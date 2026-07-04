@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -303,6 +304,9 @@ public static partial class DashboardRenderer
             var goalPrefix = goal.Id.Value[..8];
             html.AppendLine("<section class=\"goal-card\">");
             RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+            RenderOperatorDisposition(
+                html,
+                ResolveOperatorDisposition(goal, monitor, verificationGate, options));
 
             // Attention items — always visible in ops
             if (monitor.AttentionItems.Count > 0)
@@ -408,6 +412,9 @@ public static partial class DashboardRenderer
 
         html.AppendLine("<section class=\"goal-card\">");
         RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
+        RenderOperatorDisposition(
+            html,
+            ResolveOperatorDisposition(goal, monitor, verificationGate, options));
 
         // Attention items and next steps — open
         html.AppendLine("<div class=\"goal-panel\">");
@@ -645,17 +652,17 @@ public static partial class DashboardRenderer
             : string.Empty;
         html.AppendLine($"<div class=\"meta\">Goal {Encode(goal.Id.Value)} &middot; <span class=\"pill\">{Encode(Display(goal.Status))}</span> &middot; Last event {Encode(monitor.LastTimelineEventAt?.ToString("u") ?? "n/a")}{goalJsonLink}</div>");
         html.AppendLine("</div>");
-        if (goal.Status == GoalStatus.Completed && verificationGate.IsSatisfied)
+        if (goal.Status == GoalStatus.Verified && verificationGate.IsSatisfied)
         {
             html.AppendLine("<div class=\"completion-banner\">");
-            html.AppendLine("<strong>Goal complete</strong>");
+            html.AppendLine("<strong>Goal verified</strong>");
             if (IsManualOnlyCompletion(evidence))
             {
                 html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed with manual-only verification. No execution, dispatch, or process proof is recorded; inspect the verification note before treating this as implemented work.</span>");
             }
             else
             {
-                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. No operator action is required.</span>");
+                html.AppendLine($"<span>{goal.Tasks.Count} task(s) completed and verified. Next action: run acceptance, merge the goal branch, record landing evidence, and clean up the worktree before treating the goal as completed.</span>");
             }
             html.AppendLine("</div>");
         }
@@ -880,5 +887,24 @@ public static partial class DashboardRenderer
         evidence.TasksWithExecution == 0 &&
         evidence.TasksWithDispatch == 0 &&
         evidence.TasksWithProcess == 0;
+
+    private static GoalOperatorDisposition ResolveOperatorDisposition(
+        Goal goal,
+        GoalMonitor monitor,
+        GoalVerificationGate verificationGate,
+        DashboardRenderOptions options)
+    {
+        var runEventStorePath = options.Workspace?.SqliteStatePath is { Length: > 0 } statePath
+            ? Path.Combine(Path.GetDirectoryName(statePath) ?? string.Empty, "run-events.db")
+            : null;
+        return runEventStorePath is not null
+            && ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(runEventStorePath, goal) is { } conductorDisposition
+                ? conductorDisposition
+                : new GoalOperatorDispositionSurface().Evaluate(
+                    goal,
+                    monitor.PendingHumanInputCount,
+                    verificationGate.IsSatisfied,
+                    options.Workspace?.ExecutionDirectory);
+    }
 
 }

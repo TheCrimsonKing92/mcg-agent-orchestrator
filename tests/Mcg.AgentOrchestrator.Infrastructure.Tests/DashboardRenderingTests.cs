@@ -35,11 +35,27 @@ public sealed class DashboardRenderingTests
         db,
         new BatchTickSummary(4, Advanced: 1, Held: 0, Escalated: 0, Retried: 0, Done: 1, WatchSleeping: false)
         {
-            ProgressLines = ["GOAL goal=abc12345 result=done state=Complete"]
+            ProgressLines = ["GOAL goal=abc12345 result=done state=Complete"],
+            OperatorDispositions =
+            [
+                new ConductorOperatorDispositionSnapshot(
+                    "abc12345",
+                    OperatorDispositionState.Wait,
+                    OperatorDispositionConfidence.High,
+                    "conductor-owned wait",
+                    "wait",
+                    DateTimeOffset.Parse("2026-07-03T12:00:00Z"),
+                    [],
+                    [new ConductorOperatorEvidenceSnapshot("heartbeat", "logs/worker.heartbeat.json", "running")],
+                    [])
+            ]
         });
 
     var records = await new SqliteRunEventStore(db).ReadSinceAsync();
     var tick = Assert.Single(DashboardMonitoringEvents.BuildConductorTickEvents(records));
+    var disposition = Assert.Single(tick.OperatorDispositions!);
+    Assert.Equal(OperatorDispositionState.Wait, disposition.State);
+    Assert.Equal("conductor-owned wait", disposition.Reason);
 
     using var stream = new MemoryStream();
     await DashboardMonitoringEvents.WriteServerSentEventAsync(
@@ -59,6 +75,8 @@ public sealed class DashboardRenderingTests
     Assert.True(sse.Contains("id: run-", StringComparison.Ordinal));
     Assert.True(sse.Contains("event: conductor.tick", StringComparison.Ordinal));
     Assert.True(sse.Contains("\"Tick\": 4", StringComparison.Ordinal));
+    Assert.True(sse.Contains("\"OperatorDispositions\"", StringComparison.Ordinal));
+    Assert.True(sse.Contains("conductor-owned wait", StringComparison.Ordinal));
     Assert.True(sse.Contains("event: conductor.progress", StringComparison.Ordinal));
     Assert.True(sse.Contains("\"Line\": \"GOAL goal=abc12345 result=done state=Complete\"", StringComparison.Ordinal));
     Assert.True(sse.Contains("GOAL goal=abc12345 result=done state=Complete", StringComparison.Ordinal));
@@ -485,85 +503,182 @@ public sealed class DashboardRenderingTests
     Assert.Equal(message, goal.Timeline.Single(evt => evt.Message.Contains("message-start", StringComparison.Ordinal)).Message);
 }
 
-    [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
-    public void DashboardResponseMapperNextActionIncludesDispatchRecoveryPolicyAction()
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_projects_unintegrated_completed_goal_as_verified")]
+    public void DashboardResponseMapperProjectsUnintegratedCompletedGoalAsVerified()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Legacy completed before cleanup facts", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)]);
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.CompleteGoal(goal.Id, "Legacy completion.");
+
+    var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
+    var acceptance = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, kernel.BuildGoalAcceptanceSummary(goal.Id));
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
+    var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
+    var monitoringBatch = DashboardMonitoringEvents.BuildBatch(kernel, goal, sinceEventId: 0);
+
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, monitor.Status);
+    Assert.Equal(GoalStatus.Verified, acceptance.Status);
+    Assert.Equal(GoalStatus.Verified, workSummary.Status);
+    Assert.Equal(GoalStatus.Verified, detail.Goal.Status);
+    Assert.Equal(GoalStatus.Verified, monitoringBatch.Snapshot.Monitor.Status);
+    Assert.Equal(OperatorDispositionState.Accept, workSummary.OperatorDisposition.State);
+    Assert.Equal($"acceptance {goal.Id.Value[..8]}", workSummary.OperatorDisposition.NextSafeCommand);
+}
+
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_projects_manual_acceptance_cleaned_goal_as_completed")]
+    public void DashboardResponseMapperProjectsManualAcceptanceCleanedGoalAsCompleted()
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal(
-        "Next recovery policy",
-        [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer)]);
-    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var goal = kernel.CreateGoal("Manual acceptance cleaned", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)]);
     var task = goal.Tasks.Single();
-    var stdout = Path.Combine(root, "out.log");
-    var stderr = Path.Combine(root, "err.log");
-    var exit = Path.Combine(root, "exit.txt");
-    File.WriteAllText(stdout, string.Empty);
-    File.WriteAllText(stderr, string.Empty);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
-    kernel.RecordTaskProcessStarted(
-        goal.Id,
-        task.Id,
-        new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", "", DateTimeOffset.UtcNow));
+    GoalOperationJournal.Completed(root, goal, "acceptance", "Acceptance passed and merge completed.");
+    GoalOperationJournal.Completed(root, goal, "workspace:remove", "Workspace removed.");
+    kernel.CompleteGoal(goal.Id, "Manual acceptance completed after cleanup evidence.");
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
 
-    var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
-    var recovery = dto.Items.Single().Recovery;
-    var dispatchState = dto.Items.Single().DispatchState;
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        executionDirectory: root);
+    var summary = DashboardResponseMapper.ToGoalSummary(goal, root);
+    var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal, root);
+    var streamBatch = GoalMonitoringStream.BuildBatch(
+        kernel,
+        goal,
+        sinceEventId: 0,
+        [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
+        WorkerProfileCatalog.Default(),
+        workspace);
 
-    Assert.NotNull(recovery);
-    Assert.Equal(DispatchRecoveryAction.MarkStale, recovery!.Action);
-    Assert.Equal("mark-stale", recovery.ActionName);
-    Assert.Equal("heartbeat-absent", recovery.EvidencePath);
-    Assert.NotNull(dispatchState);
-    Assert.Equal(DispatchStateKind.StaleCleanup, dispatchState!.Kind);
-    Assert.Equal("mark-stale", dispatchState.RecommendedAction);
-    Assert.Equal(999999, dispatchState.ProcessTree.WrapperProcessId);
-    Assert.False(dispatchState.Artifacts.ExitCodeExists);
-    Assert.Equal(DispatchRecoveryAction.MarkStale, dispatchState.RecoveryDecision.Action);
-    Assert.True(dispatchState.StaleThresholds.LiveIdleTimeoutSeconds > 0);
+    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Completed, workSummary.Status);
+    Assert.Equal(GoalStatus.Completed, summary.Status);
+    Assert.Equal(GoalStatus.Completed, detail.Goal.Status);
+    Assert.Equal(GoalStatus.Completed, streamBatch.Snapshot.Monitor.Status);
 }
+
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_next_action_includes_dispatch_recovery_policy_action")]
+    public void DashboardResponseMapperNextActionIncludesDispatchRecoveryPolicyAction()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Next recovery policy",
+            [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdout, string.Empty);
+        File.WriteAllText(stderr, string.Empty);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+
+        var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
+        var recovery = dto.Items.Single().Recovery;
+        var dispatchState = dto.Items.Single().DispatchState;
+
+        Assert.NotNull(recovery);
+        Assert.Equal(DispatchRecoveryAction.MarkStale, recovery!.Action);
+        Assert.Equal("mark-stale", recovery.ActionName);
+        Assert.Equal("heartbeat-absent", recovery.EvidencePath);
+        Assert.Equal(OperatorDispositionState.Recover, dto.OperatorDisposition.State);
+        Assert.Equal("goal-recovery apply 1 --action mark-stale", dto.OperatorDisposition.NextSafeCommand);
+        Assert.Contains(dto.OperatorDisposition.Evidence, pointer => pointer.Kind == "exit-code");
+        Assert.NotNull(dispatchState);
+        Assert.Equal(DispatchStateKind.StaleCleanup, dispatchState!.Kind);
+        Assert.Equal("mark-stale", dispatchState.RecommendedAction);
+        Assert.Equal(999999, dispatchState.ProcessTree.WrapperProcessId);
+        Assert.False(dispatchState.Artifacts.ExitCodeExists);
+        Assert.Equal(DispatchRecoveryAction.MarkStale, dispatchState.RecoveryDecision.Action);
+        Assert.True(dispatchState.StaleThresholds.LiveIdleTimeoutSeconds > 0);
+    }
+
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_uses_conductor_disposition_snapshot_for_next_actions")]
+    public void DashboardResponseMapperUsesConductorDispositionSnapshotForNextActions()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Use conductor disposition",
+            [new TaskSpec(TaskId.New(), "Await real human request", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        goal = kernel.GetGoal(goal.Id);
+
+        var conductorDisposition = new GoalOperatorDisposition(
+            goal.Id,
+            OperatorDispositionState.Wait,
+            OperatorDispositionConfidence.High,
+            "conductor emitted wait from run-event state",
+            "wait",
+            DateTimeOffset.Parse("2026-07-03T12:05:00Z"),
+            ["owned-by-conductor"],
+            [new OperatorEvidencePointer("run-event", "run-events.db", "conductor.tick")],
+            []);
+
+        var dto = DashboardResponseMapper.ToNextActionsDto(
+            goal,
+            kernel.BuildNextActions(goal.Id),
+            conductorDisposition: conductorDisposition);
+
+        Assert.Equal(OperatorDispositionState.Wait, dto.OperatorDisposition.State);
+        Assert.Equal("conductor emitted wait from run-event state", dto.OperatorDisposition.Reason);
+        Assert.Contains(dto.OperatorDisposition.Blockers, blocker => blocker == "owned-by-conductor");
+    }
 
     [Xunit.Fact(DisplayName = "Dashboard_human_wait_dto_and_rendering_include_operator_evidence")]
     public void DashboardHumanWaitDtoAndRenderingIncludeOperatorEvidence()
-{
-    var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal(
-        "Expose typed wait",
-        [new TaskSpec(TaskId.New(), "Authenticate provider", AgentRole.Developer)]);
-    var agent = new AgentDefinition(
-        AgentId.New(),
-        "Developer",
-        AgentRole.Developer,
-        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
-    kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.Single();
-    var request = kernel.RequestHumanInput(
-        goal.Id,
-        task.Id,
-        "Complete OAuth.",
-        HumanWaitKind.ProviderAuth,
-        resumeCommand: "provider auth resume");
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Expose typed wait",
+            [new TaskSpec(TaskId.New(), "Authenticate provider", AgentRole.Developer)]);
+        var agent = new AgentDefinition(
+            AgentId.New(),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Complete OAuth.",
+            HumanWaitKind.ProviderAuth,
+            resumeCommand: "provider auth resume");
 
-    var dto = DashboardResponseMapper.ToHumanInputDto(kernel, request);
-    var worklist = DashboardResponseMapper.ToHumanInputWorklistDto(goal, kernel.BuildHumanInputWorklist(goal.Id));
-    var html = DashboardRenderer.Render(
-        kernel,
-        new DashboardRenderOptions(EnableOperatorControls: true, FocusGoalPrefix: goal.Id.Value[..8], View: DashboardView.Goal));
+        var dto = DashboardResponseMapper.ToHumanInputDto(kernel, request);
+        var worklist = DashboardResponseMapper.ToHumanInputWorklistDto(goal, kernel.BuildHumanInputWorklist(goal.Id));
+        var html = DashboardRenderer.Render(
+            kernel,
+            new DashboardRenderOptions(EnableOperatorControls: true, FocusGoalPrefix: goal.Id.Value[..8], View: DashboardView.Goal));
 
-    Assert.Equal(request.Id.Value, dto.WaitId);
-    Assert.Equal(HumanWaitKind.ProviderAuth, dto.Kind);
-    Assert.True(dto.IsExternallyBlocked);
-    Assert.False(dto.IsAutoDefaultable);
-    Assert.False(dto.IsDismissible);
-    Assert.Equal("provider auth resume", dto.ResumeCommand);
-    var item = worklist.Items.Single();
-    Assert.Equal(request.Id.Value, item.WaitId);
-    Assert.Equal(goal.Id.Value, item.GoalId);
-    Assert.Equal("provider auth resume", item.ResumeCommand);
-    Assert.Contains(html, text => text.Contains("ProviderAuth", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("externally-blocked=True", StringComparison.Ordinal));
-    Assert.Contains(html, text => text.Contains("provider auth resume", StringComparison.Ordinal));
-}
+        Assert.Equal(request.Id.Value, dto.WaitId);
+        Assert.Equal(HumanWaitKind.ProviderAuth, dto.Kind);
+        Assert.True(dto.IsExternallyBlocked);
+        Assert.False(dto.IsAutoDefaultable);
+        Assert.False(dto.IsDismissible);
+        Assert.Equal("provider auth resume", dto.ResumeCommand);
+        var item = worklist.Items.Single();
+        Assert.Equal(request.Id.Value, item.WaitId);
+        Assert.Equal(goal.Id.Value, item.GoalId);
+        Assert.Equal("provider auth resume", item.ResumeCommand);
+        Assert.Contains(html, text => text.Contains("ProviderAuth", StringComparison.Ordinal));
+        Assert.Contains(html, text => text.Contains("externally-blocked=True", StringComparison.Ordinal));
+        Assert.Contains(html, text => text.Contains("provider auth resume", StringComparison.Ordinal));
+    }
 
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_trims_verbose_subscription_plan_detail")]
     public void DashboardResponseMapperTrimsVerboseSubscriptionPlanDetail()
@@ -797,6 +912,8 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains("ReadyNowCount", snapshotText);
     Xunit.Assert.Contains("Verify task 1", snapshotText);
     Xunit.Assert.Contains("\"DispatchState\"", snapshotText);
+    Xunit.Assert.Contains("\"OperatorDisposition\"", snapshotText);
+    Xunit.Assert.Contains("\"NextSafeCommand\"", snapshotText);
     Xunit.Assert.Contains("\"RecommendedAction\": \"mark-stale\"", snapshotText);
     Xunit.Assert.Contains("\"ProcessTree\"", snapshotText);
     Xunit.Assert.Contains("\"WrapperProcessId\": 333333", snapshotText);
@@ -1481,6 +1598,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains(goalHtml, text => text.Contains("name=\"answer\" value=\"No\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains($"data-toggle-custom-answer=\"answer-{request.Id.Value[..8]}\"", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("aria-expanded=\"false\"", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Operator disposition", StringComparison.Ordinal));
+    Assert.Contains(goalHtml, text => text.Contains("Next safe command:", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Work summary", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Action recommendation", StringComparison.Ordinal));
     Assert.Contains(goalHtml, text => text.Contains("Open recommendation JSON", StringComparison.Ordinal));
@@ -1700,7 +1819,7 @@ public sealed class DashboardRenderingTests
     // Ops view shows completion banner in goal header
     var opsHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
     Assert.Contains(opsHtml, text => text.Contains("completion-banner", StringComparison.Ordinal));
-    Assert.Contains(opsHtml, text => text.Contains("Goal complete", StringComparison.Ordinal));
+    Assert.Contains(opsHtml, text => text.Contains("Goal verified", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("manual-only verification", StringComparison.Ordinal));
     Assert.Contains(opsHtml, text => text.Contains("No execution, dispatch, or process proof is recorded", StringComparison.Ordinal));
     Assert.False(opsHtml.Contains("No operator action is required.", StringComparison.Ordinal));
@@ -1712,6 +1831,34 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goalPrefix));
     Assert.Contains(goalHtml, text => text.Contains("This task is complete and has passing verification evidence.", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "DashboardRenderer_verified_goal_banner_points_to_acceptance_landing_and_cleanup")]
+    public void DashboardRendererVerifiedGoalBannerPointsToAcceptanceLandingAndCleanup()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Ready for acceptance",
+        [new TaskSpec(TaskId.New(), "Finish the simple goal", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [Agent(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", Environment.CurrentDirectory, DateTimeOffset.UtcNow));
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord("dotnet test", Environment.CurrentDirectory, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+
+    Assert.Equal(GoalStatus.Verified, goal.Status);
+    Assert.True(gate.IsSatisfied, gate.Tasks.Single().Reason.ToString());
+    Assert.True(html.Contains("completion-banner", StringComparison.Ordinal));
+    Assert.True(html.Contains("Goal verified", StringComparison.Ordinal));
+    Assert.True(html.Contains("Next action: run acceptance, merge the goal branch, record landing evidence, and clean up the worktree", StringComparison.Ordinal));
+    Assert.False(html.Contains("No operator action is required.", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_builds_direct_controls_for_safe_actions")]
     public void DashboardNextActionControlsBuildsDirectControlsForSafeActions()
 {
@@ -2933,6 +3080,7 @@ static string ExtractTaskControls(string html, int taskNumber)
         var task = completed.Tasks.Single();
         kernel.ReportTaskProgress(completed.Id, task.Id, WorkTaskStatus.Completed, "Done.");
         kernel.RecordTaskVerification(completed.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "ok", string.Empty, DateTimeOffset.UtcNow));
+        kernel.CompleteGoal(completed.Id, "Done.");
         oldestCompletedPrefix ??= completed.Id.Value[..8];
     }
 

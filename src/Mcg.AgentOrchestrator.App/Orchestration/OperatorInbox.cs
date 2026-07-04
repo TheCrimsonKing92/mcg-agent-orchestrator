@@ -217,7 +217,7 @@ internal static class OperatorInbox
         Goal goal,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
-        if (goal.Status != GoalStatus.Completed)
+        if (goal.Status != GoalStatus.Verified)
         {
             return;
         }

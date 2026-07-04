@@ -111,61 +111,45 @@ function Quote-ProcessArgument {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
-function Get-DescendantProcessIds {
-    param([int]$RootProcessId)
-
-    $descendants = New-Object System.Collections.Generic.List[int]
-    try {
-        $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
-    }
-    catch {
-        return $descendants
-    }
-
-    $childrenByParent = @{}
-    foreach ($process in $allProcesses) {
-        $parentId = [int]$process.ParentProcessId
-        if (-not $childrenByParent.ContainsKey($parentId)) {
-            $childrenByParent[$parentId] = New-Object System.Collections.Generic.List[int]
-        }
-
-        $childrenByParent[$parentId].Add([int]$process.ProcessId)
-    }
-
-    $pending = New-Object System.Collections.Generic.Queue[int]
-    $pending.Enqueue($RootProcessId)
-    while ($pending.Count -gt 0) {
-        $parentId = $pending.Dequeue()
-        if (-not $childrenByParent.ContainsKey($parentId)) {
-            continue
-        }
-
-        foreach ($childId in $childrenByParent[$parentId]) {
-            $descendants.Add($childId)
-            $pending.Enqueue($childId)
-        }
-    }
-
-    return $descendants
-}
-
 function Stop-OwnedProcessTree {
     param([int]$RootProcessId)
 
-    $processIds = @((Get-DescendantProcessIds -RootProcessId $RootProcessId))
-    [array]::Reverse($processIds)
-    $processIds += $RootProcessId
-
-    foreach ($processId in $processIds) {
+    $stopScript = Join-Path $repoRoot "scripts\Stop-RepoProcess.ps1"
+    if (Test-Path -LiteralPath $stopScript) {
         try {
-            Stop-Process -Id $processId -Force -ErrorAction Stop
-        }
-        catch [System.Management.Automation.ItemNotFoundException] {
-        }
-        catch [System.InvalidOperationException] {
+            & $stopScript -Id $RootProcessId -Force | Out-Null
+            return
         }
         catch {
+            Write-Output "process stop helper unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
         }
+    }
+
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+        if (Test-Path -LiteralPath $taskkill) {
+            try {
+                & $taskkill /PID $RootProcessId /T /F | Out-Null
+                return
+            }
+            catch {
+                Write-Output "process stop taskkill fallback unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    try {
+        $process = [System.Diagnostics.Process]::GetProcessById($RootProcessId)
+        $process.Kill($true)
+    }
+    catch [System.ArgumentException] {
+        return
+    }
+    catch [System.InvalidOperationException] {
+        return
+    }
+    catch {
+        Write-Output "process stop fallback unavailable for pid=${RootProcessId}: $($_.Exception.Message)"
     }
 }
 
@@ -269,60 +253,24 @@ catch {
     Write-Output "active-goals unavailable: $($_.Exception.Message)"
 }
 
-$processes = @()
+Write-Section "Orchestrator Processes"
 try {
-    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -Name @("dotnet", "Mcg.AgentOrchestrator.App") -CommandContains App.dll -Newest $NewestProcesses
+    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -DispatchHost -Newest $NewestProcesses
+    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -ConductLoop -Newest $NewestProcesses
 }
 catch {
-    Write-Section "Processes"
     Write-Output "process query unavailable: $($_.Exception.Message)"
+    Write-Output 'BACKLOG_CANDIDATE title="Snapshot process query degraded" body="Get-OrchestratorSnapshot.ps1 could not run the orchestrator-authored process query; preserve this disposition instead of requesting operator approval."'
 }
 
-if ($processes.Count -gt 0) {
-    Write-Section "Orchestrator Processes"
-    $interesting = @($processes |
-        Where-Object { Is-OrchestratorProcess -Process $_ } |
-        Sort-Object CreationDate -Descending |
-        Select-Object -First $NewestProcesses)
-
-    if ($interesting.Count -eq 0) {
-        Write-Output "No conduct/dispatch worker processes found."
-    }
-    else {
-        foreach ($process in $interesting) {
-            Write-Output ("PROCESS id={0} parent={1} name={2} created={3} command={4}" -f `
-                $process.ProcessId,
-                $process.ParentProcessId,
-                $process.Name,
-                (Format-CimDate $process.CreationDate),
-                (Short-Command ([string]$process.CommandLine)))
-        }
-    }
-
-    Write-Section "Build Locks"
-    $locks = @($processes |
-        Where-Object { Is-OrchestratorLockHolder -Process $_ } |
-        Sort-Object CreationDate)
-
-    if ($locks.Count -eq 0) {
-        Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
-    }
-    else {
-        foreach ($process in $locks) {
-            $command = [string]$process.CommandLine
-            $kind =
-                if ($command.IndexOf("__dispatch-run", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-                    $command.IndexOf("DispatchProcessHost", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { "dispatch-host" }
-                elseif ($command.IndexOf("conduct", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { "conduct-loop" }
-                elseif ($command.IndexOf("serve-dashboard", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { "dashboard" }
-                else { "app-host" }
-
-            Write-Output ("LOCK id={0} kind={1} created={2}" -f `
-                $process.ProcessId,
-                $kind,
-                (Format-CimDate $process.CreationDate))
-        }
-    }
+Write-Section "Build Locks"
+try {
+    & (Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1") -Locks -Newest $NewestProcesses
+}
+catch {
+    Write-Output "lock query unavailable: $($_.Exception.Message)"
+    Write-Output 'BACKLOG_CANDIDATE title="Snapshot lock query degraded" body="Get-OrchestratorSnapshot.ps1 could not run the orchestrator-authored lock query; preserve this disposition instead of requesting operator approval."'
 }
 
 if ($GoalPrefix.Count -gt 0) {

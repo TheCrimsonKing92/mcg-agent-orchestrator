@@ -237,6 +237,14 @@ internal static partial class CliCommandHandlers
                 return false;
             }
 
+            case "repo-process-info":
+                RepoProcessCliCommand.PrintInfo(parts, Console.Out);
+                return false;
+
+            case "repo-process-stop":
+                RepoProcessCliCommand.Stop(parts, Console.Out);
+                return false;
+
             case "stable-slot-dotnet":
                 RunStableSlotDotnet(parts, context);
                 return false;
@@ -620,7 +628,8 @@ internal static partial class CliCommandHandlers
             kernel.Goals,
             openEscalations,
             BuildOperatorInboxUrl(catalog.DashboardBaseUrl),
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+            factProvider: goal => GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(context.Workspace, goal)));
         await progressView.ReconcileAsync(projection, cancellationToken);
     }
 

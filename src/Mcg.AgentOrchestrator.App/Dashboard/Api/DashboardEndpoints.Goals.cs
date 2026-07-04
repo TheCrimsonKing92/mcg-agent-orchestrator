@@ -51,29 +51,30 @@ internal static partial class DashboardEndpoints
                     }
 
                     var responseGoal = current.Goals.Single(currentGoal => currentGoal.Id == goal.Id);
-                    return Json(BuildCreatedGoalResponse(current, responseGoal, autoHandoff), StatusCodes.Status201Created);
+                    return Json(BuildCreatedGoalResponse(current, responseGoal, services.Workspace.ExecutionDirectory, autoHandoff), StatusCodes.Status201Created);
                 },
                 context.RequestAborted);
         }
 
         var current = await LoadAsync(services, context.RequestAborted);
-        return Json(current.Goals.Select(DashboardResponseMapper.ToGoalSummary).ToList());
+        return Json(current.Goals.Select(goal => DashboardResponseMapper.ToGoalSummary(goal, services.Workspace.ExecutionDirectory)).ToList());
     }
 
     private static GoalDetailDto BuildCreatedGoalResponse(
         AgentOrchestratorKernel current,
         Goal goal,
+        string executionDirectory,
         AdvanceLoopResultDto? autoHandoff = null)
     {
         try
         {
-            return DashboardResponseMapper.ToGoalDetailDto(current, goal) with { AutoHandoff = autoHandoff };
+            return DashboardResponseMapper.ToGoalDetailDto(current, goal, executionDirectory) with { AutoHandoff = autoHandoff };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Console.WriteLine($"Created goal {goal.Id.Value} but could not build verification summary: {ex.Message}");
             return new GoalDetailDto(
-                DashboardResponseMapper.ToGoalSummary(goal),
+                DashboardResponseMapper.ToGoalSummary(goal, executionDirectory),
                 goal.Tasks.Select(task => DashboardResponseMapper.ToTaskSummaryDto(goal, task)).ToList(),
                 VerificationSatisfied: false,
                 AutoHandoff: autoHandoff);
@@ -83,14 +84,14 @@ internal static partial class DashboardEndpoints
     private static async Task<IResult> QueryGoalsAsync(HttpContext context, DashboardEndpointServices services)
     {
         var current = await LoadAsync(services, context.RequestAborted);
-        return Json(current.Goals.Select(DashboardResponseMapper.ToGoalSummary).ToList());
+        return Json(current.Goals.Select(goal => DashboardResponseMapper.ToGoalSummary(goal, services.Workspace.ExecutionDirectory)).ToList());
     }
 
     private static async Task<IResult> GetGoalAsync(string goalId, DashboardEndpointServices services)
     {
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
-        return Json(DashboardResponseMapper.ToGoalDetailDto(current, goal));
+        return Json(DashboardResponseMapper.ToGoalDetailDto(current, goal, services.Workspace.ExecutionDirectory));
     }
 
     private static async Task<IResult> GetGoalTranscriptAsync(string goalId, DashboardEndpointServices services)
@@ -106,12 +107,14 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
+        var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(services.Workspace.RunEventStorePath, goal);
         return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(
             current,
             goal,
             agents,
             BuildHostInfo(services),
-            services.Workspace.ExecutionDirectory));
+            services.Workspace.ExecutionDirectory,
+            conductorDisposition: conductorDisposition));
     }
 
     private static async Task<IResult> GetFailureTriageAsync(

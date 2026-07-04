@@ -290,6 +290,58 @@ public sealed class DispatchExecutionTests
     Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.VerificationHistory.Single().ProviderFailureKind);
     Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
 }
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
+    public void RecordDispatchExecutionResultFailsNonzeroWorkerResultBlockerBeforeSubscriptionRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Fail dispatch on structured blocker");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: dotnet test --no-build",
+        "tests: fail - timed out",
+        "commit: none",
+        "blockers: full Infrastructure no-build timed out at 214s after local rate limit fixture",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: dotnet-windows-build-hygiene",
+        "confidence: medium",
+        "END_WORKER_RESULT");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            1,
+            stdout,
+            string.Empty,
+            clock.UtcNow),
+        ProviderFailureKind.RateLimit);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Equal(ProviderFailureKind.RateLimit, task.LastVerification!.ProviderFailureKind);
+    Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("full Infrastructure no-build timed out at 214s after local rate limit fixture", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal)));
+}
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_powershell_wrapped_subscription_usage_limit")]
     public void RecordDispatchExecutionResultReopensTaskOnPowerShellWrappedSubscriptionUsageLimit()
 {
@@ -651,7 +703,7 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
         clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
 }
 }
 

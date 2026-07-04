@@ -54,13 +54,7 @@ internal static class TerminalGoalSweep
             }
 
             var goal = kernel.GetGoal(originalGoal.Id);
-            var isCompletedGitGoal = goal.Status == GoalStatus.Completed && GoalWorktrees.IsGitWorkTree(executionDirectory);
-            var hasGoalBranchArtifact = isCompletedGitGoal &&
-                (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
-                 GoalWorktrees.HasBranch(executionDirectory, goal.Id));
-            var branchAlreadyLanded = isCompletedGitGoal &&
-                hasGoalBranchArtifact &&
-                GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
+            var branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
 
@@ -73,7 +67,7 @@ internal static class TerminalGoalSweep
                     dirtyEvidence,
                     dirtyCommand));
             }
-            else if (branchAlreadyLanded)
+            else if (branchFacts.BranchAlreadyLanded)
             {
                 foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
                 {
@@ -90,10 +84,11 @@ internal static class TerminalGoalSweep
                 }
 
                 goal = kernel.GetGoal(originalGoal.Id);
+                branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
             }
 
             if (!blockedByDirtyWorktree &&
-                !branchAlreadyLanded &&
+                !branchFacts.BranchAlreadyLanded &&
                 TryBuildTerminalLiveDispatchBlocker(goal, prefix, out var liveDispatchEvidence, out var liveDispatchCommand))
             {
                 blockers.Add(new TerminalGoalSweepBlocker(
@@ -102,7 +97,7 @@ internal static class TerminalGoalSweep
                     liveDispatchCommand));
             }
             else if (!blockedByDirtyWorktree &&
-                     !branchAlreadyLanded &&
+                     !branchFacts.BranchAlreadyLanded &&
                      onlyGoalId is null &&
                      TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var staleTerminalExclusionEvidence))
             {
@@ -112,7 +107,7 @@ internal static class TerminalGoalSweep
                     "excluded"));
             }
             else if (!blockedByDirtyWorktree &&
-                     !branchAlreadyLanded &&
+                     !branchFacts.BranchAlreadyLanded &&
                      hasTerminalTaskDesync &&
                      kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
@@ -121,22 +116,38 @@ internal static class TerminalGoalSweep
                     desyncEvidence,
                     $"conduct {prefix} --loop"));
                 goal = kernel.GetGoal(originalGoal.Id);
+                branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
             }
 
             if (!blockedByDirtyWorktree &&
-                goal.Status == GoalStatus.Completed &&
-                GoalWorktrees.IsGitWorkTree(executionDirectory))
+                branchFacts.IsAcceptedOrVerifiedGitGoal &&
+                branchFacts.HasGoalBranchArtifact &&
+                !GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
             {
-                if (!GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id))
+                if (goal.Status == GoalStatus.Completed &&
+                    kernel.NormalizePrematureCompletedGoalToVerified(
+                        goal.Id,
+                        "terminal stale-goal sweep: normalized raw Completed goal with unmerged branch back to Verified for acceptance."))
                 {
-                    blockers.Add(new TerminalGoalSweepBlocker(
-                        "completed-branch-unmerged",
-                        $"completed goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "completed-branch-normalized",
+                        $"completed goal with unmerged branch {GoalWorktrees.BranchName(goal.Id)} was normalized to Verified",
                         $"acceptance {prefix}"));
-                    results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
-                    continue;
+                    goal = kernel.GetGoal(originalGoal.Id);
+                    branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
                 }
 
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "completed-branch-unmerged",
+                    $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
+                    $"acceptance {prefix}"));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
+
+            if (!blockedByDirtyWorktree &&
+                (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
+            {
                 var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
@@ -185,6 +196,70 @@ internal static class TerminalGoalSweep
             if (repairs.Count > 0 || blockers.Count > 0)
             {
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+            }
+        }
+
+        return new TerminalGoalSweepResult(results);
+    }
+
+    private sealed record GoalBranchFacts(
+        bool IsAcceptedOrVerifiedGitGoal,
+        bool IsCompletedGitGoal,
+        bool HasGoalBranchArtifact,
+        bool BranchAlreadyLanded);
+
+    private static GoalBranchFacts BuildGoalBranchFacts(string executionDirectory, Goal goal)
+    {
+        var isGitWorkTree = GoalWorktrees.IsGitWorkTree(executionDirectory);
+        var isAcceptedOrVerifiedGitGoal = (goal.Status is GoalStatus.Verified or GoalStatus.Completed) && isGitWorkTree;
+        var hasGoalBranchArtifact = isAcceptedOrVerifiedGitGoal &&
+            (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
+             GoalWorktrees.HasBranch(executionDirectory, goal.Id));
+        var branchAlreadyLanded = isAcceptedOrVerifiedGitGoal &&
+            hasGoalBranchArtifact &&
+            GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
+
+        return new GoalBranchFacts(
+            isAcceptedOrVerifiedGitGoal,
+            goal.Status == GoalStatus.Completed && isGitWorkTree,
+            hasGoalBranchArtifact,
+            branchAlreadyLanded);
+    }
+
+    public static TerminalGoalSweepResult Diagnose(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalId? onlyGoalId = null)
+    {
+        var results = new List<TerminalGoalSweepGoalResult>();
+
+        foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
+        {
+            var blockers = new List<TerminalGoalSweepBlocker>();
+            var prefix = goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)];
+
+            if (TryBuildTerminalLiveDispatchBlocker(goal, prefix, out var liveDispatchEvidence, out var liveDispatchCommand))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "terminal-live-dispatch",
+                    liveDispatchEvidence,
+                    liveDispatchCommand));
+            }
+
+            var branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
+            if (branchFacts.IsAcceptedOrVerifiedGitGoal &&
+                branchFacts.HasGoalBranchArtifact &&
+                !branchFacts.BranchAlreadyLanded)
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "completed-branch-unmerged",
+                    $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
+                    $"acceptance {prefix}"));
+            }
+
+            if (blockers.Count > 0)
+            {
+                results.Add(new TerminalGoalSweepGoalResult(goal.Id, prefix, [], blockers));
             }
         }
 

@@ -361,7 +361,8 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
-        $"-maxcpucount:{ResolveMaxCpuCount()}"
+        $"-maxcpucount:{ResolveMaxCpuCount()}",
+        "-p:BuildInParallel=false"
     ];
 
     private static int ResolveMaxCpuCount()

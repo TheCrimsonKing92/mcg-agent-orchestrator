@@ -65,7 +65,8 @@ public static void PrintNextActions(
     Goal goal,
     GoalNextActions actions,
     IReadOnlyList<AgentDefinition>? agents = null,
-    GoalHealthReport? health = null)
+    GoalHealthReport? health = null,
+    GoalOperatorDisposition? conductorDisposition = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
@@ -73,6 +74,13 @@ public static void PrintNextActions(
     {
         Console.WriteLine($"Health: {health.Disposition} score={health.Score}; recommendation: {health.Recommendation}; command: {health.SuggestedCommand}");
     }
+
+    var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
+    var operatorDisposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
+        goal,
+        pendingHumanInputCount: 0,
+        verificationSatisfied);
+    PrintOperatorDisposition(operatorDisposition);
 
     Console.WriteLine("Next actions:");
 
@@ -82,12 +90,7 @@ public static void PrintNextActions(
         Console.WriteLine($"  {index + 1}. {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
         if (DispatchRecoveryView.EvaluateState(goal, item) is { } dispatchState)
         {
-            var decision = dispatchState.RecoveryDecision;
-            var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
-                ? string.Empty
-                : $" blocker='{decision.Blocker}'";
-            Console.WriteLine($"     dispatch-state: state='{dispatchState.Kind}' action='{dispatchState.RecommendedAction}' live={dispatchState.ProcessTree.HasLiveProcess} child_pid={dispatchState.ProcessTree.ChildProcessId?.ToString() ?? "none"} exit_artifact={dispatchState.Artifacts.ExitCodeExists} dirty_worktree={dispatchState.Worktree.IsDirty?.ToString() ?? "unknown"}");
-            Console.WriteLine($"     recovery: action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}");
+            PrintDispatchState(dispatchState, "     ");
         }
 
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
@@ -110,6 +113,24 @@ public static void PrintNextActions(
     }
 
     Console.WriteLine();
+}
+
+public static void PrintOperatorDisposition(GoalOperatorDisposition disposition)
+{
+    var blockers = disposition.Blockers.Count == 0
+        ? "none"
+        : string.Join(",", disposition.Blockers);
+    Console.WriteLine($"Disposition: state='{disposition.State}' confidence='{disposition.Confidence}' action='{disposition.NextSafeCommand}' blockers='{blockers}' reason='{OutputTextPreview.CreateTimeline(disposition.Reason).Text}' fresh='{disposition.FreshAt:u}'");
+}
+
+public static void PrintDispatchState(DispatchAuthoritativeState dispatchState, string indent = "")
+{
+    var decision = dispatchState.RecoveryDecision;
+    var blocker = string.IsNullOrWhiteSpace(decision.Blocker)
+        ? string.Empty
+        : $" blocker='{decision.Blocker}'";
+    Console.WriteLine($"{indent}dispatch-state: state='{dispatchState.Kind}' action='{dispatchState.RecommendedAction}' live={dispatchState.ProcessTree.HasLiveProcess} child_pid={dispatchState.ProcessTree.ChildProcessId?.ToString() ?? "none"} exit_artifact={dispatchState.Artifacts.ExitCodeExists} dirty_worktree={dispatchState.Worktree.IsDirty?.ToString() ?? "unknown"}");
+    Console.WriteLine($"{indent}recovery: action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}");
 }
 }
 

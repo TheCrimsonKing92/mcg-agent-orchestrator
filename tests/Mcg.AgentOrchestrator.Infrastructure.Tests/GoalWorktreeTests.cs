@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -141,13 +142,116 @@ public sealed class GoalWorktreeIntegrationTests
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start Invoke-RepoScript.ps1.");
         var stderr = process.StandardError.ReadToEnd();
-        process.StandardOutput.ReadToEnd();
+        var stdout = process.StandardOutput.ReadToEnd();
 
         Assert.True(process.WaitForExit(30000), "Find-OrchestratorLocks.ps1 did not exit within 30 seconds.");
         Assert.True(
             process.ExitCode is 0 or 2,
             $"Expected Find-OrchestratorLocks.ps1 to exit 0 or 2, got {process.ExitCode}. stderr: {stderr}");
         Assert.DoesNotContain("A positional parameter cannot be found that accepts argument", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("repo-process-info --locks", stdout, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Repo_process_helpers_do_not_use_PowerShell_CIM_process_queries")]
+    public void RepoProcessHelpersDoNotUsePowerShellCimProcessQueries()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var cliCommandText = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Cli",
+            "RepoProcessCliCommand.cs"));
+        Assert.DoesNotContain("ProcessCommandLines.Read", cliCommandText, StringComparison.Ordinal);
+        Assert.DoesNotContain("wmic", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Get-CimInstance", cliCommandText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Win32_Process", cliCommandText, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("scripts", "Get-RepoProcessInfo.ps1"),
+            Path.Combine("scripts", "Stop-RepoProcess.ps1"),
+            Path.Combine("scripts", "Find-OrchestratorLocks.ps1"),
+            Path.Combine("scripts", "Get-OrchestratorSnapshot.ps1")
+        })
+        {
+            var text = File.ReadAllText(Path.Combine(repoRoot, relativePath));
+            Assert.DoesNotContain("Get-CimInstance", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Win32_Process", text, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GetRepoProcessInfo_reports_exact_pid_lineage_through_repo_prefix")]
+    public void GetRepoProcessInfoReportsExactPidLineageThroughRepoPrefix()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Get-RepoProcessInfo.ps1");
+        startInfo.ArgumentList.Add("-Id");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Get-RepoProcessInfo.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Get-RepoProcessInfo.ps1 did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.True(stdout.Contains($"PROCESS id={Environment.ProcessId}", StringComparison.Ordinal), stdout);
+        Assert.True(stdout.Contains("parent=", StringComparison.Ordinal), stdout);
+        Assert.True(stdout.Contains("command=", StringComparison.Ordinal), stdout);
+    }
+
+    [Xunit.Fact(DisplayName = "StopRepoProcess_refuses_exact_pid_when_command_guard_mismatches")]
+    public void StopRepoProcessRefusesExactPidWhenCommandGuardMismatches()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Stop-RepoProcess.ps1");
+        startInfo.ArgumentList.Add("-Id");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("-CommandContains");
+        startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
+        startInfo.ArgumentList.Add("-Force");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Stop-RepoProcess.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        Assert.True(
+            stdout.Contains($"PROCESS id={Environment.ProcessId} status=refused reason=command-mismatch", StringComparison.Ordinal),
+            stdout);
     }
 
     [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_fails_when_filter_runs_zero_tests")]
@@ -515,6 +619,60 @@ public sealed class GoalWorktreeIntegrationTests
         }
         finally
         {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_preserves_cleanup_needed_when_only_branch_delete_fails")]
+    public void GoalWorktreesRemovePreservesCleanupNeededWhenOnlyBranchDeleteFails()
+    {
+        var repo = CreateSeededRepository();
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            var branch = GoalWorktrees.BranchName(goalId);
+            File.WriteAllText(Path.Combine(path, "unmerged.txt"), "goal work");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Unmerged goal work");
+
+            DeleteDirectory(path);
+            RunGit(repo, "worktree", "prune");
+
+            Assert.False(Directory.Exists(path));
+            Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
+            Assert.True(BranchExists(repo, branch));
+
+            var first = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(first.IsComplete);
+            Assert.Equal(path, first.LeftoverPath);
+            Assert.Equal("remove:branch-delete-failed", first.CleanupBackoff?.Reason);
+            Assert.True(BranchExists(repo, branch));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+
+            var second = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(second.IsComplete);
+            Assert.Equal(path, second.LeftoverPath);
+            Assert.Equal("remove:branch-delete-failed", second.CleanupBackoff?.Reason);
+            Assert.True(BranchExists(repo, branch));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+
+            RunGit(repo, "branch", "-D", branch);
+            var final = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(final.IsComplete);
+            Assert.False(BranchExists(repo, branch));
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
+        }
+        finally
+        {
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
             DeleteDirectory(repo);
         }
     }
@@ -1110,6 +1268,46 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_does_not_complete_verified_goal_without_landing_evidence")]
+    public void CliWorkspaceRemoveDoesNotCompleteVerifiedGoalWithoutLandingEvidence()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Workspace remove no terminal evidence", repo);
+            var order = new List<string>();
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
+                EventWriter = new RecordingGoalLifecycleEventWriter(order)
+            };
+
+            CaptureConsole(() => CliCommandHandlers.Execute(["workspace", "remove", goal.Id.Value[..8]], context));
+
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.DoesNotContain("remove-worktree", order);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "workspace:remove" &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.DoesNotContain(journal.LatestByOperation, entry =>
+                entry.Operation == "acceptance" &&
+                entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_prints_cleanup_backoff_skip_until")]
     public void CliWorkspaceRemovePrintsCleanupBackoffSkipUntil()
     {
@@ -1344,7 +1542,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             var sourceDirectory = Path.Combine(worktreePath, "src");
@@ -1388,7 +1586,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -1741,6 +1939,12 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains("still running", StringComparison.Ordinal), output);
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            var goalSnapshot = Assert.Single(kernel.ExportSnapshot().Goals);
+            Assert.Equal(GoalStatus.Verified, goalSnapshot.Status);
+            Assert.DoesNotContain($"Goal {goal.Id.Value[..8]} completed", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, kernel.BuildLoopHealthReport().CompletedGoalCount);
+            Assert.Empty(kernel.BuildProvenanceReport($"Landed goal {goal.Id.Value[..8]}").Goals);
         }
         finally
         {
@@ -1961,7 +2165,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2014,7 +2218,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2115,7 +2319,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2431,7 +2635,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "policy.txt"), "goal work");
@@ -2553,6 +2757,56 @@ public sealed class GoalWorktreeIntegrationTests
             var reloaded = await stateRepository.LoadAsync();
             var reloadedGoal = reloaded.GetGoal(goal.Id);
             Assert.Null(reloadedGoal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_repo_process_commands_skip_persistent_state_loading")]
+    public void CliRepoProcessCommandsSkipPersistentStateLoading()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var stateRepository = new ThrowingTransactionalStateRepository();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-info", "--id", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)]));
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["repo-process-info", "--id", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)],
+                    stateRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Assert.False(changed);
+            });
+
+            Assert.Contains($"PROCESS id={Environment.ProcessId}", output);
+            Assert.Equal(0, stateRepository.LoadCount);
+            Assert.Equal(0, stateRepository.TransactionCount);
+
+            Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-stop"]));
+            var usage = Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+                ["repo-process-stop"],
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Assert.Contains("Usage: repo-process-stop", usage.Message);
+            Assert.Equal(0, stateRepository.LoadCount);
+            Assert.Equal(0, stateRepository.TransactionCount);
         }
         finally
         {
@@ -2686,7 +2940,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2733,7 +2987,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
@@ -2785,7 +3039,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             var generatedDirectory = Path.Combine(worktreePath, "src", "Feature", "bin", "Debug");
@@ -2831,7 +3085,7 @@ public sealed class GoalWorktreeIntegrationTests
                 goal.Id,
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
             File.WriteAllText(Path.Combine(worktreePath, "skip.txt"), "goal work");
@@ -3348,7 +3602,7 @@ public sealed class GoalWorktreeIntegrationTests
                 outputLines);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
             Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
-            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsCleanedUp: true);
+            var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
             Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
         }
         finally
@@ -3398,6 +3652,61 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(1_000, worktrees.RemoveTimeoutMilliseconds);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
             Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_records_landed_state_before_deferred_cleanup")]
+    public void CliGoalMarkLandedRecordsLandedStateBeforeDeferredCleanup()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Out-of-band landed deferred cleanup goal", repo);
+            RunGit(repo, "branch", GoalWorktrees.BranchName(goal.Id));
+            var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+            kernel.SetEventWriter(eventWriter);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                EventWriter = eventWriter,
+                GoalMarkLandedElapsedMilliseconds = () => CliCommandHandlers.GoalMarkLandedPromptTimeoutMilliseconds
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                context));
+
+            Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, e =>
+                e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
+            Assert.Contains(journal.LatestByOperation, e =>
+                e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
+            Assert.Contains(journal.LatestByOperation, e =>
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
+            Assert.DoesNotContain(journal.LatestByOperation, e =>
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+
+            var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id);
+            Assert.NotNull(cleanupBackoff);
+            Assert.StartsWith("remove:", cleanupBackoff!.Reason, StringComparison.Ordinal);
+            var recovery = GoalRecoveryPlanner.Build(kernel, goal, repo);
+            Assert.NotNull(recovery.CleanupBackoff);
+            Assert.Contains(recovery.RecommendedActions, action =>
+                action.Contains("workspace remove", StringComparison.Ordinal));
+            var facts = new GoalLifecycleFacts(IsMerged: true, IsRecorded: true);
+            Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(goal, facts));
         }
         finally
         {
@@ -3595,7 +3904,7 @@ public sealed class GoalWorktreeIntegrationTests
             });
 
             var goal = context.CurrentGoal!;
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("Autonomy policy: safe-auto", StringComparison.Ordinal));
             Assert.True(output.Contains("Stage acceptance: stopped.", StringComparison.Ordinal));
@@ -3683,7 +3992,7 @@ public sealed class GoalWorktreeIntegrationTests
             });
 
             var goal = context.CurrentGoal!;
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.True(output.Contains("merge blocked", StringComparison.Ordinal));
             Assert.True(output.Contains("Next: acceptance", StringComparison.Ordinal));
@@ -3720,7 +4029,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var goal = context.CurrentGoal!;
             Assert.Equal("fake verifier boom", ex.Message);
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
             Assert.Equal(1, fakeVerifier.RunCount);
         }
@@ -4751,7 +5060,7 @@ public sealed class GoalWorktreeIntegrationTests
                     "WORKER_RESULT:\nfiles: src/Old.cs\ncommands: old\nEND_WORKER_RESULT",
                     string.Empty,
                     oldDispatch.DispatchedAt.AddSeconds(10)));
-            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
 
             kernel.RecordAcceptanceFailure(goal.Id, ["SqliteOrchestratorStateRepositoryTests.Saves_goal_schema_columns"]);
@@ -4986,7 +5295,7 @@ public sealed class GoalWorktreeIntegrationTests
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-        Assert.Equal(GoalStatus.Completed, goal.Status);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
         return goal;
     }
 
@@ -5447,6 +5756,83 @@ public sealed class GoalWorktreeIntegrationTests
         {
             inner.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
             afterReset();
+        }
+    }
+
+    private sealed class ThrowingTransactionalStateRepository : ITransactionalOrchestratorStateRepository
+    {
+        public int LoadCount { get; private set; }
+
+        public int TransactionCount { get; private set; }
+
+        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load persistent state");
+        }
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load goal state");
+        }
+
+        public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save persistent state");
+
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list goal metadata");
+
+        public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list conduct metadata");
+
+        public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not list model fit history");
+
+        public Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+            int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not build model outcomes");
+
+        public Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not query best fit");
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact persistent state");
+        }
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact persistent state");
+        }
+
+        public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            throw new InvalidOperationException("repo-process command should not load goal snapshots");
+        }
+
+        public Task SaveGoalSnapshotsAsync(
+            IReadOnlyCollection<GoalSnapshot> goals,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save goal snapshots");
+
+        public Task<T> TransactGoalAsync<T>(
+            GoalId goalId,
+            Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            throw new InvalidOperationException("repo-process command should not transact goal state");
         }
     }
 

@@ -134,7 +134,7 @@ public sealed class GoalDependencyTests
 
     // ── Conductor: B depends on A; B held until A is Done ────────────────────
     //
-    // A is pre-set to Completed (via PassVerification) and requires 3 more driver
+    // A is pre-set to Verified (via PassVerification) and requires 3 more driver
     // advances to reach CleanedUp: Verified→land→Merged, Merged→record→Recorded,
     // Recorded→cleanup→CleanedUp. Then CleanedUp→Done on the fourth advance.
     // B is held each tick until A is in completedGoals. Ticks 1–3 always hold B
@@ -147,7 +147,7 @@ public sealed class GoalDependencyTests
         var a = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "A");
         var b = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "B");
 
-        PassVerification(kernel, a); // a.Status = Completed
+        PassVerification(kernel, a); // a.Status = Verified
 
         kernel.SetGoalDependency(b.Id, a.Id); // B depends on A
 

@@ -271,11 +271,13 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
         Assert.Equal($"-maxcpucount:{expectedDefault}", MaxCpuCountArgument(defaultArguments));
         Assert.NotEqual("-maxcpucount:1", MaxCpuCountArgument(defaultArguments));
+        Assert.Contains("-p:BuildInParallel=false", defaultArguments);
 
         using var configuredScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, "7");
         var configuredArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
 
         Assert.Equal("-maxcpucount:7", MaxCpuCountArgument(configuredArguments));
+        Assert.Contains("-p:BuildInParallel=false", configuredArguments);
     }
 
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_and_strips_worker_environment")]
@@ -356,6 +358,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --filter FullyQualifiedName~FocusedTests --artifacts-path ", StringComparison.Ordinal));
             Assert.True(log.Contains("-maxcpucount:", StringComparison.Ordinal));
+            Assert.True(log.Contains("-p:BuildInParallel=false", StringComparison.Ordinal));
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
             Assert.DoesNotContain("--disable-build-servers", log);

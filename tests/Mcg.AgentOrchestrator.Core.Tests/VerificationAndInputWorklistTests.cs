@@ -117,7 +117,7 @@ public sealed class VerificationAndInputWorklistTests
     var accepted = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
     Assert.True(accepted.IsAccepted);
-    Assert.Equal(GoalStatus.Completed, accepted.Status);
+    Assert.Equal(GoalStatus.Verified, accepted.Status);
     Assert.Equal(4, accepted.PassedTasks);
     Assert.Equal(0, accepted.OpenVerificationCount);
     Assert.Equal(0, accepted.PendingHumanInputCount);
@@ -128,7 +128,7 @@ public sealed class VerificationAndInputWorklistTests
     var failedAcceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
     Assert.False(failedAcceptance.IsAccepted);
-    Assert.Equal(GoalStatus.Completed, failedAcceptance.Status);
+    Assert.Equal(GoalStatus.Verified, failedAcceptance.Status);
     var acceptanceBlocker = Assert.Single(failedAcceptance.Blockers);
     Assert.Equal(GoalAcceptanceBlockerKind.AcceptanceFailed, acceptanceBlocker.Kind);
     Assert.Null(acceptanceBlocker.TaskId);
@@ -278,7 +278,7 @@ public sealed class VerificationAndInputWorklistTests
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.Equal(VerificationGateStatus.Passed, gate.GateStatus);
     Assert.True(acceptance.IsAccepted);
     Assert.Empty(acceptance.Blockers);
@@ -305,7 +305,7 @@ public sealed class VerificationAndInputWorklistTests
 
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.True(acceptance.IsAccepted);
     Assert.Empty(acceptance.Blockers);
 }
@@ -331,7 +331,7 @@ public sealed class VerificationAndInputWorklistTests
 
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
-    Assert.Equal(GoalStatus.Completed, goal.Status);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.True(acceptance.IsAccepted);
     Assert.Empty(acceptance.Blockers);
 }

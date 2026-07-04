@@ -17,7 +17,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
         {
-            goal.SetStatus(GoalStatus.Completed);
+            goal.SetStatus(GoalStatus.Verified);
             return;
         }
 
@@ -61,7 +61,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.RequiredRole == AgentRole.Reviewer &&
-            ReviewerWorkerResultBlockers.TryFindBlocker(task.LastVerification, out var reviewerBlocker))
+            WorkerResultBlockers.TryFindBlocker(task.LastVerification, out var reviewerBlocker))
         {
             return new TaskVerificationGate(
                 task.Id,

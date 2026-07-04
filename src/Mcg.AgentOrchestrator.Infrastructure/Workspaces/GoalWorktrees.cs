@@ -421,6 +421,22 @@ public static class GoalWorktrees
                     CleanupBackoff: detail);
             }
         }
+        else if (!hasLeftoverDirectory &&
+            hasBranch &&
+            IsCleanupBackedOff(path, "remove", out var branchBackoff))
+        {
+            var detail = ToCleanupBackoff(branchBackoff);
+            WarnCleanupFailure(
+                path,
+                "remove:skip-backoff",
+                new IOException(BuildCleanupRetryMessage(path, branchBackoff.Reason, detail)));
+            return new GoalWorktreeRemoveResult(
+                $"Workspace cleanup deferred by cleanup-needed backoff for branch {branch}. {FormatCleanupBackoff(detail)}",
+                path,
+                [],
+                ConductorRetryCommand(goalId),
+                CleanupBackoff: detail);
+        }
 
         if (hasRegisteredWorktree)
         {
@@ -437,6 +453,10 @@ public static class GoalWorktrees
             // partial removal so git's internal state is consistent before we finish cleanup.
             GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "prune");
         }
+
+        GitCli.GitResult? branchRemoval = hasBranch
+            ? GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch)
+            : null;
 
         if (Directory.Exists(path))
         {
@@ -461,34 +481,36 @@ public static class GoalWorktrees
             WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."));
         }
 
-        if (!BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
+        if (!hasBranch || branchRemoval is { ExitCode: 0 })
         {
+            var completeMessage = branchRemoval is { ExitCode: 0 }
+                ? $"Removed workspace and merged branch {branch}."
+                : "Removed workspace.";
+            var incompleteMessage = branchRemoval is { ExitCode: 0 }
+                ? $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
+                : "Removed workspace, but leftover directory cleanup is incomplete.";
             var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
             ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup);
             return CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
-                "Removed workspace.",
-                "Removed workspace, but leftover directory cleanup is incomplete.",
+                completeMessage,
+                incompleteMessage,
                 ephemeralCleanup);
         }
 
-        var branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
         var ownedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
         ownedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ownedEphemeralCleanup);
-        return branchRemoval.ExitCode == 0
-            ? CompleteOrDeferredRemoveResult(
-                path,
-                goalId,
-                $"Removed workspace and merged branch {branch}.",
-                $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete.",
-                ownedEphemeralCleanup)
-            : CompleteOrDeferredRemoveResult(
-                path,
-                goalId,
-                $"Removed workspace; branch {branch} kept because it has unmerged commits.",
-                $"Removed workspace; branch {branch} kept because it has unmerged commits, but leftover directory cleanup is incomplete.",
-                ownedEphemeralCleanup);
+        RecordCleanupNeeded(path, "remove:branch-delete-failed");
+        var branchCleanupBackoff = TryGetCleanupBackoff(path);
+        return new GoalWorktreeRemoveResult(
+            $"Removed workspace; branch {branch} kept because branch deletion failed. Conductor retry: {ConductorRetryCommand(goalId)}" +
+                (branchCleanupBackoff is null ? string.Empty : $" {FormatCleanupBackoff(branchCleanupBackoff)}"),
+            path,
+            [],
+            ConductorRetryCommand(goalId),
+            ownedEphemeralCleanup,
+            branchCleanupBackoff);
     }
 
     public static GoalWorktreeSweepResult SweepOrphanedWorktrees(string executionDirectory, AgentOrchestratorKernel? kernel = null)
@@ -903,6 +925,16 @@ public static class GoalWorktrees
 
     public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
         TryReadOrphanCleanupBackoff(path, out var entry) ? ToCleanupBackoff(entry) : null;
+
+    public static GoalWorktreeCleanupBackoff? RecordGoalCleanupNeeded(
+        string executionDirectory,
+        GoalId goalId,
+        string reason)
+    {
+        var path = WorktreePath(executionDirectory, goalId);
+        RecordCleanupNeeded(path, reason);
+        return TryGetCleanupBackoff(path);
+    }
 
     private static bool IsRebaseStatPathFailure(GitCli.GitResult result)
     {

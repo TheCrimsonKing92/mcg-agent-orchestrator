@@ -47,6 +47,7 @@ internal sealed class ConductorBatchLoop
         Action<AgentOrchestratorKernel>? persistTick = null,
         bool keepAliveWhenIdle = false,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick = null,
+        Func<AgentOrchestratorKernel, IReadOnlyList<ConductorOperatorDispositionSnapshot>>? buildOperatorDispositions = null,
         bool quiet = false,
         TimeSpan? stallWarningThreshold = null)
     {
@@ -303,9 +304,11 @@ internal sealed class ConductorBatchLoop
                 persistTick?.Invoke(kernel);
             }
 
+            var operatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? [];
             var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false)
             {
-                ProgressLines = tickLines
+                ProgressLines = tickLines,
+                OperatorDispositions = operatorDispositions
             };
             if (tickAdvanced == 0 && tickDone == 0)
             {
@@ -433,7 +436,7 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            if (completedGoals.Contains(goal.Id.Value) || goal.Status != GoalStatus.Completed)
+            if (completedGoals.Contains(goal.Id.Value))
             {
                 continue;
             }
@@ -739,4 +742,5 @@ public sealed record BatchTickSummary(
     bool WatchSleeping)
 {
     public IReadOnlyList<string>? ProgressLines { get; init; }
+    public IReadOnlyList<ConductorOperatorDispositionSnapshot>? OperatorDispositions { get; init; }
 }

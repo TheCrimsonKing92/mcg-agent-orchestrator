@@ -73,13 +73,15 @@ public sealed class DispatchStateSurface
     private readonly TimeSpan _recentHeartbeatGrace;
     private readonly TimeSpan _liveIdleTimeout;
     private readonly DispatchRecoveryPolicy _recoveryPolicy;
+    private readonly bool _inspectWorktree;
 
     public DispatchStateSurface(
         IClock? clock = null,
         Func<int, bool>? isProcessAlive = null,
         Func<IEnumerable<int>, IReadOnlyDictionary<int, string>>? readCommandLines = null,
         TimeSpan? recentHeartbeatGrace = null,
-        TimeSpan? liveIdleTimeout = null)
+        TimeSpan? liveIdleTimeout = null,
+        bool inspectWorktree = true)
     {
         _clock = clock ?? new SystemClock();
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
@@ -87,6 +89,7 @@ public sealed class DispatchStateSurface
         _recentHeartbeatGrace = recentHeartbeatGrace ?? DispatchRecoveryPolicy.DefaultRecentHeartbeatGrace;
         _liveIdleTimeout = liveIdleTimeout ?? DispatchRecoveryPolicy.DefaultLiveIdleTimeout;
         _recoveryPolicy = new DispatchRecoveryPolicy(_clock, _recentHeartbeatGrace, _liveIdleTimeout);
+        _inspectWorktree = inspectWorktree;
     }
 
     public DispatchAuthoritativeState Evaluate(GoalId goalId, TaskSpec task)
@@ -96,7 +99,7 @@ public sealed class DispatchStateSurface
             var heartbeat = new DispatchHeartbeatStatus(string.Empty, false, "no-process", 0, null, [], "none", null, null, null, null, 0, 0);
             var artifacts = new DispatchArtifactStatus(string.Empty, false, 0, string.Empty, false, 0, string.Empty, false, string.Empty, false);
             var tree = new DispatchProcessTreeSummary(0, null, [], [], null);
-            var worktree = InspectWorktree(string.Empty, task.LastDispatch?.DispatchedAt);
+            var worktree = InspectWorktree(string.Empty, task.LastDispatch?.DispatchedAt, _inspectWorktree);
             var decision = new DispatchRecoveryDecision(DispatchRecoveryAction.Hold, DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold), "process-absent", "task has no dispatch process");
             return new DispatchAuthoritativeState(
                 DispatchStateKind.None,
@@ -113,7 +116,7 @@ public sealed class DispatchStateSurface
         var heartbeatStatus = ProcessLogReader.ReadHeartbeat(process, _clock.UtcNow);
         var processTree = BuildProcessTree(process, heartbeatStatus);
         var artifactsStatus = ReadArtifacts(process, heartbeatStatus);
-        var worktreeState = InspectWorktree(process.WorkingDirectory, task.LastDispatch?.DispatchedAt);
+        var worktreeState = InspectWorktree(process.WorkingDirectory, task.LastDispatch?.DispatchedAt, _inspectWorktree);
         var staleBudget = DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task);
         var recovery = _recoveryPolicy.Evaluate(
             process,
@@ -202,11 +205,16 @@ public sealed class DispatchStateSurface
             File.Exists(heartbeatPath));
     }
 
-    private static DispatchWorktreeState InspectWorktree(string workingDirectory, DateTimeOffset? dispatchedAt)
+    private static DispatchWorktreeState InspectWorktree(string workingDirectory, DateTimeOffset? dispatchedAt, bool inspectGit)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
         {
             return new DispatchWorktreeState(workingDirectory, false, false, null, null, null, [], "working directory missing");
+        }
+
+        if (!inspectGit)
+        {
+            return new DispatchWorktreeState(workingDirectory, true, false, null, null, null, [], "worktree git inspection skipped for bounded diagnostics");
         }
 
         if (!File.Exists(Path.Combine(workingDirectory, ".git")) && !Directory.Exists(Path.Combine(workingDirectory, ".git")))

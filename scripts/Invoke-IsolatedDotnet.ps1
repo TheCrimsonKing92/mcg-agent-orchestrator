@@ -218,7 +218,8 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
-    "-maxcpucount:$(Get-BuildMaxCpuCount)"
+    "-maxcpucount:$(Get-BuildMaxCpuCount)",
+    "-p:BuildInParallel=false"
 )
 
 $processTempPath = Join-Path (Join-Path $hostTempBase "pt\$ownerToken") "$PID"

@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -26,6 +27,16 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             }
             foreach (var item in items)
                 Console.WriteLine($"[{item.Status}] {item.Id} - {item.Title}");
+            return false;
+        }
+
+        case "backlog-triage":
+        {
+            var limit = ParseOptionalLimit(parts) ?? 5;
+            var staleDays = ParseOptionalNonNegativeInt(parts, "--stale-days") ?? 30;
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var items = store.ListAsync(includeAll: true).GetAwaiter().GetResult();
+            Console.Write(RenderBacklogTriage(items, context.Kernel.Goals, limit, staleDays, DateTimeOffset.UtcNow));
             return false;
         }
 
@@ -125,9 +136,74 @@ internal static IReadOnlyList<BacklogItem> ApplyBacklogListFilters(
     return query.ToArray();
 }
 
+internal static string RenderBacklogTriage(
+    IReadOnlyList<BacklogItem> items,
+    IReadOnlyCollection<Goal> goals,
+    int limit,
+    int staleDays,
+    DateTimeOffset now)
+{
+    if (limit < 0)
+        throw new ArgumentOutOfRangeException(nameof(limit), "Limit must be non-negative.");
+    if (staleDays < 0)
+        throw new ArgumentOutOfRangeException(nameof(staleDays), "Stale days must be non-negative.");
+
+    var openItems = items.Where(item => item.Status == BacklogItemStatus.Open).ToArray();
+    var activeGoalByBacklogId = goals
+        .Where(goal => goal.SourceBacklogItemId is not null && !IsTerminalGoalStatus(goal.Status))
+        .GroupBy(goal => goal.SourceBacklogItemId!, StringComparer.Ordinal)
+        .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+    var linkedOpenItems = openItems
+        .Where(item => activeGoalByBacklogId.ContainsKey(item.Id))
+        .ToArray();
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine($"Backlog triage: open={openItems.Length} done={items.Count - openItems.Length} active-linked={linkedOpenItems.Length} limit={limit}");
+    AppendTriageBucket(
+        sb,
+        $"Stale open (>{staleDays}d)",
+        openItems
+            .Where(item => (now - item.UpdatedAt).TotalDays > staleDays)
+            .OrderBy(item => item.UpdatedAt),
+        limit,
+        activeGoalByBacklogId,
+        now);
+    AppendTriageBucket(
+        sb,
+        "Active-linked open",
+        linkedOpenItems.OrderBy(item => item.UpdatedAt),
+        limit,
+        activeGoalByBacklogId,
+        now);
+    AppendTriageBucket(
+        sb,
+        "Blocked-looking open",
+        openItems
+            .Where(IsBlockedLooking)
+            .OrderBy(item => item.UpdatedAt),
+        limit,
+        activeGoalByBacklogId,
+        now);
+    AppendTriageBucket(
+        sb,
+        "High-priority open",
+        openItems
+            .Where(IsHighPriorityLooking)
+            .OrderBy(item => item.UpdatedAt),
+        limit,
+        activeGoalByBacklogId,
+        now);
+    AppendDuplicateBucket(sb, openItems, limit);
+    return sb.ToString();
+}
+
 private static int? ParseOptionalLimit(IReadOnlyList<string> parts)
 {
-    var value = GetFlagValue(parts, "--limit");
+    return ParseOptionalNonNegativeInt(parts, "--limit");
+}
+
+private static int? ParseOptionalNonNegativeInt(IReadOnlyList<string> parts, string flag)
+{
+    var value = GetFlagValue(parts, flag);
     if (value is null)
     {
         return null;
@@ -136,10 +212,85 @@ private static int? ParseOptionalLimit(IReadOnlyList<string> parts)
     if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var limit) ||
         limit < 0)
     {
-        throw new ArgumentException("--limit requires a non-negative integer value.");
+        throw new ArgumentException($"{flag} requires a non-negative integer value.");
     }
 
     return limit;
+}
+
+private static void AppendTriageBucket(
+    System.Text.StringBuilder sb,
+    string heading,
+    IEnumerable<BacklogItem> items,
+    int limit,
+    IReadOnlyDictionary<string, Goal> activeGoalByBacklogId,
+    DateTimeOffset now)
+{
+    var selected = items.Take(limit).ToArray();
+    sb.AppendLine(heading + ":");
+    if (selected.Length == 0)
+    {
+        sb.AppendLine("- none");
+        return;
+    }
+
+    foreach (var item in selected)
+    {
+        var ageDays = Math.Max(0, (int)Math.Floor((now - item.UpdatedAt).TotalDays));
+        var goalText = activeGoalByBacklogId.TryGetValue(item.Id, out var goal)
+            ? $" goal={goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}:{goal.Status}"
+            : "";
+        sb.AppendLine($"- {ShortBacklogId(item)} age={ageDays}d{goalText} {item.Title}");
+    }
+}
+
+private static void AppendDuplicateBucket(System.Text.StringBuilder sb, IReadOnlyList<BacklogItem> openItems, int limit)
+{
+    var duplicateGroups = openItems
+        .GroupBy(item => DuplicateKey(item.Title), StringComparer.Ordinal)
+        .Where(group => group.Key.Length > 0 && group.Count() > 1)
+        .OrderByDescending(group => group.Count())
+        .ThenBy(group => group.Key, StringComparer.Ordinal)
+        .Take(limit)
+        .ToArray();
+
+    sb.AppendLine("Duplicate-looking open:");
+    if (duplicateGroups.Length == 0)
+    {
+        sb.AppendLine("- none");
+        return;
+    }
+
+    foreach (var group in duplicateGroups)
+    {
+        var sample = string.Join(" | ", group.Take(3).Select(item => $"{ShortBacklogId(item)} {item.Title}"));
+        sb.AppendLine($"- {group.Count()}x {group.Key}: {sample}");
+    }
+}
+
+private static string ShortBacklogId(BacklogItem item) => item.Id[..Math.Min(8, item.Id.Length)];
+
+private static bool IsTerminalGoalStatus(GoalStatus status) =>
+    status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+private static bool IsBlockedLooking(BacklogItem item) =>
+    ContainsAny(item.Title, "blocked", "blocker", "stuck", "waiting", "human input") ||
+    ContainsAny(item.Body, "blocked", "blocker", "stuck", "waiting", "human input");
+
+private static bool IsHighPriorityLooking(BacklogItem item) =>
+    ContainsAny(item.Title, "p0", "p1", "urgent", "critical", "high-priority", "high priority") ||
+    ContainsAny(item.Body, "p0", "p1", "urgent", "critical", "high-priority", "high priority");
+
+private static bool ContainsAny(string text, params string[] needles) =>
+    needles.Any(needle => text.Contains(needle, StringComparison.OrdinalIgnoreCase));
+
+private static string DuplicateKey(string title)
+{
+    var normalized = new string(title
+        .ToLowerInvariant()
+        .Select(ch => char.IsLetterOrDigit(ch) ? ch : ' ')
+        .ToArray());
+    return string.Join(' ', normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 }
 
 private static string? ResolveBacklogTextFile(IReadOnlyList<string> parts, string flag, int inlineIndex, string? defaultValue)

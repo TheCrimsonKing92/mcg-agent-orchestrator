@@ -94,7 +94,7 @@ public sealed class GoalWorktreeTests
             });
 
             var goal = context.CurrentGoal!;
-            Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+            Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
             Xunit.Assert.NotNull(worktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(0, worktrees.MergeCount);
@@ -123,7 +123,7 @@ public sealed class GoalWorktreeTests
 
             var goal = context.CurrentGoal!;
             Xunit.Assert.Equal("fake verifier boom", ex.Message);
-            Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+            Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
             Xunit.Assert.NotNull(worktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(0, worktrees.MergeCount);

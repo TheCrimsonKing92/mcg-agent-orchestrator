@@ -123,6 +123,23 @@ public sealed class ProvenanceReportTests
         Xunit.Assert.Empty(snapshot.Goals);
     }
 
+    [Xunit.Fact(DisplayName = "Provenance_verified_goals_are_excluded_from_completed_report")]
+    public void ProvenanceVerifiedGoalsAreExcludedFromCompletedReport()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Verified but unmerged work", [MakeTask()]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents);
+        RecordVerifiedWithReceipt(kernel, goal, goal.Tasks[0]);
+
+        var snapshot = kernel.BuildProvenanceReport($"Landed goal {goal.Id.Value[..8]}");
+
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Xunit.Assert.Equal(0, snapshot.CompletedGoalCount);
+        Xunit.Assert.Empty(snapshot.Goals);
+        var reference = Xunit.Assert.Single(snapshot.UnbackedDogfoodReferences);
+        Assert.True(reference.IsAbsent);
+    }
+
     // ── Acceptance gate tests ───────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "Acceptance_gate_blocks_unbacked_completed_goal_with_provenance_blocker")]
@@ -271,6 +288,28 @@ public sealed class ProvenanceReportTests
         new(TaskId.New(), "Developer implementation task", AgentRole.Developer);
 
     private static void RecordCompletedWithReceipt(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task)
+    {
+        var dispatch = new TaskDispatchRecord(
+            "worker-cli", DispatchCommand, WorkDir, DateTimeOffset.UtcNow,
+            ProviderName: "Anthropic", ModelName: "claude-sonnet-4-6");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+
+        var receipt = new TaskVerificationRecord(
+            DispatchCommand, WorkDir, 0,
+            "Task completed successfully.",
+            string.Empty,
+            DateTimeOffset.UtcNow);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, receipt);
+        if (goal.Status == GoalStatus.Verified)
+        {
+            kernel.CompleteGoal(goal.Id, "Completed after durable integration and cleanup evidence.");
+        }
+    }
+
+    private static void RecordVerifiedWithReceipt(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task)

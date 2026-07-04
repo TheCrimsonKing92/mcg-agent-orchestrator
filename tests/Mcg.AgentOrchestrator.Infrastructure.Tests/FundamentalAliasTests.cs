@@ -75,10 +75,10 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.False(string.IsNullOrWhiteSpace(runCommand));
     }
 
-    // ─── next --full: folded inspection sections ──────────────────────────────
+    // ─── next --full: bounded diagnostics replacement ─────────────────────────
 
-    [Xunit.Fact(DisplayName = "Cli_next_full_surfaces_detail_sections_not_in_concise_output")]
-    public void CliNextFullSurfacesDetailSectionsNotInConciseOutput()
+    [Xunit.Fact(DisplayName = "Cli_next_full_prints_bounded_diagnostics_not_deep_sections")]
+    public void CliNextFullPrintsBoundedDiagnosticsNotDeepSections()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -114,17 +114,20 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.DoesNotContain("Supervisor goal:", conciseOutput);
         Xunit.Assert.DoesNotContain("Operator inbox:", conciseOutput);
 
-        // next --full includes the detail sections and still prints Run:
-        Xunit.Assert.Contains("Run: ", fullOutput);
-        Xunit.Assert.Contains("Attention:", fullOutput);
-        Xunit.Assert.Contains("Goal readiness", fullOutput);
-        Xunit.Assert.Contains("Loop health report", fullOutput);
-        Xunit.Assert.Contains("Supervisor goal:", fullOutput);
-        Xunit.Assert.Contains("Operator inbox:", fullOutput);
+        Xunit.Assert.Contains("Goal diagnostics", fullOutput);
+        Xunit.Assert.Contains("Mode: bounded", fullOutput);
+        Xunit.Assert.Contains("Deeper commands:", fullOutput);
+        Xunit.Assert.Contains($"readiness {goal.Id.Value[..8]}", fullOutput);
+        Xunit.Assert.Contains($"operator-inbox {goal.Id.Value[..8]}", fullOutput);
+        Xunit.Assert.DoesNotContain("Attention:", fullOutput);
+        Xunit.Assert.DoesNotContain("Goal readiness", fullOutput);
+        Xunit.Assert.DoesNotContain("Loop health report", fullOutput);
+        Xunit.Assert.DoesNotContain("Supervisor goal:", fullOutput);
+        Xunit.Assert.DoesNotContain("Operator inbox:", fullOutput);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_next_full_includes_model_outcomes_and_subscription_plan")]
-    public void CliNextFullIncludesModelOutcomesAndSubscriptionPlan()
+    [Xunit.Fact(DisplayName = "Cli_next_full_points_to_deeper_diagnostic_commands")]
+    public void CliNextFullPointsToDeeperDiagnosticCommands()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -148,14 +151,15 @@ public sealed class FundamentalAliasTests
             ["next", "--full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
-        Xunit.Assert.Contains("Model outcome scorecard", output);
-        Xunit.Assert.Contains("subscription plan:", output);
-        Xunit.Assert.Contains("verification worklist:", output);
-        Xunit.Assert.Contains("human input worklist:", output);
-        Xunit.Assert.Contains("SDLC stages:", output);
-        Xunit.Assert.Contains("verification gate:", output);
-        Xunit.Assert.Contains("Goal recovery", output);
-        Xunit.Assert.Contains("Failure triage goal:", output);
+        Xunit.Assert.Contains($"subscription-plan {goal.Id.Value[..8]}", output);
+        Xunit.Assert.Contains("model-outcomes", output);
+        Xunit.Assert.Contains("loop-health", output);
+        Xunit.Assert.Contains($"failure-triage {goal.Id.Value[..8]}", output);
+        Xunit.Assert.Contains($"goal-recovery {goal.Id.Value[..8]}", output);
+        Xunit.Assert.DoesNotContain("Model outcome scorecard", output);
+        Xunit.Assert.DoesNotContain("subscription plan:", output);
+        Xunit.Assert.DoesNotContain("Goal recovery", output);
+        Xunit.Assert.DoesNotContain("Failure triage goal:", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_next_full_accepts_goal_prefix_before_full_flag")]
@@ -184,8 +188,8 @@ public sealed class FundamentalAliasTests
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Xunit.Assert.Equal(goal.Id, currentGoal?.Id);
-        Xunit.Assert.Contains("Attention:", output);
-        Xunit.Assert.Contains("Run: ", output);
+        Xunit.Assert.Contains("Goal diagnostics", output);
+        Xunit.Assert.Contains("Deeper commands:", output);
     }
 
     // ─── accept alias ─────────────────────────────────────────────────────────

@@ -874,6 +874,144 @@ public sealed class WorkerDispatchTests
     Assert.Contains("dirty_worktree=True", state.Summary);
 }
 
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_waits_for_quiet_live_worker")]
+    public void GoalOperatorDispositionWaitsForQuietLiveWorker()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-07-03T07:00:00Z");
+    var clock = new TestClock(now);
+    var (_, goal, task, process) = CreateRecordedDispatch(root, clock);
+    WriteHeartbeat(
+        process,
+        now.AddSeconds(-20),
+        now.AddSeconds(-20),
+        "running",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        childPid: 222,
+        ownedCpuMs: 25,
+        ownedPids: [111, 222]);
+
+    var disposition = new GoalOperatorDispositionSurface(
+        clock,
+        CreateStateSurface(clock, livePids: [111, 222], commandLines: new Dictionary<int, string>()))
+        .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: false);
+
+    Assert.Equal(OperatorDispositionState.Wait, disposition.State);
+    Assert.Equal("wait", disposition.NextSafeCommand);
+    Assert.Contains(disposition.Dispatches, dispatch => dispatch.TaskId == task.Id && dispatch.State == OperatorDispositionState.Wait);
+}
+
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_blocks_completed_dirty_worker")]
+    public void GoalOperatorDispositionBlocksCompletedDirtyWorker()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-03T07:05:00Z");
+    var clock = new TestClock(now);
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "worker output",
+        string.Empty,
+        clock);
+    File.WriteAllText(Path.Combine(process.WorkingDirectory, "dirty-disposition.txt"), "dirty evidence");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Worker completed with dirty worktree.");
+
+    var disposition = new GoalOperatorDispositionSurface(
+        clock,
+        CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>()))
+        .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: false);
+
+    Assert.Equal(OperatorDispositionState.Blocked, disposition.State);
+    Assert.Contains("dirty-worktree", disposition.Blockers);
+    Assert.Equal("task 1", disposition.NextSafeCommand);
+}
+
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_retries_failed_review")]
+    public void GoalOperatorDispositionRetriesFailedReview()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var review = new TaskSpec(TaskId.New(), "Review implementation.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Review retry", [review]);
+        var agent = new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer, new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Reviewer found a blocker.");
+
+        var disposition = new GoalOperatorDispositionSurface(new TestClock(DateTimeOffset.Parse("2026-07-03T07:10:00Z")))
+            .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: false);
+
+        Assert.Equal(OperatorDispositionState.Retry, disposition.State);
+        Assert.Equal("retry 1 <note>", disposition.NextSafeCommand);
+        Assert.True(disposition.Reason.Contains("failed", StringComparison.OrdinalIgnoreCase), disposition.Reason);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_accepts_active_verified_goal_with_worktree")]
+    public void GoalOperatorDispositionAcceptsActiveVerifiedGoalWithWorktree()
+    {
+        var root = CreateSeededDispatchRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var taskSpec = new TaskSpec(TaskId.New(), "Finish cleanup.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Cleanup debt", [taskSpec]);
+        var agent = new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        _ = GoalWorktrees.Ensure(root, goal.Id);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+
+        var disposition = new GoalOperatorDispositionSurface(new TestClock(DateTimeOffset.Parse("2026-07-03T07:15:00Z")))
+            .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: true, executionDirectory: root);
+
+        Assert.Equal(GoalStatus.Active, goal.Status);
+        Assert.Equal(OperatorDispositionState.Accept, disposition.State);
+        Assert.Equal($"acceptance {goal.Id.Value[..8]}", disposition.NextSafeCommand);
+        Assert.DoesNotContain("goal-worktree-cleanup-debt", disposition.Blockers);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_reports_terminal_worktree_cleanup_debt")]
+    public void GoalOperatorDispositionReportsTerminalWorktreeCleanupDebt()
+    {
+        var root = CreateSeededDispatchRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var taskSpec = new TaskSpec(TaskId.New(), "Finish cleanup.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Cleanup debt", [taskSpec]);
+        var agent = new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        _ = GoalWorktrees.Ensure(root, goal.Id);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", root, 0, "ok", string.Empty, DateTimeOffset.Parse("2026-07-03T07:15:00Z")));
+
+        var disposition = new GoalOperatorDispositionSurface(new TestClock(DateTimeOffset.Parse("2026-07-03T07:15:00Z")))
+            .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: true, executionDirectory: root);
+
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Equal(OperatorDispositionState.Accept, disposition.State);
+        Assert.Equal($"acceptance {goal.Id.Value[..8]}", disposition.NextSafeCommand);
+        Assert.DoesNotContain("goal-worktree-cleanup-debt", disposition.Blockers);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_flags_stale_terminal_human_wait_desync")]
+    public void GoalOperatorDispositionFlagsStaleTerminalHumanWaitDesync()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var taskSpec = new TaskSpec(TaskId.New(), "Answer then finish.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Human wait desync", [taskSpec]);
+        var agent = new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        kernel.RequestHumanInput(goal.Id, task.Id, "Need operator choice.");
+        kernel.CancelGoal(goal.Id, "Cancelled despite pending input.");
+
+        var disposition = new GoalOperatorDispositionSurface(new TestClock(DateTimeOffset.Parse("2026-07-03T07:20:00Z")))
+            .Evaluate(goal, pendingHumanInputCount: 1, verificationSatisfied: false);
+
+        Assert.Equal(GoalStatus.Cancelled, goal.Status);
+        Assert.Equal(OperatorDispositionState.ProductBug, disposition.State);
+        Assert.Equal($"terminal-goal-sweep {goal.Id.Value[..8]}", disposition.NextSafeCommand);
+        Assert.Contains("stale-terminal-human-wait", disposition.Blockers);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_does_not_start_worker_or_mutate_owned_ephemeral_cleanup")]
     public void WorkerProfileDispatcherPreflightDoesNotStartWorkerOrMutateOwnedEphemeralCleanup()
     {
@@ -1233,6 +1371,27 @@ public sealed class WorkerDispatchTests
     Assert.Equal(ProviderFailureKind.RateLimit, failureKind);
     Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
     Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProvider_parse_outcome_ignores_rate_limit_words_inside_WORKER_RESULT_blockers")]
+    public void WorkerProviderParseOutcomeIgnoresRateLimitWordsInsideWorkerResultBlockers()
+{
+    var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: dotnet test --no-build",
+        "tests: not-run",
+        "commit: none",
+        "blockers: API rate limit hit while running a local verification fixture",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: none",
+        "confidence: medium",
+        "END_WORKER_RESULT");
+
+    var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, stdout, string.Empty));
+
+    Assert.Equal(ProviderFailureKind.Unknown, failureKind);
 }
 
     [Xunit.Fact(DisplayName = "DispatchFailureClassifier_identifies_subscription_dispatch_from_typed_provider_identity")]
@@ -4263,6 +4422,62 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(exit));
     Assert.Contains(task.LastVerification!.StandardError, text => text.Contains("no observable progress", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("heartbeat state=running", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_records_WORKER_RESULT_blocker_as_task_failure_without_subscription_retry")]
+    public void BackgroundDispatchRunnerRefreshRecordsWorkerResultBlockerAsTaskFailureWithoutSubscriptionRetry()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-07-03T14:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refresh structured blocker");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: dotnet test --no-build",
+        "tests: fail - timed out",
+        "commit: none",
+        "blockers: full Infrastructure no-build timed out at 214s",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: dotnet-windows-build-hygiene",
+        "confidence: medium",
+        "END_WORKER_RESULT"));
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "1");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec prompt",
+        root,
+        now.AddMinutes(-5),
+        "OpenAI",
+        "gpt-5.5",
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+    var completed = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(1, completed.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Equal(ProviderFailureKind.Unknown, task.LastVerification.ProviderFailureKind);
+    Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("full Infrastructure no-build timed out at 214s", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_fast_path_fires_when_cpu_idle_and_no_output")]
