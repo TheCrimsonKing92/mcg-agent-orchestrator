@@ -258,6 +258,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             foreach (var goal in goals)
             {
                 await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken);
+                await UpsertModelFitHistoryRowsAsync(conn, goal, cancellationToken);
             }
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
@@ -585,6 +586,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
             var updatedAt = DateTimeOffset.UtcNow.ToString("O");
             await UpsertGoalRowAsync(conn, snapshot, updatedAt, versionSql: "$version", cancellationToken, currentVersion + 1);
+            await UpsertModelFitHistoryRowsAsync(conn, snapshot, cancellationToken);
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             return true;
@@ -660,6 +662,18 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$self_rating", ModelFitHistory.NormalizeSelfRating(row.SelfRating));
         cmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertModelFitHistoryRowsAsync(
+        SqliteConnection conn,
+        GoalSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []));
+        foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
+        {
+            await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken);
+        }
     }
 
     private static ModelFitHistoryRow ReadModelFitHistoryRow(SqliteDataReader reader)

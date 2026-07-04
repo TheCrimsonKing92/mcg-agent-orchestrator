@@ -394,6 +394,51 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(ModelFitHistory.Adequate, row.SelfRating);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_updates_model_fit_history_rows")]
+    public async Task TransactGoalAsyncUpdatesModelFitHistoryRows()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "task", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Goal-scoped model fit", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (snapshot, _) =>
+            {
+                Assert.NotNull(snapshot);
+                var transactionKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], []));
+                var dispatch = new TaskDispatchRecord(
+                    "worker-cli",
+                    "worker",
+                    "C:\\work",
+                    DateTimeOffset.Parse("2026-07-01T12:00:00Z"),
+                    "OpenAI",
+                    "gpt-5.5",
+                    TaskComplexity: TaskComplexity.Complex);
+                transactionKernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+                transactionKernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+                    dispatch.Command,
+                    dispatch.WorkingDirectory,
+                    0,
+                    "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit",
+                    string.Empty,
+                    DateTimeOffset.Parse("2026-07-01T12:00:01Z")));
+                var updated = transactionKernel.ExportSnapshot().Goals.Single(updatedGoal => updatedGoal.Id == goal.Id.Value);
+                return Task.FromResult((true, (GoalSnapshot?)updated, true));
+            });
+
+        var row = Assert.Single(await repo.ListModelFitHistoryAsync());
+        Assert.Equal(goal.Id.Value, row.GoalId);
+        Assert.Equal(task.Id.Value, row.TaskId);
+        Assert.Equal("OpenAI", row.ProviderName);
+        Assert.Equal("gpt-5.5", row.ModelName);
+        Assert.Equal(ModelFitHistory.Adequate, row.SelfRating);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_scorecard_reflects_model_fit_history_store")]
     public async Task ScorecardReflectsModelFitHistoryStore()
     {
