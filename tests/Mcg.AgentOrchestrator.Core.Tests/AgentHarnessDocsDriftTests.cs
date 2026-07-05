@@ -156,6 +156,12 @@ public sealed class AgentHarnessDocsDriftTests
                     return directory.FullName;
                 }
 
+                if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
+                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
+                {
+                    return directory.FullName;
+                }
+
                 directory = directory.Parent;
             }
         }
