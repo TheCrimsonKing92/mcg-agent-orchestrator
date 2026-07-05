@@ -467,6 +467,46 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(0, secondSwept);
 }
 
+    [Xunit.Fact(DisplayName = "SweepExitedProcesses_is_idempotent_after_recoverable_usage_limit_clears_latest_verification")]
+    public void SweepExitedProcessesIsIdempotentAfterRecoverableUsageLimitClearsLatestVerification()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "subscription-worker task idempotent", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Sweep usage limit idempotent", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var workTask = goal.Tasks.Single();
+
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, string.Empty);
+    File.WriteAllText(stderrPath, "Rate limit reached for gpt-5.5. Please try again in 42s.");
+    File.WriteAllText(exitPath, "1");
+
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        workTask.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec prompt",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var processRecord = new TaskProcessRecord(999999, "codex exec prompt", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, workTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    var firstSwept = runner.SweepExitedProcesses(kernel);
+    var secondSwept = runner.SweepExitedProcesses(kernel);
+
+    Assert.Equal(1, firstSwept);
+    Assert.Equal(0, secondSwept);
+    Assert.Null(workTask.LastVerification);
+    Assert.Single(workTask.VerificationHistory);
+    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(workTask));
+}
+
 private static TaskProcessRecord CreateProcessRecord(string root, string exitPath)
 {
     return new TaskProcessRecord(

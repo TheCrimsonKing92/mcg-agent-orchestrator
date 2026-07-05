@@ -140,13 +140,18 @@ internal static class GoalRecoveryPlanner
 
         if (task.LastVerification is { Succeeded: false } verification)
         {
+            var hasDirtyRecovery = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var dirtyRecovery);
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,
                 task.RequiredRole,
                 task.Status,
-                $"latest verification failed exit={verification.ExitCode}: {verification.Command}",
-                $"retry {taskNumber} <note>"));
+                hasDirtyRecovery
+                    ? $"latest dispatch failed but left dirty worker output for orchestrator commit: {dirtyRecovery.Label}; changed files [{string.Join(", ", dirtyRecovery.ChangedFiles)}]"
+                    : $"latest verification failed exit={verification.ExitCode}: {verification.Command}",
+                hasDirtyRecovery
+                    ? $"task {taskNumber}"
+                    : $"retry {taskNumber} <note>"));
         }
 
         if (task.Status == WorkTaskStatus.Failed)

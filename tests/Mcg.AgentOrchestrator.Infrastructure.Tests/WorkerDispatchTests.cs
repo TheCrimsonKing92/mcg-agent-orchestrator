@@ -4104,6 +4104,42 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("done", task.LastVerification!.StandardOutput);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_trusts_exit_zero_file_before_usage_limit_stderr")]
+    public void BackgroundDispatchRunnerRefreshTrustsExitZeroFileBeforeUsageLimitStderr()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    var clock = new TestClock(DateTimeOffset.Parse("2026-07-05T04:30:00Z"));
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Complete background process from exit file despite usage text");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    File.WriteAllText(stdout, "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT");
+    File.WriteAllText(stderr, "Rate limit reached for gpt-5.5. Please try again in 42s.");
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec prompt",
+            root,
+            clock.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, clock.UtcNow, null, null));
+
+    var completed = new BackgroundDispatchRunner(clock, isStillRunning: _ => true)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(0, completed.ExitCode);
+    Assert.Equal("0", File.ReadAllText(exit));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_completes_dead_exiting_worker_from_exit_file")]
     public void BackgroundDispatchRunnerReconcileCompletesDeadExitingWorkerFromExitFile()
 {

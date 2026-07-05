@@ -2192,6 +2192,48 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("shared infrastructure changed", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_recovery_surfaces_orchestrator_commit_path_for_dirty_failed_dispatch")]
+    public void CliGoalRecoverySurfacesOrchestratorCommitPathForDirtyFailedDispatch()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Recover dirty worker output", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover dirty worker output goal", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var devTask = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, devTask.Id, new TaskDispatchRecord("codex-cli", "codex exec", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            devTask.Id,
+            new TaskVerificationRecord(
+                "codex exec",
+                root,
+                1,
+                "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT",
+                "Developer/Tester dispatch exited 0 but left the worktree dirty. branch=goal/abc; head=def; worktree=dirty; commits_after_dispatch=0; status_short=M src/Foo.cs.",
+                DateTimeOffset.UtcNow));
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.True(output.Contains("orchestrator commit", StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains("dirty-useful", output);
+        Xunit.Assert.Contains("command: task 1", output);
+        Xunit.Assert.Contains("Recommended actions:", output);
+        Xunit.Assert.Contains("task 1", output);
+    }
+
     [Xunit.Fact(DisplayName = "GoalOperationJournal_records_latest_status_and_interrupted_operations")]
     public void GoalOperationJournalRecordsLatestStatusAndInterruptedOperations()
     {

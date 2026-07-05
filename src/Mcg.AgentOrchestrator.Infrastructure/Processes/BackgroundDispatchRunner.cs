@@ -272,8 +272,13 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is null || process.WasCancelled || task.LastVerification is not null)
+                if (process is null ||
+                    process.WasCancelled ||
+                    task.LastVerification is not null ||
+                    HasRecordedCompletionForProcess(task, process))
+                {
                     continue;
+                }
 
                 var recoveryDecision = _recoveryPolicy.Evaluate(process, AnyTrackedProcessStillRunning(process));
                 if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, recoveryDecision, out var outcome))
@@ -285,6 +290,20 @@ public sealed class BackgroundDispatchRunner
         }
 
         return reconciled;
+    }
+
+    private static bool HasRecordedCompletionForProcess(TaskSpec task, TaskProcessRecord process)
+    {
+        if (process.CompletedAt is null || process.ExitCode is null)
+        {
+            return false;
+        }
+
+        return task.VerificationHistory.Any(verification =>
+            verification.ExitCode == process.ExitCode &&
+            verification.Command.Equals(process.Command, StringComparison.Ordinal) &&
+            verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
+            verification.CompletedAt == process.CompletedAt);
     }
 
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
@@ -511,6 +530,7 @@ public sealed class BackgroundDispatchRunner
         string? standardErrorDiagnostic = null,
         DispatchRecoveryDecision? recoveryDecision = null)
     {
+        var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         ReleaseTrackedProcessJobs(processRecord);
@@ -653,7 +673,10 @@ public sealed class BackgroundDispatchRunner
         }
 
         standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
-        TryWriteExitCode(processRecord.ExitCodePath, exitCode);
+        if (!exitArtifactAlreadyExisted)
+        {
+            TryWriteExitCode(processRecord.ExitCodePath, exitCode);
+        }
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,

@@ -126,6 +126,11 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (IsDirtyDispatchGuardFailure(verification))
+        {
+            return false;
+        }
+
         if (verification.ProviderFailureKind == ProviderFailureKind.RateLimit)
         {
             return true;
@@ -135,6 +140,7 @@ public static class DispatchFailureClassifier
     }
 
     public static bool HasRecoverableSubscriptionLimitEvidence(TaskVerificationRecord verification) =>
+        !IsDirtyDispatchGuardFailure(verification) &&
         TryGetRecoverableSubscriptionLimitLine(verification, out _);
 
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
@@ -266,6 +272,18 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
+        if (TryBuildDirtyDispatchRecovery(task, out _))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.DirtyWorktreeRecoverable,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildEvidenceSummary(verification));
+        }
+
         if (providerFailureKind != ProviderFailureKind.Unknown)
         {
             return ClassifyProviderFailure(
@@ -379,18 +397,6 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
-        if (TryBuildDirtyDispatchRecovery(task, out _))
-        {
-            return new DispatchOutcome(
-                DispatchOutcomeKind.DirtyWorktreeRecoverable,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification));
-        }
-
         return new DispatchOutcome(
             DispatchOutcomeKind.UnknownFailure,
             exitCode,
@@ -403,6 +409,11 @@ public static class DispatchFailureClassifier
 
     private static string BuildEvidenceSummary(TaskVerificationRecord verification)
     {
+        if (IsDirtyDispatchGuardFailure(verification))
+        {
+            return "dirty-dispatch-recovery";
+        }
+
         if (TryGetPreflightFailureEvidenceLine(verification, out var preflightLine))
         {
             return BuildPreflightFailureEvidenceSummary(preflightLine);
@@ -780,7 +791,8 @@ public static class DispatchFailureClassifier
     public static bool TryGetSubscriptionLimitRetryAfter(TaskVerificationRecord verification, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
-        if (!TryGetRecoverableSubscriptionLimitLine(verification, out var output))
+        if (IsDirtyDispatchGuardFailure(verification) ||
+            !TryGetRecoverableSubscriptionLimitLine(verification, out var output))
         {
             return false;
         }
