@@ -585,7 +585,7 @@ internal static class OperatorInbox
         }
 
         return kernel.Goals
-            .Where(goal => goal.Status is not GoalStatus.Cancelled and not GoalStatus.Superseded)
+            .Where(goal => goal.Status is not GoalStatus.Parked and not GoalStatus.Cancelled and not GoalStatus.Superseded)
             .OrderByDescending(goal => goal.Timeline.LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
             .ToList();
     }

@@ -15,4 +15,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\AGENTS.md" Link="AGENTS.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\CLAUDE.md" Link="CLAUDE.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

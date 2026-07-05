@@ -370,7 +370,12 @@ public sealed class ModelExecutionTests
     var agents = DefaultAgents();
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec",
         "C:\\repo",

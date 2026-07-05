@@ -2192,6 +2192,48 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("shared infrastructure changed", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_recovery_surfaces_orchestrator_commit_path_for_dirty_failed_dispatch")]
+    public void CliGoalRecoverySurfacesOrchestratorCommitPathForDirtyFailedDispatch()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Recover dirty worker output", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover dirty worker output goal", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var devTask = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, devTask.Id, new TaskDispatchRecord("codex-cli", "codex exec", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            devTask.Id,
+            new TaskVerificationRecord(
+                "codex exec",
+                root,
+                1,
+                "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT",
+                "Developer/Tester dispatch exited 0 but left the worktree dirty. branch=goal/abc; head=def; worktree=dirty; commits_after_dispatch=0; status_short=M src/Foo.cs.",
+                DateTimeOffset.UtcNow));
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-recovery", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.True(output.Contains("orchestrator commit", StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.Contains("dirty-useful", output);
+        Xunit.Assert.Contains("command: task 1", output);
+        Xunit.Assert.Contains("Recommended actions:", output);
+        Xunit.Assert.Contains("task 1", output);
+    }
+
     [Xunit.Fact(DisplayName = "GoalOperationJournal_records_latest_status_and_interrupted_operations")]
     public void GoalOperationJournalRecordsLatestStatusAndInterruptedOperations()
     {
@@ -4325,7 +4367,12 @@ public sealed class CliCommandTests
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec attempt 1",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 1",
             root,
@@ -4333,7 +4380,12 @@ public sealed class CliCommandTests
             string.Empty,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
             DateTimeOffset.UtcNow));
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec attempt 2",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 2",
             root,
@@ -4845,6 +4897,64 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Global clarification 9", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_show_excludes_parked_goal_waits_by_default_and_all_includes_history")]
+    public void CliAttentionShowExcludesParkedGoalWaitsByDefaultAndAllIncludesHistory()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var live = kernel.CreateGoal(new GoalId("abc10000111111111111111111111111"), "Live wait");
+        var parked = kernel.CreateGoal(new GoalId("abc20000222222222222222222222222"), "Parked wait");
+        _ = kernel.RequestHumanInput(live.Id, null, "Need live choice.", HumanWaitKind.RiskReview);
+        _ = kernel.RequestHumanInput(parked.Id, null, "Need parked choice.", HumanWaitKind.RiskReview);
+        kernel.ParkGoal(parked.Id, "deferred");
+
+        var defaultOutput = ExecuteCliAndCapture(["attention", "show"], kernel, workspace);
+        var allOutput = ExecuteCliAndCapture(["attention", "show", "--all"], kernel, workspace);
+
+        Xunit.Assert.Contains("Need live choice.", defaultOutput);
+        Xunit.Assert.DoesNotContain("Need parked choice.", defaultOutput);
+        Xunit.Assert.Contains("Need parked choice.", allOutput);
+        Xunit.Assert.Contains("resolution: Goal parked: deferred", allOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_show_migrates_legacy_goal_parked_waits")]
+    public async Task CliAttentionShowMigratesLegacyGoalParkedWaits()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var live = kernel.CreateGoal(new GoalId("abc30000333333333333333333333333"), "Live wait");
+        var parked = kernel.CreateGoal(new GoalId("abc40000444444444444444444444444"), "Legacy parked wait");
+        _ = kernel.RequestHumanInput(live.Id, null, "Need live answer.", HumanWaitKind.RiskReview);
+        var parkedWait = kernel.RequestHumanInput(parked.Id, null, "Goal parked: stale_resurrected_sweep");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            parked.Id.Value,
+            "Parked clarification",
+            "Parked body",
+            $"spec-clarification:{parked.Id.Value}:scope:99999999");
+
+        var defaultOutput = ExecuteCliAndCapture(["attention", "show"], kernel, workspace);
+        var allOutput = ExecuteCliAndCapture(["attention", "show", "--all"], kernel, workspace);
+        var items = await store.ListAsync(parked.Id.Value);
+
+        Xunit.Assert.Equal(GoalStatus.Parked, parked.Status);
+        Xunit.Assert.True(parkedWait.IsCompleted);
+        Xunit.Assert.Equal("Goal parked: stale_resurrected_sweep", parkedWait.Answer);
+        Xunit.Assert.DoesNotContain("stale_resurrected_sweep", defaultOutput);
+        Xunit.Assert.DoesNotContain("Parked clarification", defaultOutput);
+        Xunit.Assert.Contains("Need live answer.", defaultOutput);
+        Xunit.Assert.Contains("stale_resurrected_sweep", allOutput);
+        Xunit.Assert.Contains("Parked clarification", allOutput);
+        Xunit.Assert.All(items, item =>
+        {
+            Xunit.Assert.Equal(CollaborationItemStatus.Resolved, item.Status);
+            Xunit.Assert.Equal("Goal parked: stale_resurrected_sweep", item.Resolution);
+        });
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_show_lists_typed_human_waits_with_goal_filter")]
     public void CliAttentionShowListsTypedHumanWaitsWithGoalFilter()
     {
@@ -5076,8 +5186,8 @@ public sealed class CliCommandTests
         Xunit.Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_park_goal_requires_confirmation_and_creates_resume_gate")]
-    public void CliParkGoalRequiresConfirmationAndCreatesResumeGate()
+    [Xunit.Fact(DisplayName = "Cli_park_goal_requires_confirmation_and_resolves_attention_waits")]
+    public void CliParkGoalRequiresConfirmationAndResolvesAttentionWaits()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -5109,6 +5219,7 @@ public sealed class CliCommandTests
         Xunit.Assert.True(task.LastProcess!.IsRunning);
         Xunit.Assert.Empty(kernel.HumanInputRequests);
         Xunit.Assert.Contains("Goal park dry run", dryRunOutput);
+        Xunit.Assert.Contains("attention waits: resolve with park reason", dryRunOutput);
 
         var applyOutput = CaptureConsole(() =>
         {
@@ -5123,12 +5234,11 @@ public sealed class CliCommandTests
             Xunit.Assert.True(changed);
         });
 
-        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Xunit.Assert.Equal(GoalStatus.Parked, goal.Status);
         Xunit.Assert.False(task.LastProcess!.IsRunning);
-        var request = Xunit.Assert.Single(kernel.HumanInputRequests);
-        Xunit.Assert.False(request.IsCompleted);
-        Xunit.Assert.Contains("Operator paused for review.", request.Question);
-        Xunit.Assert.Contains("Resume gate: answer", applyOutput);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
+        Xunit.Assert.Contains("Resolved human waits: 0", applyOutput);
+        Xunit.Assert.Contains("Resolved attention items: 0", applyOutput);
     }
 
     [Xunit.Fact(DisplayName = "Cli_rollback_goal_creates_revert_branch_from_acceptance_metadata")]

@@ -287,6 +287,27 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         return Task.FromResult(false);
     }
 
+    public Task<int> ResolveOpenForGoalAsync(
+        string goalId,
+        string resolution,
+        CancellationToken cancellationToken = default)
+    {
+        var resolved = 0;
+        for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            if (item.GoalId == goalId &&
+                CollaborationItemLifecycle.IsReachUpType(item.Type) &&
+                !CollaborationItemLifecycle.IsTerminal(item.Status))
+            {
+                _items[i] = item with { Status = CollaborationItemStatus.Resolved, Resolution = resolution, ResolvedAt = DateTimeOffset.UtcNow };
+                resolved++;
+            }
+        }
+
+        return Task.FromResult(resolved);
+    }
+
     public Task<bool> TryMarkDeliveredAsync(
         string correlationKey,
         CancellationToken cancellationToken = default)

@@ -880,7 +880,7 @@ public static partial class DashboardRenderer
 
     private static bool IsActionableGoal(Goal goal)
     {
-        return goal.Status is not GoalStatus.Completed and not GoalStatus.Cancelled and not GoalStatus.Superseded;
+        return goal.Status is not GoalStatus.Parked and not GoalStatus.Completed and not GoalStatus.Cancelled and not GoalStatus.Superseded;
     }
 
     private static bool IsManualOnlyCompletion(GoalEvidenceSummary evidence) =>

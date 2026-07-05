@@ -802,7 +802,7 @@ internal sealed class ConductorBatchLoop
 
     private static bool ClearsPersistedVerifiedAcceptanceEscalation(ProgressEvent evt) =>
         evt.Kind is ProgressKind.TaskRetried or ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded
-        || (evt.Kind == ProgressKind.HumanInputRequested
+        || (evt.Kind is ProgressKind.HumanInputRequested or ProgressKind.GoalPolicyDecision
             && evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
         || evt.Kind == ProgressKind.HumanInputReceived;
 

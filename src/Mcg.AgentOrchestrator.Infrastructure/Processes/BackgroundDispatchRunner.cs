@@ -272,8 +272,13 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is null || process.WasCancelled || task.LastVerification is not null)
+                if (process is null ||
+                    process.WasCancelled ||
+                    task.LastVerification is not null ||
+                    HasRecordedCompletionForProcess(task, process))
+                {
                     continue;
+                }
 
                 var recoveryDecision = _recoveryPolicy.Evaluate(process, AnyTrackedProcessStillRunning(process));
                 if (!TryCompleteFromExitFile(kernel, goal.Id, task.Id, process, recoveryDecision, out var outcome))
@@ -285,6 +290,20 @@ public sealed class BackgroundDispatchRunner
         }
 
         return reconciled;
+    }
+
+    private static bool HasRecordedCompletionForProcess(TaskSpec task, TaskProcessRecord process)
+    {
+        if (process.CompletedAt is null || process.ExitCode is null)
+        {
+            return false;
+        }
+
+        return task.VerificationHistory.Any(verification =>
+            verification.ExitCode == process.ExitCode &&
+            verification.Command.Equals(process.Command, StringComparison.Ordinal) &&
+            verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
+            verification.CompletedAt == process.CompletedAt);
     }
 
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
@@ -511,6 +530,7 @@ public sealed class BackgroundDispatchRunner
         string? standardErrorDiagnostic = null,
         DispatchRecoveryDecision? recoveryDecision = null)
     {
+        var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
         ReleaseTrackedProcessJobs(processRecord);
@@ -653,7 +673,10 @@ public sealed class BackgroundDispatchRunner
         }
 
         standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
-        TryWriteExitCode(processRecord.ExitCodePath, exitCode);
+        if (!exitArtifactAlreadyExisted)
+        {
+            TryWriteExitCode(processRecord.ExitCodePath, exitCode);
+        }
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,
@@ -735,15 +758,12 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            (HasCompletedVerification(task, standardOutput, standardError) || workerResultPresent);
+            HasCompletedVerification(task, standardOutput, standardError);
     }
 
-    // A verification-role worker proves it did its job either with a recognised test-runner result OR
-    // by emitting its WORKER_RESULT contract block (confidence/blockers) — the way Tester/Reviewer
-    // workers actually report. The pass-count patterns in HasVerificationEvidence never match that
-    // block, so without this a Tester that verified already-committed work is false-failed for "no
-    // relevant file-change evidence". Scoped to the clean-worktree path; the acceptance suite re-runs
-    // the real tests, and a worker that errored before producing a WORKER_RESULT still fails here.
+    // A verification-role worker proves it did its job with recognised verification evidence.
+    // WORKER_RESULT shape alone is not enough: evidence-less clean dispatches must fail so the
+    // orchestrator does not convert a well-formed self-report into proof that checks actually passed.
     private static bool HasClassifiedVerificationEvidence(TaskSpec task, string standardOutput, string standardError)
     {
         var tempVerification = new TaskVerificationRecord(
@@ -753,8 +773,7 @@ public sealed class BackgroundDispatchRunner
 
     private static bool HasCompletedVerification(TaskSpec task, string standardOutput, string standardError)
     {
-        return HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-            standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+        return HasClassifiedVerificationEvidence(task, standardOutput, standardError);
     }
 
     private static bool HasSandboxCommitBlockedEvidence(

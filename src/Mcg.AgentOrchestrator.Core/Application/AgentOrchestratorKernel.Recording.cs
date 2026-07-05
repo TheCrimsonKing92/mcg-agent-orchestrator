@@ -59,9 +59,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
+        var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
         if (!verification.Succeeded &&
             WorkerResultBlockers.TryFindBlocker(verification, out var blocker) &&
-            !DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification))
+            outcome.Kind != DispatchOutcomeKind.RecoverableSubscriptionLimit)
         {
             ReportTaskProgress(
                 goalId,
@@ -71,9 +72,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        var isRecoverableSubscriptionLimit = effectiveProviderFailureKind == ProviderFailureKind.RateLimit ||
-            (effectiveProviderFailureKind == ProviderFailureKind.Unknown &&
-             DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+        var isRecoverableSubscriptionLimit = outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit;
         if (!verification.Succeeded && isRecoverableSubscriptionLimit)
         {
             if (DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
@@ -100,7 +99,6 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
         if (outcome.Kind == DispatchOutcomeKind.EmptyOutputFlake &&
             verification.ExitCode == 0 &&
             string.IsNullOrWhiteSpace(verification.StandardOutput) &&

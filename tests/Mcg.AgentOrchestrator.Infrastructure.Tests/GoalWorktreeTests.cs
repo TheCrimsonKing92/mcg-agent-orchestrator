@@ -426,6 +426,7 @@ public sealed class GoalWorktreeIntegrationTests
             startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
+            startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start Invoke-IsolatedDotnet.ps1.");

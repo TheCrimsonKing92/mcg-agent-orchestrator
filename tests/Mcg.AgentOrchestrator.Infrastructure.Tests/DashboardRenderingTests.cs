@@ -1205,7 +1205,7 @@ public sealed class DashboardRenderingTests
     File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
     var task = goal.Tasks.Single();
 
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec attempt 1",
         root,
@@ -1213,7 +1213,7 @@ public sealed class DashboardRenderingTests
         string.Empty,
         "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
         DateTimeOffset.UtcNow));
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", root, DateTimeOffset.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec attempt 2",
         root,
@@ -1270,7 +1270,7 @@ public sealed class DashboardRenderingTests
     ];
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", "C:\\repo", DateTimeOffset.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec attempt 1",
         "C:\\repo",
@@ -1278,7 +1278,7 @@ public sealed class DashboardRenderingTests
         string.Empty,
         "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
         DateTimeOffset.UtcNow));
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", "C:\\repo", DateTimeOffset.UtcNow));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", "C:\\repo", DateTimeOffset.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec attempt 2",
         "C:\\repo",
@@ -3109,7 +3109,7 @@ static string ExtractTaskControls(string html, int taskNumber)
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var now = DateTimeOffset.UtcNow;
     var retryTime = now.AddHours(1);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", now));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", now, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec",
         "C:\\repo",

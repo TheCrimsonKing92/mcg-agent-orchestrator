@@ -46,6 +46,26 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(0, outcome.ExitCode);
     }
 
+    [Xunit.Fact(DisplayName = "Classify keeps exit zero worker evidence as completion despite usage limit text")]
+    public void ClassifyExitZeroWorkerEvidenceOverridesUsageLimitText()
+    {
+        var verification = new TaskVerificationRecord(
+            "cmd",
+            "C:\\repo",
+            0,
+            "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT",
+            "Rate limit reached for gpt-5.5. Please try again in 42s.",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true);
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.Equal(0, outcome.ExitCode);
+    }
+
     [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider rate limit stderr")]
     public void ClassifyRecoverableSubscriptionLimitFromStderr()
     {
@@ -204,6 +224,44 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify dirty worker output before usage limit text")]
+    public void ClassifyDirtyWorkerOutputBeforeUsageLimitText()
+    {
+        const string dirtyGuardStderr =
+            "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
+            "branch=goal/abc; head=def; worktree=dirty; commits_after_dispatch=0; " +
+            "status_short=M src/Foo.cs. Rate limit reached; please try again in 42s.";
+
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Dirty usage text test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        var verification = new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            1,
+            "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT",
+            dirtyGuardStderr,
+            clock.UtcNow);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
     }
 
     [Xunit.Fact(DisplayName = "Classify returns UnknownFailure for unrecognized nonzero exit")]
