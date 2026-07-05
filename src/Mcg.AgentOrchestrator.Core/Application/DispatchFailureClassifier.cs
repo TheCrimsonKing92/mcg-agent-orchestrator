@@ -131,6 +131,14 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (HasWorkerEvidenceThatOutranksSubscriptionLimit(
+            verification,
+            verification.WorkerResultPresent,
+            verification.HasCommittedChanges))
+        {
+            return false;
+        }
+
         if (verification.ProviderFailureKind == ProviderFailureKind.RateLimit)
         {
             return true;
@@ -284,7 +292,9 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
         }
 
-        if (providerFailureKind != ProviderFailureKind.Unknown)
+        if (providerFailureKind != ProviderFailureKind.Unknown &&
+            !(providerFailureKind == ProviderFailureKind.RateLimit &&
+              HasWorkerEvidenceThatOutranksSubscriptionLimit(verification, workerResultPresent, hasCommittedChanges)))
         {
             return ClassifyProviderFailure(
                 providerFailureKind,
@@ -565,6 +575,16 @@ public static class DispatchFailureClassifier
 
     private static bool HasArtifactEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent || hasCommittedChanges;
+
+    private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
+        workerResultPresent && hasCommittedChanges;
+
+    private static bool HasWorkerEvidenceThatOutranksSubscriptionLimit(
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges) =>
+        WorkerResultBlockers.TryFindBlocker(verification, out _) ||
+        HasSubstantiveWorkerEvidence(workerResultPresent, hasCommittedChanges);
 
     // A Low-IL (sandboxed) worker can do valid work but be structurally unable to self-commit — it
     // cannot write .git (Medium integrity), and therefore cannot run the git-dependent suite to
