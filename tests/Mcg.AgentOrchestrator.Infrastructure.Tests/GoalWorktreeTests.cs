@@ -2053,7 +2053,7 @@ public sealed class GoalWorktreeIntegrationTests
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
             Assert.False(mergeCalled);
-            Assert.True(output.Contains("Verification check: failed - infrastructure tests (exit -1)", StringComparison.Ordinal), output);
+            Assert.True(output.Contains("Verification check: failed - acceptance-check-timeout: infrastructure-tests elapsed=25m budget=25m (exit -1)", StringComparison.Ordinal), output);
             Assert.True(output.Contains("BLOCKER step=verification reason=timeout", StringComparison.Ordinal), output);
             Assert.True(output.Contains("artifacts=C:\\artifacts\\goal-acceptance", StringComparison.Ordinal), output);
             Assert.True(output.Contains("Command: dotnet test infrastructure", StringComparison.Ordinal), output);
