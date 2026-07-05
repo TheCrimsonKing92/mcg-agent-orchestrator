@@ -758,15 +758,12 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            (HasCompletedVerification(task, standardOutput, standardError) || workerResultPresent);
+            HasCompletedVerification(task, standardOutput, standardError);
     }
 
-    // A verification-role worker proves it did its job either with a recognised test-runner result OR
-    // by emitting its WORKER_RESULT contract block (confidence/blockers) — the way Tester/Reviewer
-    // workers actually report. The pass-count patterns in HasVerificationEvidence never match that
-    // block, so without this a Tester that verified already-committed work is false-failed for "no
-    // relevant file-change evidence". Scoped to the clean-worktree path; the acceptance suite re-runs
-    // the real tests, and a worker that errored before producing a WORKER_RESULT still fails here.
+    // A verification-role worker proves it did its job with recognised verification evidence.
+    // WORKER_RESULT shape alone is not enough: evidence-less clean dispatches must fail so the
+    // orchestrator does not convert a well-formed self-report into proof that checks actually passed.
     private static bool HasClassifiedVerificationEvidence(TaskSpec task, string standardOutput, string standardError)
     {
         var tempVerification = new TaskVerificationRecord(
@@ -776,8 +773,7 @@ public sealed class BackgroundDispatchRunner
 
     private static bool HasCompletedVerification(TaskSpec task, string standardOutput, string standardError)
     {
-        return HasClassifiedVerificationEvidence(task, standardOutput, standardError) ||
-            standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+        return HasClassifiedVerificationEvidence(task, standardOutput, standardError);
     }
 
     private static bool HasSandboxCommitBlockedEvidence(

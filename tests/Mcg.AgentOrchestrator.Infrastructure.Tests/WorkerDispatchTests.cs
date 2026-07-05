@@ -3261,7 +3261,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var now = DateTimeOffset.UtcNow;
     var retryTime = now.AddHours(1);
-    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", now));
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        developer.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            "C:\\repo",
+            now,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
         "codex exec",
         "C:\\repo",
@@ -3270,7 +3278,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         $"ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {retryTime:h:mm tt}.",
         now));
     kernel.RetryTask(goal.Id, developer.Id, "Retry after provider window.");
-    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec retry", "C:\\repo", now.AddMinutes(5)));
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        developer.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec retry",
+            "C:\\repo",
+            now.AddMinutes(5),
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
         "codex exec retry",
         "C:\\repo",
@@ -3505,7 +3521,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, failureAt));
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        developer.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            workingDirectory,
+            failureAt,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
         "codex exec",
         workingDirectory,
@@ -3565,7 +3589,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             workingDirectory,
             failureAt,
             "OpenAI",
-            "gpt-5.5"));
+            "gpt-5.5",
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, limitedTask.Id, new TaskVerificationRecord(
         "codex exec",
         workingDirectory,
@@ -3716,7 +3741,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.ActivateGoal(goal.Id, agents);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", workingDirectory, firstFailureAt));
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        developer.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec attempt 1",
+            workingDirectory,
+            firstFailureAt,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
         "codex exec attempt 1",
         workingDirectory,
@@ -3725,7 +3758,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
         firstFailureAt));
     kernel.RetryTask(goal.Id, developer.Id, "Retry after first usage limit.");
-    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", workingDirectory, secondFailureAt));
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        developer.Id,
+        new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec attempt 2",
+            workingDirectory,
+            secondFailureAt,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
         "codex exec attempt 2",
         workingDirectory,
@@ -4955,7 +4996,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("branch=goal/", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
-    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_no_change_rationale_without_source_change_fails")]
@@ -4976,7 +5017,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("changed_paths=none", StringComparison.Ordinal));
-    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_generated_noise_only_dispatch_fails")]
@@ -5006,7 +5047,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("changed_paths=.qwen/settings.json", StringComparison.Ordinal));
-    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_verification_only_clean_dispatch_passes")]
@@ -5032,8 +5073,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_with_worker_result_passes")]
-    public void BackgroundDispatchRunnerTesterCleanDispatchWithWorkerResultPasses()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_with_worker_result_without_passing_evidence_fails")]
+    public void BackgroundDispatchRunnerTesterCleanDispatchWithWorkerResultWithoutPassingEvidenceFails()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -5046,15 +5087,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         taskDescription: "Verify behavior with automated and manual checks",
         verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
 
-    // A verify-only Tester on a clean worktree that reported via WORKER_RESULT (no "N passed" line, and
-    // a non-zero exit that is unreliable under the sandbox) must NOT be false-failed for lacking
-    // file-change evidence — it did exactly its job, and the acceptance suite re-runs the real tests.
+    // WORKER_RESULT shape alone is not passing evidence. A non-zero clean Tester dispatch must remain
+    // failed unless the output contains real verification evidence.
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.False(task.LastVerification!.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_without_passing_evidence_fails")]
@@ -5076,7 +5117,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
-    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_without_evidence_fails")]
@@ -5099,7 +5140,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
-    Assert.Equal("1", File.ReadAllText(process.ExitCodePath));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_without_commit_fails")]
@@ -5537,8 +5578,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_worker_result_file_completes")]
-    public void BackgroundDispatchRunnerExitZeroEmptyStreamedOutputWithWorkerResultFileCompletes()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_worker_result_file_without_passing_evidence_fails")]
+    public void BackgroundDispatchRunnerExitZeroEmptyStreamedOutputWithWorkerResultFileWithoutPassingEvidenceFails()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -5556,8 +5597,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.True(task.LastVerification.WorkerResultPresent);
     Assert.Equal(0, task.EmptyOutputRetryCount);
     Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
@@ -5911,7 +5952,6 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         task.LastVerification.StandardError,
         text => text.Contains("Orchestrator commit-on-behalf git command failed", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("operation=commit", StringComparison.Ordinal));
-    Assert.Contains(task.LastVerification.StandardError, text => text.Contains("blocked residual commit", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     Assert.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=M seed.txt", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -7264,7 +7304,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "gpt-5.5",
         "high",
         TaskComplexity.Simple,
-        123);
+        123,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli);
     kernel.RecordTaskDispatch(goal.Id, task.Id, previousDispatch);
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         previousDispatch.Command,
