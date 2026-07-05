@@ -1,11 +1,31 @@
 # AGENTS
 
+<!-- HARNESS-COUNTERPART-CONTRACT:BEGIN -->
+Owns: shared repository discipline plus Codex harness operating guidance.
+Counterpart: CLAUDE.md owns Claude Code harness operating guidance and links back to AGENTS.md for shared discipline.
+Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
+Shared anchors:
+- output-discipline
+- retry-and-loop-control
+- repository-rules
+- architecture-and-design-discipline
+- specification-discipline
+- diagnosis-discipline
+- dashboard-dogfood-boundary
+- operating-the-goal-loop
+- safety
+- evidence
+<!-- HARNESS-COUNTERPART-CONTRACT:END -->
+
 Attention is scarce. Preserve it.
 
 Prefer short, decision-changing output over comprehensive dumps. Show what changed, what is blocked, what was verified, and what needs a decision. Suppress everything else.
 
+Codex auto-reads this file. Claude Code auto-reads [`CLAUDE.md`](CLAUDE.md); keep Claude-harness idioms there and keep shared discipline here.
+
 > **Operating the orchestrator — driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the canonical conductor-first guide, including the stuck-goal playbook (symptom → command) and the state/store map. This file covers output/diagnosis/spec discipline and architecture invariants — read it alongside the runbook, not instead of it.
 
+<!-- shared-discipline:output-discipline -->
 ## Output Discipline
 
 All commands must minimize output by default.
@@ -14,6 +34,9 @@ All commands must minimize output by default.
 - Prefer bounded `rg`/`rg --files` for discovery. Use exact paths or symbols once known.
 - Exclude generated/noisy trees when surveying source using `-g "!**/bin/**"` style globs for `bin`, `obj`, `.scratch`, `.orchestrator-prototype`, `TestResults`, and `playwright-report`.
 - Do not run broad repo-root `rg` unless the path and pattern are tight.
+
+Codex harness command guidance:
+
 - For checked-in PowerShell scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; it is repo-bounded and avoids repeated permission prompts from ad-hoc shell one-liners.
 - For foreground orchestrator CLI commands, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>` over direct `dotnet` or launcher calls; keep free-form arguments shell-plain (avoid `;`, `|`, `&`) so PowerShell does not split the answer into extra command segments.
 - For operator monitoring, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; it combines active goals, conduct/dispatch processes, build locks, and selected statuses without ad-hoc CIM/SQLite/log snippets.
@@ -31,6 +54,7 @@ Good shape: `rg -n --count "DashboardHost" src/Mcg.AgentOrchestrator.App tests/M
 
 Bad shape: `rg -n "dashboard|goal|task|hosted|source-survey" .. -C 4`
 
+<!-- shared-discipline:retry-and-loop-control -->
 ## Retry and Loop Control
 
 Before repeating a command, state what changed or what is being narrowed.
@@ -46,6 +70,7 @@ This repository implements an AI agent orchestrator. Avoid recursive or high-fan
 
 **Judging a dispatched worker's progress.** A worker showing zero stdout AND an empty worktree is NOT stalled — it is reading the brief + project context and planning. claude-cli/codex write nothing (stdout *or* files) during this phase, which is 4–6+ minutes for a complex brief. Judge a dispatch hung ONLY by a long-window absence of progress — default 15–30 min for Complex work — and confirm against the worker PROCESS (alive + CPU accumulating = thinking) before concluding, never a short empty-worktree snapshot. A short "backstop timer → cancel → re-dispatch" loop manufactures the very hang it's looking for and is the worst form of repeating-hoping-for-a-different-result; it also invites hallucinated root causes (rate-limiting, etc.) to explain the self-inflicted symptom. Inspect, don't theorize.
 
+<!-- shared-discipline:repository-rules -->
 ## Repository Rules
 
 - Treat version-controlled files as source. Build outputs, browser profiles, prototype workspace files, logs, scratch scripts, and previous run artifacts are not source structure.
@@ -53,6 +78,7 @@ This repository implements an AI agent orchestrator. Avoid recursive or high-fan
 - Core and Infrastructure intentionally keep flat public namespaces: `Mcg.AgentOrchestrator.Core` and `Mcg.AgentOrchestrator.Infrastructure`.
 - Do not split those namespaces unless there is a strong API reason and a migration plan for consumers.
 
+<!-- shared-discipline:architecture-and-design-discipline -->
 ## Architecture & Design Discipline
 
 Before adding a member, field, case, or flag, think about the system ontology — what KIND of thing each type represents and what invariant it encodes — not just "where does my new thing compile." A change that types cleanly but violates the model is debt, not progress.
@@ -63,6 +89,7 @@ Before adding a member, field, case, or flag, think about the system ontology �
 - **Constraints are load-bearing; do not trade them for convenience.** The deterministic gates, subscription-budget-first posture, and evidence-over-narrative spine are invariants of this system. New work composes WITH them (e.g. an LLM judgment lands ADVISORY, never inside a deterministic gate; fan-out goes on free/cheap lanes, never the paid CLI). If a feature seems to require breaking one, that is a design signal to rethink the placement, not a license.
 - **Put behavior where its data and invariant already live.** Prefer extending an existing seam that owns the concept over threading a parallel path; reuse the deterministic signal that already exists (e.g. select among parallel model outputs by an existing validator, not a model self-rating). Match the surrounding idiom.
 
+<!-- shared-discipline:specification-discipline -->
 ## Specification Discipline — the brief is the unverified root of trust
 
 The gates verify "did the output match the spec," never "was the spec right" — so a sloppy brief lands a plausible-but-wrong implementation on green tests (the Discord listener that deleted its own forum post compiled and passed fake-API tests; the gateway built but never hosted; `postResult` left optional so the operator saw nothing). A capable worker does exactly what the brief says — quality is set or lost in the brief. Before dispatch, run the objective through this rubric; each item is a scar:
@@ -75,6 +102,7 @@ The gates verify "did the output match the spec," never "was the spec right" —
 
 Separate the axes when scoping: WHERE it applies (which goals) vs HOW it's implemented (stage/role/function) vs WHAT the increment limits (depth vs coverage) — conflating them produces contradictory specs.
 
+<!-- shared-discipline:diagnosis-discipline -->
 ## Diagnosis Discipline — empirics over theorizing
 
 Reproduce before you theorize. When something fails — especially an external CLI, model, or tool — run the smallest command that reproduces the behavior before concluding a cause or declaring it unfixable. Do not build a verdict on documentation, web reports, or aggregate stats alone.
@@ -83,6 +111,7 @@ Reproduce before you theorize. When something fails — especially an external C
 - **If you catch yourself stacking hypotheses** (cross-block, version drift, platform restriction) without having run the thing, stop and run it. Layered speculation is a smell.
 - **Aggregate stats flag WHERE to look, not the diagnosis.** Scorecards and pass-rates point at a suspect; confirm the mechanism with a direct test before acting on it. A model rated "Avoid" may just be mis-invoked.
 
+<!-- shared-discipline:dashboard-dogfood-boundary -->
 ## Dashboard / Dogfood Boundary
 
 For ordinary implementation or debugging, inspect and edit source directly.
@@ -107,6 +136,7 @@ Local-model file work goes through the `qwen-code-cli` profile (Qwen Code agains
 
 Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the model receives the full qwen-code system prompt and returns an empty stream; the default 4k truncation is what makes it work. qwen3:14b cannot finish a qwen-code turn within the ~483 s request timeout on this GPU (use it for single-shot API runs instead). qwen-code rewrites `.qwen/settings.json` at exit with its startup view - never hand-edit that file while a qwen process is running.
 
+<!-- shared-discipline:operating-the-goal-loop -->
 ## Operating the goal loop
 
 **Default: drive goals with the autonomous conductor (`conduct --loop`), not the manual verbs.** The full operate / observe / recover guide — golden path, the `conduct` flag matrix, the three policies, the state model, and the **stuck-goal playbook** (symptom → first command) — lives in [`docs/operator-runbook.md`](docs/operator-runbook.md); read it first. A few notes that complement it:
@@ -126,6 +156,7 @@ When the task involves subscription/dogfood execution:
 - Prefer focused checks such as `/api/goals/{goalPrefix}/work-summary` and `Invoke-DashboardApi.ps1 -Path api/goals/<prefix>/work-summary` before broad dashboard JSON or HTML reads.
 - Prefer checked-in helpers (`Invoke-DashboardApi.ps1`, `Run-DashboardBrowserScript.ps1`, `Invoke-DashboardDogfoodAction.ps1`) over one-off browser/API scripts.
 
+<!-- shared-discipline:safety -->
 ## Safety
 
 Use dashboard cancel/refresh controls or exact known process ids for stuck workers. Never run broad cleanup such as `Get-Process codex | Stop-Process`; it can kill the active Codex session.
@@ -140,6 +171,7 @@ Tests that spawn the real app inherit the machine environment; pin provider env 
 
 Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalog|PrototypeWorkspaceSeeder|WorkerProfile|WorkerDispatch'`.
 
+<!-- shared-discipline:evidence -->
 ## Evidence
 
 Record dogfood goal-boundary evidence with `dogfood-log add <goal-prefix>` or read it with `dogfood-log list --limit <n>`. Durable entries live in `.orchestrator/dogfood-log.db`, not in `DOGFOOD_LOG.md`. Keep entries short: goal id, objective, command/action, exit code, focused result, blocker/friction, verification, next follow-up.
