@@ -39,6 +39,53 @@ public sealed class LauncherScriptTests
         Assert.True(launcher.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "OperatorCommands_points_landing_recovery_at_acceptance")]
+    public void OperatorCommandsPointsLandingRecoveryAtAcceptance()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var helpSource = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Cli",
+            "CliCommandHelp.cs"));
+
+        Assert.Contains(
+            "Acceptance: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 acceptance <goal>",
+            helpSource);
+        Assert.DoesNotContain(RetiredManualLandingScriptName(), helpSource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Runbook_documents_acceptance_rerun_without_gate_bypass")]
+    public void RunbookDocumentsAcceptanceRerunWithoutGateBypass()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
+
+        Assert.Contains(
+            "If a gate defect blocks an otherwise green goal, file and fix the gate bug, then re-run acceptance; do not bypass the gate.",
+            runbook);
+        Assert.DoesNotContain(RetiredManualLandingScriptName(), runbook, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Permission_allowlist_keeps_acceptance_and_excludes_retired_manual_landing_script")]
+    public void PermissionAllowlistKeepsAcceptanceAndExcludesRetiredManualLandingScript()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(repoRoot, ".claude", "settings.json")));
+        var allow = document.RootElement
+            .GetProperty("permissions")
+            .GetProperty("allow")
+            .EnumerateArray()
+            .Select(entry => entry.GetString() ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains(allow, entry => entry.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
+        Assert.False(
+            allow.Any(entry => entry.Contains(RetiredManualLandingScriptName(), StringComparison.OrdinalIgnoreCase)),
+            string.Join(Environment.NewLine, allow));
+    }
+
     [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_uses_fresh_launcher")]
     public void InvokeOrchestratorCommandDefaultPathUsesFreshLauncher()
     {
@@ -845,6 +892,9 @@ public sealed class LauncherScriptTests
 
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static string RetiredManualLandingScriptName() =>
+        string.Concat("Land-", "Verified", "Goal.ps1");
 
     private static string AppDllHashPrefix(string appDll)
     {
