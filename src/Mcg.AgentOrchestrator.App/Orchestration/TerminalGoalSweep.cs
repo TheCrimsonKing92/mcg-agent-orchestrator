@@ -179,10 +179,16 @@ internal static class TerminalGoalSweep
                 }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
+                    RecordTerminalDisposition(
+                        kernel,
+                        executionDirectory,
+                        goal,
+                        $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
                     repairs.Add(new TerminalGoalSweepRepair(
                         "merged-branch-cleanup",
                         removeResult.Message,
                         $"workspace remove {prefix}"));
+                    goal = kernel.GetGoal(originalGoal.Id);
                 }
 
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
