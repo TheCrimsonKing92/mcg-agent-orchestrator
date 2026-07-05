@@ -415,7 +415,10 @@ public sealed class GoalAcceptanceVerifierTests
 
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker profiles");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "infrastructure tests" &&
+            check.Passed &&
+            check.ResultSummary == "covered by 18 partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_focused_infrastructure_filter_for_cli_only_changes")]
@@ -534,7 +537,10 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Dashboard rendering");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "infrastructure tests" &&
+            check.Passed &&
+            check.ResultSummary == "covered by 18 partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_infrastructure_suite_for_app_plus_shared_infrastructure_or_script_changes")]
@@ -571,7 +577,10 @@ public sealed class GoalAcceptanceVerifierTests
             Assert.Contains(infrastructureCalls, call =>
                 call.Any(argument => argument.Contains("FullyQualifiedName!~DashboardHostTests", StringComparison.Ordinal) &&
                     argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
-            Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests");
+            Assert.Contains(result.Checks!, check =>
+                check.Name == "infrastructure tests" &&
+                check.Passed &&
+                check.ResultSummary == "covered by 18 partitioned checks");
             Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
         }
 
@@ -940,7 +949,10 @@ public sealed class GoalAcceptanceVerifierTests
             Assert.Contains("--filter", call);
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Goal acceptance verifier");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "infrastructure tests" &&
+            check.Passed &&
+            check.ResultSummary == "covered by 18 partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_union_for_core_and_infra_scope")]
@@ -981,7 +993,10 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Contains(result.Checks!, check => check.Name == "core tests");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "infrastructure tests" &&
+            check.Passed &&
+            check.ResultSummary == "covered by 18 partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_keeps_solution_check_for_build_security_broad_or_disabled_scopes")]
@@ -1077,6 +1092,63 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(1, result.Checks!.Count(c => c.Name == "core tests"));
         Assert.Equal(0, result.Checks!.Count(c => c.Name == "infrastructure tests"));
         Assert.True(result.Checks.All(c => c.Passed));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_records_policy_alias_for_equivalent_manifest_command")]
+    public async Task GoalAcceptanceVerifierRecordsPolicyAliasForEquivalentManifestCommand()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "renamed core coverage", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5."));
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(1, result.Checks!.Count(c => c.Name == "renamed core coverage"));
+        var policyAlias = result.Checks.Single(c => c.Name == "core tests");
+        Assert.True(policyAlias.Passed);
+        Assert.Equal("covered by: renamed core coverage", policyAlias.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_auto_runs_policy_required_browser_smoke")]
+    public async Task GoalAcceptanceVerifierAutoRunsPolicyRequiredBrowserSmoke()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed."));
+        });
+
+        var result = await verifier.RunAsync(root, changedFiles: ["wwwroot/css/app.css"]);
+
+        Assert.True(result.Passed);
+        var browserCall = calls.Single(call => call.Contains(@".\scripts\Run-DashboardBrowserScript.ps1", StringComparer.OrdinalIgnoreCase));
+        Assert.Equal("powershell", browserCall[0]);
+        Assert.Contains(@".\scripts\dashboard-smoke.js", browserCall, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(result.Checks!, check => check.Name == "dashboard browser smoke" && check.Passed);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_injected_policy_check_blocks_merge")]

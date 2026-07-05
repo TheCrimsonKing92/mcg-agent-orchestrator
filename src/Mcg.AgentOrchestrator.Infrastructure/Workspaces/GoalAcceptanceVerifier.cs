@@ -122,7 +122,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Apply policy-required checks from the change scope. Focused project checks replace
         // matching unfiltered project checks so a narrow App change does not still run the full
         // Infrastructure project suite from the tracked manifest.
-        var effectiveChecks = ExpandBroadInfrastructureChecks(BuildPolicyEffectiveChecks(manifest.Checks, changedFiles));
+        var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
+        var policyEffectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles, policyRequiredChecks);
+        var effectiveChecks = ExpandBroadInfrastructureChecks(policyEffectiveChecks);
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
@@ -245,6 +247,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
             }
         }
+
+        AddCoveredBroadInfrastructureResults(checks, policyRequiredChecks, changedFiles);
+        AddCoveredPolicyAliasResults(checks, policyRequiredChecks, effectiveChecks);
 
         if (checks.All(check => check.Passed) && manifest.ForbiddenChangedPathGlobs.Count > 0)
         {
@@ -371,23 +376,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildPolicyEffectiveChecks(
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
-        IReadOnlyList<string>? changedFiles)
+        IReadOnlyList<string>? changedFiles,
+        IReadOnlyList<AcceptanceManifestCheck>? policyRequiredChecks = null)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return manifestChecks;
 
-        var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
-        var plannedChecks = plan.Checks
-            .Where(c => c.Command.Count > 0)
-            .Select(PolicyCheckToManifestCheck)
+        var plannedChecks = (policyRequiredChecks ?? BuildRequiredPolicyChecks(changedFiles))
             .SelectMany(ExpandBroadInfrastructureCheck)
             .ToArray();
         var focusedProjectChecks = plannedChecks
             .Where(IsFocusedProjectDotnetCheck)
             .ToArray();
-        var coveredNames = manifestChecks
-            .Select(c => c.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var effective = manifestChecks
             .Where(check => !IsReplacedByFocusedProjectCheck(check, focusedProjectChecks))
@@ -396,15 +396,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         foreach (var plannedManifestCheck in plannedChecks)
         {
-            if (coveredNames.Contains(plannedManifestCheck.Name))
-                continue;
-
-            if (effective.Any(check =>
-                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                DotnetCheckMatches(check, plannedManifestCheck)))
-                continue;
-
             var commandKey = ManifestCheckKey(plannedManifestCheck);
+            if (effective.Any(check => ManifestCheckKey(check).Equals(commandKey, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
             if (!injectedKeys.Add(commandKey))
                 continue;
 
@@ -412,6 +407,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return effective;
+    }
+
+    private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(IReadOnlyList<string>? changedFiles)
+    {
+        if (changedFiles is null || changedFiles.Count == 0)
+            return [];
+
+        var policy = VerificationPolicyCompiler.Compile(
+            AgentRole.Reviewer,
+            goalObjective: string.Empty,
+            taskDescription: string.Empty,
+            verificationPlan: null,
+            changedFiles);
+        return policy.Checks
+            .Where(c =>
+                c.Required &&
+                (c.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
+                    c.Kind.Equals("browser-smoke", StringComparison.OrdinalIgnoreCase)))
+            .Select(PolicyCheckToManifestCheck)
+            .Where(c => c is not null)
+            .Select(c => c!)
+            .ToArray();
     }
 
     private static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
@@ -485,23 +502,161 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             string.Equals(NormalizePath(focused.Project), NormalizePath(manifestCheck.Project), StringComparison.OrdinalIgnoreCase));
 
     private static string ManifestCheckKey(AcceptanceManifestCheck check) =>
-        $"{check.Type}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
+        $"{check.Type}:{check.Command}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
+
+    private static AcceptanceManifestCheck? PolicyCheckToManifestCheck(VerificationPolicyCheck check)
+    {
+        if (check.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = SplitCommandLine(check.CommandLine);
+            if (parts.Length < 2 ||
+                !parts[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+                !parts[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return DotnetCommandToManifestCheck(check.Name, parts);
+        }
+
+        if (check.Kind.Equals("browser-smoke", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = SplitCommandLine(check.CommandLine);
+            var script = parts.Length == 0 ? @".\scripts\Run-DashboardBrowserScript.ps1" : parts[0];
+            string[] scriptArguments = parts.Length > 1
+                ? parts[1..]
+                : [@".\scripts\dashboard-smoke.js"];
+            return new AcceptanceManifestCheck
+            {
+                Name = check.Name,
+                Type = "browser-smoke",
+                Command = "powershell",
+                Arguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, .. scriptArguments]
+            };
+        }
+
+        return null;
+    }
 
     private static AcceptanceManifestCheck PolicyCheckToManifestCheck(RepositoryTestImpactCheck check)
     {
         // Command format: ["dotnet", "test", <optional project>, ...args]
-        var remaining = check.Command.Skip(2).ToArray();
+        return DotnetCommandToManifestCheck(check.Name, [.. check.Command]);
+    }
+
+    private static AcceptanceManifestCheck DotnetCommandToManifestCheck(string name, string[] command)
+    {
+        var remaining = command.Skip(2).ToArray();
         var project = remaining.Length > 0 && !remaining[0].StartsWith("-", StringComparison.Ordinal)
             ? remaining[0]
             : null;
         var arguments = project is null ? remaining : remaining.Skip(1).ToArray();
         return new AcceptanceManifestCheck
         {
-            Name = check.Name,
+            Name = name,
             Type = "dotnet-test",
             Project = project,
             Arguments = arguments
         };
+    }
+
+    private static string[] SplitCommandLine(string commandLine) =>
+        commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static void AddCoveredBroadInfrastructureResults(
+        List<AcceptanceCheckResult> checks,
+        IReadOnlyList<AcceptanceManifestCheck> policyEffectiveChecks,
+        IReadOnlyList<string>? changedFiles)
+    {
+        if (changedFiles is null || changedFiles.Count == 0)
+            return;
+
+        foreach (var broadCheck in policyEffectiveChecks.Where(IsBroadInfrastructureTestCheck))
+        {
+            if (checks.Any(result => result.Name.Equals(broadCheck.Name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var shardResults = ExpandBroadInfrastructureCheck(broadCheck)
+                .Select(shard => checks.FirstOrDefault(result =>
+                    result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase)))
+                .Where(result => result is not null)
+                .Select(result => result!)
+                .ToArray();
+            if (shardResults.Length == 0)
+                continue;
+
+            var failedShard = shardResults.FirstOrDefault(result => !result.Passed);
+            if (failedShard is not null)
+            {
+                checks.Add(new AcceptanceCheckResult(
+                    broadCheck.Name,
+                    false,
+                    failedShard.ExitCode,
+                    failedShard.OutputTail,
+                    failedShard.ArtifactsPath,
+                    failedShard.BrokerName,
+                    failedShard.LeaseId,
+                    failedShard.DurationMilliseconds,
+                    failedShard.LockRemediationApplied,
+                    $"covered by failed partition: {failedShard.Name}"));
+                continue;
+            }
+
+            if (shardResults.Length != InfrastructureTestLanes.Length)
+                continue;
+
+            var lastShard = shardResults[^1];
+            checks.Add(new AcceptanceCheckResult(
+                broadCheck.Name,
+                true,
+                0,
+                null,
+                lastShard.ArtifactsPath,
+                lastShard.BrokerName,
+                lastShard.LeaseId,
+                shardResults.Sum(result => result.DurationMilliseconds ?? 0),
+                shardResults.Any(result => result.LockRemediationApplied),
+                $"covered by {shardResults.Length} partitioned checks"));
+        }
+    }
+
+    private static void AddCoveredPolicyAliasResults(
+        List<AcceptanceCheckResult> checks,
+        IReadOnlyList<AcceptanceManifestCheck> policyRequiredChecks,
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    {
+        foreach (var policyCheck in policyRequiredChecks)
+        {
+            if (IsBroadInfrastructureTestCheck(policyCheck) ||
+                checks.Any(result => result.Name.Equals(policyCheck.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var policyKey = ManifestCheckKey(policyCheck);
+            var coveringCheck = effectiveChecks.FirstOrDefault(check =>
+                ManifestCheckKey(check).Equals(policyKey, StringComparison.OrdinalIgnoreCase) &&
+                !check.Name.Equals(policyCheck.Name, StringComparison.OrdinalIgnoreCase));
+            if (coveringCheck is null)
+                continue;
+
+            var coveringResult = checks.FirstOrDefault(result =>
+                result.Name.Equals(coveringCheck.Name, StringComparison.OrdinalIgnoreCase));
+            if (coveringResult is null)
+                continue;
+
+            checks.Add(new AcceptanceCheckResult(
+                policyCheck.Name,
+                coveringResult.Passed,
+                coveringResult.ExitCode,
+                coveringResult.Passed ? null : coveringResult.OutputTail,
+                coveringResult.ArtifactsPath,
+                coveringResult.BrokerName,
+                coveringResult.LeaseId,
+                coveringResult.DurationMilliseconds,
+                coveringResult.LockRemediationApplied,
+                $"covered by: {coveringCheck.Name}"));
+        }
     }
 
     private static bool IsProjectInSolution(string projectPath, string? solutionProject, string? slnContent)
