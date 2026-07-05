@@ -195,17 +195,17 @@ internal static partial class CliCommandHandlers
                 // and the question, so the operator can read them before deciding to answer or dismiss.
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
-                    var migratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
-                    var migratedCollaborationItems = ResolveParkedAttentionItems(context.Kernel, store);
+                    var showMigratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
+                    var showMigratedCollaborationItems = ResolveParkedAttentionItems(context.Kernel, store);
                     var (includeHistory, goalPrefix) = ParseAttentionShowArgs(parts);
-                    var changed = migratedHumanWaits > 0 || migratedCollaborationItems > 0;
+                    var changed = showMigratedHumanWaits > 0 || showMigratedCollaborationItems > 0;
 
                     if (goalPrefix is null)
                     {
-                        var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
-                        if (waits.Count > 0)
+                        var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
+                        if (showWaits.Count > 0)
                         {
-                            ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow, includeHistory);
+                            ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory);
                             if (includeHistory)
                             {
                                 var allItems = store.ListAsync().GetAwaiter().GetResult();
