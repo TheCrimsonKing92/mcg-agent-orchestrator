@@ -114,7 +114,7 @@ internal static class CliCommandHelp
             "Exact stop: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Stop-RepoProcess.ps1 -Id <pid>",
             "SQLite: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorSqliteTool.ps1 <args>",
             "Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]",
-            "Land: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Land-VerifiedGoal.ps1 -GoalPrefix <goal>"
+            "Acceptance: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 acceptance <goal>"
         ]);
 
     private static readonly IReadOnlySet<string> GenericHelpFlags =

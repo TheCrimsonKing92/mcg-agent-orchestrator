@@ -193,7 +193,7 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("scripts\\Stop-RepoProcess.ps1", output);
         Xunit.Assert.Contains("scripts\\Invoke-OrchestratorSqliteTool.ps1", output);
         Xunit.Assert.Contains("Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]", output);
-        Xunit.Assert.Contains("Land: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Land-VerifiedGoal.ps1 -GoalPrefix <goal>", output);
+        Xunit.Assert.Contains("Acceptance: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 acceptance <goal>", output);
         Xunit.Assert.DoesNotContain("Get-Process codex", output, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
         Xunit.Assert.Empty(kernel.Goals);

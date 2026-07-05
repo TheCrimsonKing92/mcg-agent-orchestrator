@@ -98,7 +98,7 @@ Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`).
 accept [goal-id] [--skip-verify] [--keep-workspace] [--autonomy <policy>]
 ```
 
-Runs the goal acceptance check, fast-forwards the goal branch into `main`, auto-records a dogfood log entry, and removes the goal worktree. Stops before any gate that has not passed. Add `--skip-verify` only when deliberately bypassing the verification check, `--keep-workspace` to skip worktree removal, and `--autonomy` to override the default policy.
+Runs the goal acceptance check, fast-forwards the goal branch into `main`, auto-records a dogfood log entry, and removes the goal worktree. Stops before any gate that has not passed. Do not use `--skip-verify` to land an otherwise green goal; if a gate defect blocks landing, file and fix the gate bug, then re-run acceptance. Add `--keep-workspace` to skip worktree removal and `--autonomy` to override the default policy.
 
 ## `stop`
 
