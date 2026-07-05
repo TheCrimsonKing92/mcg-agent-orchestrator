@@ -94,6 +94,7 @@ internal static class GoalArtifactRetentionPlanner
             GoalStatus.Cancelled => RetentionGoalState.Abandoned,
             GoalStatus.Superseded => RetentionGoalState.Superseded,
             GoalStatus.WaitingForHuman => RetentionGoalState.Waiting,
+            GoalStatus.Parked => RetentionGoalState.Waiting,
             _ => RetentionGoalState.Active
         };
     }

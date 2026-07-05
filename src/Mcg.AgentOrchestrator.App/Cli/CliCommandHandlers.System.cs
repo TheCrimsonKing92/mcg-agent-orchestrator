@@ -41,12 +41,82 @@ internal static partial class CliCommandHandlers
         };
     }
 
-    private static IReadOnlyList<HumanInputRequest> OpenHumanWaits(AgentOrchestratorKernel kernel, GoalId? goalId = null)
+    private static IReadOnlyList<HumanInputRequest> HumanWaitsForAttention(
+        AgentOrchestratorKernel kernel,
+        GoalId? goalId,
+        bool includeHistory)
     {
         return kernel.HumanInputRequests
-            .Where(request => !request.IsCompleted && (goalId is null || request.GoalId == goalId))
+            .Where(request => goalId is null || request.GoalId == goalId)
+            .Where(request => includeHistory || !request.IsCompleted)
+            .Where(request => includeHistory || IsLiveAttentionGoal(kernel, request.GoalId))
             .OrderBy(request => request.CreatedAt)
             .ToList();
+    }
+
+    private static IReadOnlyList<CollaborationItem> CollaborationItemsForAttention(
+        IReadOnlyList<CollaborationItem> items,
+        AgentOrchestratorKernel kernel,
+        GoalId? goalId,
+        bool includeHistory)
+    {
+        return items
+            .Where(item => CollaborationItemLifecycle.IsReachUpType(item.Type))
+            .Where(item => goalId is null || string.Equals(item.GoalId, goalId.Value, StringComparison.OrdinalIgnoreCase))
+            .Where(item => includeHistory || item.GoalId is null || IsLiveAttentionGoal(kernel, new GoalId(item.GoalId)))
+            .ToList();
+    }
+
+    private static bool IsLiveAttentionGoal(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
+        return goal is not null && goal.Status is not GoalStatus.Parked
+            and not GoalStatus.Completed
+            and not GoalStatus.Failed
+            and not GoalStatus.Cancelled
+            and not GoalStatus.Superseded;
+    }
+
+    private static int ResolveParkedAttentionItems(AgentOrchestratorKernel kernel, CollaborationItemStore store)
+    {
+        var resolved = 0;
+        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Parked))
+        {
+            var resolution = goal.Timeline
+                .LastOrDefault(evt =>
+                    evt.Kind == ProgressKind.GoalPolicyDecision &&
+                    evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+                ?.Message ?? "Goal parked.";
+            resolved += store.ResolveOpenForGoalAsync(goal.Id.Value, resolution).GetAwaiter().GetResult();
+        }
+
+        return resolved;
+    }
+
+    private static bool IsAttentionAllFlag(string value) =>
+        value.Equals("--all", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--include-parked", StringComparison.OrdinalIgnoreCase);
+
+    private static (bool IncludeHistory, string? GoalPrefix) ParseAttentionShowArgs(IReadOnlyList<string> parts)
+    {
+        var args = parts.Skip(2).Where(part => !string.IsNullOrWhiteSpace(part)).ToList();
+        var includeHistory = args.RemoveAll(IsAttentionAllFlag) > 0;
+        if (args.Count == 0)
+        {
+            return (includeHistory, null);
+        }
+
+        if (args[0].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Count < 2)
+            {
+                throw new ArgumentException("Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix>");
+            }
+
+            return (includeHistory, args[1]);
+        }
+
+        return (includeHistory, args[0]);
     }
 
     private static CollaborationItem ResolveClarificationByShortId(
@@ -125,41 +195,76 @@ internal static partial class CliCommandHandlers
                 // and the question, so the operator can read them before deciding to answer or dismiss.
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (parts.Count < 3)
+                    var migratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
+                    var migratedCollaborationItems = ResolveParkedAttentionItems(context.Kernel, store);
+                    var (includeHistory, goalPrefix) = ParseAttentionShowArgs(parts);
+                    var changed = migratedHumanWaits > 0 || migratedCollaborationItems > 0;
+
+                    if (goalPrefix is null)
                     {
-                        var waits = OpenHumanWaits(context.Kernel);
+                        var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (waits.Count > 0)
                         {
-                            ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow);
-                            return false;
+                            ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow, includeHistory);
+                            if (includeHistory)
+                            {
+                                var allItems = store.ListAsync().GetAwaiter().GetResult();
+                                ConsoleViews.PrintCollaborationItems(
+                                    CollaborationItemsForAttention(allItems, context.Kernel, null, includeHistory),
+                                    includeHistory);
+                            }
+
+                            return changed;
                         }
 
-                        var globalQueue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
-                        ConsoleViews.PrintAttentionQueue(globalQueue);
-                        return false;
+                        var globalItems = includeHistory
+                            ? store.ListAsync().GetAwaiter().GetResult()
+                            : store.GetAttentionQueueAsync().GetAwaiter().GetResult();
+                        var globalQueue = CollaborationItemsForAttention(globalItems, context.Kernel, null, includeHistory);
+                        ConsoleViews.PrintCollaborationItems(globalQueue, includeHistory);
+                        return changed;
                     }
 
-                    if (parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase) && parts.Count < 4)
-                    {
-                        throw new ArgumentException("Usage: attention show [--goal] <goal-id-prefix>");
-                    }
-
-                    var goalPrefix = parts.Count >= 4 && parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase)
-                        ? parts[3]
-                        : parts[2];
                     var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
-                    var waitsForGoal = OpenHumanWaits(context.Kernel, goal.Id);
+                    var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
                     if (waitsForGoal.Count > 0)
                     {
-                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow);
-                        return false;
+                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory);
+                        if (includeHistory)
+                        {
+                            var allItems = store.ListAsync().GetAwaiter().GetResult();
+                            ConsoleViews.PrintCollaborationItems(
+                                CollaborationItemsForAttention(allItems, context.Kernel, goal.Id, includeHistory),
+                                includeHistory);
+                        }
+
+                        return changed;
                     }
 
-                    var clarifications = OpenClarificationsForGoal(store, goal);
+                    var scopedItems = includeHistory
+                        ? CollaborationItemsForAttention(store.ListAsync().GetAwaiter().GetResult(), context.Kernel, goal.Id, includeHistory)
+                        : OpenClarificationsForGoal(store, goal).Cast<CollaborationItem>().ToList();
+                    if (includeHistory)
+                    {
+                        if (scopedItems.Count == 0)
+                        {
+                            Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
+                            return changed;
+                        }
+
+                        ConsoleViews.PrintCollaborationItems(scopedItems, includeHistory);
+                        return changed;
+                    }
+
+                    var clarifications = scopedItems
+                        .Where(item =>
+                            !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+                            item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal))
+                        .ToList();
                     if (clarifications.Count == 0)
                     {
                         Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
-                        return false;
+                        return changed;
                     }
 
                     foreach (var clarification in clarifications)
@@ -170,7 +275,7 @@ internal static partial class CliCommandHandlers
                     }
 
                     Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> (ids are stable; answering one does not renumber the rest)");
-                    return false;
+                    return changed;
                 }
 
                 // `attention answer <goal-id-prefix> <id> <answer...>`: resolve one open clarification with a
@@ -217,9 +322,22 @@ internal static partial class CliCommandHandlers
                     return false;
                 }
 
-                var queue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
+                var migratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
+                var migratedCollaborationItems = ResolveParkedAttentionItems(context.Kernel, store);
+                var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
+                if (waits.Count > 0)
+                {
+                    ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow);
+                    return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
+                }
+
+                var queue = CollaborationItemsForAttention(
+                    store.GetAttentionQueueAsync().GetAwaiter().GetResult(),
+                    context.Kernel,
+                    null,
+                    includeHistory: false);
                 ConsoleViews.PrintAttentionQueue(queue);
-                return false;
+                return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
             }
 
             case "doctor":

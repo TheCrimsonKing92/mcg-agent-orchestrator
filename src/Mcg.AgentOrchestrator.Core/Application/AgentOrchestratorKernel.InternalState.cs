@@ -9,6 +9,11 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        if (goal.Status == GoalStatus.Parked)
+        {
+            return;
+        }
+
         if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
         {
             goal.SetStatus(GoalStatus.WaitingForHuman);

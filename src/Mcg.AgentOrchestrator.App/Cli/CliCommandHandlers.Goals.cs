@@ -2539,7 +2539,7 @@ private static Goal HandleGoalParkCommand(CliExecutionContext context, IReadOnly
         Console.WriteLine($"Goal park dry run {goal.Id.Value[..8]}:");
         Console.WriteLine($"  reason: {reason}");
         Console.WriteLine($"  running dispatches to cancel: {runningTasks.Length}");
-        Console.WriteLine("  resume gate: create goal-level human input request");
+        Console.WriteLine("  attention waits: resolve with park reason");
         Console.WriteLine($"  command: park-goal {goal.Id.Value[..8]} <reason> --confirm-goal-park");
         return goal;
     }
@@ -2550,10 +2550,14 @@ private static Goal HandleGoalParkCommand(CliExecutionContext context, IReadOnly
         _ = runner.CancelLatestProcess(context.Kernel, goal.Id, task.Id);
     }
 
-    var request = context.Kernel.RequestHumanInput(goal.Id, null, $"Goal parked: {reason}");
+    var resolvedHumanWaits = context.Kernel.HumanInputRequests.Count(request => request.GoalId == goal.Id && !request.IsCompleted);
+    _ = context.Kernel.ParkGoal(goal.Id, reason);
+    var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+    var resolvedAttentionItems = store.ResolveOpenForGoalAsync(goal.Id.Value, $"Goal parked: {reason}").GetAwaiter().GetResult();
     Console.WriteLine($"Goal parked {goal.Id.Value[..8]}.");
     Console.WriteLine($"Cancelled running dispatches: {runningTasks.Length}");
-    Console.WriteLine($"Resume gate: answer {request.Id.Value[..8]} <resume note>");
+    Console.WriteLine($"Resolved human waits: {resolvedHumanWaits}");
+    Console.WriteLine($"Resolved attention items: {resolvedAttentionItems}");
     return goal;
 }
 

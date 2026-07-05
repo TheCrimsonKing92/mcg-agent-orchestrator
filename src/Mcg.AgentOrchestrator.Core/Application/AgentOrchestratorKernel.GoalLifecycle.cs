@@ -348,6 +348,32 @@ public sealed partial class AgentOrchestratorKernel
 
     public Goal SupersedeGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Superseded, reason);
 
+    public Goal ParkGoal(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var parkReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(parkReason))
+        {
+            throw new ArgumentException("Goal park reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status == GoalStatus.Completed)
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' is Completed and cannot be parked.");
+        }
+
+        if (IsTerminalGoalStatus(goal.Status))
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' is already {goal.Status}.");
+        }
+
+        goal.SetStatus(GoalStatus.Parked);
+        var resolution = BuildGoalParkResolution(parkReason);
+        CompleteOpenHumanInputRequestsForGoal(goal.Id, resolution);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, resolution);
+        return goal;
+    }
+
     public Goal CompleteGoal(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
@@ -603,6 +629,29 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, request.TaskId, ProgressKind.HumanInputReceived, $"Dismissed human wait {request.Id.Value[..8]}.");
     }
 
+    public int SweepParkedGoalHumanWaits()
+    {
+        var resolved = 0;
+        foreach (var goal in _goals.Values)
+        {
+            var parkResolution = ResolveParkResolution(goal);
+            if (parkResolution is null)
+            {
+                continue;
+            }
+
+            if (goal.Status != GoalStatus.Parked)
+            {
+                goal.SetStatus(GoalStatus.Parked);
+                Append(goal, null, ProgressKind.GoalPolicyDecision, parkResolution);
+            }
+
+            resolved += CompleteOpenHumanInputRequestsForGoal(goal.Id, parkResolution);
+        }
+
+        return resolved;
+    }
+
     public IReadOnlyList<HumanWaitPolicyResult> SweepStaleHumanWaits(TimeSpan specClarificationStaleAfter)
     {
         var resolved = new List<HumanWaitPolicyResult>();
@@ -633,6 +682,47 @@ public sealed partial class AgentOrchestratorKernel
 
         return resolved;
     }
+
+    private int CompleteOpenHumanInputRequestsForGoal(GoalId goalId, string resolution)
+    {
+        var completed = 0;
+        foreach (var request in _humanInputRequests.Values
+            .Where(request => request.GoalId == goalId && !request.IsCompleted)
+            .OrderBy(request => request.RequestedAt)
+            .ToList())
+        {
+            request.Complete(resolution, _clock.UtcNow);
+            completed++;
+            Append(GetGoal(goalId), request.TaskId, ProgressKind.HumanInputReceived, resolution);
+        }
+
+        return completed;
+    }
+
+    private string? ResolveParkResolution(Goal goal)
+    {
+        if (goal.Status == GoalStatus.Parked)
+        {
+            return goal.Timeline
+                .LastOrDefault(evt =>
+                    evt.Kind == ProgressKind.GoalPolicyDecision &&
+                    evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+                ?.Message ?? "Goal parked.";
+        }
+
+        if (goal.Status != GoalStatus.WaitingForHuman)
+        {
+            return null;
+        }
+
+        return _humanInputRequests.Values
+            .Where(request => request.GoalId == goal.Id && !request.IsCompleted)
+            .OrderByDescending(request => request.RequestedAt)
+            .Select(request => request.Question)
+            .FirstOrDefault(question => question.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string BuildGoalParkResolution(string reason) => $"Goal parked: {reason}";
 
     public Goal GetGoal(GoalId goalId)
     {

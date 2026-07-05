@@ -56,6 +56,7 @@ public sealed partial class AgentOrchestratorKernel
             kernel._humanInputRequests.Add(request.Id, request);
         }
 
+        kernel.SweepParkedGoalHumanWaits();
         return kernel;
     }
 
@@ -74,6 +75,8 @@ public sealed partial class AgentOrchestratorKernel
         {
             _humanInputRequests.Add(request.Id, request);
         }
+
+        SweepParkedGoalHumanWaits();
     }
 
     // Additive merge: ingest goals (and their human-input requests) from the snapshot that this kernel
@@ -100,6 +103,7 @@ public sealed partial class AgentOrchestratorKernel
             _humanInputRequests.TryAdd(request.Id, request);
         }
 
+        SweepParkedGoalHumanWaits();
         return ingested;
     }
 
@@ -128,6 +132,7 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
+        SweepParkedGoalHumanWaits();
         return refreshed;
     }
 

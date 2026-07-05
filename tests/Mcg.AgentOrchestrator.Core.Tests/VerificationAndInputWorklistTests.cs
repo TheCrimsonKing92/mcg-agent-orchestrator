@@ -422,6 +422,27 @@ public sealed class VerificationAndInputWorklistTests
     Assert.False(riskWait.IsDismissible);
 }
 
+    [Xunit.Fact(DisplayName = "Parking_goal_resolves_open_human_waits_with_park_reason")]
+    public void ParkingGoalResolvesOpenHumanWaitsWithParkReason()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Park stale waits");
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+    var goalWait = kernel.RequestHumanInput(goal.Id, null, "Which repository?");
+    var taskWait = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
+
+    kernel.ParkGoal(goal.Id, "deferred");
+
+    Assert.Equal(GoalStatus.Parked, goal.Status);
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+    Assert.True(goalWait.IsCompleted);
+    Assert.True(taskWait.IsCompleted);
+    Assert.Equal("Goal parked: deferred", goalWait.Answer);
+    Assert.Equal("Goal parked: deferred", taskWait.Answer);
+    Assert.False(goalWait.WasDismissed);
+    Assert.False(taskWait.WasDismissed);
+}
+
     [Xunit.Fact(DisplayName = "Dismissed_human_wait_resumes_same_goal_and_task_without_reinitializing")]
     public void DismissedHumanWaitResumesSameGoalAndTaskWithoutReinitializing()
 {
