@@ -4367,7 +4367,12 @@ public sealed class CliCommandTests
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec attempt 1",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 1",
             root,
@@ -4375,7 +4380,12 @@ public sealed class CliCommandTests
             string.Empty,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
             DateTimeOffset.UtcNow));
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 2", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec attempt 2",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec attempt 2",
             root,
