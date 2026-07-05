@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
+[Xunit.Collection("ProviderEnvironment")]
 public sealed class ProviderProbeTests
 {
     [Xunit.Fact(DisplayName = "Provider_registry_probe_uses_openai_models_endpoint")]

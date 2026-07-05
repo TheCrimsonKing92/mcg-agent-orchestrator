@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("ProviderEnvironment")]
 public sealed class ProviderDefaultTests
 {
     [Xunit.Fact(DisplayName = "Ollama_default_base_url_avoids_localhost_ipv6_fallback")]

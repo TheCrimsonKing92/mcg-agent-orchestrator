@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("ProcessSpawning")]
 public sealed class WorkerContextArtifactsCharacterizationTests
 {
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_facade_matches_extracted_collaborator_outputs")]

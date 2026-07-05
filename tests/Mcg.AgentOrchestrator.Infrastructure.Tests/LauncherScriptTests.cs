@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
+[Xunit.Collection("ProcessSpawning")]
 public sealed class LauncherScriptTests
 {
     private static readonly string[] JsonLineSeparators = ["\r\n", "\n"];
