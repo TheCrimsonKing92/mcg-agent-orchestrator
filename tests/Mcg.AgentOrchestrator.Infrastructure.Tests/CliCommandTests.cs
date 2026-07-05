@@ -6706,6 +6706,122 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal(status, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.Single(second.Goals.Single().Blockers);
+        Xunit.Assert.Equal(1, first.ExcludedGoalCount);
+        Xunit.Assert.Equal(1, second.ExcludedGoalCount);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_excluded_goals_print_one_summary_line")]
+    public void TerminalGoalSweepExcludedGoalsPrintOneSummaryLine()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        for (var i = 0; i < 3; i++)
+        {
+            var task = new TaskSpec(TaskId.New(), $"Do work {i}", AgentRole.Developer);
+            var goal = kernel.CreateGoal($"Stale {i}", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+        }
+
+        var result = TerminalGoalSweep.Run(kernel, CreateTempDirectory());
+        var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(result));
+
+        Xunit.Assert.Equal(3, result.ExcludedGoalCount);
+        Xunit.Assert.Equal(1, CountLinesContaining(output, "SWEEP_SUMMARY kind=stale-terminal-excluded count=3"));
+        Xunit.Assert.Equal(0, CountLinesContaining(output, "SWEEP_BLOCKER"));
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_reachable_from_main_reconciles_to_cleaned_up")]
+    public void TerminalGoalSweepVerifiedMissingBranchReachableFromMainReconcilesToCleanedUp()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Verified missing branch already landed", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var worktree = GoalWorktrees.Ensure(root, goal.Id);
+            var baseCommit = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+            var path = Path.Combine(worktree, "src", "landed-missing.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "goal work");
+            RunGit(worktree, "add", "-A");
+            RunGit(worktree, "commit", "-m", "Goal work");
+            var resultCommit = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+                "manual",
+                "manual",
+                worktree,
+                DateTimeOffset.UtcNow,
+                BaseCommit: baseCommit,
+                ResultCommit: resultCommit));
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                worktree,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            _ = GoalWorktrees.Remove(root, goal.Id);
+
+            var first = TerminalGoalSweep.Run(kernel, root);
+            var second = TerminalGoalSweep.Run(kernel, root);
+            var facts = new GoalLifecycleFacts(
+                WorkspaceExists: GoalWorktrees.TryResolve(root, goal.Id) is not null,
+                IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)),
+                IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(GoalOperationJournal.Read(root, goal.Id)),
+                IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+
+            Xunit.Assert.True(first.Changed);
+            Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "missing-branch-landed-reconciled");
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
+            Xunit.Assert.Empty(second.Goals);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_unverifiable_is_retired_once")]
+    public void TerminalGoalSweepVerifiedMissingBranchUnverifiableIsRetiredOnce()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Verified missing branch unverifiable", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                root,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+
+            var first = TerminalGoalSweep.Run(kernel, root);
+            var second = TerminalGoalSweep.Run(kernel, root);
+
+            Xunit.Assert.True(first.Changed);
+            var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "missing-branch-retired");
+            Xunit.Assert.Contains("record retired", repair.Evidence, StringComparison.Ordinal);
+            Xunit.Assert.Equal("retired", repair.Command);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+            Xunit.Assert.Empty(second.Goals);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
     }
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_reconciles_human_input_exit_before_exclusion")]
@@ -6946,12 +7062,10 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains($"command=\"conduct {goal.Id.Value[..8]} --loop\"", nextRepair, StringComparison.Ordinal);
 
-        var conductExclusion = SingleLineContaining(conductOutput, "SWEEP_BLOCKER");
+        var conductExclusion = SingleLineContaining(conductOutput, "SWEEP_SUMMARY");
         Xunit.Assert.Contains("kind=stale-terminal-excluded", conductExclusion, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"goalId={goal.Id.Value}", conductExclusion, StringComparison.Ordinal);
-        Xunit.Assert.Contains("goalState=Completed", conductExclusion, StringComparison.Ordinal);
-        Xunit.Assert.Contains("action=excluded", conductExclusion, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.Contains("count=1", conductExclusion, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("SWEEP_BLOCKER", conductOutput, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("SWEEP_REPAIR", conductOutput, StringComparison.Ordinal);
     }
 

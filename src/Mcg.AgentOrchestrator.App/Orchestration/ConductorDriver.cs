@@ -55,6 +55,11 @@ internal sealed class ConductorDriver
 
         _getFacts = goal =>
         {
+            if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
+            {
+                RefreshJournal(goal.Id);
+            }
+
             var workspaceExists = worktreeSnapshot.ContainsKey(goal.Id);
             var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
                 ? summary
