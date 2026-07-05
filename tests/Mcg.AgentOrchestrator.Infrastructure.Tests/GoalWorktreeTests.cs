@@ -5808,17 +5808,17 @@ public sealed class GoalWorktreeIntegrationTests
                     Passed: false,
                     Skipped: false,
                     ExitCode: -1,
-                    OutputTail: "Verification command timed out after 10m.\nCommand: dotnet test infrastructure\nstdout: C:\\temp\\acc.out\nstderr: C:\\temp\\acc.err\nLast output:\nstill running",
+                    OutputTail: "Verification command timed out after elapsed=25m budget=25m.\nCommand: dotnet test infrastructure\nstdout: C:\\temp\\acc.out\nstderr: C:\\temp\\acc.err\nLast output:\nstill running",
                     ArtifactsPath: "C:\\artifacts\\goal-acceptance",
                     Checks:
                     [
                         new AcceptanceCheckResult(
-                            "infrastructure tests",
+                            "acceptance-check-timeout: infrastructure-tests elapsed=25m budget=25m",
                             false,
                             -1,
-                            "Verification command timed out after 10m.\nCommand: dotnet test infrastructure\nLast output:\nstill running",
+                            "Verification command timed out after elapsed=25m budget=25m.\nCommand: dotnet test infrastructure\nLast output:\nstill running",
                             "C:\\artifacts\\goal-acceptance",
-                            ResultSummary: "timed out after 10m")
+                            ResultSummary: "elapsed=25m budget=25m")
                     ]),
                 onRun);
 

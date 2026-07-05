@@ -210,11 +210,54 @@ public sealed class LocalProcessVerifierTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "LocalProcessVerifier_reports_configured_timeout_as_structured_evidence")]
+    public async Task LocalProcessVerifierReportsConfiguredTimeoutAsStructuredEvidence()
+    {
+        var previous = SetAcceptanceTimeoutEnvironment("0.001");
+        var calls = new List<(string FileName, IReadOnlyList<string> Arguments, TimeSpan Timeout)>();
+        var verifier = new LocalProcessVerifier(async (fileName, args, _, timeout, cancellationToken) =>
+        {
+            calls.Add((fileName, args, timeout));
+            if (fileName.Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                args.SequenceEqual(["build-server", "shutdown"]))
+            {
+                return new LocalProcessVerifier.CommandResult(0, "", "");
+            }
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
+            await Task.Delay(TimeSpan.FromSeconds(5), timeoutCts.Token);
+            return new LocalProcessVerifier.CommandResult(0, "unexpected completion", "");
+        });
+
+        try
+        {
+            var record = await verifier.RunAsync("custom-check --slow", "C:\\fake\\dir");
+
+            Assert.Equal(-1, record.ExitCode);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal(TimeSpan.FromMinutes(0.001), calls[1].Timeout);
+            Assert.Contains("acceptance-check-timeout: local-process-verification elapsed=0.1s budget=0.1s", record.StandardOutput);
+            Assert.False(record.StandardOutput.Contains("A task was canceled", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            SetAcceptanceTimeoutEnvironment(previous);
+        }
+    }
+
     private static void DeleteDirectory(string path)
     {
         if (Directory.Exists(path))
         {
             Directory.Delete(path, recursive: true);
         }
+    }
+
+    private static string? SetAcceptanceTimeoutEnvironment(string? value)
+    {
+        var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable, value);
+        return previous;
     }
 }
