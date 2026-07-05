@@ -29,6 +29,9 @@ public sealed class ConductorBatchLoopTests
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
     }
 
+    private static Exception SqliteBusy() =>
+        new InvalidOperationException("SQLite Error 5: 'database is locked'.");
+
     private static GoalWorktreeRebaseResult DefaultRebaseSuccess() =>
         new(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null);
 
@@ -2115,6 +2118,67 @@ public sealed class ConductorBatchLoopTests
     }
 
     // ── Per-tick write scope: persistGoalTick fires once with exactly the goals that changed ──
+
+    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_exhausted_warns_and_loop_continues")]
+    public void PersistGoalTickBusyExhaustedWarnsAndLoopContinues()
+    {
+        var (kernel, goal) = SimpleGoal("busy persistence survives");
+        var driver = MakeDriver();
+        var ticks = new List<BatchTickSummary>();
+        var attempts = 0;
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+            maxIterations: 2,
+            onTick: ticks.Add,
+            persistGoalTick: (_, _) =>
+            {
+                attempts++;
+                throw SqliteBusy();
+            },
+            busyWriteDelay: _ => { });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.True(ticks.Count >= 2);
+        Assert.True(attempts >= ConductorBatchLoop.DefaultMaxBusyWriteAttempts);
+        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
+        Assert.Contains(lines, line =>
+            line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)
+            && line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal)
+            && line.Contains("attempt=1", StringComparison.Ordinal)
+            && line.Contains("likelyHolder=concurrent-per-command-host", StringComparison.Ordinal));
+        Assert.Contains(lines, line =>
+            line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal)
+            && line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal)
+            && line.Contains($"attempt={ConductorBatchLoop.DefaultMaxBusyWriteAttempts}", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_retries_and_succeeds_before_budget")]
+    public void PersistGoalTickBusyRetriesAndSucceedsBeforeBudget()
+    {
+        var (kernel, _) = SimpleGoal("busy persistence clears");
+        var driver = MakeDriver();
+        var ticks = new List<BatchTickSummary>();
+        var attempts = 0;
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+            maxIterations: 1,
+            onTick: ticks.Add,
+            persistGoalTick: (_, _) =>
+            {
+                attempts++;
+                if (attempts < 3)
+                    throw SqliteBusy();
+            },
+            busyWriteDelay: _ => { });
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(3, attempts);
+        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
+        Assert.Equal(2, lines.Count(line => line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)));
+        Assert.DoesNotContain(lines, line => line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal));
+    }
 
     [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]
     public void PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition()
