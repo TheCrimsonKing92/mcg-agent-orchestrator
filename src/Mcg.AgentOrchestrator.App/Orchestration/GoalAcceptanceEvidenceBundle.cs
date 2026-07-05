@@ -198,8 +198,8 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
                         blockers,
                         nextCommands,
                         "acceptance-policy-check-missing",
-                        $"Required verification policy check '{missing.Name}' was not run by acceptance.",
-                        "add an acceptance manifest check or rerun acceptance with generated policy checks");
+                        $"Acceptance verifier failed to auto-run required verification policy check '{missing.Name}'.",
+                        $"rerun acceptance {goal.Id.Value[..8]} and inspect verifier output");
                 }
             }
         }
