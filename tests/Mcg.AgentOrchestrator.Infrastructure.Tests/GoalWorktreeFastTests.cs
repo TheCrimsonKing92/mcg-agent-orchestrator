@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("ConsoleOutMutation")]
 public sealed class GoalWorktreeTests
 {
     private static AgentDefinition EchoDeveloper() => new(

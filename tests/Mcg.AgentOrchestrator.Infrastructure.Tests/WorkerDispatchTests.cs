@@ -10,6 +10,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 
+[Xunit.Collection("ProcessSpawning")]
 public sealed class WorkerDispatchTests
 {
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_and_persists_when_assigned_agent_is_missing")]

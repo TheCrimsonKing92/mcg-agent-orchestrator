@@ -46,13 +46,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? CommandLine = null,
         string? StdoutPath = null,
         string? StderrPath = null,
-        TimeSpan? Timeout = null);
-
-    // Hard ceiling for a single build/test process. The suite itself runs in ~90s even in the
-    // throttled acceptance environment, so this only guards a genuinely runaway process. Output is
-    // captured to files (see RunProcessAsync) so a grandchild holding an inherited handle no longer
-    // stalls the command to this ceiling.
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
+        TimeSpan? Timeout = null,
+        TimeSpan? Elapsed = null);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -94,11 +89,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration")
     ];
 
-    private readonly Func<string[], string, CancellationToken, Task<CommandResult>> _runner;
+    private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
 
     internal GoalAcceptanceVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
+        : this((arguments, workingDirectory, _, cancellationToken) =>
+            runner(arguments, workingDirectory, cancellationToken))
+    {
+    }
+
+    internal GoalAcceptanceVerifier(Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner)
     {
         _runner = runner;
     }
@@ -110,7 +111,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken = default)
     {
         // Shut down build servers to release file locks before running tests.
-        await _runner(["dotnet", "build-server", "shutdown"], worktreePath, cancellationToken).ConfigureAwait(false);
+        await _runner(
+            ["dotnet", "build-server", "shutdown"],
+            worktreePath,
+            AcceptanceCheckTimeouts.DefaultTimeout,
+            cancellationToken).ConfigureAwait(false);
 
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
 
@@ -443,7 +448,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Type = check.Type,
                 Command = check.Command,
                 Project = check.Project,
-                Arguments = [.. check.Arguments, "--filter", lane.Filter]
+                Arguments = [.. check.Arguments, "--filter", lane.Filter],
+                TimeoutMinutes = check.TimeoutMinutes
             };
         }
     }
@@ -605,6 +611,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(
             ["git", "grep", "-q", "--", check.Pattern],
             worktreePath,
+            AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
             cancellationToken).ConfigureAwait(false);
 
         // git grep exit 0 = pattern found, exit 1 = not found
@@ -664,11 +671,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false);
         }
 
-        var result = await _runner(arguments, worktreePath, cancellationToken).ConfigureAwait(false);
+        var result = await _runner(arguments, worktreePath, AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes), cancellationToken).ConfigureAwait(false);
         if (result.TimedOut)
         {
             return (new AcceptanceCheckResult(
-                check.Name,
+                BuildTimeoutFailureName(check, result),
                 false,
                 result.ExitCode,
                 BuildTimeoutOutput(result),
@@ -710,7 +717,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var elapsed = Stopwatch.StartNew();
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
         using var leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
-        var result = await _runner(WithBuildEnvironmentArguments(arguments, environment), worktreePath, cancellationToken).ConfigureAwait(false);
+        var result = await _runner(
+            WithBuildEnvironmentArguments(arguments, environment),
+            worktreePath,
+            AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+            cancellationToken).ConfigureAwait(false);
 
         var retried = false;
         if (!result.TimedOut &&
@@ -722,11 +733,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // (resource pressure, concurrent slot use). Both are transient: a second build-server shutdown
             // + fresh attempt clears them before the single allowed retry, so a one-off crash stops
             // spuriously escalating an otherwise-green goal.
-            await _runner(["dotnet", "build-server", "shutdown"], worktreePath, cancellationToken).ConfigureAwait(false);
+            await _runner(
+                ["dotnet", "build-server", "shutdown"],
+                worktreePath,
+                AcceptanceCheckTimeouts.DefaultTimeout,
+                cancellationToken).ConfigureAwait(false);
             environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
             leaseLock.Dispose();
             using var retryLeaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
-            result = await _runner(WithBuildEnvironmentArguments(arguments, environment), worktreePath, cancellationToken).ConfigureAwait(false);
+            result = await _runner(
+                WithBuildEnvironmentArguments(arguments, environment),
+                worktreePath,
+                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                cancellationToken).ConfigureAwait(false);
             retried = true;
         }
 
@@ -737,7 +756,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
         var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
         return (new AcceptanceCheckResult(
-            check.Name,
+            result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,
             result.TimedOut
@@ -794,7 +813,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         CancellationToken cancellationToken)
     {
-        var result = await _runner(["git", "diff", "--name-only", "main...HEAD"], worktreePath, cancellationToken).ConfigureAwait(false);
+        var result = await _runner(
+            ["git", "diff", "--name-only", "main...HEAD"],
+            worktreePath,
+            AcceptanceCheckTimeouts.DefaultTimeout,
+            cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
             return new AcceptanceCheckResult("forbidden changed paths", false, result.ExitCode, TailOutput(result.Output));
@@ -819,7 +842,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var diffArgs = DiffBaseArgs.Concat(testFiles).ToArray();
 
-        var result = await _runner(diffArgs, worktreePath, cancellationToken).ConfigureAwait(false);
+        var result = await _runner(
+            diffArgs,
+            worktreePath,
+            AcceptanceCheckTimeouts.DefaultTimeout,
+            cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != 0)
             return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "diff unavailable");
@@ -945,10 +972,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
         }
 
-        // Fail a hung test fast and by name instead of silently eating CommandTimeout. A test that
+        // Fail a hung test fast and by name before the whole check budget is exhausted. A test that
         // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
-        // can otherwise stall the whole acceptance for ten minutes ("A task was canceled"). The
-        // inactivity timeout is per-test; the full suite runs in ~90s so this never false-trips.
+        // can otherwise stall the whole acceptance until the configured command timeout. The
+        // inactivity timeout is per-test and distinct from the full check budget.
         args.Add("--blame-hang-timeout");
         args.Add("120s");
         args.Add("--blame-hang-dump-type");
@@ -1056,13 +1083,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static string BuildTimeoutSummary(CommandResult result) =>
-        $"timed out after {FormatTimeout(result.Timeout ?? CommandTimeout)}";
+        $"elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? AcceptanceCheckTimeouts.DefaultTimeout)} budget={FormatTimeout(result.Timeout ?? AcceptanceCheckTimeouts.DefaultTimeout)}";
+
+    private static string BuildTimeoutFailureName(AcceptanceManifestCheck check, CommandResult result) =>
+        $"acceptance-check-timeout: {Slug(check.Name)} {BuildTimeoutSummary(result)}";
 
     private static string BuildTimeoutOutput(CommandResult result)
     {
         var details = new List<string>
         {
-            $"Verification command timed out after {FormatTimeout(result.Timeout ?? CommandTimeout)}.",
+            $"Verification command timed out after {BuildTimeoutSummary(result)}.",
         };
 
         if (!string.IsNullOrWhiteSpace(result.CommandLine))
@@ -1090,12 +1120,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         // Capture output to FILES via the platform shell, not pipes. A test or build can spawn a
         // grandchild that inherits the child's stdout/stderr handle and outlives it; with a
         // redirected PIPE the test runner never reaches EOF while that grandchild holds the write
-        // end, so `dotnet test` never exits and the whole command rides CommandTimeout to a
+        // end, so `dotnet test` never exits and the whole command rides the configured timeout to a
         // "A task was canceled". A plain `dotnet test > out 2> err` exits cleanly in that same
         // scenario, so we mirror it: every process exits regardless of a lingering grandchild and
         // we read the files afterward with a shared, delete-tolerant handle.
@@ -1104,6 +1135,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
+        var elapsed = Stopwatch.StartNew();
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -1147,7 +1179,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             WorkerProcessJobs.TryRegister(process, $"acceptance:{workingDirectory}");
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(CommandTimeout);
+            timeoutCts.CancelAfter(commandTimeout);
 
             try
             {
@@ -1165,6 +1197,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
             var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
+            elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
             return new CommandResult(
                 exitCode,
@@ -1173,7 +1206,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 commandLine,
                 stdoutPath,
                 stderrPath,
-                CommandTimeout);
+                commandTimeout,
+                elapsed.Elapsed);
         }
         finally
         {
@@ -1348,6 +1382,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public IReadOnlyList<string> Arguments { get; init; } = [];
         public string? Pattern { get; init; }
         public string? FilePath { get; init; }
+        public int? TimeoutMinutes { get; init; }
         public bool Advisory { get; init; }
     }
 

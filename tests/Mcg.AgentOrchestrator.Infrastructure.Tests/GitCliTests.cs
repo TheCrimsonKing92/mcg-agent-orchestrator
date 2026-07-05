@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("ProcessSpawning")]
 public sealed class GitCliTests
 {
     [Xunit.Fact(DisplayName = "GitCli_Run_succeeds_for_valid_git_command")]

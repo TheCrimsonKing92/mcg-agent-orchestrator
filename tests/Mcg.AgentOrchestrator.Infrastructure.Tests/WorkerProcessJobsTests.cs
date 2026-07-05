@@ -1,9 +1,6 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.CollectionDefinition("ProcessSpawning", DisableParallelization = true)]
-public sealed class ProcessSpawningCollection;
-
 [Xunit.Collection("ProcessSpawning")]
 public sealed class WorkerProcessJobsTests : IDisposable
 {

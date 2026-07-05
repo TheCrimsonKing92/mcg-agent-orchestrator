@@ -22,7 +22,21 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
         "Drive one goal or run the autonomous conductor loop.",
-        ["--policy", "--loop", "--max-iterations", "--max-duration", "--watch", "--daemon", "--poll-seconds", "--watch-interval", "--help", "-h"]);
+        [
+            "--policy",
+            "--loop",
+            "--max-iterations",
+            "--max-duration",
+            "--watch",
+            "--daemon",
+            "--poll-seconds",
+            "--watch-interval",
+            "--quiet",
+            "--stall-warning-seconds",
+            "--stall-warning-minutes",
+            "--help",
+            "-h"
+        ]);
 
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,

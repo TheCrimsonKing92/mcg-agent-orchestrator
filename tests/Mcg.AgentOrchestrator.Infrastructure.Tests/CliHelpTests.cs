@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("ConsoleOutMutation")]
 public sealed class CliHelpTests
 {
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]

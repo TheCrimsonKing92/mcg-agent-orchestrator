@@ -28,7 +28,11 @@ internal sealed class ConductorWatchProgressReporter
         _now = now ?? (() => DateTimeOffset.UtcNow);
     }
 
-    public IReadOnlyList<string> BuildLines(Goal goal, bool quiet, TimeSpan? stallThreshold = null)
+    public IReadOnlyList<string> BuildLines(
+        Goal goal,
+        bool quiet,
+        TimeSpan? watchInterval = null,
+        TimeSpan? stallThreshold = null)
     {
         if (quiet)
         {
@@ -48,31 +52,37 @@ internal sealed class ConductorWatchProgressReporter
         if (previous is not null && previous.TaskId != active.Id.Value)
         {
             var priorTask = goal.Tasks.FirstOrDefault(task => task.Id.Value == previous.TaskId);
-            lines.Add(FormatTransition(goal, previous, priorTask, active));
+            lines.AddRange(FormatTransition(goal, previous, priorTask, active));
             _lastEmitted.Remove(goalKey);
             previous = null;
         }
 
         var snapshot = BuildSnapshot(goal, active, now);
         var stdoutDelta = previous is null
+            ? snapshot.StandardOutputBytes
+            : Math.Max(0, snapshot.StandardOutputBytes - previous.StandardOutputBytes);
+        var outputDelta = previous is null
             ? snapshot.OutputBytes
             : Math.Max(0, snapshot.OutputBytes - previous.OutputBytes);
         var shouldEmit =
             previous is null ||
-            stdoutDelta > 0 ||
+            outputDelta > 0 ||
             snapshot.ChangedFileCount != previous.ChangedFileCount ||
             now - previous.EmittedAt >= TimeSpan.FromSeconds(DefaultThrottleSeconds);
 
         if (shouldEmit)
         {
-            lines.Add(FormatProgress(snapshot, stdoutDelta));
+            lines.Add(FormatProgress(snapshot, outputDelta));
+            lines.Add(FormatHumanProgress(snapshot, stdoutDelta));
             _lastEmitted[goalKey] = snapshot with { EmittedAt = now };
         }
 
-        var warning = BuildWarning(snapshot, stallThreshold ?? TimeSpan.FromMinutes(DefaultStallWarningMinutes));
+        var effectiveStallThreshold = ResolveStallThreshold(watchInterval, stallThreshold);
+        var warning = BuildWarning(snapshot, effectiveStallThreshold);
         if (warning is not null)
         {
             lines.Add(warning);
+            lines.Add(FormatHumanWarning(snapshot));
         }
 
         return lines;
@@ -89,7 +99,9 @@ internal sealed class ConductorWatchProgressReporter
             : _readHeartbeat(process, now);
         var changes = _readChanges(dispatch.WorkingDirectory, dispatch.BaseCommit);
         var liveness = ResolveLiveness(process, heartbeat);
+        var workerPid = ResolveWorkerPid(process, heartbeat);
         var outputBytes = (heartbeat?.StandardOutputBytes ?? 0) + (heartbeat?.StandardErrorBytes ?? 0);
+        var stdoutBytes = heartbeat?.StandardOutputBytes ?? 0;
         var lastProgressAge = heartbeat?.IdleDuration ?? (now - dispatch.DispatchedAt);
         return new ConductorWatchProgressSnapshot(
             goal.Id.Value.Length >= 8 ? goal.Id.Value[..8] : goal.Id.Value,
@@ -99,8 +111,10 @@ internal sealed class ConductorWatchProgressReporter
             totalTasks,
             dispatch.DispatchedAt,
             now - dispatch.DispatchedAt,
+            workerPid,
             liveness,
             outputBytes,
+            stdoutBytes,
             lastProgressAge,
             changes.Files.Count,
             changes.DisplayFiles,
@@ -135,6 +149,32 @@ internal sealed class ConductorWatchProgressReporter
         return process.IsRunning ? "NO LIVE WORKER" : "exiting";
     }
 
+    private int? ResolveWorkerPid(TaskProcessRecord? process, DispatchHeartbeatStatus? heartbeat)
+    {
+        var pids = heartbeat?.OwnedProcessIds is { Count: > 0 }
+            ? heartbeat.OwnedProcessIds
+            : heartbeat?.ChildProcessId is { } childPidForSet
+                ? [childPidForSet]
+                : process?.TrackedProcessIds ?? [];
+        var livePid = pids.FirstOrDefault(_isProcessAlive);
+        if (livePid > 0)
+        {
+            return livePid;
+        }
+
+        if (heartbeat?.ChildProcessId is { } childPid)
+        {
+            return childPid;
+        }
+
+        if (heartbeat?.OwnedProcessIds is { Count: > 0 })
+        {
+            return heartbeat.OwnedProcessIds[0];
+        }
+
+        return process?.ProcessId;
+    }
+
     private static string FormatProgress(ConductorWatchProgressSnapshot snapshot, long outputDelta)
     {
         var files = FormatFiles(snapshot.DisplayFiles, snapshot.RemainingFileCount);
@@ -144,7 +184,16 @@ internal sealed class ConductorWatchProgressReporter
             $"last_progress_age={FormatDuration(snapshot.LastProgressAge)} files={snapshot.ChangedFileCount} [{files}]";
     }
 
-    private static string FormatTransition(Goal goal, EmittedSnapshot previous, TaskSpec? priorTask, TaskSpec next)
+    private static string FormatHumanProgress(ConductorWatchProgressSnapshot snapshot, long stdoutDelta)
+    {
+        var files = FormatHumanFiles(snapshot.ChangedFileCount, snapshot.DisplayFiles, snapshot.RemainingFileCount);
+        return
+            $"[{snapshot.GoalPrefix}] {snapshot.Role} (task {snapshot.TaskNumber}/{snapshot.TotalTasks}) - " +
+            $"running {FormatDuration(snapshot.Elapsed)} - {FormatWorker(snapshot)} - " +
+            $"+{FormatBytes(stdoutDelta)} stdout - last progress {FormatDuration(snapshot.LastProgressAge)} ago - {files}";
+    }
+
+    private static IReadOnlyList<string> FormatTransition(Goal goal, EmittedSnapshot previous, TaskSpec? priorTask, TaskSpec next)
     {
         var commitValue = priorTask?.LastDispatch?.ResultCommit ?? previous.ResultCommit;
         var commit = string.IsNullOrWhiteSpace(commitValue) ? "unknown" : commitValue;
@@ -153,9 +202,13 @@ internal sealed class ConductorWatchProgressReporter
             commit = commit[..12];
         }
 
-        return
+        var machine =
             $"WATCH_TRANSITION goal={previous.GoalPrefix} {previous.Role}=✓ commit={commit} " +
             $"files={previous.ChangedFileCount} elapsed={FormatDuration(previous.Elapsed)} next={next.RequiredRole} task={ConsoleViews.GetTaskDisplayNumber(goal, next.Id)}/{goal.Tasks.Count}";
+        var humanCommit = commit == "unknown" ? commit : commit[..Math.Min(7, commit.Length)];
+        var human =
+            $"[{previous.GoalPrefix}] {previous.Role} - committed {humanCommit} ({FormatFileCount(previous.ChangedFileCount)}, {FormatDuration(previous.Elapsed)}) -> {next.RequiredRole} dispatched";
+        return [machine, human];
     }
 
     private static string? BuildWarning(ConductorWatchProgressSnapshot snapshot, TimeSpan stallThreshold)
@@ -173,6 +226,27 @@ internal sealed class ConductorWatchProgressReporter
         return null;
     }
 
+    private static string FormatHumanWarning(ConductorWatchProgressSnapshot snapshot) =>
+        $"[{snapshot.GoalPrefix}] WARNING: no worker progress for {FormatDuration(snapshot.LastProgressAge)} " +
+        $"(stdout flat, last edit {FormatDuration(snapshot.LastProgressAge)} ago) - possible stall";
+
+    private static TimeSpan ResolveStallThreshold(TimeSpan? watchInterval, TimeSpan? explicitThreshold)
+    {
+        if (explicitThreshold is { } threshold)
+        {
+            return threshold;
+        }
+
+        var defaultThreshold = TimeSpan.FromMinutes(DefaultStallWarningMinutes);
+        if (watchInterval is null)
+        {
+            return defaultThreshold;
+        }
+
+        var pollBasedThreshold = TimeSpan.FromTicks(watchInterval.Value.Ticks * 4);
+        return pollBasedThreshold > defaultThreshold ? pollBasedThreshold : defaultThreshold;
+    }
+
     private static TaskSpec? GetActiveTask(Goal goal) =>
         goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true }) ??
         goal.Tasks.FirstOrDefault(task => task.Status == WorkTaskStatus.Running && task.LastDispatch is not null) ??
@@ -187,6 +261,44 @@ internal sealed class ConductorWatchProgressReporter
 
         var text = string.Join(", ", files);
         return remaining > 0 ? $"{text}, +{remaining} more" : text;
+    }
+
+    private static string FormatHumanFiles(
+        int changedFileCount,
+        IReadOnlyList<string> files,
+        int remaining)
+    {
+        var count = FormatFileCount(changedFileCount);
+        if (changedFileCount == 0 || files.Count == 0)
+        {
+            return count;
+        }
+
+        return $"{count} ({FormatFiles(files, remaining)})";
+    }
+
+    private static string FormatFileCount(int count) =>
+        count == 1 ? "1 file changed" : $"{count} files changed";
+
+    private static string FormatWorker(ConductorWatchProgressSnapshot snapshot) =>
+        snapshot.WorkerPid is { } pid
+            ? $"worker pid {pid} {snapshot.Liveness}"
+            : snapshot.Liveness;
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+        {
+            return $"{Math.Max(0, bytes)}B";
+        }
+
+        var kib = bytes / 1024d;
+        if (kib < 1024)
+        {
+            return $"{kib:0.#}KB";
+        }
+
+        return $"{kib / 1024d:0.#}MB";
     }
 
     private static string FormatDuration(TimeSpan value)
@@ -230,8 +342,10 @@ internal sealed class ConductorWatchProgressReporter
         int TotalTasks,
         DateTimeOffset DispatchedAt,
         TimeSpan Elapsed,
+        int? WorkerPid,
         string Liveness,
         long OutputBytes,
+        long StandardOutputBytes,
         TimeSpan LastProgressAge,
         int ChangedFileCount,
         IReadOnlyList<string> DisplayFiles,
@@ -243,6 +357,7 @@ internal sealed class ConductorWatchProgressReporter
             Role,
             Elapsed,
             OutputBytes,
+            StandardOutputBytes,
             ChangedFileCount,
             ResultCommit,
             EmittedAt);
@@ -253,6 +368,7 @@ internal sealed class ConductorWatchProgressReporter
         string Role,
         TimeSpan Elapsed,
         long OutputBytes,
+        long StandardOutputBytes,
         int ChangedFileCount,
         string? ResultCommit,
         DateTimeOffset EmittedAt);

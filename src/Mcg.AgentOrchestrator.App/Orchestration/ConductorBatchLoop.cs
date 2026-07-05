@@ -10,6 +10,7 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultWatchIntervalSeconds = 15;
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
+    internal const int DefaultMaxBusyWriteAttempts = 6;
 
     private readonly Action<AgentOrchestratorKernel> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -49,7 +50,8 @@ internal sealed class ConductorBatchLoop
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick = null,
         Func<AgentOrchestratorKernel, IReadOnlyList<ConductorOperatorDispositionSnapshot>>? buildOperatorDispositions = null,
         bool quiet = false,
-        TimeSpan? stallWarningThreshold = null)
+        TimeSpan? stallWarningThreshold = null,
+        Action<TimeSpan>? busyWriteDelay = null)
     {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
@@ -74,7 +76,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                persistTick?.Invoke(kernel);
+                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "stop", null, busyWriteDelay);
                 break;
             }
 
@@ -83,7 +85,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                persistTick?.Invoke(kernel);
+                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "max-iterations", null, busyWriteDelay);
                 break;
             }
 
@@ -92,7 +94,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                persistTick?.Invoke(kernel);
+                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "max-duration", null, busyWriteDelay);
                 break;
             }
 
@@ -124,7 +126,7 @@ internal sealed class ConductorBatchLoop
                     {
                         _sweep(kernel);
                         _recoverInterruptedDispatches(kernel);
-                        persistTick?.Invoke(kernel);
+                        TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "idle-wake-sweep", null, busyWriteDelay);
                     }
 
                     if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
@@ -132,7 +134,7 @@ internal sealed class ConductorBatchLoop
                         stopRequested = true;
                         EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                        persistTick?.Invoke(kernel);
+                        TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "stop-while-idle", null, busyWriteDelay);
                         break;
                     }
 
@@ -267,7 +269,7 @@ internal sealed class ConductorBatchLoop
             {
                 foreach (var goal in eligible)
                 {
-                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, stallWarningThreshold))
+                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, watchInterval, stallWarningThreshold))
                     {
                         EmitProgress(line, tickLines);
                     }
@@ -297,11 +299,11 @@ internal sealed class ConductorBatchLoop
             if (persistGoalTick is not null)
             {
                 if (changedGoalIds.Count > 0)
-                    persistGoalTick(kernel, changedGoalIds.ToArray());
+                    TryPersistGoalTick(persistGoalTick, kernel, changedGoalIds.ToArray(), totalTicks, tickLines, busyWriteDelay);
             }
             else
             {
-                persistTick?.Invoke(kernel);
+                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(changedGoalIds, onlyGoalId), "tick", tickLines, busyWriteDelay);
             }
 
             var operatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? [];
@@ -316,9 +318,9 @@ internal sealed class ConductorBatchLoop
                 {
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
-                    onTick?.Invoke(tickSummary);
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                    persistTick?.Invoke(kernel);
+                    TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "no-progress", tickLines, busyWriteDelay);
+                    onTick?.Invoke(tickSummary);
                     break;
                 }
 
@@ -339,7 +341,7 @@ internal sealed class ConductorBatchLoop
                 {
                     _sweep(kernel);
                     _recoverInterruptedDispatches(kernel);
-                    persistTick?.Invoke(kernel);
+                    TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "wake-sweep", tickLines, busyWriteDelay);
                 }
 
                 if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
@@ -348,7 +350,7 @@ internal sealed class ConductorBatchLoop
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                    persistTick?.Invoke(kernel);
+                    TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "stop-during-sleep", tickLines, busyWriteDelay);
                     break;
                 }
 
@@ -367,6 +369,155 @@ internal sealed class ConductorBatchLoop
         Console.WriteLine(line);
         Console.Out.Flush();
         accumulator?.Add(line);
+    }
+
+    private static bool TryPersistGoalTick(
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>> persistGoalTick,
+        AgentOrchestratorKernel kernel,
+        IReadOnlyCollection<GoalId> changedGoalIds,
+        int tick,
+        List<string> tickLines,
+        Action<TimeSpan>? busyWriteDelay)
+    {
+        var goals = ResolveGoalContext(changedGoalIds, onlyGoalId: null);
+        return TryPersistWithBusyContainment(
+            () => persistGoalTick(kernel, changedGoalIds),
+            tick,
+            goals,
+            "goal",
+            tickLines,
+            busyWriteDelay);
+    }
+
+    private static bool TryPersistTick(
+        Action<AgentOrchestratorKernel>? persistTick,
+        AgentOrchestratorKernel kernel,
+        int tick,
+        string goals,
+        string kind,
+        List<string>? tickLines,
+        Action<TimeSpan>? busyWriteDelay)
+    {
+        if (persistTick is null)
+        {
+            return true;
+        }
+
+        return TryPersistWithBusyContainment(
+            () => persistTick(kernel),
+            tick,
+            goals,
+            kind,
+            tickLines,
+            busyWriteDelay);
+    }
+
+    private static bool TryPersistWithBusyContainment(
+        Action persist,
+        int tick,
+        string goals,
+        string kind,
+        List<string>? tickLines,
+        Action<TimeSpan>? busyWriteDelay)
+    {
+        var delay = TimeSpan.FromMilliseconds(50);
+        for (var attempt = 1; attempt <= DefaultMaxBusyWriteAttempts; attempt++)
+        {
+            try
+            {
+                persist();
+                return true;
+            }
+            catch (Exception ex) when (IsTransientSqliteLock(ex))
+            {
+                EmitProgress(
+                    $"TICK_WRITE_BUSY tick={tick} kind={kind} goal={goals} attempt={attempt} likelyHolder=concurrent-per-command-host",
+                    tickLines);
+
+                if (attempt == DefaultMaxBusyWriteAttempts)
+                {
+                    EmitProgress(
+                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={attempt} likelyHolder=concurrent-per-command-host error={Sanitize(ex.Message)}",
+                        tickLines);
+                    return false;
+                }
+
+                if (busyWriteDelay is null)
+                    Thread.Sleep(delay);
+                else
+                    busyWriteDelay(delay);
+                delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 1000));
+            }
+        }
+
+        return false;
+    }
+
+    private static string ResolveGoalContext(AgentOrchestratorKernel kernel, string? onlyGoalId)
+    {
+        if (onlyGoalId is not null)
+        {
+            return ShortGoalId(onlyGoalId);
+        }
+
+        var active = kernel.Goals
+            .Where(goal => !IsTerminalGoal(goal))
+            .Select(goal => ShortGoalId(goal.Id.Value))
+            .Take(4)
+            .ToArray();
+        return active.Length == 0 ? "none" : string.Join(",", active);
+    }
+
+    private static string ResolveGoalContext(IReadOnlyCollection<GoalId> goalIds, string? onlyGoalId)
+    {
+        if (goalIds.Count > 0)
+        {
+            return string.Join(",", goalIds.Select(goalId => ShortGoalId(goalId.Value)).Take(4));
+        }
+
+        return onlyGoalId is null ? "none" : ShortGoalId(onlyGoalId);
+    }
+
+    private static string ShortGoalId(string goalId) =>
+        goalId.Length <= 8 ? goalId : goalId[..8];
+
+    private static bool IsTransientSqliteLock(Exception ex)
+    {
+        if (IsSqliteBusyOrLocked(ex))
+        {
+            return true;
+        }
+
+        return ex.InnerException is not null && IsTransientSqliteLock(ex.InnerException);
+    }
+
+    private static bool IsSqliteBusyOrLocked(Exception ex)
+    {
+        var typeName = ex.GetType().FullName;
+        if (string.Equals(typeName, "Microsoft.Data.Sqlite.SqliteException", StringComparison.Ordinal)
+            && TryGetSqliteErrorCode(ex, out var sqliteErrorCode)
+            && sqliteErrorCode is 5 or 6)
+        {
+            return true;
+        }
+
+        return ex.Message.Contains("SQLite Error 5", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("SQLite Error 6", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("database is locked", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("database table is locked", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetSqliteErrorCode(Exception ex, out int sqliteErrorCode)
+    {
+        sqliteErrorCode = 0;
+        var property = ex.GetType().GetProperty("SqliteErrorCode");
+        if (property?.GetValue(ex) is int value)
+        {
+            sqliteErrorCode = value;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool RecordChangedDisposition(

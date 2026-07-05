@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection("ProcessSpawning")]
 public sealed class DispatchProcessHostTests
 {
     [Xunit.Fact(DisplayName = "DispatchProcessHost_parameters_round_trip_via_camelCase_json")]

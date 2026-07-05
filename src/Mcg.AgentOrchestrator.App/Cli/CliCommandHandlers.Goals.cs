@@ -2918,7 +2918,8 @@ private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerification
         .FirstOrDefault(check =>
             !check.Advisory &&
             !check.Passed &&
-            (check.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true ||
+            (check.Name.StartsWith("acceptance-check-timeout:", StringComparison.OrdinalIgnoreCase) ||
+             check.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true ||
              check.OutputTail?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true));
 
     if (timedOutCheck is null)
