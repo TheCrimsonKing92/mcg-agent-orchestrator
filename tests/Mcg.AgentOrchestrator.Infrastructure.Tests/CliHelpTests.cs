@@ -78,12 +78,25 @@ public sealed class CliHelpTests
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_help_unknown_command_suggests_nearest_command")]
+    public void CliHelpUnknownCommandSuggestsNearestCommand()
+    {
+        AssertUnknownCommandSuggestion(
+            ["help", "backlog-lits"],
+            "backlog-lits",
+            "backlog-list");
+    }
+
     [Xunit.Theory(DisplayName = "Cli_unknown_command_suggests_nearest_command")]
-    [Xunit.InlineData(new[] { "help", "backlog-lits" }, "backlog-lits", "backlog-list")]
     [Xunit.InlineData(new[] { "backlog", "list" }, "backlog list", "backlog-list")]
     [Xunit.InlineData(new[] { "help" }, "help", "--help")]
     [Xunit.InlineData(new[] { "stauts" }, "stauts", "status")]
     public void CliUnknownCommandSuggestsNearestCommand(string[] args, string token, string suggestion)
+    {
+        AssertUnknownCommandSuggestion(args, token, suggestion);
+    }
+
+    private static void AssertUnknownCommandSuggestion(string[] args, string token, string suggestion)
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -241,12 +254,25 @@ public sealed class CliHelpTests
             seedBacklogItem: true);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_help_unknown_command_startup_exits_one_with_suggestion")]
+    public void CliHelpUnknownCommandStartupExitsOneWithSuggestion()
+    {
+        AssertUnknownCommandStartupExit(
+            ["help", "backlog-lits"],
+            "backlog-lits",
+            "backlog-list");
+    }
+
     [Xunit.Theory(DisplayName = "Cli_unknown_command_startup_exits_one_with_suggestion")]
-    [Xunit.InlineData(new[] { "help", "backlog-lits" }, "backlog-lits", "backlog-list")]
     [Xunit.InlineData(new[] { "backlog", "list" }, "backlog list", "backlog-list")]
     [Xunit.InlineData(new[] { "help" }, "help", "--help")]
     [Xunit.InlineData(new[] { "stauts" }, "stauts", "status")]
     public void CliUnknownCommandStartupExitsOneWithSuggestion(string[] args, string token, string suggestion)
+    {
+        AssertUnknownCommandStartupExit(args, token, suggestion);
+    }
+
+    private static void AssertUnknownCommandStartupExit(string[] args, string token, string suggestion)
     {
         var root = CreateTempDirectory();
 
