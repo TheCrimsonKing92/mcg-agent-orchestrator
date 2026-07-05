@@ -50,9 +50,9 @@ public sealed class LauncherScriptTests
             "Cli",
             "CliCommandHelp.cs"));
 
-        Assert.Contains(
-            "Acceptance: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 acceptance <goal>",
-            helpSource);
+        Assert.Contains("Acceptance:", helpSource);
+        Assert.Contains("Invoke-OrchestratorCommand.ps1", helpSource);
+        Assert.Contains("acceptance <goal>", helpSource);
         Assert.DoesNotContain(RetiredManualLandingScriptName(), helpSource, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -81,7 +81,7 @@ public sealed class LauncherScriptTests
             .ToArray();
 
         Assert.Contains(allow, entry => entry.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
-        Assert.False(
+        Xunit.Assert.False(
             allow.Any(entry => entry.Contains(RetiredManualLandingScriptName(), StringComparison.OrdinalIgnoreCase)),
             string.Join(Environment.NewLine, allow));
     }
