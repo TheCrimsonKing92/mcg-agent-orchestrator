@@ -91,7 +91,7 @@ public sealed class RunGoalServiceTests
         DateTimeOffset completedAt,
         string output)
     {
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", command, workspace.ExecutionDirectory, completedAt));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", command, workspace.ExecutionDirectory, completedAt, WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             command,
             workspace.ExecutionDirectory,
@@ -257,7 +257,7 @@ public sealed class RunGoalServiceTests
         for (var i = 0; i < 2; i++)
         {
             var cmd = $"cmd{i}";
-            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", cmd, workspace.ExecutionDirectory, now));
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", cmd, workspace.ExecutionDirectory, now, WorkerProviderKind: ProviderKind.OpenAICodexCli));
             kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
                 cmd, workspace.ExecutionDirectory, 1, string.Empty, limitOutput, now));
         }
@@ -290,7 +290,7 @@ public sealed class RunGoalServiceTests
         kernel.ActivateGoal(goal.Id, [agent]);
         var now = DateTimeOffset.UtcNow;
         var retryTime = now.AddHours(1);
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "codex exec", workspace.ExecutionDirectory, now));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "codex exec", workspace.ExecutionDirectory, now, WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             "codex exec",
             workspace.ExecutionDirectory,

@@ -446,6 +446,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.ArgumentList.Add("--no-restore");
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+            startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start PowerShell.");
@@ -553,6 +554,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.ArgumentList.Add("--no-restore");
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+            startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start PowerShell.");

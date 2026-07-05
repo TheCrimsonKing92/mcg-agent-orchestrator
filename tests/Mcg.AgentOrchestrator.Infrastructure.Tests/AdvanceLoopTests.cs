@@ -737,7 +737,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     var task = goal.Tasks.Single();
     var now = DateTimeOffset.UtcNow;
     var retryTime = now.AddHours(1);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workspace.ExecutionDirectory, now));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workspace.ExecutionDirectory, now, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec",
         workspace.ExecutionDirectory,
@@ -952,7 +952,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     var task = goal.Tasks.Single();
     var now = DateTimeOffset.UtcNow;
     var retryAfter = now.AddHours(1);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workspace.ExecutionDirectory, now));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workspace.ExecutionDirectory, now, WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
         "codex exec",
         workspace.ExecutionDirectory,
