@@ -13,15 +13,25 @@ public sealed class LocalProcessVerifier
         IReadOnlyList<string> Arguments,
         DotnetBuildEnvironment? BuildEnvironment = null);
 
-    internal sealed record CommandResult(int ExitCode, string Stdout, string Stderr = "");
+    internal sealed record CommandResult(
+        int ExitCode,
+        string Stdout,
+        string Stderr = "",
+        bool TimedOut = false,
+        TimeSpan? Timeout = null,
+        TimeSpan? Elapsed = null);
 
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
-
-    private readonly Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> _runner;
+    private readonly Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
 
     public LocalProcessVerifier() : this(RunCommandAsync) { }
 
     internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> runner)
+        : this((fileName, args, workingDirectory, _, cancellationToken) =>
+            runner(fileName, args, workingDirectory, cancellationToken))
+    {
+    }
+
+    internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> runner)
     {
         _runner = runner;
     }
@@ -44,24 +54,43 @@ public sealed class LocalProcessVerifier
         }
 
         // Shut down build servers to release file locks before running verification.
-        await _runner("dotnet", ["build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
+        await _runner(
+            "dotnet",
+            ["build-server", "shutdown"],
+            workingDirectory,
+            AcceptanceCheckTimeouts.DefaultTimeout,
+            cancellationToken).ConfigureAwait(false);
 
         var completedAt = DateTimeOffset.UtcNow;
         var preparedCommand = PrepareCommand(command, goalId, taskId);
         var elapsed = Stopwatch.StartNew();
+        var commandTimeout = AcceptanceCheckTimeouts.DefaultTimeout;
 
         using var leaseLock = preparedCommand.BuildEnvironment is null
             ? null
             : DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(preparedCommand.BuildEnvironment, cancellationToken);
 
-        var result = await _runner(preparedCommand.FileName, preparedCommand.Arguments, workingDirectory, cancellationToken).ConfigureAwait(false);
+        var result = await RunPreparedCommandAsync(
+            preparedCommand,
+            workingDirectory,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != 0 && (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
         {
             // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
             // clears residual compiler processes before the single allowed retry.
-            await _runner("dotnet", ["build-server", "shutdown"], workingDirectory, cancellationToken).ConfigureAwait(false);
-            result = await _runner(preparedCommand.FileName, preparedCommand.Arguments, workingDirectory, cancellationToken).ConfigureAwait(false);
+            await _runner(
+                "dotnet",
+                ["build-server", "shutdown"],
+                workingDirectory,
+                AcceptanceCheckTimeouts.DefaultTimeout,
+                cancellationToken).ConfigureAwait(false);
+            result = await RunPreparedCommandAsync(
+                preparedCommand,
+                workingDirectory,
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false);
         }
 
         elapsed.Stop();
@@ -71,9 +100,38 @@ public sealed class LocalProcessVerifier
             preparedCommand.Command,
             workingDirectory,
             result.ExitCode,
-            BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) + result.Stdout,
+            BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
+                (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
+                result.Stdout,
             result.Stderr,
             completedAt);
+    }
+
+    private async Task<CommandResult> RunPreparedCommandAsync(
+        PreparedCommand preparedCommand,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _runner(
+                preparedCommand.FileName,
+                preparedCommand.Arguments,
+                workingDirectory,
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new CommandResult(
+                -1,
+                string.Empty,
+                string.Empty,
+                TimedOut: true,
+                Timeout: commandTimeout,
+                Elapsed: commandTimeout);
+        }
     }
 
     internal static PreparedCommand PrepareCommand(string command, GoalId? goalId = null, TaskId? taskId = null)
@@ -205,10 +263,19 @@ public sealed class LocalProcessVerifier
             line.Contains("Total:", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static string BuildTimeoutEvidence(CommandResult result) =>
+        $"acceptance-check-timeout: local-process-verification elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? AcceptanceCheckTimeouts.DefaultTimeout)} budget={FormatTimeout(result.Timeout ?? AcceptanceCheckTimeouts.DefaultTimeout)}{Environment.NewLine}";
+
+    private static string FormatTimeout(TimeSpan timeout) =>
+        timeout.TotalSeconds >= 60
+            ? $"{timeout.TotalMinutes:0.#}m"
+            : $"{timeout.TotalSeconds:0.#}s";
+
     private static async Task<CommandResult> RunCommandAsync(
         string fileName,
         IReadOnlyList<string> args,
         string workingDirectory,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
@@ -233,7 +300,8 @@ public sealed class LocalProcessVerifier
         WorkerProcessJobs.TryRegister(process, $"local-verification:{workingDirectory}");
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(CommandTimeout);
+        timeoutCts.CancelAfter(commandTimeout);
+        var elapsed = Stopwatch.StartNew();
 
         try
         {
@@ -244,7 +312,21 @@ public sealed class LocalProcessVerifier
 
             var stdout = await stdoutTask.ConfigureAwait(false);
             var stderr = await stderrTask.ConfigureAwait(false);
-            return new CommandResult(process.ExitCode, stdout, stderr);
+            elapsed.Stop();
+            return new CommandResult(process.ExitCode, stdout, stderr, Elapsed: elapsed.Elapsed);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
+            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            elapsed.Stop();
+            return new CommandResult(
+                -1,
+                string.Empty,
+                string.Empty,
+                TimedOut: true,
+                Timeout: commandTimeout,
+                Elapsed: elapsed.Elapsed);
         }
         catch (OperationCanceledException)
         {

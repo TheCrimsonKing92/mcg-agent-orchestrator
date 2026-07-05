@@ -239,11 +239,12 @@ public sealed class GoalAcceptanceVerifierTests
             Assert.Equal(-1, result.ExitCode);
             Assert.Equal(2, calls.Count);
             var check = Assert.Single(result.Checks!.Where(check => !check.Passed));
-            Assert.Equal("focused CLI infrastructure tests", check.Name);
+            Assert.Equal("acceptance-check-timeout: focused-cli-infrastructure-tests elapsed=10m budget=10m", check.Name);
             Assert.False(check.Passed);
-            Assert.Equal("timed out after 10m", check.ResultSummary);
+            Assert.Equal("elapsed=10m budget=10m", check.ResultSummary);
             Assert.Equal(result.ArtifactsPath, check.ArtifactsPath);
             var outputTail = result.OutputTail ?? string.Empty;
+            Assert.True(outputTail.Contains("Verification command timed out after elapsed=10m budget=10m.", StringComparison.Ordinal), outputTail);
             Assert.True(outputTail.Contains("Command: dotnet test", StringComparison.Ordinal), outputTail);
             Assert.True(outputTail.Contains("stdout: C:\\temp\\acceptance.out", StringComparison.Ordinal), outputTail);
             Assert.True(outputTail.Contains("stderr: C:\\temp\\acceptance.err", StringComparison.Ordinal), outputTail);
@@ -251,6 +252,79 @@ public sealed class GoalAcceptanceVerifierTests
         }
         finally
         {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_uses_25_minute_default_timeout_when_unconfigured")]
+    public async Task GoalAcceptanceVerifierUses25MinuteDefaultTimeoutWhenUnconfigured()
+    {
+        var previous = SetAcceptanceTimeoutEnvironment(null);
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<(string[] Args, TimeSpan Timeout)>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            {
+                calls.Add((args, timeout));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal(TimeSpan.FromMinutes(25), calls[0].Timeout);
+            Assert.Equal(TimeSpan.FromMinutes(25), calls[1].Timeout);
+        }
+        finally
+        {
+            SetAcceptanceTimeoutEnvironment(previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_manifest_timeout_override_wins_over_global_default")]
+    public async Task GoalAcceptanceVerifierManifestTimeoutOverrideWinsOverGlobalDefault()
+    {
+        var previous = SetAcceptanceTimeoutEnvironment("7");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "slow custom check", "type": "command", "command": "custom-check", "arguments": ["--slow"], "timeoutMinutes": 2 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<(string[] Args, TimeSpan Timeout)>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            {
+                calls.Add((args, timeout));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal(TimeSpan.FromMinutes(7), calls[0].Timeout);
+            Assert.Equal(TimeSpan.FromMinutes(2), calls[1].Timeout);
+            Assert.Equal("custom-check", calls[1].Args[0]);
+        }
+        finally
+        {
+            SetAcceptanceTimeoutEnvironment(previous);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1452,6 +1526,13 @@ public sealed class GoalAcceptanceVerifierTests
         Directory.CreateDirectory(manifestDirectory);
         File.WriteAllText(Path.Combine(manifestDirectory, "acceptance-manifest.json"), manifest);
         return root;
+    }
+
+    private static string? SetAcceptanceTimeoutEnvironment(string? value)
+    {
+        var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable, value);
+        return previous;
     }
 
     private static string CreateStandardManifestWorkspace() =>
