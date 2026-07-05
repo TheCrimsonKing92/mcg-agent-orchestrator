@@ -1751,6 +1751,14 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("files=4", line);
         Assert.Contains("src/A.cs", line);
         Assert.Contains("+1 more", line);
+
+        var human = ticks.Single().ProgressLines!.Single(l => l.StartsWith($"[{goal.Id.Value[..8]}] {task.RequiredRole}", StringComparison.Ordinal));
+        Assert.Contains("(task 1/", human);
+        Assert.Contains("running 2m0s", human);
+        Assert.Contains("worker pid 222 alive", human);
+        Assert.Contains("+42B stdout", human);
+        Assert.Contains("last progress 15s ago", human);
+        Assert.Contains("4 files changed (src/A.cs, src/B.cs, src/C.cs, +1 more)", human);
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_throttles_until_output_or_file_count_changes")]
@@ -1839,6 +1847,10 @@ public sealed class ConductorBatchLoopTests
         var warning = ticks.Single().ProgressLines!.Single(l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
         Assert.Contains($"goal={goal.Id.Value[..8]}", warning);
         Assert.Contains("reason=no-live-worker", warning);
+
+        var human = ticks.Single().ProgressLines!.Single(l => l.StartsWith($"[{goal.Id.Value[..8]}] WARNING:", StringComparison.Ordinal));
+        Assert.Contains("no worker progress for 20s", human);
+        Assert.Contains("possible stall", human);
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_emits_transition_after_role_completion")]
@@ -1885,6 +1897,11 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("files=2", transition);
         Assert.Contains("next=Developer", transition);
         Assert.True(ticks.SelectMany(t => t.ProgressLines ?? []).Any(l => l.Contains("role=Developer", StringComparison.Ordinal)));
+
+        var human = ticks.SelectMany(t => t.ProgressLines ?? []).Single(l => l.StartsWith($"[{goal.Id.Value[..8]}] Planner - committed", StringComparison.Ordinal));
+        Assert.Contains("committed deadbee", human);
+        Assert.Contains("(2 files changed, 3m0s)", human);
+        Assert.Contains("-> Developer dispatched", human);
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_uses_operator_supplied_stall_warning_threshold")]
@@ -1911,6 +1928,30 @@ public sealed class ConductorBatchLoopTests
         var warning = ticks.Single().ProgressLines!.Single(l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
         Assert.Contains("reason=last-progress-stale", warning);
         Assert.Contains("stall=45s", warning);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_default_stall_threshold_uses_four_poll_intervals_when_larger")]
+    public void WatchProgressDefaultStallThresholdUsesFourPollIntervalsWhenLarger()
+    {
+        var (kernel, goal) = SimpleGoal("watch poll threshold");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-30), "abc123");
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromMinutes(12), [111], [111], ["src/A.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            watchInterval: TimeSpan.FromMinutes(5),
+            sleepFunc: _ => true,
+            onTick: ticks.Add);
+
+        Assert.DoesNotContain(ticks.Single().ProgressLines!, l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
+        Assert.DoesNotContain(ticks.Single().ProgressLines!, l => l.Contains("WARNING:", StringComparison.Ordinal));
     }
 
     // ── Fault isolation: a throwing goal is escalated, others still advance ─

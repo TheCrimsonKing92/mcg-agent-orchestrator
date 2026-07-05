@@ -267,7 +267,7 @@ internal sealed class ConductorBatchLoop
             {
                 foreach (var goal in eligible)
                 {
-                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, stallWarningThreshold))
+                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, watchInterval, stallWarningThreshold))
                     {
                         EmitProgress(line, tickLines);
                     }
