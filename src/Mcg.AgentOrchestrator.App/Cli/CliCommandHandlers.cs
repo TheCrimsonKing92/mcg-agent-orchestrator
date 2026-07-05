@@ -46,7 +46,6 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
         return handled.Value;
     }
 
-    Console.WriteLine("Unknown command.");
-    return false;
+    throw new ArgumentException(CliArgumentParser.FormatUnknownCommandMessage(parts));
 }
 }

@@ -81,6 +81,23 @@ public sealed class CliHelpTests
     [Xunit.Fact(DisplayName = "Cli_help_unknown_command_suggests_nearest_command")]
     public void CliHelpUnknownCommandSuggestsNearestCommand()
     {
+        AssertUnknownCommandSuggestion(
+            ["help", "backlog-lits"],
+            "backlog-lits",
+            "backlog-list");
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_unknown_command_suggests_nearest_command")]
+    [Xunit.InlineData(new[] { "backlog", "list" }, "backlog list", "backlog-list")]
+    [Xunit.InlineData(new[] { "help" }, "help", "--help")]
+    [Xunit.InlineData(new[] { "stauts" }, "stauts", "status")]
+    public void CliUnknownCommandSuggestsNearestCommand(string[] args, string token, string suggestion)
+    {
+        AssertUnknownCommandSuggestion(args, token, suggestion);
+    }
+
+    private static void AssertUnknownCommandSuggestion(string[] args, string token, string suggestion)
+    {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
@@ -90,7 +107,7 @@ public sealed class CliHelpTests
         Goal? currentGoal = null;
 
         var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
-            ["help", "backlog-lits"],
+            args,
             kernel,
             workspace,
             ref agents,
@@ -98,7 +115,9 @@ public sealed class CliHelpTests
             ref profiles,
             ref currentGoal));
 
-        Xunit.Assert.Contains("Unknown command 'backlog-lits'. Did you mean: backlog-list?", ex.Message);
+        Xunit.Assert.Contains($"Unknown command '{token}'.", ex.Message);
+        Xunit.Assert.Contains($"Did you mean: {suggestion}", ex.Message);
+        Xunit.Assert.Contains("--help", ex.Message);
     }
 
     [Xunit.Fact(DisplayName = "Cli_conduct_help_documents_poll_seconds")]
@@ -238,13 +257,32 @@ public sealed class CliHelpTests
     [Xunit.Fact(DisplayName = "Cli_help_unknown_command_startup_exits_one_with_suggestion")]
     public void CliHelpUnknownCommandStartupExitsOneWithSuggestion()
     {
+        AssertUnknownCommandStartupExit(
+            ["help", "backlog-lits"],
+            "backlog-lits",
+            "backlog-list");
+    }
+
+    [Xunit.Theory(DisplayName = "Cli_unknown_command_startup_exits_one_with_suggestion")]
+    [Xunit.InlineData(new[] { "backlog", "list" }, "backlog list", "backlog-list")]
+    [Xunit.InlineData(new[] { "help" }, "help", "--help")]
+    [Xunit.InlineData(new[] { "stauts" }, "stauts", "status")]
+    public void CliUnknownCommandStartupExitsOneWithSuggestion(string[] args, string token, string suggestion)
+    {
+        AssertUnknownCommandStartupExit(args, token, suggestion);
+    }
+
+    private static void AssertUnknownCommandStartupExit(string[] args, string token, string suggestion)
+    {
         var root = CreateTempDirectory();
 
-        var result = RunAppCli(root, ["help", "backlog-lits"]);
+        var result = RunAppCli(root, args);
 
         Xunit.Assert.Equal(1, result.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardOutput), result.StandardOutput);
-        Xunit.Assert.Contains("Error: Unknown command 'backlog-lits'. Did you mean: backlog-list?", result.StandardError);
+        Xunit.Assert.Contains($"Error: Unknown command '{token}'.", result.StandardError);
+        Xunit.Assert.Contains($"Did you mean: {suggestion}", result.StandardError);
+        Xunit.Assert.Contains("--help", result.StandardError);
     }
 
     [Xunit.Theory(DisplayName = "Cli_invalid_flags_fail_before_handler_execution")]
