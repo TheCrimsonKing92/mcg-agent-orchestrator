@@ -2091,6 +2091,55 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(staleGoal.Id, staleTask.Id).Status);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_retired_verified_goal_is_excluded_from_tick_eligible_set")]
+    public void BatchLoopRetiredVerifiedGoalIsExcludedFromTickEligibleSet()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var retiredGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Retired missing branch goal");
+        var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
+        PassVerification(kernel, retiredGoal, retiredGoal.Tasks.Single());
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-retired-eligible-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        GoalOperationJournal.Completed(root, retiredGoal, "conductor:land", "Terminal sweep retired missing goal artifact.");
+        GoalOperationJournal.Completed(root, retiredGoal, "conductor:record", "Terminal sweep retired missing goal artifact.");
+        GoalOperationJournal.Completed(root, retiredGoal, "conductor:cleanup", "Terminal sweep retired missing goal artifact.");
+
+        var advancedGoalIds = new List<GoalId>();
+        var driver = MakeDriver(
+            getFacts: goal =>
+            {
+                var journal = GoalOperationJournal.Read(root, goal.Id);
+                return new GoalLifecycleFacts(
+                    IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
+                    IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
+                    IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+            },
+            createWorkspace: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return "/tmp/workspace";
+            },
+            dispatchAndStart: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return DispatchStartOutcome.Started();
+            });
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+        });
+
+        Assert.Contains("TICK tick=1 eligible=1", output, StringComparison.Ordinal);
+        Assert.Contains(activeGoal.Id, advancedGoalIds);
+        Assert.DoesNotContain(retiredGoal.Id, advancedGoalIds);
+    }
+
     // ── Duration cap: loop exits when max-duration is reached ────────────
 
     [Xunit.Fact(DisplayName = "MaxDuration_ParameterAcceptedAndLoopExitsCleanly")]

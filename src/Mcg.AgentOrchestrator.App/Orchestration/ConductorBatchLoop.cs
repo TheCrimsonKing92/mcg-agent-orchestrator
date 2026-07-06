@@ -737,7 +737,7 @@ internal sealed class ConductorBatchLoop
             return false;
         }
 
-        if (goal.Status == GoalStatus.Completed)
+        if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
         {
             try
             {
