@@ -710,37 +710,37 @@ internal static class CliPersistentStateRunner
                             ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
                         if (transactionGoal.Status != GoalStatus.Verified)
                         {
-                            var result = GuardedAcceptanceFailure(
+                            var guardedResult = GuardedAcceptanceFailure(
                                 transactionKernel,
                                 request.GoalId,
                                 $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
-                            var updatedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
-                                (true, updatedSnapshot, (result, updatedSnapshot)));
+                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
                         }
 
                         var currentFingerprint = BuildGoalFingerprint(transactionKernel, request.GoalId);
                         if (!string.Equals(currentFingerprint, request.ExpectedGoalFingerprint, StringComparison.Ordinal))
                         {
-                            var result = GuardedAcceptanceFailure(
+                            var guardedResult = GuardedAcceptanceFailure(
                                 transactionKernel,
                                 request.GoalId,
                                 $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
-                            var updatedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
-                                (true, updatedSnapshot, (result, updatedSnapshot)));
+                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
                         }
 
                         var currentHead = ResolveWorktreeHead(workspace.ExecutionDirectory, request.GoalId);
                         if (!string.Equals(currentHead, request.TestedWorktreeHead, StringComparison.Ordinal))
                         {
-                            var result = GuardedAcceptanceFailure(
+                            var guardedResult = GuardedAcceptanceFailure(
                                 transactionKernel,
                                 request.GoalId,
                                 $"Goal '{request.GoalId.Value[..8]}' worktree changed during acceptance verification; retry acceptance.");
-                            var updatedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
-                                (true, updatedSnapshot, (result, updatedSnapshot)));
+                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
                         }
 
                         var result = request.Merge();
