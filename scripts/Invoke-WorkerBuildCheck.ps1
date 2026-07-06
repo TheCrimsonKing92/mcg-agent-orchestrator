@@ -170,7 +170,7 @@ function Initialize-ArtifactsDirectory {
 
 $repositoryRoot = (Get-Location).Path
 $missingProjects = @()
-$projectPaths = foreach ($project in $Projects) {
+$projectPaths = @(foreach ($project in $Projects) {
     $candidate = if ([System.IO.Path]::IsPathRooted($project)) {
         $project
     }
@@ -184,7 +184,7 @@ $projectPaths = foreach ($project in $Projects) {
     }
 
     (Resolve-Path -LiteralPath $candidate).Path
-}
+})
 
 if ($missingProjects.Count -gt 0) {
     Write-Output "FAIL build: missing project(s) (Invoke-WorkerBuildCheck)"
