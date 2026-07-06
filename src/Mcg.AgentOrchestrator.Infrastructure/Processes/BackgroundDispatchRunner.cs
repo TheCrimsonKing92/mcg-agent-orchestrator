@@ -565,6 +565,11 @@ public sealed class BackgroundDispatchRunner
                 standardOutput,
                 standardError,
                 providerFailureKind);
+            var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
+                task.LastDispatch,
+                processRecord,
+                standardError,
+                sandboxCommitBlocked);
             var successfulWorkerResult = HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
                 standardOutput,
@@ -583,9 +588,9 @@ public sealed class BackgroundDispatchRunner
 
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var shouldCommitDirtyWorktree =
-                exitCode == 0 ||
+                (exitCode == 0 && lowIntegrityConfinementEvidence) ||
                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
-                (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit);
+                (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence);
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -628,6 +633,13 @@ public sealed class BackgroundDispatchRunner
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
+                if (task.LastDispatch.SandboxLowIntegrity && !lowIntegrityConfinementEvidence)
+                {
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Low-integrity dispatch exited 0 with a dirty worktree, but deterministic low-integrity confinement evidence was absent; refusing orchestrator commit-on-behalf.");
+                }
+
                 if (commitAttempted && !commitAttempt.Succeeded && commitAttempt.Diagnostic.Length > 0)
                 {
                     standardErrorDiagnostic = AppendDiagnostic(
@@ -818,6 +830,63 @@ public sealed class BackgroundDispatchRunner
             standardError,
             DateTimeOffset.UtcNow);
         return DispatchFailureClassifier.Classify(task, verification, providerFailureKind).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
+    }
+
+    private static bool HasLowIntegrityConfinementEvidence(
+        TaskDispatchRecord? dispatch,
+        TaskProcessRecord processRecord,
+        string standardError,
+        bool sandboxCommitBlocked)
+    {
+        if (dispatch?.SandboxLowIntegrity != true)
+        {
+            return false;
+        }
+
+        return sandboxCommitBlocked ||
+            HasCompletedSandboxPreparationEvent(standardError) ||
+            HasLowIntegritySetupArtifact(processRecord.WorkingDirectory);
+    }
+
+    private static bool HasCompletedSandboxPreparationEvent(string standardError)
+    {
+        foreach (var line in standardError.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.Contains("sandbox-prep", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (root.TryGetProperty("event", out var evt) &&
+                    root.TryGetProperty("phase", out var phase) &&
+                    string.Equals(evt.GetString(), "sandbox-prep", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(phase.GetString(), "complete", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasLowIntegritySetupArtifact(string workingDirectory)
+    {
+        try
+        {
+            return File.Exists(Path.Combine(workingDirectory, ".mcg-sandbox", DispatchProcessHost.LowIntegritySetupArtifactName));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private ProviderFailureKind ParseProviderFailureKind(

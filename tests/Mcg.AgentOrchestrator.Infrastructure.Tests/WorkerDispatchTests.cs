@@ -5296,8 +5296,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_non_self_committing_provider_exit1_dirty_successful_worker_result_commits_on_behalf")]
-    public void BackgroundDispatchRunnerTypedNonSelfCommittingProviderExit1DirtySuccessfulWorkerResultCommitsOnBehalf()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_non_self_committing_provider_exit1_dirty_with_low_integrity_evidence_commits_on_behalf")]
+    public void BackgroundDispatchRunnerTypedNonSelfCommittingProviderExit1DirtyWithLowIntegrityEvidenceCommitsOnBehalf()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -5318,12 +5318,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         AgentRole.Developer,
         "Implemented the feature and ran the focused tests." + Environment.NewLine +
             WorkerResultBlock("feature.txt", "dotnet test --filter WorkerDispatch", "Passed: 2, Failed: 0"),
-        string.Empty,
+        SandboxPrepCompleteEvent(),
         clock,
         worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but codex exited one"),
         workerName: workerProfile,
         command: "codex exec prompt",
-        workerProviderKind: ProviderKind.OpenAICodexCli);
+        workerProviderKind: ProviderKind.OpenAICodexCli,
+        sandboxLowIntegrity: true);
 
     File.WriteAllText(process.ExitCodePath, "1");
 
@@ -5929,8 +5930,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_regression_exit_zero_dirty_without_prior_commit_is_committed_by_orchestrator")]
-    public void BackgroundDispatchRunnerRegressionExitZeroDirtyWithoutPriorCommitIsCommittedByOrchestrator()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_exit_zero_dirty_with_setup_evidence_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerLowIntegrityExitZeroDirtyWithSetupEvidenceIsCommittedByOrchestrator()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -5939,9 +5940,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         AgentRole.Developer,
         "Implemented feature." + Environment.NewLine +
             WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1"),
-        string.Empty,
+        SandboxPrepCompleteEvent(),
         clock,
-        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature"));
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature"),
+        sandboxLowIntegrity: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -6040,7 +6042,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         root,
         AgentRole.Developer,
         "Committed implementation.",
-        string.Empty,
+        SandboxPrepCompleteEvent(),
         clock,
         worktree =>
         {
@@ -6048,7 +6050,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover");
-        });
+        },
+        sandboxLowIntegrity: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -6073,7 +6076,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         root,
         AgentRole.Developer,
         "Committed implementation.",
-        string.Empty,
+        SandboxPrepCompleteEvent(),
         clock,
         worktree =>
         {
@@ -6081,7 +6084,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
             File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover");
-        });
+        },
+        sandboxLowIntegrity: true);
     var hookPath = Path.Combine(root, ".git", "hooks", "pre-commit");
     File.WriteAllText(
         hookPath,
@@ -7804,6 +7808,13 @@ private static string WorkerResultBlock(
         skills: {skills}
         confidence: {confidence}
         END_WORKER_RESULT
+        """;
+}
+
+private static string SandboxPrepCompleteEvent()
+{
+    return """
+        {"event":"sandbox-prep","phase":"complete","timestamp":"2026-06-02T12:00:01.0000000Z","startedAt":"2026-06-02T12:00:00.0000000Z","workingDirectory":"test","elapsedMs":1}
         """;
 }
 
