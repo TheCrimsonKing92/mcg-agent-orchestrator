@@ -253,22 +253,16 @@ public sealed class GoalRefinementTests
 
         await service.RefineAsync(kernel, goalId);
         var correlationKey = collab.Items[0].CorrelationKey!;
-        using var warningWriter = new StringWriter();
-        var originalError = Console.Error;
-        Console.SetError(warningWriter);
-        try
+        var resolved = false;
+        var warningOutput = CaptureConsoleError(() =>
         {
-            var resolved = await service.TryResolveOpenClarificationAsync(
+            resolved = service.TryResolveOpenClarificationAsync(
                 new AgentOrchestratorKernel(),
                 correlationKey,
-                "Stripe");
+                "Stripe").GetAwaiter().GetResult();
 
             Xunit.Assert.True(resolved);
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        });
 
         var resolvedItem = Xunit.Assert.Single(collab.Items);
         Xunit.Assert.Equal(CollaborationItemStatus.Resolved, resolvedItem.Status);
@@ -276,8 +270,8 @@ public sealed class GoalRefinementTests
         var precedent = await precedentStore.TryGetPrecedentAsync("external-contract");
         Xunit.Assert.NotNull(precedent);
         Xunit.Assert.Equal("Stripe", precedent!.Choice);
-        Xunit.Assert.Contains("Warning:", warningWriter.ToString(), StringComparison.Ordinal);
-        Xunit.Assert.Contains(correlationKey, warningWriter.ToString(), StringComparison.Ordinal);
+        Xunit.Assert.Contains("Warning:", warningOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains(correlationKey, warningOutput, StringComparison.Ordinal);
     }
 
     // --- Precedent reuse: second goal with same forkKind does not re-ask ---

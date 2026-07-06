@@ -137,6 +137,7 @@ public sealed class ConductorDriverTests
             string worktreePath,
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
     }

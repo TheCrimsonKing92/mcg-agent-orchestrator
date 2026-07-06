@@ -123,6 +123,11 @@ public static class DotnetBuildEnvironmentManager
         return BuildArguments(StableSlotArtifactsPath(slotIndex));
     }
 
+    public static DotnetBuildEnvironment CreateStableSlotAttempt(int slotIndex)
+    {
+        return CreateStableSlotEnvironment(slotIndex);
+    }
+
     public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
         CancellationToken cancellationToken = default)
     {

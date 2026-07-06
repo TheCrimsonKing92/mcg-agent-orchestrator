@@ -3,7 +3,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("ConsoleOutMutation")]
 public sealed class GoalWorktreeTests
 {
     private static AgentDefinition EchoDeveloper() => new(
@@ -336,6 +335,7 @@ public sealed class GoalWorktreeTests
             string worktreePath,
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
             CancellationToken cancellationToken = default)
         {
             RunCount++;
@@ -398,22 +398,6 @@ public sealed class GoalWorktreeTests
         var root = Path.Combine(Path.GetTempPath(), "mcg-worktree-fast-tests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
         return root;
-    }
-
-    private static string CaptureConsole(Action action)
-    {
-        var originalOut = Console.Out;
-        using var writer = new StringWriter();
-        Console.SetOut(writer);
-        try
-        {
-            action();
-            return writer.ToString();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
     }
 
     private static void DeleteDirectory(string path)
