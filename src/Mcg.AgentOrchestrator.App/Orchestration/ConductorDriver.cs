@@ -34,6 +34,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
+    private readonly Action<Goal, string> _recordMissingBranchRetirement;
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -52,6 +53,15 @@ internal sealed class ConductorDriver
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         var openClarificationGoalIds = GoalRefinementGate.OpenClarificationGoalIds(workspace, factGoalIds);
         void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
+        void RecordMissingBranchRetirement(Goal goal, string detail)
+        {
+            GoalOperationJournal.RecordTerminalDisposition(
+                dir,
+                goal,
+                new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, detail));
+            kernel.CompleteGoal(goal.Id, detail);
+            RefreshJournal(goal.Id);
+        }
 
         _getFacts = goal =>
         {
@@ -214,6 +224,7 @@ internal sealed class ConductorDriver
         _recordAcceptanceFailure = (goal, failedChecks) => kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
+        _recordMissingBranchRetirement = RecordMissingBranchRetirement;
 
         _runAdvisorySemanticAcceptance = (goal, _) =>
         {
@@ -356,7 +367,8 @@ internal sealed class ConductorDriver
         Action<Goal>? clearAcceptanceFailure = null,
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
-        Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null)
+        Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
+        Action<Goal, string>? recordMissingBranchRetirement = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -388,6 +400,7 @@ internal sealed class ConductorDriver
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
+        _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
     }
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
@@ -829,6 +842,13 @@ internal sealed class ConductorDriver
         var rebase = _rebaseOntoMain(goal);
         if (!rebase.UpdatedBranch)
         {
+            if (rebase.Status == GoalWorktreeRebaseStatus.MissingBranch)
+            {
+                var detail = $"Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: {rebase.Message}";
+                _recordMissingBranchRetirement(goal, detail);
+                return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp));
+            }
+
             var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
                 ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
                 : $"pre-landing rebase failed: {rebase.Message}";

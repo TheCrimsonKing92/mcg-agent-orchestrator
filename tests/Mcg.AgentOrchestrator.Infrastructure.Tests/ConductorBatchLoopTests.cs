@@ -47,7 +47,8 @@ public sealed class ConductorBatchLoopTests
         Func<Goal, GoalWorktreeRemoveResult>? cleanup = null,
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
-        Func<GoalId, TaskId, string, TaskSpec>? retryTask = null) =>
+        Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        Action<Goal, string>? recordMissingBranchRetirement = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -70,7 +71,8 @@ public sealed class ConductorBatchLoopTests
             record ?? (_ => { }),
             cleanup ?? (_ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null)),
             writeEscalation ?? ((_, _, _) => { }),
-            classifyRisk ?? (_ => null));
+            classifyRisk ?? (_ => null),
+            recordMissingBranchRetirement: recordMissingBranchRetirement);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -2180,6 +2182,56 @@ public sealed class ConductorBatchLoopTests
             Assert.Contains("TICK tick=1 eligible=1", output);
             Assert.Contains(activeGoal.Id, advancedGoalIds);
             Assert.DoesNotContain(retiredGoal.Id, advancedGoalIds);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_verified_missing_branch_is_retired_without_tick_escalation")]
+    public void BatchLoopVerifiedMissingBranchIsRetiredWithoutTickEscalation()
+    {
+        var root = CreateSeededGitRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var missingBranchGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Missing branch pre-landing goal");
+            PassVerification(kernel, missingBranchGoal, missingBranchGoal.Tasks.Single());
+
+            var escalationReasons = new List<string>();
+            var driver = MakeDriver(
+                rebaseOntoMain: goal => new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.MissingBranch,
+                    GoalWorktrees.BranchName(goal.Id),
+                    $"Goal branch {GoalWorktrees.BranchName(goal.Id)} is missing.",
+                    [],
+                    "goal-recovery"),
+                writeEscalation: (_, _, reason) => escalationReasons.Add(reason),
+                recordMissingBranchRetirement: (goal, detail) =>
+                {
+                    GoalOperationJournal.RecordTerminalDisposition(
+                        root,
+                        goal,
+                        new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, detail));
+                    kernel.CompleteGoal(goal.Id, detail);
+                });
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
+            });
+
+            Assert.Empty(escalationReasons);
+            Assert.Contains("TICK_END tick=1 advanced=0 held=0 escalated=0 done=1", output);
+            Assert.DoesNotContain("pre-landing rebase failed", output, StringComparison.Ordinal);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(missingBranchGoal.Id).Status);
+            Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, missingBranchGoal.Id)));
         }
         finally
         {

@@ -6787,6 +6787,85 @@ public sealed class CliCommandTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_integration_commit_reconciles_to_landed")]
+    public void TerminalGoalSweepVerifiedMissingBranchIntegrationCommitReconcilesToLanded()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Verified missing branch with integration commit", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                root,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            File.WriteAllText(Path.Combine(root, "operator-bridged.txt"), "operator landed");
+            RunGit(root, "add", "-A");
+            RunGit(root, "commit", "-m", $"Operator bridged landing for goal {goal.Id.Value[..8]}");
+
+            var first = TerminalGoalSweep.Run(kernel, root);
+            var repair = first.Goals.Single().Repairs.Single();
+
+            Xunit.Assert.Equal("missing-branch-landed-reconciled", repair.Kind);
+            Xunit.Assert.Contains("reachableIntegrationCommit=", repair.Evidence, StringComparison.Ordinal);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_dogfood_log_reconciles_to_landed")]
+    public async Task TerminalGoalSweepVerifiedMissingBranchDogfoodLogReconcilesToLanded()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Verified missing branch with dogfood log", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                root,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            var workspace = CreateRefinedWorkspace(root);
+            await new DogfoodLogStore(workspace.DogfoodLogStorePath).UpsertAsync(new DogfoodLogAppend(
+                goal.Id.Value,
+                "Landed operator-bridged goal",
+                "Landed via operator bridge.",
+                "passed",
+                "manual",
+                $"Landed goal {goal.Id.Value[..8]} via operator bridge."));
+
+            var first = TerminalGoalSweep.Run(kernel, root);
+            var repair = first.Goals.Single().Repairs.Single();
+
+            Xunit.Assert.Equal("missing-branch-landed-reconciled", repair.Kind);
+            Xunit.Assert.Contains("dogfoodLogSequence=", repair.Evidence, StringComparison.Ordinal);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_unverifiable_is_retired_once")]
     public void TerminalGoalSweepVerifiedMissingBranchUnverifiableIsRetiredOnce()
     {
