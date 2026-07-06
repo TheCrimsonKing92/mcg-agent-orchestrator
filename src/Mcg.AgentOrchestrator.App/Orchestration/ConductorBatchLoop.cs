@@ -104,10 +104,12 @@ internal sealed class ConductorBatchLoop
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, reapedGoals);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals);
 
+            var parkedExcludedCount = CountParkedExcludedGoals(kernel, onlyGoalId, excludedGoals);
             var eligible = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !excludedGoals.Contains(g.Id.Value)
                     && !setAsideGoals.ContainsKey(g.Id.Value)
+                    && g.Status != GoalStatus.Parked
                     && IsLoopEligibleGoal(g, driver))
                 .ToArray();
 
@@ -286,7 +288,9 @@ internal sealed class ConductorBatchLoop
             totalEscalated += tickEscalated;
             totalRetried   += tickRetried;
 
-            var emitTickSummary = changedGoalLines.Count > 0 || totalTicks % QuietSummaryEveryTicks == 0;
+            var emitTickSummary = changedGoalLines.Count > 0
+                || parkedExcludedCount > 0
+                || totalTicks % QuietSummaryEveryTicks == 0;
             var tickLines = new List<string>();
             if (watchInterval is not null)
             {
@@ -305,6 +309,11 @@ internal sealed class ConductorBatchLoop
                 foreach (var line in changedGoalLines)
                 {
                     EmitProgress(line, tickLines);
+                }
+
+                if (parkedExcludedCount > 0)
+                {
+                    EmitProgress($"TICK_EXCLUDED tick={totalTicks} kind=parked count={parkedExcludedCount}", tickLines);
                 }
 
                 var summaryPrefix = changedGoalLines.Count > 0 ? "TICK_END" : "TICK_SUMMARY";
@@ -910,6 +919,15 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsTerminalGoal(Goal goal) =>
         goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    private static int CountParkedExcludedGoals(
+        AgentOrchestratorKernel kernel,
+        string? onlyGoalId,
+        HashSet<string> excludedGoals) =>
+        kernel.Goals.Count(goal =>
+            (onlyGoalId is null || goal.Id.Value == onlyGoalId)
+            && !excludedGoals.Contains(goal.Id.Value)
+            && goal.Status == GoalStatus.Parked);
 
     private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver)
     {
