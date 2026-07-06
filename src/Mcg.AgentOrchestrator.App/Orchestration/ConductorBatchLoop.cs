@@ -592,12 +592,12 @@ internal sealed class ConductorBatchLoop
             }
 
             if (GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is not null ||
-                HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver))
+                TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) != false)
             {
                 continue;
             }
 
-            var candidate = driver.TryBuildParallelAcceptanceCandidate(goal, policy, candidates.Count);
+            var candidate = TryBuildParallelAcceptanceCandidate(driver, goal, policy, candidates.Count);
             if (candidate is null || candidates.Any(existing => existing.Overlaps(candidate)))
             {
                 continue;
@@ -635,6 +635,34 @@ internal sealed class ConductorBatchLoop
         }
 
         return results;
+    }
+
+    private static bool? TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
+    {
+        try
+        {
+            return HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
+        ConductorDriver driver,
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        int slotIndex)
+    {
+        try
+        {
+            return driver.TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static ConductorAdvanceResult CompleteParallelAcceptanceRun(
