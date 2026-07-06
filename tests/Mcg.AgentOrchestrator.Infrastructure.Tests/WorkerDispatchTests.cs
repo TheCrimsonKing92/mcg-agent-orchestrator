@@ -5775,7 +5775,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out _, out var diagnostic);
 
     Assert.False(parsed);
-    Assert.Contains("tests reported failure", diagnostic, StringComparison.Ordinal);
+    Assert.Contains(diagnostic, text => text.Contains("tests reported failure", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]

@@ -514,7 +514,8 @@ public sealed class ChaosGateTests
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(0, task.LastVerification!.ExitCode);
         Assert.True(task.LastVerification.HasCommittedChanges);
-        Assert.Contains("full suite deferred", task.LastVerification.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(task.LastVerification.StandardOutput, text =>
+            text.Contains("full suite deferred", StringComparison.Ordinal));
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskCompleted &&
