@@ -5773,6 +5773,32 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("tests reported failure", diagnostic, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_failed_worker_build_check_fails_round_with_error_feedback")]
+    public void BackgroundDispatchRunnerFailedWorkerBuildCheckFailsRoundWithErrorFeedback()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-07-06T12:00:00Z"));
+    var buildError = "FAIL build: 1 error(s) (Invoke-WorkerBuildCheck) src/Feature.cs(10,20): error CS1002: ; expected";
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the change." + Environment.NewLine + WorkerResultBlock(
+            "feature.txt",
+            ".\\scripts\\Invoke-WorkerBuildCheck.ps1 src\\Feature.csproj",
+            buildError),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains("WORKER_RESULT reported failed worker build check", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("CS1002", task.LastVerification.StandardError, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
     public void BackgroundDispatchRunnerFileRoleWithoutWorkerResultContractPassesAdvisory()
 {
@@ -6421,10 +6447,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("prior-task-summaries.md", digest, StringComparison.Ordinal);
     Assert.Contains("prior-task-evidence.md", digest, StringComparison.Ordinal);
     Assert.Contains(".orchestrator-handoff.md", digest, StringComparison.Ordinal);
-    Assert.Contains("## .NET Verification Delegated To Acceptance", deterministic, StringComparison.Ordinal);
-    Assert.Contains("Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", deterministic, StringComparison.Ordinal);
-    Assert.Contains("The orchestrator acceptance gate verifies .NET changes through stable slots", deterministic, StringComparison.Ordinal);
-    Assert.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", deterministic, StringComparison.Ordinal);
+    Assert.True(File.Exists(FindRepositoryFile("scripts", "Invoke-WorkerBuildCheck.ps1")));
+    Assert.Contains("## Worker Build Check", deterministic, StringComparison.Ordinal);
+    Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", deterministic, StringComparison.Ordinal);
+    Assert.Contains("does not run tests or spawn testhost", deterministic, StringComparison.Ordinal);
+    Assert.Contains("Subscription workers must not run raw `dotnet test`, raw `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", deterministic, StringComparison.Ordinal);
+    Assert.Contains("tests: build: 0 errors (Invoke-WorkerBuildCheck)", deterministic, StringComparison.Ordinal);
     Assert.Contains("## Required Verification Policy", deterministic, StringComparison.Ordinal);
     Assert.Contains("Requires tests:", deterministic, StringComparison.Ordinal);
     Assert.Contains("build-test-selection", workflowBrokers, StringComparison.Ordinal);
@@ -6444,8 +6472,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("Status: missing", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("Source files indexed:", sourceSurvey, StringComparison.Ordinal);
     Assert.Contains("Git Status", diffSummary, StringComparison.Ordinal);
-    Assert.Contains("Run worker dispatch tests.", File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), StringComparison.Ordinal);
-    Assert.Contains("skills: <selected skills used or none>", File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), StringComparison.Ordinal);
+    var currentTaskText = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
+    Assert.Contains("Run worker dispatch tests.", currentTaskText, StringComparison.Ordinal);
+    Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", currentTaskText, StringComparison.Ordinal);
+    Assert.Contains("tests: build: 0 errors (Invoke-WorkerBuildCheck)", currentTaskText, StringComparison.Ordinal);
+    Assert.Contains("Do not run raw `dotnet test`, raw `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", currentTaskText, StringComparison.Ordinal);
+    Assert.Contains("skills: <selected skills used or none>", currentTaskText, StringComparison.Ordinal);
     Assert.Contains(artifactOnlyTail, File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), StringComparison.Ordinal);
     var packageDirectory = Path.Combine(contextDirectory, "packages", currentTask.Id.Value);
     Assert.True(File.Exists(Path.Combine(packageDirectory, "manifest.md")));

@@ -226,9 +226,10 @@ internal sealed class WorkerArtifactWriter
             [
                 string.Empty,
                 "## Build/Test Verification",
-                "- Do not run raw `dotnet test` or `dotnet build` directly: raw testhost binds an unauthorized port and blocks on a Windows Firewall prompt during unattended runs.",
-                "- Do not run `.\\scripts\\Invoke-IsolatedDotnet.ps1` from a subscription worker either; the orchestrator acceptance gate owns .NET build/test verification through stable firewall-authorized slots.",
-                "- When reporting, use `tests: not-run - orchestrator acceptance gate verifies via stable slots` unless you ran a non-.NET check that cannot trigger testhost."
+                "- Run `.\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` before writing WORKER_RESULT for every project whose sources you changed; this is the only sanctioned worker-side .NET build check.",
+                "- Report the build result in WORKER_RESULT `tests`, for example `tests: build: 0 errors (Invoke-WorkerBuildCheck)` or include the failing build error text.",
+                "- Do not run raw `dotnet test`, raw `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1` directly from a subscription worker; raw test execution can create per-worktree testhost firewall prompts.",
+                "- If no .NET project sources changed, report the non-.NET verification you ran or `tests: not-run - no .NET project sources changed; orchestrator acceptance gate verifies via stable slots`."
             ]);
         }
 
@@ -316,16 +317,15 @@ internal sealed class WorkerArtifactWriter
 
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
         {
-            var goalPrefix = goal.Id.Value.Length <= 8 ? goal.Id.Value : goal.Id.Value[..8];
-            var attemptName = $"{task.RequiredRole.ToString().ToLowerInvariant()}-{task.Id.Value[..8]}";
             var toolchain = TargetToolchainDetector.Detect(workingDirectory);
             lines.Add(string.Empty);
             if (toolchain == Toolchain.Dotnet)
             {
-                lines.Add("## .NET Verification Delegated To Acceptance");
-                lines.Add("- Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`; those commands can create per-worktree testhost firewall prompts.");
-                lines.Add($"- The orchestrator acceptance gate verifies .NET changes through stable slots under `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}` before merge.");
-                lines.Add("- In WORKER_RESULT, report `tests: not-run - orchestrator acceptance gate verifies via stable slots` for skipped .NET verification.");
+                lines.Add("## Worker Build Check");
+                lines.Add("- Developer/Tester subscription workers must run `.\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` for every project whose sources they changed before writing WORKER_RESULT.");
+                lines.Add($"- The helper performs build-only verification through isolated artifacts under `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`; it does not run tests or spawn testhost.");
+                lines.Add("- Subscription workers must not run raw `dotnet test`, raw `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`; raw test execution can create per-worktree testhost firewall prompts.");
+                lines.Add("- In WORKER_RESULT, report build evidence such as `tests: build: 0 errors (Invoke-WorkerBuildCheck)` or include the failing build error text.");
             }
             else if (toolchain == Toolchain.Go)
             {
