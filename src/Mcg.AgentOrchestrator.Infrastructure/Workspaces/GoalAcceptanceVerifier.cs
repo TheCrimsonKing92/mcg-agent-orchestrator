@@ -34,6 +34,7 @@ public interface IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId = null,
         IReadOnlyList<string>? changedFiles = null,
+        int? stableSlotIndex = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -108,6 +109,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId = null,
         IReadOnlyList<string>? changedFiles = null,
+        int? stableSlotIndex = null,
         CancellationToken cancellationToken = default)
     {
         // Shut down build servers to release file locks before running tests.
@@ -152,7 +154,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -167,7 +169,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                     scopedNames.Contains(c.Name)))
                 {
-                    var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                    var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
                     retried |= checkResult.Retried;
                     checks.Add(checkResult.Result);
                     if (!checkResult.Result.Passed)
@@ -185,7 +187,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -197,7 +199,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             if (nonDotnetPassed)
             {
-                var slnRun = await RunCheckAsync(solutionCheck!, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                var slnRun = await RunCheckAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
                 retried |= slnRun.Retried;
                 checks.Add(slnRun.Result);
 
@@ -223,7 +225,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
                         !deferredNames.Contains(c.Name)))
                     {
-                        var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                        var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
                         retried |= checkResult.Retried;
                         checks.Add(checkResult.Result);
                         if (!checkResult.Result.Passed)
@@ -238,7 +240,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             foreach (var check in effectiveChecks)
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -259,7 +261,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Advisory checks: always run, failures are recorded but do not affect overall Passed.
         foreach (var advisoryCheck in advisoryChecks)
         {
-            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result with { Advisory = true });
         }
 
@@ -725,6 +727,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceManifestCheck check,
         string worktreePath,
         GoalId? goalId,
+        int? stableSlotIndex,
         CancellationToken cancellationToken)
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
@@ -742,11 +745,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (RunFileExistsCheck(check, worktreePath), false);
 
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
-            return await RunCommandCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+            return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
 
         return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
-            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false)
-            : await RunCommandCheckAsync(check, worktreePath, goalId, cancellationToken).ConfigureAwait(false);
+            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false)
+            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<AcceptanceCheckResult> RunGrepCheckAsync(
@@ -812,6 +815,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceManifestCheck check,
         string worktreePath,
         GoalId? goalId,
+        int? stableSlotIndex,
         CancellationToken cancellationToken)
     {
         var arguments = BuildCommandArguments(check);
@@ -822,6 +826,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 arguments,
                 worktreePath,
                 goalId,
+                stableSlotIndex,
                 $"acceptance-{Slug(check.Name)}",
                 cancellationToken).ConfigureAwait(false);
         }
@@ -850,6 +855,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceManifestCheck check,
         string worktreePath,
         GoalId? goalId,
+        int? stableSlotIndex,
         CancellationToken cancellationToken)
     {
         return await RunManagedDotnetCheckAsync(
@@ -857,6 +863,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             BuildDotnetTestArguments(check),
             worktreePath,
             goalId,
+            stableSlotIndex,
             $"acceptance-{Slug(check.Name)}",
             cancellationToken).ConfigureAwait(false);
     }
@@ -866,11 +873,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string[] arguments,
         string worktreePath,
         GoalId? goalId,
+        int? stableSlotIndex,
         string attemptName,
         CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
+        var environment = stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
         using var leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
         var result = await _runner(
             WithBuildEnvironmentArguments(arguments, environment),
@@ -888,7 +898,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 AcceptanceCheckTimeouts.DefaultTimeout,
                 cancellationToken).ConfigureAwait(false);
-            environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
+            environment = stableSlotIndex.HasValue
+                ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+                : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
             leaseLock.Dispose();
             using var retryLeaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
             result = await _runner(

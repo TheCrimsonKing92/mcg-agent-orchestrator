@@ -15,7 +15,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Action _buildServerShutdown;
-    private readonly Func<Goal, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<Goal, int?, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
@@ -35,6 +35,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
+    private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -189,13 +190,14 @@ internal sealed class ConductorDriver
             catch { }
         };
 
-        _runAcceptanceVerification = goal =>
+        _runAcceptanceVerification = (goal, stableSlotIndex) =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
-            GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", "Running acceptance verification.");
+            var slotSuffix = stableSlotIndex.HasValue ? $" on stable slot {stableSlotIndex.Value}" : string.Empty;
+            GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", $"Running acceptance verification{slotSuffix}.");
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
-            var verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles).GetAwaiter().GetResult();
+            var verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
             var unmetCriteria = verification.Checks?
                 .Where(check => check.Advisory && !check.Passed)
                 .ToArray() ?? [];
@@ -340,6 +342,16 @@ internal sealed class ConductorDriver
             var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
             return DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
         };
+        _getLandingFileScopes = goal =>
+        {
+            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
+            var changedFiles = worktreePath is null
+                ? Array.Empty<string>()
+                : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+            return changedFiles.Length == 0
+                ? InferRecordedFileScopes(goal)
+                : changedFiles;
+        };
     }
 
     internal ConductorDriver(
@@ -368,7 +380,9 @@ internal sealed class ConductorDriver
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
-        Action<Goal, string>? recordMissingBranchRetirement = null)
+        Action<Goal, string>? recordMissingBranchRetirement = null,
+        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
+        Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -378,7 +392,7 @@ internal sealed class ConductorDriver
             ? _dispatchAndStart
             : (goal, _) => startRecordedDispatches(goal);
         _buildServerShutdown = buildServerShutdown ?? (() => { });
-        _runAcceptanceVerification = runAcceptanceVerification;
+        _runAcceptanceVerification = runAcceptanceVerificationWithSlot ?? ((goal, _) => runAcceptanceVerification(goal));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
@@ -401,6 +415,7 @@ internal sealed class ConductorDriver
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
+        _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
     }
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
@@ -565,6 +580,60 @@ internal sealed class ConductorDriver
     }
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
+
+    internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        int slotIndex)
+    {
+        if (policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Escalate)
+        {
+            return null;
+        }
+
+        if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) != GoalLifecycleState.Verified)
+        {
+            return null;
+        }
+
+        return ConductorParallelAcceptanceCandidate.Create(goal, slotIndex, _getLandingFileScopes(goal));
+    }
+
+    internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy)
+    {
+        try
+        {
+            var early = RebaseBeforeAcceptance(candidate.Goal, candidate.GoalPrefix, policy);
+            if (early is not null)
+            {
+                return ConductorParallelAcceptanceRunResult.Early(candidate, early);
+            }
+
+            return ConductorParallelAcceptanceRunResult.Accepted(
+                candidate,
+                _runAcceptanceVerification(candidate.Goal, candidate.SlotIndex));
+        }
+        catch (Exception ex)
+        {
+            return ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
+        }
+    }
+
+    internal ConductorAdvanceResult CompleteParallelLandingAcceptance(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary acceptance)
+    {
+        if (!acceptance.Passed || acceptance.UnmetCriteria.Count > 0)
+        {
+            return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+        }
+
+        var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy);
+        return rebase ?? CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+    }
 
     private ConductorAdvanceResult ExecuteCreateWorkspace(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
@@ -833,30 +902,66 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        var early = RebaseBeforeAcceptance(goal, goalPrefix, policy);
+        if (early is not null)
+        {
+            return early;
+        }
+
+        // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
+        var acceptance = _runAcceptanceVerification(goal, null);
+        return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
+    }
+
+    private ConductorAdvanceResult? RebaseBeforeAcceptance(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
+    {
         // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
         // criteria, landing) operates on the ACTUAL integrated result that will land — not the
         // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
         // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
         // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
         // a wasted (expensive) acceptance run when the branch cannot integrate at all.
-        var rebase = _rebaseOntoMain(goal);
-        if (!rebase.UpdatedBranch)
-        {
-            if (rebase.Status == GoalWorktreeRebaseStatus.MissingBranch)
-            {
-                var detail = $"Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: {rebase.Message}";
-                _recordMissingBranchRetirement(goal, detail);
-                return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp));
-            }
+        return RebaseOrRetire(goal, goalPrefix, policy, "pre-landing");
+    }
 
-            var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
-                ? $"pre-landing rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
-                : $"pre-landing rebase failed: {rebase.Message}";
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+    private ConductorAdvanceResult? RebaseBeforeMerge(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
+    {
+        // In a parallel acceptance batch, a sibling goal may advance main after this goal's
+        // acceptance finished. Re-check the branch immediately before the serialized merge.
+        return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge");
+    }
+
+    private ConductorAdvanceResult? RebaseOrRetire(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        string phase)
+    {
+        var rebase = _rebaseOntoMain(goal);
+        if (rebase.UpdatedBranch)
+        {
+            return null;
         }
 
-        // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
-        var acceptance = _runAcceptanceVerification(goal);
+        if (rebase.Status == GoalWorktreeRebaseStatus.MissingBranch)
+        {
+            var detail = $"Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: {rebase.Message}";
+            _recordMissingBranchRetirement(goal, detail);
+            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp));
+        }
+
+        var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
+            ? $"{phase} rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
+            : $"{phase} rebase failed: {rebase.Message}";
+        return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+    }
+
+    private ConductorAdvanceResult CompleteLandingAfterAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary acceptance)
+    {
         if (!acceptance.Passed)
         {
             if (acceptance.FailedChecks is { Count: > 0 })
@@ -1006,6 +1111,25 @@ internal sealed class ConductorDriver
         }
 
         return string.Join(" ", parts);
+    }
+
+    private static string[] InferRecordedFileScopes(Goal goal)
+    {
+        var scopes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in goal.Tasks)
+        {
+            var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}";
+            foreach (var token in text.Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var normalized = token.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']');
+                if (normalized.Contains('/') && !string.IsNullOrWhiteSpace(Path.GetExtension(normalized)))
+                {
+                    scopes.Add(normalized.TrimStart('/'));
+                }
+            }
+        }
+
+        return scopes.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static string FormatLockHolder(WorktreeLockHolder holder) =>

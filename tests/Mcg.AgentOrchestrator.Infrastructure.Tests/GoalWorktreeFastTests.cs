@@ -336,6 +336,7 @@ public sealed class GoalWorktreeTests
             string worktreePath,
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
             CancellationToken cancellationToken = default)
         {
             RunCount++;

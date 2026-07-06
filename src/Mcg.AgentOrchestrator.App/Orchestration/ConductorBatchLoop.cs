@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -155,6 +156,15 @@ internal sealed class ConductorBatchLoop
             var tickEscalated = 0;
             var tickRetried = 0;
             var tickDone = 0;
+            var parallelLandingResults = RunParallelAcceptanceBatch(
+                eligible,
+                kernel,
+                driver,
+                policy,
+                completedGoals,
+                escalatedGoals,
+                totalTicks,
+                changedGoalLines);
 
             foreach (var goal in eligible)
             {
@@ -205,31 +215,41 @@ internal sealed class ConductorBatchLoop
                 }
 
                 ConductorAdvanceResult result;
-                try
+                ParallelLandingOutcome? parallelLandingOutcome = null;
+                if (parallelLandingResults.TryGetValue(goal.Id.Value, out parallelLandingOutcome))
                 {
-                    result = driver.AdvanceOnce(goal, policy);
+                    result = parallelLandingOutcome.Result;
                 }
-                catch (Exception ex)
+                else
                 {
-                    var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
-                    changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
-                    lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
-                    changedGoalIds.Add(goal.Id);
-                    Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
-                    kernel.RecordGoalPolicyDecision(goal.Id, msg);
-                    escalatedGoals.Add(goal.Id.Value);
-                    SetAside(goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals);
-                    ReapGoalOnce(kernel, goal, reapedGoals);
-                    tickEscalated++;
-                    continue;
+                    try
+                    {
+                        result = driver.AdvanceOnce(goal, policy);
+                    }
+                    catch (Exception ex)
+                    {
+                        var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
+                        changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
+                        lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
+                        changedGoalIds.Add(goal.Id);
+                        Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
+                        kernel.RecordGoalPolicyDecision(goal.Id, msg);
+                        escalatedGoals.Add(goal.Id.Value);
+                        SetAside(goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals);
+                        ReapGoalOnce(kernel, goal, reapedGoals);
+                        tickEscalated++;
+                        continue;
+                    }
                 }
 
                 // Auto-retry transient acceptance verification failures (up to maxVerifyRetries re-verifications)
+                var serialRetryRan = false;
                 if (result.WasEscalated && IsTransientVerificationFailure(result))
                 {
                     retryCounts.TryGetValue(goal.Id.Value, out var retries);
                     while (retries < maxVerifyRetries && result.WasEscalated && IsTransientVerificationFailure(result))
                     {
+                        serialRetryRan = true;
                         retries++;
                         retryCounts[goal.Id.Value] = retries;
                         tickRetried++;
@@ -242,7 +262,10 @@ internal sealed class ConductorBatchLoop
                     }
                 }
 
-                var goalProgressLine = FormatGoalProgressLine(label, result.Outcome);
+                var goalProgressLine = FormatGoalProgressLine(
+                    label,
+                    result.Outcome,
+                    serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
                 if (RecordChangedDisposition(goal.Id.Value, goalProgressLine, lastGoalDisposition, changedGoalLines))
                 {
                     // Held goals have no kernel state mutation worth a per-goal CAS write.
@@ -544,14 +567,149 @@ internal sealed class ConductorBatchLoop
         return s.Length > 40 ? s[..40] : s;
     }
 
-    private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome) => outcome switch
+    private static IReadOnlyDictionary<string, ParallelLandingOutcome> RunParallelAcceptanceBatch(
+        IReadOnlyList<Goal> eligible,
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        ConductorAutonomyPolicy policy,
+        HashSet<string> completedGoals,
+        HashSet<string> escalatedGoals,
+        int tick,
+        List<string> changedGoalLines)
     {
-        ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}",
-        ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}",
-        ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}",
-        ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}",
-        _                                   => $"GOAL goal={label} result=unknown"
-    };
+        var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount - 1);
+        if (slotCount < 2)
+        {
+            return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
+        }
+
+        var candidates = new List<ConductorParallelAcceptanceCandidate>();
+        foreach (var goal in eligible)
+        {
+            if (candidates.Count >= slotCount)
+            {
+                break;
+            }
+
+            if (GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is not null ||
+                HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver))
+            {
+                continue;
+            }
+
+            var candidate = driver.TryBuildParallelAcceptanceCandidate(goal, policy, candidates.Count);
+            if (candidate is null || candidates.Any(existing => existing.Overlaps(candidate)))
+            {
+                continue;
+            }
+
+            candidates.Add(candidate);
+        }
+
+        if (candidates.Count < 2)
+        {
+            return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
+        }
+
+        foreach (var candidate in candidates)
+        {
+            EmitProgress(
+                $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result=started tick={tick}",
+                changedGoalLines);
+        }
+
+        var tasks = candidates
+            .Select(candidate => Task.Run(() => driver.RunParallelLandingAcceptance(candidate, policy)))
+            .ToArray();
+        Task.WaitAll(tasks);
+
+        var results = new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
+        foreach (var run in tasks.Select(task => task.Result)
+                     .OrderBy(result => result.Candidate.SlotIndex))
+        {
+            var result = CompleteParallelAcceptanceRun(driver, policy, run);
+            results[run.Candidate.Goal.Id.Value] = new ParallelLandingOutcome(result, run.Candidate.SlotIndex);
+            EmitProgress(
+                $"ACCEPTANCE goal={run.Candidate.GoalPrefix} slot=slot-{run.Candidate.SlotIndex} result={AcceptanceRunDisposition(run)} tick={tick}",
+                changedGoalLines);
+        }
+
+        return results;
+    }
+
+    private static ConductorAdvanceResult CompleteParallelAcceptanceRun(
+        ConductorDriver driver,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunResult run)
+    {
+        if (run.Exception is not null)
+        {
+            return ParallelAcceptanceFault(run.Candidate, policy, run.Exception);
+        }
+
+        if (run.EarlyResult is not null)
+        {
+            return run.EarlyResult;
+        }
+
+        if (run.Acceptance is null)
+        {
+            return ParallelAcceptanceFault(
+                run.Candidate,
+                policy,
+                new InvalidOperationException("Parallel acceptance produced no result."));
+        }
+
+        try
+        {
+            return driver.CompleteParallelLandingAcceptance(run.Candidate, policy, run.Acceptance);
+        }
+        catch (Exception ex)
+        {
+            return ParallelAcceptanceFault(run.Candidate, policy, ex);
+        }
+    }
+
+    private static ConductorAdvanceResult ParallelAcceptanceFault(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        Exception exception) =>
+        new(
+            candidate.Goal.Id.Value,
+            candidate.GoalPrefix,
+            policy.Name,
+            new ConductorAdvanceOutcome.Escalated(
+                GoalLifecycleState.Verified,
+                $"parallel acceptance fault: {Sanitize(exception.Message)}"));
+
+    private static string AcceptanceRunDisposition(ConductorParallelAcceptanceRunResult run)
+    {
+        if (run.Exception is not null)
+        {
+            return "fault";
+        }
+
+        if (run.EarlyResult is not null)
+        {
+            return run.EarlyResult.WasEscalated ? "blocked" : "done";
+        }
+
+        return run.Acceptance?.Passed == true ? "passed" : "failed";
+    }
+
+    private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome, int? slotIndex = null)
+    {
+        var slot = slotIndex.HasValue ? $" slot=slot-{slotIndex.Value}" : string.Empty;
+        return outcome switch
+        {
+            ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}{slot}",
+            ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot}",
+            ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}{slot}",
+            ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}{slot}",
+            _                                   => $"GOAL goal={label} result=unknown{slot}"
+        };
+    }
+
 
     private static string? GetDependencyHoldReason(
         Goal goal,
@@ -874,6 +1032,8 @@ internal enum WatchSleepResult
 }
 
 internal sealed record BatchSetAsideEntry(string GoalId, BatchSetAsideCondition Condition);
+
+internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int SlotIndex);
 
 public sealed record BatchLoopSummary(
     int Ticks,

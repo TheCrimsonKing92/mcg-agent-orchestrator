@@ -1,0 +1,75 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal sealed record ConductorParallelAcceptanceCandidate(
+    Goal Goal,
+    int SlotIndex,
+    IReadOnlyList<string> ScopePaths,
+    IReadOnlyList<string> ResourceKeys)
+{
+    public string GoalPrefix => Goal.Id.Value[..8];
+
+    public bool Overlaps(ConductorParallelAcceptanceCandidate other)
+    {
+        if (ResourceKeys.Intersect(other.ResourceKeys, StringComparer.OrdinalIgnoreCase).Any())
+        {
+            return true;
+        }
+
+        return ScopePaths.Any(left => other.ScopePaths.Any(right => PathsOverlap(left, right)));
+    }
+
+    public static ConductorParallelAcceptanceCandidate Create(Goal goal, int slotIndex, IReadOnlyList<string> fileScopes)
+    {
+        var paths = fileScopes
+            .Where(scope => !string.IsNullOrWhiteSpace(scope))
+            .Select(NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var resources = paths.Length == 0
+            ? new[] { "ownership:unknown-acceptance-scope" }
+            : paths
+                .Select(RepositoryOwnershipMap.Classify)
+                .Where(path => path.RequiresSerialization)
+                .Select(path => $"ownership:{path.ReservationKey}")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+        return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources);
+    }
+
+    private static bool PathsOverlap(string left, string right) =>
+        left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+        left.StartsWith(right + "/", StringComparison.OrdinalIgnoreCase) ||
+        right.StartsWith(left + "/", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizePath(string path) =>
+        path.Replace('\\', '/').Trim().TrimStart('/').TrimEnd('/');
+}
+
+internal sealed record ConductorParallelAcceptanceRunResult(
+    ConductorParallelAcceptanceCandidate Candidate,
+    AcceptanceVerificationSummary? Acceptance,
+    ConductorAdvanceResult? EarlyResult,
+    Exception? Exception)
+{
+    public static ConductorParallelAcceptanceRunResult Accepted(
+        ConductorParallelAcceptanceCandidate candidate,
+        AcceptanceVerificationSummary acceptance) =>
+        new(candidate, acceptance, null, null);
+
+    public static ConductorParallelAcceptanceRunResult Early(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAdvanceResult result) =>
+        new(candidate, null, result, null);
+
+    public static ConductorParallelAcceptanceRunResult Fault(
+        ConductorParallelAcceptanceCandidate candidate,
+        Exception exception) =>
+        new(candidate, null, null, exception);
+}

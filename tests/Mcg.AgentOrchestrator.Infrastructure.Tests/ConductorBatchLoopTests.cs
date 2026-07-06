@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -41,6 +42,7 @@ public sealed class ConductorBatchLoopTests
         Func<Goal, string>? createWorkspace = null,
         Func<Goal, DispatchStartOutcome>? dispatchAndStart = null,
         Func<Goal, bool>? runAcceptance = null,
+        Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceWithSlot = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
         Func<Goal, LandingResult>? land = null,
         Action<Goal>? record = null,
@@ -48,7 +50,8 @@ public sealed class ConductorBatchLoopTests
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
-        Action<Goal, string>? recordMissingBranchRetirement = null) =>
+        Action<Goal, string>? recordMissingBranchRetirement = null,
+        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -72,11 +75,238 @@ public sealed class ConductorBatchLoopTests
             cleanup ?? (_ => new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null)),
             writeEscalation ?? ((_, _, _) => { }),
             classifyRisk ?? (_ => null),
-            recordMissingBranchRetirement: recordMissingBranchRetirement);
+            recordMissingBranchRetirement: recordMissingBranchRetirement,
+            getLandingFileScopes: getLandingFileScopes,
+            runAcceptanceVerificationWithSlot: runAcceptanceWithSlot);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
         Path.Combine(Path.GetTempPath(), $"conduct-stop-{Guid.NewGuid():N}.txt");
+
+    private static Goal CreateVerifiedSimpleGoal(AgentOrchestratorKernel kernel, string objective)
+    {
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), objective);
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        return goal;
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_runs_disjoint_gate_ready_acceptance_concurrently_on_distinct_slots")]
+    public void BatchLoopRunsDisjointGateReadyAcceptanceConcurrentlyOnDistinctSlots()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
+        var goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
+        using var release = new ManualResetEventSlim(false);
+        using var bothStarted = new CountdownEvent(2);
+        var running = 0;
+        var maxRunning = 0;
+        var slots = new ConcurrentDictionary<string, int?>();
+        var rebaseCounts = new ConcurrentDictionary<string, int>();
+        var landOrder = new List<string>();
+        object gate = new();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: goal =>
+            {
+                rebaseCounts.AddOrUpdate(goal.Id.Value, 1, (_, count) => count + 1);
+                return DefaultRebaseSuccess();
+            },
+            runAcceptanceWithSlot: (goal, slot) =>
+            {
+                slots[goal.Id.Value] = slot;
+                lock (gate)
+                {
+                    running++;
+                    maxRunning = Math.Max(maxRunning, running);
+                }
+
+                bothStarted.Signal();
+                if (bothStarted.CurrentCount == 0)
+                {
+                    release.Set();
+                }
+
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                lock (gate)
+                {
+                    running--;
+                }
+
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            land: goal =>
+            {
+                lock (landOrder)
+                {
+                    landOrder.Add(goal.Id.Value);
+                }
+
+                return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
+            },
+            getLandingFileScopes: goal => goal.Id == goalA.Id
+                ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
+                : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"]);
+
+        BatchTickSummary? tick = null;
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: t => tick = t);
+
+        Assert.Equal(2, summary.Advanced);
+        Assert.Equal(2, maxRunning);
+        Assert.Equal(2, slots.Values.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+        Assert.Equal(2, rebaseCounts[goalA.Id.Value]);
+        Assert.Equal(2, rebaseCounts[goalB.Id.Value]);
+        Assert.Equal([goalA.Id.Value, goalB.Id.Value], landOrder);
+        Assert.Contains(tick!.ProgressLines!, line => line.Contains("ACCEPTANCE", StringComparison.Ordinal) && line.Contains("slot=slot-0", StringComparison.Ordinal));
+        Assert.Contains(tick.ProgressLines!, line => line.Contains("GOAL", StringComparison.Ordinal) && line.Contains("slot=slot-1", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_serializes_overlapping_gate_ready_acceptance")]
+    public void BatchLoopSerializesOverlappingGateReadyAcceptance()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs");
+        var goalB = CreateVerifiedSimpleGoal(kernel, "Also update src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs");
+        var running = 0;
+        var overlapped = false;
+        var slots = new ConcurrentQueue<int?>();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, slot) =>
+            {
+                slots.Enqueue(slot);
+                if (Interlocked.Increment(ref running) > 1)
+                {
+                    overlapped = true;
+                }
+
+                Thread.Sleep(25);
+                Interlocked.Decrement(ref running);
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"]);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(2, summary.Advanced);
+        Assert.False(overlapped);
+        foreach (var slot in slots)
+        {
+            Assert.Null(slot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_failing_parallel_acceptance_does_not_block_sibling_landing")]
+    public void BatchLoopFailingParallelAcceptanceDoesNotBlockSiblingLanding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var failing = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Failing.cs");
+        var passing = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Passing.cs");
+        var landed = new List<string>();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (goal, _) => goal.Id == failing.Id
+                ? AcceptanceVerificationSummary.Failed
+                : AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            land: goal =>
+            {
+                landed.Add(goal.Id.Value);
+                return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
+            },
+            writeEscalation: (_, _, _) => { },
+            getLandingFileScopes: goal => goal.Id == failing.Id
+                ? ["src/Mcg.AgentOrchestrator.App/Orchestration/Failing.cs"]
+                : ["src/Mcg.AgentOrchestrator.App/Orchestration/Passing.cs"]);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            maxVerifyRetries: 0);
+
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal([passing.Id.Value], landed);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_slot_exhaustion_queues_extra_goal")]
+    public void BatchLoopParallelAcceptanceSlotExhaustionQueuesExtraGoal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, 4)
+            .Select(index => CreateVerifiedSimpleGoal(
+                kernel,
+                $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
+            .ToArray();
+        using var release = new ManualResetEventSlim(false);
+        using var firstWaveStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount - 1);
+        var running = 0;
+        var maxRunning = 0;
+        var slots = new ConcurrentQueue<int?>();
+        object gate = new();
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, slot) =>
+            {
+                slots.Enqueue(slot);
+                lock (gate)
+                {
+                    running++;
+                    maxRunning = Math.Max(maxRunning, running);
+                }
+
+                if (slot.HasValue)
+                {
+                    firstWaveStarted.Signal();
+                    if (firstWaveStarted.CurrentCount == 0)
+                    {
+                        release.Set();
+                    }
+
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                }
+
+                lock (gate)
+                {
+                    running--;
+                }
+
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            getLandingFileScopes: goal =>
+            {
+                var index = Array.FindIndex(goals, candidate => candidate.Id == goal.Id);
+                return [$"src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"];
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(4, summary.Advanced);
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount - 1, maxRunning);
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount - 1, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+        Assert.Single(slots.Where(slot => !slot.HasValue));
+    }
 
     // Creates a stop file and returns its path.
     private static string ExistingStopPath()
