@@ -84,6 +84,43 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
+    private static string CreateSeededGitRepository()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-batch-loop-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        RunGit(path, "init");
+        RunGit(path, "checkout", "-b", "main");
+        RunGit(path, "config", "user.email", "tests@example.com");
+        RunGit(path, "config", "user.name", "Batch Loop Tests");
+        File.WriteAllText(Path.Combine(path, "seed.txt"), "seed");
+        RunGit(path, "add", "-A");
+        RunGit(path, "commit", "-m", "Seed");
+        return path;
+    }
+
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Error}");
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
     private static AgentDefinition[] BuildAgents(params AgentRole[] roles)
     {
         var capability = ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse;
@@ -2093,50 +2130,61 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "BatchLoop_retired_verified_goal_is_excluded_from_tick_eligible_set")]
     public void BatchLoopRetiredVerifiedGoalIsExcludedFromTickEligibleSet()
     {
-        var kernel = new AgentOrchestratorKernel();
-        var retiredGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Retired missing branch goal");
-        var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
-        PassVerification(kernel, retiredGoal, retiredGoal.Tasks.Single());
-        var root = Path.Combine(Path.GetTempPath(), $"mcg-retired-eligible-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        GoalOperationJournal.Completed(root, retiredGoal, "conductor:land", "Terminal sweep retired missing goal artifact.");
-        GoalOperationJournal.Completed(root, retiredGoal, "conductor:record", "Terminal sweep retired missing goal artifact.");
-        GoalOperationJournal.Completed(root, retiredGoal, "conductor:cleanup", "Terminal sweep retired missing goal artifact.");
+        var root = CreateSeededGitRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var retiredGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Retired missing branch goal");
+            var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
+            PassVerification(kernel, retiredGoal, retiredGoal.Tasks.Single());
 
-        var advancedGoalIds = new List<GoalId>();
-        var driver = MakeDriver(
-            getFacts: goal =>
+            var sweep = TerminalGoalSweep.Run(kernel, root);
+            Assert.Contains(sweep.Goals, goal =>
+                goal.GoalId == retiredGoal.Id &&
+                goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
+            Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, retiredGoal.Id)));
+
+            GoalOperationJournal.Begin(root, retiredGoal, "conductor:cleanup", "Later interrupted cleanup must not erase retirement.");
+
+            var advancedGoalIds = new List<GoalId>();
+            var driver = MakeDriver(
+                getFacts: goal =>
+                {
+                    var journal = GoalOperationJournal.Read(root, goal.Id);
+                    return new GoalLifecycleFacts(
+                        IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
+                        IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
+                        IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+                },
+                createWorkspace: goal =>
+                {
+                    advancedGoalIds.Add(goal.Id);
+                    return "/tmp/workspace";
+                },
+                dispatchAndStart: goal =>
+                {
+                    advancedGoalIds.Add(goal.Id);
+                    return DispatchStartOutcome.Started();
+                });
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
             {
-                var journal = GoalOperationJournal.Read(root, goal.Id);
-                return new GoalLifecycleFacts(
-                    IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
-                    IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
-                    IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal));
-            },
-            createWorkspace: goal =>
-            {
-                advancedGoalIds.Add(goal.Id);
-                return "/tmp/workspace";
-            },
-            dispatchAndStart: goal =>
-            {
-                advancedGoalIds.Add(goal.Id);
-                return DispatchStartOutcome.Started();
+                new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
             });
 
-        var output = AsyncLocalConsoleRouter.Capture(() =>
+            Assert.Contains("TICK tick=1 eligible=1", output);
+            Assert.Contains(activeGoal.Id, advancedGoalIds);
+            Assert.DoesNotContain(retiredGoal.Id, advancedGoalIds);
+        }
+        finally
         {
-            new ConductorBatchLoop().Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1);
-        });
-
-        Assert.Contains("TICK tick=1 eligible=1", output);
-        Assert.Contains(activeGoal.Id, advancedGoalIds);
-        Assert.DoesNotContain(retiredGoal.Id, advancedGoalIds);
+            TryDeleteDirectory(root);
+        }
     }
 
     // ── Duration cap: loop exits when max-duration is reached ────────────
