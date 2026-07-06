@@ -296,10 +296,10 @@ internal static class TerminalGoalSweep
             executionDirectory,
             goal,
             GoalTerminalDispositionKind.Retired,
-            $"Terminal sweep retired missing goal artifact because landing could not be verified from recorded commits: {missing}.");
+            $"Terminal sweep retired missing goal artifact because landing could not be verified from recorded commits, integration commits, or dogfood log: {missing}.");
         repairs.Add(new TerminalGoalSweepRepair(
             "missing-branch-retired",
-            $"{missing}; landing not verifiable from recorded commits; record retired from future conduct sweeps",
+            $"{missing}; landing not verifiable from recorded commits, integration commits, or dogfood log; record retired from future conduct sweeps",
             "retired"));
         return true;
     }
@@ -316,19 +316,96 @@ internal static class TerminalGoalSweep
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (commits.Length == 0 ||
-            commits.Any(commit => !IsCommitReachableFromHead(executionDirectory, commit)))
+        if (commits.Length > 0 &&
+            commits.All(commit => IsCommitReachableFromHead(executionDirectory, commit)))
+        {
+            evidence = $"reachableResultCommits={string.Join(",", commits)}";
+            return true;
+        }
+
+        if (TryBuildReachableIntegrationCommitEvidence(executionDirectory, goal, out evidence))
+        {
+            return true;
+        }
+
+        if (TryBuildDogfoodLogEvidence(executionDirectory, goal, out evidence))
+        {
+            return true;
+        }
+
+        evidence = string.Empty;
+        return false;
+    }
+
+    private static bool IsCommitReachableFromHead(string executionDirectory, string commit) =>
+        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commit, "HEAD").ExitCode == 0;
+
+    private static bool TryBuildReachableIntegrationCommitEvidence(
+        string executionDirectory,
+        Goal goal,
+        out string evidence)
+    {
+        var goalPrefix = goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)];
+        foreach (var pattern in new[] { goal.Id.Value, goalPrefix, GoalWorktrees.BranchName(goal.Id) })
+        {
+            var result = GitCli.Run(
+                executionDirectory,
+                "log",
+                "--format=%H",
+                "-n",
+                "1",
+                "--regexp-ignore-case",
+                $"--grep={pattern}",
+                "HEAD");
+            if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output))
+            {
+                var commit = result.Output
+                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(commit))
+                {
+                    evidence = $"reachableIntegrationCommit={commit}; matched={pattern}";
+                    return true;
+                }
+            }
+        }
+
+        evidence = string.Empty;
+        return false;
+    }
+
+    private static bool TryBuildDogfoodLogEvidence(
+        string executionDirectory,
+        Goal goal,
+        out string evidence)
+    {
+        var dogfoodLogPath = Path.Combine(executionDirectory, ".orchestrator", "dogfood-log.db");
+        if (!File.Exists(dogfoodLogPath))
         {
             evidence = string.Empty;
             return false;
         }
 
-        evidence = $"reachableResultCommits={string.Join(",", commits)}";
-        return true;
-    }
+        try
+        {
+            var record = new DogfoodLogStore(dogfoodLogPath)
+                .GetByGoalIdAsync(goal.Id.Value)
+                .GetAwaiter()
+                .GetResult();
+            if (record is not null)
+            {
+                evidence = $"dogfoodLogSequence={record.Sequence}; recordedAt={record.RecordedAt:O}";
+                return true;
+            }
+        }
+        catch
+        {
+            // Sweep repair remains best-effort; unreadable evidence should not block the fallback path.
+        }
 
-    private static bool IsCommitReachableFromHead(string executionDirectory, string commit) =>
-        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commit, "HEAD").ExitCode == 0;
+        evidence = string.Empty;
+        return false;
+    }
 
     private static void RecordTerminalDisposition(
         AgentOrchestratorKernel kernel,
