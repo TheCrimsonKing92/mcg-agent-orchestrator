@@ -92,11 +92,11 @@ public sealed class GoalAcceptanceVerifierTests
                     call[2].EndsWith("Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal))
                 .ToList();
 
-            Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
-            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
-            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests"));
-            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"));
-            Assert.Contains(infrastructureCalls, call =>
+            AssertEx.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
+            AssertEx.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
+            AssertEx.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests"));
+            AssertEx.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"));
+            AssertEx.Contains(infrastructureCalls, call =>
                 call.Any(argument =>
                     argument.Contains("FullyQualifiedName!~GoalAcceptanceVerifierTests", StringComparison.Ordinal) &&
                     argument.Contains("FullyQualifiedName!~DashboardRenderingTests", StringComparison.Ordinal) &&
@@ -138,7 +138,7 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[3]);
         Assert.Equal(GetArtifactsPath(calls[1]), GetArtifactsPath(calls[3]));
         Assert.True(result.ArtifactsPath is not null);
-        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
         var check = result.Checks!.Single(item => item.Name == "dotnet test");
         Assert.Equal("goal-acceptance-verifier", check.BrokerName);
         Assert.Equal("goal-abcd1234", check.LeaseId);
@@ -406,16 +406,16 @@ public sealed class GoalAcceptanceVerifierTests
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
         Assert.Equal(18, infrastructureCalls.Length);
-        Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.Ordinal));
+        AssertEx.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.Ordinal));
         foreach (var call in infrastructureCalls)
         {
             AssertIsolatedTestCommand(call);
             Assert.Contains("--filter", call);
         }
 
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker profiles");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.Contains(result.Checks!, check =>
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker profiles");
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        AssertEx.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
             check.ResultSummary == "covered by 18 partitioned checks");
@@ -444,12 +444,12 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(result.Passed);
         Assert.Equal(3, calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
-        Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
+        AssertEx.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Contains("--filter", calls[2]);
-        Assert.Contains(calls[2], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        AssertEx.Contains(calls[2], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
         Assert.False(calls[2].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
         Assert.False(calls[2].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
-        Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        AssertEx.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
         Assert.Equal(["git diff whitespace", "focused CLI infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
 
@@ -480,7 +480,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[3][2]);
         Assert.Contains("--filter", calls[3]);
-        Assert.Contains(calls[3], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        AssertEx.Contains(calls[3], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
         Assert.False(calls[3].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
         Assert.False(calls[3].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.DoesNotContain(
@@ -526,18 +526,18 @@ public sealed class GoalAcceptanceVerifierTests
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
         Assert.Equal(18, infrastructureCalls.Length);
-        Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
+        AssertEx.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         foreach (var call in infrastructureCalls)
             Assert.Contains("--filter", call);
-        Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
-        Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardRenderingTests"));
-        Assert.Contains(infrastructureCalls, call =>
+        AssertEx.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
+        AssertEx.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardRenderingTests"));
+        AssertEx.Contains(infrastructureCalls, call =>
             call.Any(argument => argument.Contains("FullyQualifiedName!~DashboardHostTests", StringComparison.Ordinal) &&
                 argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Dashboard rendering");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.Contains(result.Checks!, check =>
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Dashboard rendering");
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        AssertEx.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
             check.ResultSummary == "covered by 18 partitioned checks");
@@ -573,15 +573,15 @@ public sealed class GoalAcceptanceVerifierTests
             Assert.Equal(18, infrastructureCalls.Length);
             foreach (var call in infrastructureCalls)
                 Assert.Contains("--filter", call);
-            Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
-            Assert.Contains(infrastructureCalls, call =>
+            AssertEx.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
+            AssertEx.Contains(infrastructureCalls, call =>
                 call.Any(argument => argument.Contains("FullyQualifiedName!~DashboardHostTests", StringComparison.Ordinal) &&
                     argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
-            Assert.Contains(result.Checks!, check =>
+            AssertEx.Contains(result.Checks!, check =>
                 check.Name == "infrastructure tests" &&
                 check.Passed &&
                 check.ResultSummary == "covered by 18 partitioned checks");
-            Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+            AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
         }
 
         await AssertPartitionedInfrastructureRunAsync(
@@ -703,7 +703,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(calls[1].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("forbidden changed paths", result.Checks![0].Name);
-        Assert.Contains(result.OutputTail!, text => text.Contains("bin/Debug/generated.dll", StringComparison.Ordinal));
+        AssertEx.Contains(result.OutputTail!, text => text.Contains("bin/Debug/generated.dll", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_defers_granular_csproj_checks_to_solution_wide_run")]
@@ -913,7 +913,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(result.Passed);
         Assert.Equal(3, calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
-        Assert.DoesNotContain(calls[2], arg => arg.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
+        AssertEx.DoesNotContain(calls[2], arg => arg.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(["git diff whitespace", "core tests"], result.Checks!.Select(check => check.Name).ToArray());
     }
 
@@ -944,12 +944,12 @@ public sealed class GoalAcceptanceVerifierTests
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
         Assert.Equal(18, infrastructureCalls.Length);
-        Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
+        AssertEx.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         foreach (var call in infrastructureCalls)
             Assert.Contains("--filter", call);
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Goal acceptance verifier");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.Contains(result.Checks!, check =>
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Goal acceptance verifier");
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        AssertEx.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
             check.ResultSummary == "covered by 18 partitioned checks");
@@ -980,7 +980,7 @@ public sealed class GoalAcceptanceVerifierTests
 
         Assert.True(result.Passed);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
-        Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
+        AssertEx.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         var infrastructureCalls = calls
             .Where(call => call.Length > 2 &&
                 call[0] == "dotnet" &&
@@ -990,10 +990,10 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(18, infrastructureCalls.Length);
         foreach (var call in infrastructureCalls)
             Assert.Contains("--filter", call);
-        Assert.Contains(result.Checks!, check => check.Name == "core tests");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.Contains(result.Checks!, check =>
+        AssertEx.Contains(result.Checks!, check => check.Name == "core tests");
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
+        AssertEx.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        AssertEx.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
             check.ResultSummary == "covered by 18 partitioned checks");
@@ -1148,7 +1148,7 @@ public sealed class GoalAcceptanceVerifierTests
         var browserCall = calls.Single(call => call.Contains(@".\scripts\Run-DashboardBrowserScript.ps1", StringComparer.OrdinalIgnoreCase));
         Assert.Equal("powershell", browserCall[0]);
         Assert.Contains(@".\scripts\dashboard-smoke.js", browserCall, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains(result.Checks!, check => check.Name == "dashboard browser smoke" && check.Passed);
+        AssertEx.Contains(result.Checks!, check => check.Name == "dashboard browser smoke" && check.Passed);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_injected_policy_check_blocks_merge")]
@@ -1193,7 +1193,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.False(args.Any(arg => arg.Equals("--disable-build-servers", StringComparison.Ordinal)));
         Assert.False(args.Any(arg => arg.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal)));
         Assert.True(args.Any(arg => arg.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !arg.Equals("-maxcpucount:1", StringComparison.Ordinal)));
-        Assert.Contains(GetArtifactsPath(args), text => text.Contains("mcg-dotnet-isolated", StringComparison.Ordinal));
+        AssertEx.Contains(GetArtifactsPath(args), text => text.Contains("mcg-dotnet-isolated", StringComparison.Ordinal));
     }
 
     private static string GetArtifactsPath(string[] args)
@@ -1468,7 +1468,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(tamperCheck.Advisory);
         Assert.False(tamperCheck.Passed);
         Assert.True(tamperCheck.OutputTail is not null);
-        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("FooTests.cs", StringComparison.Ordinal));
+        AssertEx.Contains(tamperCheck.OutputTail!, text => text.Contains("FooTests.cs", StringComparison.Ordinal));
 
         // Git diff was the last call
         var lastCall = calls.Last();
@@ -1551,8 +1551,8 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(tamperCheck.Advisory);
         Assert.False(tamperCheck.Passed);
         Assert.True(tamperCheck.OutputTail is not null);
-        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("tautology", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("Assert.True(true)", StringComparison.Ordinal));
+        AssertEx.Contains(tamperCheck.OutputTail!, text => text.Contains("tautology", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(tamperCheck.OutputTail!, text => text.Contains("Assert.True(true)", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_absent_when_no_test_files_in_diff")]

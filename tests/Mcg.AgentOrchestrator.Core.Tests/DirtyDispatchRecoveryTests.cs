@@ -20,9 +20,9 @@ public sealed class DirtyDispatchRecoveryTests
         Assert.True(result);
         Assert.Equal("dirty-useful", recovery.Label);
         Assert.True(recovery.HasUsefulVerification);
-        Assert.Contains(recovery.ChangedFiles, f => f.Contains("src/Foo.cs", StringComparison.Ordinal));
-        Assert.Contains(recovery.ChangedFiles, f => f.Contains("tests/FooTests.cs", StringComparison.Ordinal));
-        Assert.Contains(recovery.VerificationEvidence, ev => ev.Contains("Passed: 5", StringComparison.Ordinal));
+        AssertEx.Contains(recovery.ChangedFiles, f => f.Contains("src/Foo.cs", StringComparison.Ordinal));
+        AssertEx.Contains(recovery.ChangedFiles, f => f.Contains("tests/FooTests.cs", StringComparison.Ordinal));
+        AssertEx.Contains(recovery.VerificationEvidence, ev => ev.Contains("Passed: 5", StringComparison.Ordinal));
         Assert.Equal("C:\\repo", recovery.WorkingDirectory);
     }
 
@@ -38,7 +38,7 @@ public sealed class DirtyDispatchRecoveryTests
         Assert.Equal("dirty-unverified", recovery.Label);
         Assert.False(recovery.HasUsefulVerification);
         Assert.Equal(0, recovery.VerificationEvidence.Count);
-        Assert.Contains(recovery.ChangedFiles, f => f.Contains("src/Foo.cs", StringComparison.Ordinal));
+        AssertEx.Contains(recovery.ChangedFiles, f => f.Contains("src/Foo.cs", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "TryBuildDirtyDispatchRecovery_returns_false_for_non_dirty_guard_failure")]
@@ -134,7 +134,7 @@ public sealed class DirtyDispatchRecoveryTests
 
         var actions = kernel.BuildNextActions(goal.Id);
 
-        Assert.Contains(actions.Items, item =>
+        AssertEx.Contains(actions.Items, item =>
             item.Kind == NextActionKind.FixFailedVerification &&
             item.Message.Contains("dirty-useful", StringComparison.Ordinal) &&
             item.Message.Contains("src/Foo.cs", StringComparison.Ordinal));
@@ -159,7 +159,7 @@ public sealed class DirtyDispatchRecoveryTests
 
         var actions = kernel.BuildNextActions(goal.Id);
 
-        Assert.Contains(actions.Items, item =>
+        AssertEx.Contains(actions.Items, item =>
             item.Kind == NextActionKind.FixFailedVerification &&
             item.Message.Contains("dirty-unverified", StringComparison.Ordinal) &&
             item.Message.Contains("rerun focused tests", StringComparison.OrdinalIgnoreCase));
@@ -185,8 +185,8 @@ public sealed class DirtyDispatchRecoveryTests
         var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
         var taskSummary = summary.Tasks.First(t => t.TaskId == devTask.Id);
 
-        Assert.Contains(taskSummary.Message, text => text.Contains("dirty-useful", StringComparison.Ordinal));
-        Assert.Contains(taskSummary.Message, text => text.Contains("src/Foo.cs", StringComparison.Ordinal));
+        AssertEx.Contains(taskSummary.Message, text => text.Contains("dirty-useful", StringComparison.Ordinal));
+        AssertEx.Contains(taskSummary.Message, text => text.Contains("src/Foo.cs", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "TryBuildDirtyDispatchRecovery_returns_unavailable_changed_files_when_no_status_short_in_stderr")]

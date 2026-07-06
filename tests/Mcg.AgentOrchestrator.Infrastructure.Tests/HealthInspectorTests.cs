@@ -48,8 +48,8 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     var report = OrchestratorHealthInspector.Inspect(environment, AgentCatalog.Default(), WorkerProfileCatalog.Default(), _ => false);
 
     var developer = report.Agents.Single(agent => agent.Role == AgentRole.Developer);
-    Assert.Contains(developer.Detail, text => text.Contains("local Ollama is available", StringComparison.Ordinal));
-    Assert.Contains(developer.Detail, text => text.Contains("switching this role to Ollama before paid work", StringComparison.Ordinal));
+    AssertEx.Contains(developer.Detail, text => text.Contains("local Ollama is available", StringComparison.Ordinal));
+    AssertEx.Contains(developer.Detail, text => text.Contains("switching this role to Ollama before paid work", StringComparison.Ordinal));
     await server.WaitAsync(TimeSpan.FromSeconds(5));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_subscription_only_agents_by_worker_profile")]
@@ -170,7 +170,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 
     var reviewer = report.Agents.Single(agent => agent.Role == AgentRole.Reviewer);
     Assert.False(reviewer.IsValid);
-    Assert.Contains(reviewer.Detail, text => text.Contains("does not pin the selected model", StringComparison.Ordinal));
+    AssertEx.Contains(reviewer.Detail, text => text.Contains("does not pin the selected model", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_subscription_profiles_without_reasoning_pinning")]
     public void OrchestratorHealthInspectorRejectsSubscriptionProfilesWithoutReasoningPinning()
@@ -193,7 +193,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 
     var reviewer = report.Agents.Single(agent => agent.Role == AgentRole.Reviewer);
     Assert.False(reviewer.IsValid);
-    Assert.Contains(reviewer.Detail, text => text.Contains("does not pin the selected reasoning effort", StringComparison.Ordinal));
+    AssertEx.Contains(reviewer.Detail, text => text.Contains("does not pin the selected reasoning effort", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_local_bridge_provider_status")]
     public void OrchestratorHealthInspectorReportsLocalBridgeProviderStatus()
@@ -209,7 +209,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 
     Assert.True(openAi.IsConfigured);
     Assert.Equal("LocalBridge", openAi.Mode);
-    Assert.Contains(openAi.Detail, text => text.Contains("codex", StringComparison.Ordinal));
+    AssertEx.Contains(openAi.Detail, text => text.Contains("codex", StringComparison.Ordinal));
     Assert.False(anthropic.IsConfigured);
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_treats_default_cli_bridges_as_optional_profiles")]
@@ -253,8 +253,8 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     Assert.True(report.Agents.Single(agent => agent.Role == AgentRole.Planner).IsValid);
     Assert.False(report.Agents.Single(agent => agent.Role == AgentRole.Developer).IsValid);
     Assert.False(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).IsValid);
-    Assert.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Developer).Detail, text => text.Contains("not registered", StringComparison.Ordinal));
-    Assert.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).Detail, text => text.Contains("No agent", StringComparison.Ordinal));
+    AssertEx.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Developer).Detail, text => text.Contains("not registered", StringComparison.Ordinal));
+    AssertEx.Contains(report.Agents.Single(agent => agent.Role == AgentRole.Reviewer).Detail, text => text.Contains("No agent", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_local_bridge_for_api_only_agent")]
     public void OrchestratorHealthInspectorRejectsLocalBridgeForApiOnlyAgent()
@@ -277,7 +277,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 
     var planner = report.Agents.Single(agent => agent.Role == AgentRole.Planner);
     Assert.False(planner.IsValid);
-    Assert.Contains(planner.Detail, text => text.Contains("local subscription bridge", StringComparison.Ordinal));
+    AssertEx.Contains(planner.Detail, text => text.Contains("local subscription bridge", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_rejects_echo_only_subscription_routes")]
     public void OrchestratorHealthInspectorRejectsEchoOnlySubscriptionRoutes()
@@ -300,7 +300,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
 
     var tester = report.Agents.Single(agent => agent.Role == AgentRole.Tester);
     Assert.False(tester.IsValid);
-    Assert.Contains(tester.Detail, text => text.Contains("only echoes", StringComparison.Ordinal));
+    AssertEx.Contains(tester.Detail, text => text.Contains("only echoes", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_worker_profile_commands")]
     public void OrchestratorHealthInspectorValidatesWorkerProfileCommands()
@@ -360,7 +360,7 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     Assert.True(codex.IsResolvable);
     Assert.True(codex.IsEchoOnly);
     Assert.False(codex.IsPatchCapable);
-    Assert.Contains(codex.Detail, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+    AssertEx.Contains(codex.Detail, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_reports_codex_patch_capability")]
     public void OrchestratorHealthInspectorReportsCodexPatchCapability()
@@ -380,9 +380,9 @@ public async Task OrchestratorHealthInspectorRecommendsOllamaForPaidAgentsWhenAv
     var ok = report.WorkerProfiles.Single(profile => profile.Name == "codex-cli");
     var readOnly = report.WorkerProfiles.Single(profile => profile.Name == "codex-spark");
     Assert.True(ok.IsPatchCapable);
-    Assert.Contains(ok.Detail, text => text.Contains("workspace-write", StringComparison.Ordinal));
+    AssertEx.Contains(ok.Detail, text => text.Contains("workspace-write", StringComparison.Ordinal));
     Assert.False(readOnly.IsPatchCapable);
-    Assert.Contains(readOnly.Detail, text => text.Contains("missing --sandbox workspace-write", StringComparison.Ordinal));
+    AssertEx.Contains(readOnly.Detail, text => text.Contains("missing --sandbox workspace-write", StringComparison.Ordinal));
 }
 
 private static AgentDefinition CreateSubscriptionAlternate(

@@ -31,13 +31,13 @@ public sealed class StatusProjectorTests
         Assert.Equal(1, projection.Buckets.Active.Count);
         Assert.Equal("active-123456", projection.Buckets.Active[0].Id);
         Assert.Equal(2, projection.Buckets.AlmostDone.Count);
-        Assert.Contains(projection.Buckets.AlmostDone, item => item.Id == "almost-123456");
-        Assert.Contains(projection.Buckets.AlmostDone, item => item.Id == "waiting-123456");
+        AssertEx.Contains(projection.Buckets.AlmostDone, item => item.Id == "almost-123456");
+        AssertEx.Contains(projection.Buckets.AlmostDone, item => item.Id == "waiting-123456");
         Assert.Equal(1, projection.Buckets.Landed.Count);
         Assert.Equal("landed-123456", projection.Buckets.Landed[0].Id);
         Assert.Equal(2, projection.OpenEscalationCount);
-        Assert.Contains(projection.RenderedContent, text => text.Contains("Open escalations: 2", StringComparison.Ordinal));
-        Assert.Contains(projection.RenderedContent, text => text.Contains("https://discord.example/escalations", StringComparison.Ordinal));
+        AssertEx.Contains(projection.RenderedContent, text => text.Contains("Open escalations: 2", StringComparison.Ordinal));
+        AssertEx.Contains(projection.RenderedContent, text => text.Contains("https://discord.example/escalations", StringComparison.Ordinal));
         Assert.False(projection.Unchanged);
     }
 
@@ -55,7 +55,7 @@ public sealed class StatusProjectorTests
         Assert.Equal("raw-completed", item.Id);
         Assert.Equal("accepting", item.Stage);
         Assert.Equal("integration or cleanup required", item.Health);
-        Assert.Contains(projection.RenderedContent, text => text.Contains("integration or cleanup required", StringComparison.Ordinal));
+        AssertEx.Contains(projection.RenderedContent, text => text.Contains("integration or cleanup required", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "StatusProjector_reports_unchanged_for_byte_identical_render")]

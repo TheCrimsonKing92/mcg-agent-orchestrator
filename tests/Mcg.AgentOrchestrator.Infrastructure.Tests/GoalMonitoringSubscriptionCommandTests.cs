@@ -834,12 +834,12 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             workspace,
             []);
 
-        Assert.Contains(events, evt =>
+        AssertEx.Contains(events, evt =>
             evt.EventKind == "dispatch.heartbeat" &&
             evt.TaskId == task.Id.Value &&
             evt.ProcessId == 123 &&
             evt.Message?.Contains("stdout=2", StringComparison.Ordinal) == true);
-        Assert.Contains(events, evt =>
+        AssertEx.Contains(events, evt =>
             evt.EventKind == "dispatch.exit" &&
             evt.TaskId == task.Id.Value &&
             evt.ProcessId == 123 &&
@@ -906,11 +906,11 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 Kind: doc.RootElement.GetProperty("eventKind").GetString(),
                 Cursor: doc.RootElement.GetProperty("cursor").GetString());
         }).ToArray();
-        Assert.Contains(events, evt =>
+        AssertEx.Contains(events, evt =>
             evt.Kind == "dispatch.heartbeat" &&
             evt.Cursor?.Contains("timeline:999", StringComparison.Ordinal) == true &&
             evt.Cursor.Contains("process:", StringComparison.Ordinal));
-        Assert.Contains(events, evt =>
+        AssertEx.Contains(events, evt =>
             evt.Kind == "dispatch.exit" &&
             evt.Cursor?.Contains("timeline:999", StringComparison.Ordinal) == true &&
             evt.Cursor.Contains("process:", StringComparison.Ordinal));
@@ -966,7 +966,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var globalTick = Assert.Single(events.Where(evt => evt.EventKind == "conduct:tick"));
         Assert.Null(globalTick.GoalId);
         Assert.False(GoalMonitoringSubscriptionCommand.Matches(globalTick, options));
-        Assert.Contains(events, evt =>
+        AssertEx.Contains(events, evt =>
             evt.EventKind == "conductor:dispatch" &&
             GoalMonitoringSubscriptionCommand.Matches(evt, options));
     }
@@ -1024,7 +1024,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             });
 
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        Assert.Contains(lines, line =>
+        AssertEx.Contains(lines, line =>
         {
             using var doc = JsonDocument.Parse(line);
             return doc.RootElement.GetProperty("eventKind").GetString() == "conductor:dispatch" &&

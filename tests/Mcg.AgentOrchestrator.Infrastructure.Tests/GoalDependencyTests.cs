@@ -35,7 +35,7 @@ public sealed class GoalDependencyTests
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Test");
 
         var ex = Assert.Throws<InvalidOperationException>(() => kernel.SetGoalDependency(goal.Id, goal.Id));
-        Assert.Contains(ex.Message, msg => msg.Contains("cannot depend on itself", StringComparison.Ordinal));
+        AssertEx.Contains(ex.Message, msg => msg.Contains("cannot depend on itself", StringComparison.Ordinal));
     }
 
     // ── Model: direct cycle rejected ─────────────────────────────────────────
@@ -50,7 +50,7 @@ public sealed class GoalDependencyTests
         kernel.SetGoalDependency(b.Id, a.Id); // B → A
 
         var ex = Assert.Throws<InvalidOperationException>(() => kernel.SetGoalDependency(a.Id, b.Id));
-        Assert.Contains(ex.Message, msg => msg.Contains("cycle", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(ex.Message, msg => msg.Contains("cycle", StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Model: transitive cycle rejected ─────────────────────────────────────
@@ -68,7 +68,7 @@ public sealed class GoalDependencyTests
 
         // A → C would create A → C → B → A
         var ex = Assert.Throws<InvalidOperationException>(() => kernel.SetGoalDependency(a.Id, c.Id));
-        Assert.Contains(ex.Message, msg => msg.Contains("cycle", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(ex.Message, msg => msg.Contains("cycle", StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Model: snapshot round-trip ────────────────────────────────────────────

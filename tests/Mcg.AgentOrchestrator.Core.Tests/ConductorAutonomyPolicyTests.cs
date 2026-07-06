@@ -17,9 +17,9 @@ public sealed class ConductorAutonomyPolicyTests
     {
         var all = ConductorAutonomyPolicy.All;
         Assert.Equal(3, all.Count);
-        Assert.Contains(all, p => p.Name == "Conservative");
-        Assert.Contains(all, p => p.Name == "Permissive");
-        Assert.Contains(all, p => p.Name == "Manual");
+        AssertEx.Contains(all, p => p.Name == "Conservative");
+        AssertEx.Contains(all, p => p.Name == "Permissive");
+        AssertEx.Contains(all, p => p.Name == "Manual");
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_only_permissive_auto_approves_high_risk_ownership")]
@@ -159,7 +159,7 @@ public sealed class ConductorAutonomyPolicyTests
         var policy = ConductorAutonomyPolicy.Conservative with { MaxConcurrentPaidWorkers = 0 };
         var errors = policy.Validate();
         Assert.True(errors.Count > 0);
-        Assert.Contains(errors, e => e.Contains("maxConcurrentPaidWorkers", StringComparison.Ordinal));
+        AssertEx.Contains(errors, e => e.Contains("maxConcurrentPaidWorkers", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_negative_budget")]
@@ -168,7 +168,7 @@ public sealed class ConductorAutonomyPolicyTests
         var policy = ConductorAutonomyPolicy.Conservative with { MaxTotalBudget = -1m };
         var errors = policy.Validate();
         Assert.True(errors.Count > 0);
-        Assert.Contains(errors, e => e.Contains("maxTotalBudget", StringComparison.Ordinal));
+        AssertEx.Contains(errors, e => e.Contains("maxTotalBudget", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_provider_cap_exceeding_total")]
@@ -181,7 +181,7 @@ public sealed class ConductorAutonomyPolicyTests
         };
         var errors = policy.Validate();
         Assert.True(errors.Count > 0);
-        Assert.Contains(errors, e => e.Contains("anthropic", StringComparison.Ordinal) && e.Contains("exceeds", StringComparison.Ordinal));
+        AssertEx.Contains(errors, e => e.Contains("anthropic", StringComparison.Ordinal) && e.Contains("exceeds", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_missing_lifecycle_state")]
@@ -196,7 +196,7 @@ public sealed class ConductorAutonomyPolicyTests
         };
         var errors = policy.Validate();
         Assert.True(errors.Count > 0);
-        Assert.Contains(errors, e => e.Contains("Merged", StringComparison.Ordinal));
+        AssertEx.Contains(errors, e => e.Contains("Merged", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_JSON_round_trip_Conservative")]

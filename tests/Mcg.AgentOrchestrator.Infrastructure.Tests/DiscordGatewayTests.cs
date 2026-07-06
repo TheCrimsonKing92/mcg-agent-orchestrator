@@ -68,7 +68,7 @@ public sealed class DiscordGatewayTests
         Assert.True(result.Decision is null);
         Assert.True(result.RequiresConfirmation);
         Assert.True(result.ConfirmationCustomId is not null);
-        Assert.Contains(result.ConfirmationCustomId!, s => s.Contains("mcgo-confirmed"));
+        AssertEx.Contains(result.ConfirmationCustomId!, s => s.Contains("mcgo-confirmed"));
     }
 
     [Xunit.Fact(DisplayName = "DiscordInteractionHandler_overload_confirmed_action_maps_to_decision")]
@@ -96,7 +96,7 @@ public sealed class DiscordGatewayTests
         var result = DiscordInteractionHandler.Process(customId, "unauthorized-999", "interact-001", ["authorized-111"]);
 
         Assert.True(result.ErrorMessage is not null);
-        Assert.Contains(result.ErrorMessage!, s => s.Contains("allowlist"));
+        AssertEx.Contains(result.ErrorMessage!, s => s.Contains("allowlist"));
         Assert.True(result.Decision is null);
     }
 
@@ -414,7 +414,7 @@ public sealed class DiscordGatewayTests
             ["user1"]);
 
         Assert.True(submit.ErrorMessage is not null);
-        Assert.Contains(submit.ErrorMessage!, s => s.Contains("allowlist"));
+        AssertEx.Contains(submit.ErrorMessage!, s => s.Contains("allowlist"));
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_restart_reconcile_refreshes_existing_open_message")]
@@ -478,8 +478,8 @@ public sealed class DiscordGatewayTests
 
         Assert.Equal(1, api.CreatedThreads.Count);
         var message = api.SentMessages.Single();
-        Assert.Contains(message.Content, s => s.Contains("Landing needs review"));
-        Assert.Contains(message.Content, s => s.Contains("LandingEscalation"));
+        AssertEx.Contains(message.Content, s => s.Contains("Landing needs review"));
+        AssertEx.Contains(message.Content, s => s.Contains("LandingEscalation"));
         Assert.Equal(1, message.Buttons.Count);
     }
 
@@ -514,7 +514,7 @@ public sealed class DiscordGatewayTests
         await CliCommandHandlers.RunCollaborationReconcileLoopAsync(view, TimeSpan.FromSeconds(15), cts.Token, Delay);
 
         var message = api.SentMessages.Single();
-        Assert.Contains(message.Content, s => s.Contains("Loop surfaced decision"));
+        AssertEx.Contains(message.Content, s => s.Contains("Loop surfaced decision"));
     }
 
     [Xunit.Fact(DisplayName = "OperatorListen_collaboration_reconcile_loop_retries_transient_discord_refresh_error")]
@@ -555,7 +555,7 @@ public sealed class DiscordGatewayTests
         Assert.Equal(TimeSpan.FromSeconds(1), delays[0]);
         Assert.Equal(TimeSpan.FromSeconds(15), delays[1]);
         var message = api.SentMessages.Single();
-        Assert.Contains(message.Content, s => s.Contains("Retry surfaced decision"));
+        AssertEx.Contains(message.Content, s => s.Contains("Retry surfaced decision"));
     }
 
     [Xunit.Fact(DisplayName = "OperatorListen_collaboration_reconcile_loop_exits_on_unauthorized_discord_refresh_error")]

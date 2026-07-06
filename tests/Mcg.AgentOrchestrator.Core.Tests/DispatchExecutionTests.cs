@@ -17,7 +17,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(dispatch, task.LastDispatch);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Equal(GoalStatus.Active, goal.Status);
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskDispatchRecorded &&
         evt.Message.Contains("codex", StringComparison.Ordinal) &&
@@ -36,7 +36,7 @@ public sealed class DispatchExecutionTests
         task.Id,
         new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
 
-    Assert.Contains(ex.Message, text => text.Contains("status is Pending", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("status is Pending", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
     Assert.Equal(WorkTaskStatus.Pending, task.Status);
 }
@@ -57,7 +57,7 @@ public sealed class DispatchExecutionTests
         task.Id,
         new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
 
-    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
 }
@@ -119,8 +119,8 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal("ok", task.LastVerification!.StandardOutput);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_pauses_for_worker_requested_human_input")]
     public void RecordDispatchExecutionResultPausesForWorkerRequestedHumanInput()
@@ -147,8 +147,8 @@ public sealed class DispatchExecutionTests
     Assert.Equal(task.Id, request.TaskId);
     Assert.Equal("Which branch should I modify?", request.Question);
     Assert.Equal(verification, task.LastVerification);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
 
@@ -175,7 +175,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(verification, task.LastVerification);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested));
 }
 
@@ -199,7 +199,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(42, task.LastVerification!.ExitCode);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_subscription_usage_limit")]
     public void RecordDispatchExecutionResultReopensTaskOnSubscriptionUsageLimit()
@@ -228,7 +228,7 @@ public sealed class DispatchExecutionTests
     Assert.True(task.LastVerification is null);
     Assert.Equal(1, task.VerificationHistory.Count);
     Assert.Equal(GoalStatus.Active, goal.Status);
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
@@ -284,7 +284,7 @@ public sealed class DispatchExecutionTests
     Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
     Assert.Equal(1, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
     Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
@@ -336,7 +336,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.NotNull(task.LastVerification);
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskCompleted &&
         evt.Message.Contains("advisory WORKER_RESULT blocker", StringComparison.Ordinal) &&
@@ -390,7 +390,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(ProviderFailureKind.RateLimit, task.LastVerification!.ProviderFailureKind);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
         evt.Message.Contains("full Infrastructure no-build timed out at 214s after local rate limit fixture", StringComparison.Ordinal));
@@ -457,7 +457,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
     Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out _));
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_keeps_repeated_subscription_usage_limits_retryable")]
@@ -494,7 +494,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(3, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
     Assert.True(task.SubscriptionRetryAfter is not null);
     Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("recoverable subscription usage limit 3 time", StringComparison.Ordinal));
@@ -538,7 +538,7 @@ public sealed class DispatchExecutionTests
     Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
     Assert.Equal(2, task.SubscriptionLimitReviewedFailureCount);
     Assert.Equal("Reviewed profile and will retry after the provider window.", task.SubscriptionLimitReviewNote);
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskSubscriptionLimitReviewAcknowledged &&
         evt.Message.Contains("Reviewed profile", StringComparison.Ordinal));
@@ -628,7 +628,7 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
         evt.Message.Contains("no output", StringComparison.OrdinalIgnoreCase));
@@ -734,7 +734,7 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.Contains(goal.Timeline, evt =>
+    AssertEx.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
         evt.Message.Contains("no output", StringComparison.OrdinalIgnoreCase));

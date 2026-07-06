@@ -58,7 +58,7 @@ public sealed class ChaosGateTests
         Assert.Equal(1, result.ExitCode);
         var forbidden = result.Checks!.Single(c => c.Name == "forbidden changed paths");
         Assert.False(forbidden.Passed);
-        Assert.Contains(forbidden.OutputTail!, text => text.Contains(".qwen/settings.json", StringComparison.Ordinal));
+        AssertEx.Contains(forbidden.OutputTail!, text => text.Contains(".qwen/settings.json", StringComparison.Ordinal));
     }
 
     // ── Anti-tautology: weakening Gate 2 (empty globs) lets write through ──
@@ -226,8 +226,8 @@ public sealed class ChaosGateTests
 
         Assert.False(result.Allowed);
         var findings = string.Join("\n", result.Findings);
-        Assert.Contains(findings, text => text.Contains("missing required local skill", StringComparison.Ordinal));
-        Assert.Contains(findings, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
+        AssertEx.Contains(findings, text => text.Contains("missing required local skill", StringComparison.Ordinal));
+        AssertEx.Contains(findings, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
     }
 
     // ── Gate 7b: Dirty worktree before dispatch blocks preflight ─────────────
@@ -248,7 +248,7 @@ public sealed class ChaosGateTests
 
         Assert.False(result.Allowed);
         var findings = string.Join("\n", result.Findings);
-        Assert.Contains(findings, text => text.Contains("uncommitted change", StringComparison.Ordinal));
+        AssertEx.Contains(findings, text => text.Contains("uncommitted change", StringComparison.Ordinal));
     }
 
     // ── Leniency: commit is ancestor (HEAD advanced post-commit) ────────────
@@ -514,9 +514,9 @@ public sealed class ChaosGateTests
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(0, task.LastVerification!.ExitCode);
         Assert.True(task.LastVerification.HasCommittedChanges);
-        Assert.Contains(task.LastVerification.StandardOutput, text =>
+        AssertEx.Contains(task.LastVerification.StandardOutput, text =>
             text.Contains("full suite deferred", StringComparison.Ordinal));
-        Assert.Contains(goal.Timeline, evt =>
+        AssertEx.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskCompleted &&
             evt.Message.Contains("advisory WORKER_RESULT blocker", StringComparison.Ordinal));

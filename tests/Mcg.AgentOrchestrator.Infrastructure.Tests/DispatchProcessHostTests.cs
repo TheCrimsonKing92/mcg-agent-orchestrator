@@ -517,8 +517,8 @@ public sealed class DispatchProcessHostTests
 
             Assert.False(result.WorktreeRecursiveRelabel);
             Assert.False(result.SandboxRecursiveRelabel);
-            Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive && call.Level == "(OI)(CI)L");
-            Assert.DoesNotContain(labeler.SetCalls, call => call.Path.Contains(".git", StringComparison.OrdinalIgnoreCase));
+            AssertEx.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive && call.Level == "(OI)(CI)L");
+            AssertEx.DoesNotContain(labeler.SetCalls, call => call.Path.Contains(".git", StringComparison.OrdinalIgnoreCase));
             Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.MarkerFileName)));
         }
         finally
@@ -888,8 +888,8 @@ public sealed class DispatchProcessHostTests
                 .Where(line => line.Contains("\"event\":\"sandbox-prep\"", StringComparison.Ordinal))
                 .Select(line => JsonDocument.Parse(line).RootElement.Clone())
                 .ToArray();
-            Assert.Contains(sandboxPrepEvents, evt => evt.GetProperty("phase").GetString() == "start");
-            Assert.Contains(sandboxPrepEvents, evt =>
+            AssertEx.Contains(sandboxPrepEvents, evt => evt.GetProperty("phase").GetString() == "start");
+            AssertEx.Contains(sandboxPrepEvents, evt =>
                 evt.GetProperty("phase").GetString() == "complete" &&
                 evt.TryGetProperty("elapsedMs", out var elapsedMs) &&
                 elapsedMs.GetInt64() >= 0);

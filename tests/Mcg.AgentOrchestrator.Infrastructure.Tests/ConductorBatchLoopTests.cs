@@ -1716,7 +1716,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(4, ticks.Count);
         Assert.Single(lines.Where(l => l.StartsWith("GOAL goal=", StringComparison.Ordinal)));
         Assert.Single(lines.Where(l => l.StartsWith("TICK_END tick=", StringComparison.Ordinal)));
-        Assert.DoesNotContain(lines, l => l.StartsWith("TICK_END tick=2 ", StringComparison.Ordinal));
+        AssertEx.DoesNotContain(lines, l => l.StartsWith("TICK_END tick=2 ", StringComparison.Ordinal));
         Assert.True(ticks.Skip(1).All(t => t.ProgressLines is not null && t.ProgressLines.Count == 0));
     }
 
@@ -1991,8 +1991,8 @@ public sealed class ConductorBatchLoopTests
             sleepFunc: _ => true,
             onTick: ticks.Add);
 
-        Assert.DoesNotContain(ticks.Single().ProgressLines!, l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
-        Assert.DoesNotContain(ticks.Single().ProgressLines!, l => l.Contains("WARNING:", StringComparison.Ordinal));
+        AssertEx.DoesNotContain(ticks.Single().ProgressLines!, l => l.StartsWith("WATCH_WARNING ", StringComparison.Ordinal));
+        AssertEx.DoesNotContain(ticks.Single().ProgressLines!, l => l.Contains("WARNING:", StringComparison.Ordinal));
     }
 
     // ── Fault isolation: a throwing goal is escalated, others still advance ─
@@ -2141,7 +2141,7 @@ public sealed class ConductorBatchLoopTests
             PassVerification(kernel, retiredGoal, retiredGoal.Tasks.Single());
 
             var sweep = TerminalGoalSweep.Run(kernel, root);
-            Assert.Contains(sweep.Goals, goal =>
+            AssertEx.Contains(sweep.Goals, goal =>
                 goal.GoalId == retiredGoal.Id &&
                 goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
             Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, retiredGoal.Id)));
@@ -2290,12 +2290,12 @@ public sealed class ConductorBatchLoopTests
         Assert.True(ticks.Count >= 2);
         Assert.True(attempts >= ConductorBatchLoop.DefaultMaxBusyWriteAttempts);
         var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
-        Assert.Contains(lines, line =>
+        AssertEx.Contains(lines, line =>
             line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)
             && line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal)
             && line.Contains("attempt=1", StringComparison.Ordinal)
             && line.Contains("likelyHolder=concurrent-per-command-host", StringComparison.Ordinal));
-        Assert.Contains(lines, line =>
+        AssertEx.Contains(lines, line =>
             line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal)
             && line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal)
             && line.Contains($"attempt={ConductorBatchLoop.DefaultMaxBusyWriteAttempts}", StringComparison.Ordinal));
@@ -2325,7 +2325,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(3, attempts);
         var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
         Assert.Equal(2, lines.Count(line => line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)));
-        Assert.DoesNotContain(lines, line => line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal));
+        AssertEx.DoesNotContain(lines, line => line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]

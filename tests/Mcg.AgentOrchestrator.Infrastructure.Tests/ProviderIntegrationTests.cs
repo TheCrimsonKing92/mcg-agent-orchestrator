@@ -22,8 +22,8 @@ public sealed class ProviderIntegrationTests
     Assert.Equal("stop", result.StopReason);
     Assert.Equal(0, request.Options.Temperature);
     Assert.Equal(8, request.Options.MaxOutputTokens);
-    Assert.Contains(request.SystemPrompt, text => text.Contains("Connectivity smoke test", StringComparison.Ordinal));
-    Assert.Contains(request.SystemPrompt, text => text.Contains("Reply exactly OK", StringComparison.Ordinal));
+    AssertEx.Contains(request.SystemPrompt, text => text.Contains("Connectivity smoke test", StringComparison.Ordinal));
+    AssertEx.Contains(request.SystemPrompt, text => text.Contains("Reply exactly OK", StringComparison.Ordinal));
     Assert.Equal("Reply OK.", request.Messages.Single().Content);
 }
     [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_sends_request_and_parses_response")]
@@ -50,9 +50,9 @@ public sealed class ProviderIntegrationTests
     Assert.Equal("Bearer", handler.LastRequest!.Headers.Authorization!.Scheme);
     Assert.Equal("openai-key", handler.LastRequest.Headers.Authorization.Parameter);
     Assert.Equal("https://api.openai.com/v1/responses", handler.LastRequest.RequestUri!.ToString());
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"model\":\"gpt-test\"", StringComparison.Ordinal));
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"instructions\":\"system prompt\"", StringComparison.Ordinal));
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":123", StringComparison.Ordinal));
+    AssertEx.Contains(handler.LastBody!, text => text.Contains("\"model\":\"gpt-test\"", StringComparison.Ordinal));
+    AssertEx.Contains(handler.LastBody!, text => text.Contains("\"instructions\":\"system prompt\"", StringComparison.Ordinal));
+    AssertEx.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":123", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_uses_routine_cap_when_request_omits_max_output_tokens")]
@@ -66,7 +66,7 @@ public sealed class ProviderIntegrationTests
 
     await provider.CompleteAsync(TestRequest(new ModelOptions()), CancellationToken.None);
 
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":2048", StringComparison.Ordinal));
+    AssertEx.Contains(handler.LastBody!, text => text.Contains("\"max_output_tokens\":2048", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "OpenAiResponsesModelProvider_sends_reasoning_effort_when_configured")]
@@ -80,7 +80,7 @@ public sealed class ProviderIntegrationTests
 
     await provider.CompleteAsync(TestRequest(new ModelOptions(Temperature: 0.2, MaxOutputTokens: 123, ReasoningEffort: "high")), CancellationToken.None);
 
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"reasoning\":{\"effort\":\"high\"}", StringComparison.Ordinal));
+    AssertEx.Contains(handler.LastBody!, text => text.Contains("\"reasoning\":{\"effort\":\"high\"}", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "AnthropicMessagesModelProvider_sends_request_and_parses_response")]
     public async Task AnthropicMessagesModelProviderSendsRequestAndParsesResponse()
@@ -110,9 +110,9 @@ public sealed class ProviderIntegrationTests
     var versions = GetRequiredHeader(request, "anthropic-version");
     Assert.Equal("2023-06-01", versions.Single());
     Assert.Equal("https://api.anthropic.com/v1/messages", request.RequestUri!.ToString());
-    Assert.Contains(body, text => text.Contains("\"model\":\"claude-test\"", StringComparison.Ordinal));
-    Assert.Contains(body, text => text.Contains("\"system\":\"system prompt\"", StringComparison.Ordinal));
-    Assert.Contains(body, text => text.Contains("\"max_tokens\":123", StringComparison.Ordinal));
+    AssertEx.Contains(body, text => text.Contains("\"model\":\"claude-test\"", StringComparison.Ordinal));
+    AssertEx.Contains(body, text => text.Contains("\"system\":\"system prompt\"", StringComparison.Ordinal));
+    AssertEx.Contains(body, text => text.Contains("\"max_tokens\":123", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "AnthropicMessagesModelProvider_uses_routine_cap_when_request_omits_max_output_tokens")]
@@ -126,7 +126,7 @@ public sealed class ProviderIntegrationTests
 
     await provider.CompleteAsync(TestRequest(new ModelOptions()), CancellationToken.None);
 
-    Assert.Contains(handler.LastBody!, text => text.Contains("\"max_tokens\":2048", StringComparison.Ordinal));
+    AssertEx.Contains(handler.LastBody!, text => text.Contains("\"max_tokens\":2048", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ModelProviders_throw_on_http_error")]
@@ -140,8 +140,8 @@ public sealed class ProviderIntegrationTests
 
     var ex = await Xunit.Assert.ThrowsAsync<HttpRequestException>(async () => await provider.CompleteAsync(TestRequest(), CancellationToken.None));
 
-    Assert.Contains(ex.Message, text => text.Contains("400", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("bad request", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("400", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("bad request", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ModelProviders_trim_verbose_http_error_bodies")]
@@ -156,10 +156,10 @@ public sealed class ProviderIntegrationTests
 
     var ex = await Xunit.Assert.ThrowsAsync<HttpRequestException>(async () => await provider.CompleteAsync(TestRequest(), CancellationToken.None));
 
-    Assert.Contains(ex.Message, text => text.Contains("OpenAI request failed with 400", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("error-start", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("error-tail", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("OpenAI request failed with 400", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("error-start", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("error-tail", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!ex.Message.Contains(new string('e', 2000), StringComparison.Ordinal));
 }
 
@@ -178,10 +178,10 @@ public sealed class ProviderIntegrationTests
 
     var ex = await Xunit.Assert.ThrowsAsync<HttpRequestException>(async () => await provider.CompleteAsync(TestRequest(), CancellationToken.None));
 
-    Assert.Contains(ex.Message, text => text.Contains("Ollama request failed with 502", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("chat-error-start", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("chat-error-tail", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("Ollama request failed with 502", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("chat-error-start", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("chat-error-tail", StringComparison.Ordinal));
+    AssertEx.Contains(ex.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!ex.Message.Contains(new string('c', 2000), StringComparison.Ordinal));
 }
 

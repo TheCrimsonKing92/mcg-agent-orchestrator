@@ -80,7 +80,7 @@ public sealed class LauncherScriptTests
             .Select(entry => entry.GetString() ?? string.Empty)
             .ToArray();
 
-        Assert.Contains(allow, entry => entry.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(allow, entry => entry.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
         Xunit.Assert.False(
             allow.Any(entry => entry.Contains(RetiredManualLandingScriptName(), StringComparison.OrdinalIgnoreCase)),
             string.Join(Environment.NewLine, allow));

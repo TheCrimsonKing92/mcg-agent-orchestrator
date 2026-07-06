@@ -16,23 +16,23 @@ public sealed class TaskBriefTests
     Assert.Equal(goal.Id, brief.GoalId);
     Assert.Equal(task.Id, brief.TaskId);
     Assert.Equal(AgentRole.Developer, brief.Role);
-    Assert.Contains(brief.Content, text => text.Contains("Build worker adapter", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains($"Goal id: {goal.Id.Value}", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("do not attempt to reach dashboard APIs or orchestrator state", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("Build worker adapter", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains($"Goal id: {goal.Id.Value}", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("do not attempt to reach dashboard APIs or orchestrator state", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Goal work summary:", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("/api/goals/", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("/api/system/dashboard-host", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains(task.Description, StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("Developer retry note.", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("Report only changed files", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("**/obj/**", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains(task.Description, StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("Developer retry note.", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("Report only changed files", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("Keep the response concise", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("**/bin/**", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("**/obj/**", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("## Verification Plan", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains(task.VerificationPlan!, StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Context files:", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
 }
@@ -52,8 +52,8 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("before broad recursive file reads", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("before broad recursive file reads", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "AgentTaskRunner_prefers_bounded_source_survey_for_research_prompts")]
     public async Task AgentTaskRunnerPrefersBoundedSourceSurveyForResearchPrompts()
@@ -76,8 +76,8 @@ public sealed class TaskBriefTests
     await runner.RunAsync(goal.Id, task.Id);
 
     Assert.True(provider.LastRequest is not null);
-    Assert.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
+    AssertEx.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("/api/source-survey?max=8", StringComparison.Ordinal));
+    AssertEx.Contains(provider.LastRequest!.Messages.Single().Content, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
     public void BuildTaskBriefTrimsNoisyGoalAndTaskPrimaryContext()
@@ -92,11 +92,11 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
 
-    Assert.Contains(brief.Content, text => text.Contains("goal-start", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("goal-tail", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("task-start", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("task-tail", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("goal-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("goal-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("task-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("task-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("goal-middle-omitted", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("task-middle-omitted", StringComparison.Ordinal));
     Assert.True(brief.Title.Length < description.Length);
@@ -117,10 +117,10 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("simple-goal-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-goal-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-task-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-task-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-goal-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-goal-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-task-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-task-tail", StringComparison.Ordinal));
     Assert.True(!brief.Contains("simple-goal-middle", StringComparison.Ordinal));
     Assert.True(!brief.Contains("simple-task-middle", StringComparison.Ordinal));
 }
@@ -137,8 +137,8 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("complex-goal-middle", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-task-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-goal-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-task-middle", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_full_role_requirements_for_complex_tasks")]
     public void BuildTaskBriefUsesFullRoleRequirementsForComplexTasks()
@@ -156,12 +156,12 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("Developer Requirements", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Keep the response evidence-focused", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Developer Requirements", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Keep the response evidence-focused", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "AgentTaskRunner_includes_complex_response_budget_guidance")]
@@ -186,9 +186,9 @@ public sealed class TaskBriefTests
 
     Assert.True(provider.LastRequest is not null);
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("Response guidance: Keep the response evidence-focused", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
+    AssertEx.Contains(prompt, text => text.Contains("Response guidance: Keep the response evidence-focused", StringComparison.Ordinal));
+    AssertEx.Contains(prompt, text => text.Contains("omit generic progress and long logs", StringComparison.Ordinal));
+    AssertEx.Contains(prompt, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]
     public void BuildTaskBriefIncludesPendingHumanInputAndVerification()
@@ -203,9 +203,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
 
-    Assert.Contains(brief.Content, text => text.Contains("Which test command?", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("dotnet test", StringComparison.Ordinal));
-    Assert.Contains(brief.Content, text => text.Contains("failed", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("Which test command?", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("dotnet test", StringComparison.Ordinal));
+    AssertEx.Contains(brief.Content, text => text.Contains("failed", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_model_and_verification_evidence")]
     public async Task BuildTaskBriefTrimsNoisyModelAndVerificationEvidence()
@@ -230,13 +230,13 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("model-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("model-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("stdout-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("stdout-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("stderr-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("stderr-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("model-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("model-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("stdout-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("stdout-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("stderr-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("stderr-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('a', 1600), StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('b', 1600), StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('c', 1600), StringComparison.Ordinal));
@@ -261,11 +261,11 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("## Last Model Output", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("model-output-unique", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("## Last Verification", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("stdout-unique", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("stderr-unique", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("## Last Model Output", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("model-output-unique", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("## Last Verification", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("stdout-unique", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("stderr-unique", StringComparison.Ordinal));
     Assert.True(!brief.Contains("TaskOutputRecorded", StringComparison.Ordinal));
     Assert.True(!brief.Contains("TaskVerificationRecorded", StringComparison.Ordinal));
 }
@@ -282,9 +282,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("## Last Dispatch", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("codex-cli", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("codex exec prompt.md", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("## Last Dispatch", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("codex-cli", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("codex exec prompt.md", StringComparison.Ordinal));
     Assert.True(!brief.Contains("TaskDispatchRecorded", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_evidence_budget_for_simple_tasks")]
@@ -312,13 +312,13 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("simple-model-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-model-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-stdout-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-stdout-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-stderr-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-stderr-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-model-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-model-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-stdout-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-stdout-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-stderr-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-stderr-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains("simple-model-middle", StringComparison.Ordinal));
     Assert.True(!brief.Contains("simple-stdout-middle", StringComparison.Ordinal));
     Assert.True(!brief.Contains("simple-stderr-middle", StringComparison.Ordinal));
@@ -353,9 +353,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("complex-model-middle", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-stdout-middle", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-stderr-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-model-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-stdout-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-stderr-middle", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_timeline_messages")]
     public void BuildTaskBriefTrimsNoisyTimelineMessages()
@@ -370,8 +370,8 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("event-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("event-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("event-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("event-tail", StringComparison.Ordinal));
     var timelineLine = brief.Split(Environment.NewLine).Single(text =>
         text.Contains("TaskRetried", StringComparison.Ordinal) &&
         text.Contains("event-start", StringComparison.Ordinal));
@@ -391,9 +391,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("simple-brief-event-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-brief-event-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-brief-event-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-brief-event-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains("simple-brief-event-middle", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_timeline_message_budget_for_complex_tasks")]
@@ -414,9 +414,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("complex-brief-event-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-brief-event-middle", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-brief-event-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-brief-event-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-brief-event-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-brief-event-tail", StringComparison.Ordinal));
     Assert.True(!brief.Contains("[truncated", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_decision_timeline_events_over_lifecycle_noise")]
@@ -431,7 +431,7 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
     Assert.True(!brief.Contains("routine completed lifecycle noise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_lifecycle_only_timeline_for_simple_tasks")]
@@ -471,8 +471,8 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("GoalCreated", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("TaskDelegated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("GoalCreated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("TaskDelegated", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_uses_smaller_timeline_budget_for_simple_tasks")]
     public void BuildTaskBriefUsesSmallerTimelineBudgetForSimpleTasks()
@@ -488,9 +488,9 @@ public sealed class TaskBriefTests
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
     Assert.True(!brief.Contains("simple-brief-note-02", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-brief-note-03", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("simple-brief-note-10", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("## Recent Timeline", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-brief-note-03", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("simple-brief-note-10", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("## Recent Timeline", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_timeline_budget_for_complex_tasks")]
     public void BuildTaskBriefKeepsLargerTimelineBudgetForComplexTasks()
@@ -510,8 +510,8 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("complex-brief-note-01", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-brief-note-10", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-brief-note-01", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-brief-note-10", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_tester")]
     public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForTester()
@@ -537,14 +537,14 @@ public sealed class TaskBriefTests
     var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
     var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
-    Assert.Contains(testerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains("Most recent retry: Retry 3 of 3", StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains("Prior outcome:", StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains("TaskFailed: prior developer outcome for tester redispatch", StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
-    Assert.Contains(testerBrief, text => text.Contains("operator recovery note for redispatch", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("Most recent retry: Retry 3 of 3", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("Prior outcome:", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("TaskFailed: prior developer outcome for tester redispatch", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
+    AssertEx.Contains(testerBrief, text => text.Contains("operator recovery note for redispatch", StringComparison.Ordinal));
     Assert.Equal(1, CountOccurrences(testerBrief, "## Recent retry/recovery feedback"));
     Assert.True(!testerBrief.Contains("stale duplicate retry feedback", StringComparison.Ordinal));
 
@@ -572,14 +572,14 @@ public sealed class TaskBriefTests
     var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
     var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
-    Assert.Contains(reviewerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("Most recent retry: Retry 2 of 2", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("Prior outcome:", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("TaskFailed: prior developer outcome for reviewer redispatch", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("latest developer retry feedback for review", StringComparison.Ordinal));
-    Assert.Contains(reviewerBrief, text => text.Contains("operator recovery note for reviewer redispatch", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("Most recent retry: Retry 2 of 2", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains(latestRetryAt.ToString("u"), StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("Task 1 Developer", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("Prior outcome:", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("TaskFailed: prior developer outcome for reviewer redispatch", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("latest developer retry feedback for review", StringComparison.Ordinal));
+    AssertEx.Contains(reviewerBrief, text => text.Contains("operator recovery note for reviewer redispatch", StringComparison.Ordinal));
     Assert.Equal(1, CountOccurrences(reviewerBrief, "## Recent retry/recovery feedback"));
     Assert.True(!reviewerBrief.Contains("first stale retry feedback", StringComparison.Ordinal));
     Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
@@ -596,9 +596,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("plan-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("plan-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("plan-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("plan-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains("plan-middle", StringComparison.Ordinal));
     Assert.Equal(plan, task.VerificationPlan);
 }
@@ -620,9 +620,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("complex-plan-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-plan-middle", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("complex-plan-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-plan-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-plan-middle", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("complex-plan-tail", StringComparison.Ordinal));
     Assert.True(!brief.Contains("[truncated", StringComparison.Ordinal));
     Assert.Equal(plan, task.VerificationPlan);
 }
@@ -639,9 +639,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("cmd-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("cmd-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("cmd-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("cmd-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('d', 1600), StringComparison.Ordinal));
     Assert.Equal(command, task.LastDispatch!.Command);
 }
@@ -657,9 +657,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("question-start", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("question-tail", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("question-start", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("question-tail", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("[truncated", StringComparison.Ordinal));
     Assert.True(!brief.Contains(new string('h', 1600), StringComparison.Ordinal));
     Assert.Equal(question, kernel.GetHumanInputRequest(request.Id).Question);
 }
@@ -677,9 +677,9 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task2Spec.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Planner", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("prior-stdout-evidence", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Planner", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("prior-stdout-evidence", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_prior_task_evidence_for_single_task_goal")]
     public void BuildTaskBriefOmitsPriorTaskEvidenceForSingleTaskGoal()
@@ -711,7 +711,7 @@ public sealed class TaskBriefTests
 
     Assert.True(provider.LastRequest is not null);
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("prior-task-verification-stdout", StringComparison.Ordinal));
+    AssertEx.Contains(prompt, text => text.Contains("prior-task-verification-stdout", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_collapses_prior_evidence_to_digest_pointer_for_file_context")]
@@ -731,12 +731,12 @@ public sealed class TaskBriefTests
         workingDirectory: "C:\\repo",
         contextDirectory: "C:\\repo\\.orchestrator-context\\goal").Content;
 
-    Assert.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.True(brief.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < brief.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("verification exit 0", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("verification exit 0", StringComparison.Ordinal));
     Assert.True(!brief.Contains("prior-evidence-head", StringComparison.Ordinal));
     Assert.True(!brief.Contains("prior-evidence-tail", StringComparison.Ordinal));
 }
@@ -753,7 +753,7 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, currentTask.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("api-inline-prior-evidence", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("api-inline-prior-evidence", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Read digest.md first", StringComparison.Ordinal));
 }
 
@@ -804,12 +804,12 @@ public sealed class TaskBriefTests
     var apiBrief = kernel.BuildTaskBrief(goal.Id, currentTask.Id).Content;
 
     Assert.True(fileAccessBrief.Length <= 9000);
-    Assert.Contains(fileAccessBrief, text => text.Contains("current-task.md in the context directory", StringComparison.Ordinal));
-    Assert.Contains(fileAccessBrief, text => text.Contains("inline verification output collapsed", StringComparison.Ordinal));
-    Assert.Contains(fileAccessBrief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
+    AssertEx.Contains(fileAccessBrief, text => text.Contains("current-task.md in the context directory", StringComparison.Ordinal));
+    AssertEx.Contains(fileAccessBrief, text => text.Contains("inline verification output collapsed", StringComparison.Ordinal));
+    AssertEx.Contains(fileAccessBrief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
     Assert.True(!fileAccessBrief.Contains("api-inline-evidence-token", StringComparison.Ordinal));
-    Assert.Contains(apiBrief, text => text.Contains("api-inline-evidence-token", StringComparison.Ordinal));
-    Assert.Contains(apiBrief, text => text.Contains("reviewer evidence tail", StringComparison.Ordinal));
+    AssertEx.Contains(apiBrief, text => text.Contains("api-inline-evidence-token", StringComparison.Ordinal));
+    AssertEx.Contains(apiBrief, text => text.Contains("reviewer evidence tail", StringComparison.Ordinal));
     Assert.True(apiBrief.Length > fileAccessBrief.Length);
 }
 
@@ -822,8 +822,8 @@ public sealed class TaskBriefTests
 
     var researcherBrief = kernel.BuildTaskBrief(researcherGoal.Id, researcherTask.Id).Content;
 
-    Assert.Contains(researcherBrief, text => text.Contains("Do not modify repository files", StringComparison.Ordinal));
-    Assert.Contains(researcherBrief, text => text.Contains("implementation belongs to the Developer task", StringComparison.Ordinal));
+    AssertEx.Contains(researcherBrief, text => text.Contains("Do not modify repository files", StringComparison.Ordinal));
+    AssertEx.Contains(researcherBrief, text => text.Contains("implementation belongs to the Developer task", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "SdlcRoleRequirements_developer_brief_does_not_include_no_modify_repository_line")]
     public void SdlcRoleRequirementsDeveloperBriefDoesNotIncludeNoModifyRepositoryLine()
@@ -846,12 +846,12 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains("WORKER_RESULT:", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("files:", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("commit:", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("model_fit:", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("END_WORKER_RESULT", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs.", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("WORKER_RESULT:", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("files:", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("commit:", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("model_fit:", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("END_WORKER_RESULT", StringComparison.Ordinal));
+    AssertEx.Contains(brief, text => text.Contains("Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs.", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Git commit all changes in the working directory before reporting results.", StringComparison.Ordinal));
     Assert.True(!brief.Contains("Final: WORKER_RESULT.", StringComparison.Ordinal));
 }
@@ -867,7 +867,7 @@ public sealed class TaskBriefTests
 
     foreach (var templateLine in AgentOutputDirectives.WorkerResultTemplateLines)
     {
-        Assert.Contains(brief, text => text.Contains(templateLine, StringComparison.Ordinal));
+        AssertEx.Contains(brief, text => text.Contains(templateLine, StringComparison.Ordinal));
     }
 }
 

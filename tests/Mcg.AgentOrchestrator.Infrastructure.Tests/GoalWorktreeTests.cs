@@ -787,7 +787,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal("remove:branch-delete-failed", second.CleanupBackoff?.Reason);
             Assert.True(BranchExists(repo, branch));
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:branch-delete-failed"));
-            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+            AssertEx.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
 
             RunGit(repo, "branch", "-D", branch);
             var final = GoalWorktrees.Remove(repo, goalId);
@@ -1357,7 +1357,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
             Assert.Contains("remove-worktree", order);
             var journal = GoalOperationJournal.Read(repo, goal.Id);
-            Assert.Contains(journal.LatestByOperation, entry =>
+            AssertEx.Contains(journal.LatestByOperation, entry =>
                 entry.Operation == "workspace:remove" &&
                 entry.Status == GoalOperationStatus.Completed);
         }
@@ -1384,7 +1384,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.DoesNotContain("Acceptance repaired:", output);
             Assert.NotNull(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
             var journal = GoalOperationJournal.Read(repo, goal.Id);
-            Assert.Contains(journal.LatestByOperation, entry =>
+            AssertEx.Contains(journal.LatestByOperation, entry =>
                 entry.Operation == "workspace:remove" &&
                 entry.Status == GoalOperationStatus.Completed);
         }
@@ -1421,10 +1421,10 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
             Assert.DoesNotContain("remove-worktree", order);
             var journal = GoalOperationJournal.Read(repo, goal.Id);
-            Assert.Contains(journal.LatestByOperation, entry =>
+            AssertEx.Contains(journal.LatestByOperation, entry =>
                 entry.Operation == "workspace:remove" &&
                 entry.Status == GoalOperationStatus.Completed);
-            Assert.DoesNotContain(journal.LatestByOperation, entry =>
+            AssertEx.DoesNotContain(journal.LatestByOperation, entry =>
                 entry.Operation == "acceptance" &&
                 entry.Status == GoalOperationStatus.Completed);
         }
@@ -1800,10 +1800,10 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
             Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
             var journal = GoalOperationJournal.Read(repo, goal.Id);
-            Assert.Contains(journal.LatestByOperation, entry =>
+            AssertEx.Contains(journal.LatestByOperation, entry =>
                 entry.Operation == "acceptance" &&
                 entry.Status == GoalOperationStatus.Completed);
-            Assert.Contains(journal.LatestByOperation, entry =>
+            AssertEx.Contains(journal.LatestByOperation, entry =>
                 entry.Operation == "workspace:remove" &&
                 entry.Status == GoalOperationStatus.Completed);
 
@@ -2114,7 +2114,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
             var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
             Assert.False(acceptance.IsAccepted);
-            Assert.Contains(acceptance.Blockers, blocker =>
+            AssertEx.Contains(acceptance.Blockers, blocker =>
                 blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
                 blocker.Message.Contains("merge", StringComparison.Ordinal));
         }
@@ -2421,7 +2421,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", StringComparison.Ordinal));
             var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
             Assert.False(acceptance.IsAccepted);
-            Assert.Contains(acceptance.Blockers, blocker =>
+            AssertEx.Contains(acceptance.Blockers, blocker =>
                 blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
                 blocker.Message.Contains("remove-worktree", StringComparison.OrdinalIgnoreCase));
         }
@@ -3920,13 +3920,13 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
             var journal = GoalOperationJournal.Read(repo, goal.Id);
-            Assert.Contains(journal.LatestByOperation, e =>
+            AssertEx.Contains(journal.LatestByOperation, e =>
                 e.Operation == "conductor:land" && e.Status == GoalOperationStatus.Completed);
-            Assert.Contains(journal.LatestByOperation, e =>
+            AssertEx.Contains(journal.LatestByOperation, e =>
                 e.Operation == "conductor:record" && e.Status == GoalOperationStatus.Completed);
-            Assert.Contains(journal.LatestByOperation, e =>
+            AssertEx.Contains(journal.LatestByOperation, e =>
                 e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
-            Assert.DoesNotContain(journal.LatestByOperation, e =>
+            AssertEx.DoesNotContain(journal.LatestByOperation, e =>
                 e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
 
             var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id);
@@ -3934,7 +3934,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.StartsWith("remove:", cleanupBackoff!.Reason, StringComparison.Ordinal);
             var recovery = GoalRecoveryPlanner.Build(kernel, goal, repo);
             Assert.NotNull(recovery.CleanupBackoff);
-            Assert.Contains(recovery.RecommendedActions, action =>
+            AssertEx.Contains(recovery.RecommendedActions, action =>
                 action.Contains("workspace remove", StringComparison.Ordinal));
             var facts = new GoalLifecycleFacts(IsMerged: true, IsRecorded: true);
             Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(goal, facts));
@@ -4432,10 +4432,10 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Empty(acl.ResetPaths);
             Assert.True(Directory.Exists(path));
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:cleanup-budget-exhausted"));
-            Assert.Contains(warnings, warning =>
+            AssertEx.Contains(warnings, warning =>
                 warning.Operation == "remove:build-server-shutdown" &&
                 warning.Exception is TimeoutException);
-            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            AssertEx.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
 
             elapsedMilliseconds = 0;
             GoalWorktrees.BuildServerShutdown = (_, _) => { };
@@ -4443,7 +4443,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.True(retry.IsComplete);
             Assert.False(Directory.Exists(path));
-            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
+            AssertEx.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
         }
         finally
         {
@@ -4751,12 +4751,12 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Empty(first.LeftoverPaths.Where(path => !string.Equals(path, orphanPath, StringComparison.Ordinal)));
             Assert.Equal([orphanPath], second.LeftoverPaths);
             Assert.True(acl.ResetPaths.SequenceEqual([orphanPath]));
-            Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:acl-reset" && warning.Exception is TimeoutException);
-            Assert.Contains(warnings, warning =>
+            AssertEx.Contains(warnings, warning => warning.Operation == "orphan-sweep:acl-reset" && warning.Exception is TimeoutException);
+            AssertEx.Contains(warnings, warning =>
                 warning.Operation == "orphan-sweep:backoff" &&
                 warning.Exception.Message.Contains("Cleanup-needed record persisted in SQLite", StringComparison.Ordinal) &&
                 warning.Exception.Message.Contains(orphanPath, StringComparison.Ordinal));
-            Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
+            AssertEx.Contains(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
             Assert.True(Directory.Exists(orphanPath));
         }
         finally
@@ -4793,8 +4793,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal([orphanPath], result.LeftoverPaths);
             Assert.True(Directory.Exists(orphanPath));
             Assert.True(HasCleanupNeededRecord(repo, orphanPath, "orphan-sweep:delete-failed"));
-            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
-            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
+            AssertEx.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
+            AssertEx.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
         }
         finally
         {
@@ -4840,8 +4840,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal([orphanPath], acl.ResetPaths);
             Assert.True(Directory.Exists(orphanPath));
             Assert.True(HasCleanupNeededRecord(repo, orphanPath, "orphan-sweep:post-acl-delete-failed"));
-            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
-            Assert.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
+            AssertEx.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep");
+            AssertEx.Contains(warnings, warning => warning.Path == orphanPath && warning.Operation == "orphan-sweep:backoff");
         }
         finally
         {
@@ -4882,8 +4882,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.True(result.Message.Contains("leftover directory cleanup is incomplete", StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(path));
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
-            Assert.Contains(warnings, warning => warning.Path == path && warning.Operation == "remove");
-            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            AssertEx.Contains(warnings, warning => warning.Path == path && warning.Operation == "remove");
+            AssertEx.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
         }
         finally
         {
@@ -4965,8 +4965,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal([contextPath], second.LeftoverPaths);
             Assert.Equal(1, attempts);
             Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
-            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
-            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:skip-backoff");
+            AssertEx.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
+            AssertEx.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:skip-backoff");
         }
         finally
         {
@@ -5006,8 +5006,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.False(Directory.Exists(worktreePath));
             Assert.True(Directory.Exists(contextPath));
             Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
-            Assert.Contains(result.Message, text => text.Contains("Owned ephemeral cleanup is incomplete", StringComparison.Ordinal));
-            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
+            AssertEx.Contains(result.Message, text => text.Contains("Owned ephemeral cleanup is incomplete", StringComparison.Ordinal));
+            AssertEx.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
         }
         finally
         {
@@ -5045,7 +5045,7 @@ public sealed class GoalWorktreeIntegrationTests
             var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
             var repairedTask = kernel.GetGoal(goal.Id).Tasks.Single();
 
-            Assert.Contains(result.Goals.Single().Repairs, repair => repair.Kind == "owned-ephemeral-cleanup");
+            AssertEx.Contains(result.Goals.Single().Repairs, repair => repair.Kind == "owned-ephemeral-cleanup");
             Assert.Empty(result.Blockers);
             Assert.False(Directory.Exists(contextPath));
             Assert.False(Directory.Exists(tempPath));
@@ -5116,8 +5116,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(1, deleteAttempts);
             Assert.Equal(1, shutdownCalls);
             Assert.True(HasCleanupNeededRecord(repo, path, "remove:leftover-directory"));
-            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
-            Assert.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
+            AssertEx.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            AssertEx.Contains(warnings, warning => warning.Operation == "remove:skip-backoff");
         }
         finally
         {
@@ -5185,8 +5185,8 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(2, shutdownCalls);
             Assert.False(Directory.Exists(path));
             Assert.False(HasCleanupNeededRecord(repo, path, "remove:leftover-directory:lock-held"));
-            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
-            Assert.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
+            AssertEx.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+            AssertEx.DoesNotContain(warnings, warning => warning.Operation == "remove:skip-backoff");
         }
         finally
         {

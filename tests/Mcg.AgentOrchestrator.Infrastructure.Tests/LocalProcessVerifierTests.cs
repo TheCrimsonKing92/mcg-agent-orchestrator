@@ -27,7 +27,7 @@ public sealed class LocalProcessVerifierTests
             Assert.DoesNotContain("--disable-build-servers", prepared.Arguments);
             Assert.DoesNotContain("-maxcpucount:1", prepared.Arguments);
             Assert.DoesNotContain("-p:UseSharedCompilation=false", prepared.Arguments);
-            Assert.Contains(prepared.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
+            AssertEx.Contains(prepared.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Build environment lease: goal-12345678", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Verification artifacts:", StringComparison.Ordinal));
             Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase) == true);

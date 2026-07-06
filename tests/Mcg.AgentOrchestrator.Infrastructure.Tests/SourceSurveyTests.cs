@@ -24,7 +24,7 @@ public sealed class SourceSurveyTests
         Assert.True(report.ExcludedDirectoryNames.Contains("bin"));
         Assert.True(report.ExcludedDirectoryNames.Contains("obj"));
         Assert.True(report.ExcludedDirectoryNames.Contains(".scratch"));
-        Assert.Contains(report.RecommendedCommand, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
+        AssertEx.Contains(report.RecommendedCommand, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "SourceSurvey_limits_returned_files_but_reports_total_matches")]

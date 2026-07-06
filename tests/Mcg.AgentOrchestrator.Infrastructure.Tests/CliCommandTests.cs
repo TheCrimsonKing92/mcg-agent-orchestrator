@@ -7357,8 +7357,8 @@ public sealed class CliCommandTests
             var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
             var goalResult = Assert.Single(result.Goals);
 
-            Assert.Contains(goalResult.Repairs, repair => repair.Kind == "terminal-task-desync");
-            Assert.DoesNotContain(goalResult.Blockers, blocker => blocker.Kind == "completed-branch-unmerged");
+            AssertEx.Contains(goalResult.Repairs, repair => repair.Kind == "terminal-task-desync");
+            AssertEx.DoesNotContain(goalResult.Blockers, blocker => blocker.Kind == "completed-branch-unmerged");
             Assert.Empty(goalResult.Blockers);
             Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
             Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));

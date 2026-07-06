@@ -90,9 +90,9 @@ static void AssertAutomation(
     Assert.Equal(NextActionKind.AnswerHumanInput, actions.Items[0].Kind);
     Assert.Equal(request.Id, actions.Items[0].HumanInputRequestId);
     Assert.Equal(plannerTask.Id, actions.Items[0].TaskId);
-    Assert.Contains(actions.Items, item => item.Kind == NextActionKind.FixFailedVerification && item.TaskId == testerTask.Id);
-    Assert.Contains(actions.Items, item => item.Kind == NextActionKind.ExecuteRecordedDispatch && item.TaskId == developerTask.Id);
-    Assert.Contains(actions.Items, item => item.Kind == NextActionKind.VerifyCompletedTask && item.TaskId == reviewerTask.Id);
+    AssertEx.Contains(actions.Items, item => item.Kind == NextActionKind.FixFailedVerification && item.TaskId == testerTask.Id);
+    AssertEx.Contains(actions.Items, item => item.Kind == NextActionKind.ExecuteRecordedDispatch && item.TaskId == developerTask.Id);
+    AssertEx.Contains(actions.Items, item => item.Kind == NextActionKind.VerifyCompletedTask && item.TaskId == reviewerTask.Id);
 }
     [Xunit.Fact(DisplayName = "BuildNextActions_suggests_running_assigned_pending_and_monitor_states")]
     public void BuildNextActionsSuggestsRunningAssignedPendingAndMonitorStates()
@@ -112,8 +112,8 @@ static void AssertAutomation(
 
     var actions = kernel.BuildNextActions(goal.Id);
 
-    Assert.Contains(actions.Items, item => item.Kind == NextActionKind.RunAssignedTask && item.TaskId == assignedTask.Id);
-    Assert.Contains(actions.Items, item => item.Kind == NextActionKind.DelegatePendingTask && item.TaskId == pendingTask.Id);
+    AssertEx.Contains(actions.Items, item => item.Kind == NextActionKind.RunAssignedTask && item.TaskId == assignedTask.Id);
+    AssertEx.Contains(actions.Items, item => item.Kind == NextActionKind.DelegatePendingTask && item.TaskId == pendingTask.Id);
 
     kernel.ReportTaskProgress(goal.Id, assignedTask.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, assignedTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));

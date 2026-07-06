@@ -29,7 +29,7 @@ public sealed class RepositoryChangeClassifierTests
         Assert.True(summary.HasBuildSystemChanges);
         Assert.True(summary.HasBehaviorChanges);
         Assert.True(summary.RequiresBroadVerification);
-        Assert.Contains(summary.Files, file => file.Path == "src/Mcg.AgentOrchestrator.Infrastructure/bin/Debug/generated.dll" &&
+        AssertEx.Contains(summary.Files, file => file.Path == "src/Mcg.AgentOrchestrator.Infrastructure/bin/Debug/generated.dll" &&
             file.IsGeneratedArtifact);
         Assert.True(summary.RecommendedVerification.Contains("Remove generated artifacts", StringComparison.Ordinal));
     }
@@ -44,7 +44,7 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(summary.HasSecuritySensitiveChanges);
         Assert.True(summary.RequiresBroadVerification);
-        Assert.Contains(summary.Files, file => file.IsSecuritySensitive);
+        AssertEx.Contains(summary.Files, file => file.IsSecuritySensitive);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_classifies_high_risk_generated_dashboard_tests_and_docs")]
@@ -58,15 +58,15 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.App/bin/Debug/generated.dll"
         ]);
 
-        Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.SharedInfrastructure && path.IsHighRisk);
-        Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.DashboardUi && path.RequiresSerialization);
-        Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Test);
-        Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Documentation);
-        Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.GeneratedOrNoisy && path.IsGeneratedOrNoisy);
+        AssertEx.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.SharedInfrastructure && path.IsHighRisk);
+        AssertEx.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.DashboardUi && path.RequiresSerialization);
+        AssertEx.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Test);
+        AssertEx.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Documentation);
+        AssertEx.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.GeneratedOrNoisy && path.IsGeneratedOrNoisy);
         Assert.True(guard.RequiresOperatorApproval);
-        Assert.Contains(guard.RequiredResources, resource => resource == "ownership:shared-infrastructure");
-        Assert.Contains(guard.RequiredResources, resource => resource == "ownership:dashboard-ui");
-        Assert.Contains(guard.Reasons, reason => reason.Contains("generated/noisy path", StringComparison.Ordinal));
+        AssertEx.Contains(guard.RequiredResources, resource => resource == "ownership:shared-infrastructure");
+        AssertEx.Contains(guard.RequiredResources, resource => resource == "ownership:dashboard-ui");
+        AssertEx.Contains(guard.Reasons, reason => reason.Contains("generated/noisy path", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_skips_build_for_docs_only_changes")]
@@ -110,7 +110,7 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused CLI infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        AssertEx.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
         Assert.False(check.Command.Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
@@ -126,8 +126,8 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused dashboard infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+        AssertEx.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
+        AssertEx.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
@@ -201,7 +201,7 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused changed infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains(check.Command, argument => argument.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests", StringComparison.Ordinal));
+        AssertEx.Contains(check.Command, argument => argument.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]

@@ -210,7 +210,7 @@ public sealed class RunGoalServiceTests
         Assert.False(result.Executed);
         Assert.Equal(NextActionKind.InspectFailedTask, result.BlockingAction?.Kind);
         Assert.True(result.ContinueAfter is null);
-        Assert.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("Simulated failure output.", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("Simulated failure output.", StringComparison.Ordinal));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
     }
 
@@ -272,7 +272,7 @@ public sealed class RunGoalServiceTests
             sleep: NoSleep);
 
         Assert.False(result.Executed);
-        Assert.Contains(result.StopReason, text => text.Contains("usage limit", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("usage limit", StringComparison.OrdinalIgnoreCase));
         Assert.True(result.ContinueAfter is null);
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
@@ -310,9 +310,9 @@ public sealed class RunGoalServiceTests
 
         Assert.False(result.Executed);
         Assert.True(result.ContinueAfter is null);
-        Assert.Contains(result.StopReason, text => text.Contains("alternate", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
-        Assert.Contains(result.StopReason, text => text.Contains("retry deferral", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("alternate", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopReason, text => text.Contains("retry deferral", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
     }
 
@@ -353,7 +353,7 @@ public sealed class RunGoalServiceTests
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal("alternate", task.LastDispatch!.WorkerName);
-        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("alternate-ok", StringComparison.Ordinal));
+        AssertEx.Contains(task.LastVerification!.StandardOutput, text => text.Contains("alternate-ok", StringComparison.Ordinal));
         Assert.Equal(2, task.VerificationHistory.Count);
         Assert.Equal(1, result.CompletedTasks.Count);
         Assert.True(result.CompletedTasks.Single().Succeeded);
@@ -404,7 +404,7 @@ public sealed class RunGoalServiceTests
         Xunit.Assert.True(result.StopEvidence is null, result.StopEvidence?.Reason ?? result.StopReason);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
-        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("catalog-alternate-ok", StringComparison.Ordinal));
+        AssertEx.Contains(task.LastVerification!.StandardOutput, text => text.Contains("catalog-alternate-ok", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_heartbeat_stall_redelegates")]
@@ -437,7 +437,7 @@ public sealed class RunGoalServiceTests
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal("alternate", task.LastDispatch!.WorkerName);
-        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("heartbeat-ok", StringComparison.Ordinal));
+        AssertEx.Contains(task.LastVerification!.StandardOutput, text => text.Contains("heartbeat-ok", StringComparison.Ordinal));
         Assert.Equal(2, task.VerificationHistory.Count);
     }
 
@@ -472,10 +472,10 @@ public sealed class RunGoalServiceTests
             sleep: NoSleep);
 
         Assert.False(result.Executed);
-        Assert.Contains(result.StopReason, text => text.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
-        Assert.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("websocket", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("websocket", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(primary.Id, task.AssignedAgentId);
     }
@@ -544,9 +544,9 @@ public sealed class RunGoalServiceTests
             sleep: NoSleep);
 
         Assert.False(result.Executed);
-        Assert.Contains(result.StopReason, text => text.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("ConnectionRefused", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopReason, text => text.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("ConnectionRefused", StringComparison.Ordinal));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(primary.Id, task.AssignedAgentId);
     }
@@ -590,9 +590,9 @@ public sealed class RunGoalServiceTests
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal(task.RequiredRole, alternate.Role);
         Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
-        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("connectivity-alternate-ok", StringComparison.Ordinal));
+        AssertEx.Contains(task.LastVerification!.StandardOutput, text => text.Contains("connectivity-alternate-ok", StringComparison.Ordinal));
         Assert.Equal(2, task.VerificationHistory.Count);
-        Assert.Contains(task.VerificationHistory.First().StandardError, text => text.Contains("10013", StringComparison.Ordinal));
+        AssertEx.Contains(task.VerificationHistory.First().StandardError, text => text.Contains("10013", StringComparison.Ordinal));
         Assert.Equal(1, result.CompletedTasks.Count);
         Assert.True(result.CompletedTasks.Single().Succeeded);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
@@ -636,7 +636,7 @@ public sealed class RunGoalServiceTests
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
-        Assert.Contains(task.LastVerification!.StandardOutput, text => text.Contains("model-rejection-alternate-ok", StringComparison.Ordinal));
+        AssertEx.Contains(task.LastVerification!.StandardOutput, text => text.Contains("model-rejection-alternate-ok", StringComparison.Ordinal));
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
     }
 
@@ -669,12 +669,12 @@ public sealed class RunGoalServiceTests
             sleep: NoSleep);
 
         Assert.False(result.Executed);
-        Assert.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
-        Assert.Contains(result.StopReason, text => text.Contains("limited-planner", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopReason, text => text.Contains("no available unused alternate", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopReason, text => text.Contains("Planner", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopReason, text => text.Contains("limited-planner", StringComparison.Ordinal));
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(limited.Id, task.AssignedAgentId);
-        Assert.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("usage limit", StringComparison.OrdinalIgnoreCase));
+        AssertEx.Contains(result.StopEvidence?.OutputTail ?? string.Empty, text => text.Contains("usage limit", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_does_not_loop_back_to_failed_agent")]
@@ -705,7 +705,7 @@ public sealed class RunGoalServiceTests
         Assert.True(result.Executed);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(second.Id, task.AssignedAgentId);
-        Assert.Contains(result.StopReason, text => text.Contains("Previously failed agent(s): first-planner, second-planner", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopReason, text => text.Contains("Previously failed agent(s): first-planner, second-planner", StringComparison.Ordinal));
         Assert.Equal(1, goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRedelegated));
         Assert.False(goal.Timeline.Any(evt =>
             evt.Kind == ProgressKind.TaskRedelegated &&
@@ -736,7 +736,7 @@ public sealed class RunGoalServiceTests
             allowLargePaidSubscriptionStart: false,
             sleep: NoSleep);
 
-        Assert.Contains(result.StopReason, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
+        AssertEx.Contains(result.StopReason, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
         Assert.True(result.ContinueAfter is null);
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
     }
