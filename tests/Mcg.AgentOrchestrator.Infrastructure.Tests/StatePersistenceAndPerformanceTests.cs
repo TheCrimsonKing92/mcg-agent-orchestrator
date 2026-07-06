@@ -529,9 +529,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(logPath, restoredTask.LastVerification!.StandardOutputPath);
         Assert.Equal(0, restoredTask.LastVerification.ExitCode);
         // Bounded preview must begin with the head of the original text
-        Assert.Contains(
-            restoredTask.LastVerification.StandardOutput,
-            text => text.StartsWith(new string('A', 4096), StringComparison.Ordinal));
+        Assert.StartsWith(new string('A', 4096), restoredTask.LastVerification.StandardOutput, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_preserves_full_inline_output_when_no_path_is_set")]

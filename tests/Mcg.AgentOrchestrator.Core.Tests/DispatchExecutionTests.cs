@@ -234,8 +234,9 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
     Assert.Contains(
+        "Recoverable subscription usage limit",
         kernel.BuildGoalEvidenceSummary(goal.Id).Tasks.Single(item => item.TaskId == task.Id).Message,
-        text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
+        StringComparison.Ordinal);
 
     Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
     Assert.Equal(new DateTimeOffset(2026, 06, 01, 16, 58, 00, TimeSpan.Zero), retryAfter);

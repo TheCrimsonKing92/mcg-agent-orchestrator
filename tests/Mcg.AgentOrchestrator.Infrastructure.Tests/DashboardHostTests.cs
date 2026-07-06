@@ -383,7 +383,7 @@ public sealed class DashboardHostTests
             Assert.Contains("confirmPaidApiRun=true", paidApiRunMissingConfirm, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, invalidGoalResponse.StatusCode);
             Assert.Contains("dashboard invalid request", invalidGoal, StringComparison.Ordinal);
-            Assert.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", css, StringComparison.Ordinal);
+            Assert.Contains("dashboard-content", css, StringComparison.Ordinal);
             Assert.Contains("refreshContent", js, StringComparison.Ordinal);
             Assert.Contains("summarizeResponse", js, StringComparison.Ordinal);
             Assert.Contains("new EventSource(url)", js, StringComparison.Ordinal);

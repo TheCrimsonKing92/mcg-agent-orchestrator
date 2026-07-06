@@ -110,7 +110,7 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused CLI infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains("CliHelpTests", check.Command, StringComparison.Ordinal);
+        Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
         Assert.False(check.Command.Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
@@ -126,8 +126,8 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused dashboard infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains("DashboardRenderingTests", check.Command, StringComparison.Ordinal);
-        Assert.Contains("DashboardValidationHarnessTests", check.Command, StringComparison.Ordinal);
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
@@ -201,7 +201,7 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused changed infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
-        Assert.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests", check.Command, StringComparison.Ordinal);
+        Assert.Contains(check.Command, argument => argument.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]

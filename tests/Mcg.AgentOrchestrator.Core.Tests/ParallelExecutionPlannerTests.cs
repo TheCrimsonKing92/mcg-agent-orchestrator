@@ -92,9 +92,13 @@ public sealed class ParallelExecutionPlannerTests
 
     Assert.Empty(plan.Batches);
     Assert.Equal(ParallelExecutionDisposition.RequiresOperatorApproval, Decision(plan, "core-change").Disposition);
-    Assert.Contains("high-risk ownership area", Decision(plan, "core-change").Reasons, StringComparison.Ordinal);
+    Assert.Contains(
+        Decision(plan, "core-change").Reasons,
+        reason => reason.Contains("high-risk ownership area", StringComparison.Ordinal));
     Assert.Equal(ParallelExecutionDisposition.RequiresOperatorApproval, Decision(plan, "generated-change").Disposition);
-    Assert.Contains("generated/noisy path", Decision(plan, "generated-change").Reasons, StringComparison.Ordinal);
+    Assert.Contains(
+        Decision(plan, "generated-change").Reasons,
+        reason => reason.Contains("generated/noisy path", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "ParallelExecutionPlanner_serializes_shared_ownership_reservations")]

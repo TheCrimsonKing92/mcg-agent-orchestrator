@@ -20,7 +20,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     {
         var summary = ConsoleViews.FormatDirtyDispatchRecoverySummary(DirtyUsefulRecovery);
 
-        Assert.Contains(summary, text => text.StartsWith("dirty-useful:", StringComparison.Ordinal));
+        Assert.StartsWith("dirty-useful:", summary, StringComparison.Ordinal);
         Assert.Contains("src/Foo.cs", summary, StringComparison.Ordinal);
         Assert.Contains("tests/FooTests.cs", summary, StringComparison.Ordinal);
         Assert.Contains("Passed: 5", summary, StringComparison.Ordinal);
@@ -31,7 +31,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     {
         var summary = ConsoleViews.FormatDirtyDispatchRecoverySummary(DirtyUnverifiedRecovery);
 
-        Assert.Contains(summary, text => text.StartsWith("dirty-unverified:", StringComparison.Ordinal));
+        Assert.StartsWith("dirty-unverified:", summary, StringComparison.Ordinal);
         Assert.Contains("src/Bar.cs", summary, StringComparison.Ordinal);
         Assert.Contains("none found", summary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("rerun focused verification", summary, StringComparison.OrdinalIgnoreCase);
