@@ -29,8 +29,10 @@ public sealed class ChaosGateTests
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+        Assert.Contains(
+            "did not produce required relevant file-change evidence",
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
     }
 
     // ── Gate 2: Forbidden-changed-paths guard ───────────────────────────────
@@ -153,8 +155,10 @@ public sealed class ChaosGateTests
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+        Assert.Contains(
+            "left the worktree dirty",
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
     }
 
     // ── Gate 5: Noise-only commit (.qwen/settings.json) ─────────────────────
@@ -181,8 +185,10 @@ public sealed class ChaosGateTests
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+        Assert.Contains(
+            "did not produce required relevant file-change evidence",
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
     }
 
     // ── Gate 6: tests not run at dispatch → advisory pass (acceptance enforces tests) ─
@@ -398,8 +404,10 @@ public sealed class ChaosGateTests
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+        Assert.Contains(
+            "left the worktree dirty",
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
     }
 
     // ── Regression: no WORKER_RESULT anywhere (no stdout block, no file) ────
@@ -421,8 +429,10 @@ public sealed class ChaosGateTests
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
-        Assert.Contains(task.LastVerification.StandardError,
-            text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+        Assert.Contains(
+            "did not produce required relevant file-change evidence",
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
     }
 
     // ── Leniency: blockers: none followed by informational notes ────────────

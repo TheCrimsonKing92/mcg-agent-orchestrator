@@ -5184,8 +5184,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "left the worktree dirty",
         task.LastVerification.StandardError,
-        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
@@ -5232,8 +5233,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "left the worktree dirty",
         task.LastVerification.StandardError,
-        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
@@ -5271,8 +5273,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "left the worktree dirty",
         task.LastVerification.StandardError,
-        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
@@ -5298,8 +5301,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "left the worktree dirty",
         task.LastVerification.StandardError,
-        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
@@ -5340,8 +5344,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "complete non-failing WORKER_RESULT and dirty worktree edits",
         task.LastVerification.StandardError,
-        text => text.Contains("complete non-failing WORKER_RESULT and dirty worktree edits", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
@@ -5402,11 +5407,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "Classified worker git metadata write failure as non-fatal",
         task.LastVerification.StandardError,
-        text => text.Contains("Classified worker git metadata write failure as non-fatal", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     Assert.Contains(
+        "index_lock=",
         task.LastVerification.StandardError,
-        text => text.Contains("index_lock=", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
 }
@@ -5435,8 +5442,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "Orchestrator committed the worker's verified worktree edits",
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
@@ -5470,8 +5478,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "Orchestrator committed the worker's verified worktree edits",
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
     Assert.DoesNotContain(WorkerSandboxPreparer.MarkerFileName, ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
@@ -5527,8 +5536,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "Accepted on verification evidence despite a non-zero worker exit",
         task.LastVerification.StandardError,
-        text => text.Contains("Accepted on verification evidence despite a non-zero worker exit", StringComparison.Ordinal));
+        StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_clean_worktree_nonzero_exit_without_evidence_stays_failed")]
@@ -5979,8 +5989,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
+        "Orchestrator commit-on-behalf git command failed",
         task.LastVerification.StandardError,
-        text => text.Contains("Orchestrator commit-on-behalf git command failed", StringComparison.Ordinal));
+        StringComparison.Ordinal);
     AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("operation=commit", StringComparison.Ordinal));
     AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=M seed.txt", StringComparison.Ordinal));
