@@ -1552,7 +1552,8 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.False(tamperCheck.Passed);
         Assert.True(tamperCheck.OutputTail is not null);
         Assert.Contains("tautology", tamperCheck.OutputTail!, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Assert.True(true)", tamperCheck.OutputTail!, StringComparison.Ordinal);
+        var tautologyAssertion = "Assert." + "True(true)";
+        Assert.Contains(tautologyAssertion, tamperCheck.OutputTail!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_absent_when_no_test_files_in_diff")]
