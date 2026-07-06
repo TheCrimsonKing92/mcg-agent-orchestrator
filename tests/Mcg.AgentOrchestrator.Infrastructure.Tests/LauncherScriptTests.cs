@@ -27,79 +27,6 @@ public sealed class LauncherScriptTests
         "00:01:00"
     ];
 
-    [Xunit.Fact(DisplayName = "LandVerifiedGoal_stale_launcher_unknown_command_still_records_with_current_app")]
-    public void LandVerifiedGoalStaleLauncherUnknownCommandStillRecordsWithCurrentApp()
-    {
-        using var sandbox = CreateLandVerifiedGoalSandbox("""
-            @echo off
-            echo %*>> dotnet-args.txt
-            if "%~1"=="build" exit /b 0
-            if "%~3"=="" (
-              echo Usage: goal-mark-landed ^<goal-prefix^> --confirm-goal-mark-landed
-              exit /b 0
-            )
-            echo marked
-            exit /b 0
-            """);
-
-        var result = RunLandVerifiedGoal(sandbox.RepositoryPath);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Contains("[land] DONE", result.Stdout);
-        Assert.True(File.Exists(Path.Combine(sandbox.RepositoryPath, "goal.txt")));
-        var dotnetArgs = File.ReadAllText(Path.Combine(sandbox.RepositoryPath, "dotnet-args.txt"));
-        Assert.True(
-            dotnetArgs.Contains(
-                "Mcg.AgentOrchestrator.App.dll goal-mark-landed abcdef12 --confirm-goal-mark-landed",
-                StringComparison.Ordinal),
-            dotnetArgs);
-    }
-
-    [Xunit.Fact(DisplayName = "LandVerifiedGoal_goal_mark_landed_nonzero_exit_exits_nonzero_without_done")]
-    public void LandVerifiedGoalGoalMarkLandedNonzeroExitExitsNonzeroWithoutDone()
-    {
-        using var sandbox = CreateLandVerifiedGoalSandbox("""
-            @echo off
-            if "%~1"=="build" exit /b 0
-            if "%~3"=="" (
-              echo Usage: goal-mark-landed ^<goal-prefix^> --confirm-goal-mark-landed
-              exit /b 0
-            )
-            echo bookkeeping failed
-            exit /b 7
-            """);
-
-        var result = RunLandVerifiedGoal(sandbox.RepositoryPath);
-
-        Assert.Equal(1, result.ExitCode);
-        Assert.DoesNotContain("[land] DONE", result.Stdout);
-        Assert.Contains("goal-mark-landed", result.Stderr);
-        Assert.Contains("Exit code: 7", result.Stderr);
-        Assert.Contains("bookkeeping failed", result.Stderr);
-    }
-
-    [Xunit.Fact(DisplayName = "LandVerifiedGoal_goal_mark_landed_success_exits_zero_and_prints_done")]
-    public void LandVerifiedGoalGoalMarkLandedSuccessExitsZeroAndPrintsDone()
-    {
-        using var sandbox = CreateLandVerifiedGoalSandbox("""
-            @echo off
-            if "%~1"=="build" exit /b 0
-            if "%~3"=="" (
-              echo Usage: goal-mark-landed ^<goal-prefix^> --confirm-goal-mark-landed
-              exit /b 0
-            )
-            echo marked
-            exit /b 0
-            """);
-
-        var result = RunLandVerifiedGoal(sandbox.RepositoryPath);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Contains("[land] DONE", result.Stdout);
-    }
-
     [Xunit.Fact(DisplayName = "Launcher_rebuild_freshness_includes_git_head_marker")]
     public void LauncherRebuildFreshnessIncludesGitHeadMarker()
     {
@@ -110,6 +37,53 @@ public sealed class LauncherScriptTests
         Assert.True(launcher.Contains("rev-parse HEAD", StringComparison.Ordinal));
         Assert.True(launcher.Contains("scripts\\Update-AppDllGitHeadMarker.ps1", StringComparison.Ordinal));
         Assert.True(launcher.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorCommands_points_landing_recovery_at_acceptance")]
+    public void OperatorCommandsPointsLandingRecoveryAtAcceptance()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var helpSource = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Cli",
+            "CliCommandHelp.cs"));
+
+        Assert.Contains("Acceptance:", helpSource);
+        Assert.Contains("Invoke-OrchestratorCommand.ps1", helpSource);
+        Assert.Contains("acceptance <goal>", helpSource);
+        Assert.DoesNotContain(RetiredManualLandingScriptName(), helpSource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Runbook_documents_acceptance_rerun_without_gate_bypass")]
+    public void RunbookDocumentsAcceptanceRerunWithoutGateBypass()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
+
+        Assert.Contains(
+            "If a gate defect blocks an otherwise green goal, file and fix the gate bug, then re-run acceptance; do not bypass the gate.",
+            runbook);
+        Assert.DoesNotContain(RetiredManualLandingScriptName(), runbook, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Permission_allowlist_keeps_acceptance_and_excludes_retired_manual_landing_script")]
+    public void PermissionAllowlistKeepsAcceptanceAndExcludesRetiredManualLandingScript()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(repoRoot, ".claude", "settings.json")));
+        var allow = document.RootElement
+            .GetProperty("permissions")
+            .GetProperty("allow")
+            .EnumerateArray()
+            .Select(entry => entry.GetString() ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains(allow, entry => entry.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
+        Xunit.Assert.False(
+            allow.Any(entry => entry.Contains(RetiredManualLandingScriptName(), StringComparison.OrdinalIgnoreCase)),
+            string.Join(Environment.NewLine, allow));
     }
 
     [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_default_path_uses_fresh_launcher")]
@@ -690,9 +664,8 @@ public sealed class LauncherScriptTests
         while (directory is not null)
         {
             var launcherPath = Path.Combine(directory.FullName, "mcg-orchestrator.cmd");
-            var landVerifiedGoalPath = Path.Combine(directory.FullName, "scripts", "Land-VerifiedGoal.ps1");
 
-            if (File.Exists(launcherPath) && File.Exists(landVerifiedGoalPath))
+            if (File.Exists(launcherPath))
             {
                 return directory.FullName;
             }
@@ -920,6 +893,9 @@ public sealed class LauncherScriptTests
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
 
+    private static string RetiredManualLandingScriptName() =>
+        string.Concat("Land-", "Verified", "Goal.ps1");
+
     private static string AppDllHashPrefix(string appDll)
     {
         using var stream = File.OpenRead(appDll);
@@ -984,64 +960,6 @@ public sealed class LauncherScriptTests
             repositoryRoot,
             dotnetShimPath,
             Path.Combine(repositoryRoot, "status-child.pid"));
-    }
-
-    private static LandVerifiedGoalSandbox CreateLandVerifiedGoalSandbox(string dotnetShimBody)
-    {
-        const string goalPrefix = "abcdef12";
-        var repositoryPath = Path.Combine(Path.GetTempPath(), $"land-verified-goal-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(Path.Combine(repositoryPath, "scripts"));
-        var shimPath = Path.Combine(repositoryPath, "shim");
-        Directory.CreateDirectory(shimPath);
-        File.Copy(
-            Path.Combine(FindLauncherSourceRoot(), "scripts", "Land-VerifiedGoal.ps1"),
-            Path.Combine(repositoryPath, "scripts", "Land-VerifiedGoal.ps1"));
-        File.WriteAllText(Path.Combine(repositoryPath, "mcg-orchestrator.cmd"), """
-            @echo off
-            echo Unknown command.
-            exit /b 0
-            """);
-        var dotnetShimPath = Path.Combine(shimPath, "dotnet.cmd");
-        File.WriteAllText(dotnetShimPath, dotnetShimBody);
-
-        RunGit(repositoryPath, "init", "--initial-branch=main");
-        RunGit(repositoryPath, "config", "user.email", "test@example.invalid");
-        RunGit(repositoryPath, "config", "user.name", "Launcher Script Test");
-        File.WriteAllText(Path.Combine(repositoryPath, "README.md"), "base");
-        RunGit(repositoryPath, "add", "README.md");
-        RunGit(repositoryPath, "commit", "-m", "base");
-        RunGit(repositoryPath, "checkout", "-b", $"goal/{goalPrefix}");
-        File.WriteAllText(Path.Combine(repositoryPath, "goal.txt"), "goal change");
-        RunGit(repositoryPath, "add", "goal.txt");
-        RunGit(repositoryPath, "commit", "-m", "goal change");
-        RunGit(repositoryPath, "checkout", "main");
-
-        return new LandVerifiedGoalSandbox(repositoryPath, dotnetShimPath);
-    }
-
-    private static ProcessResult RunLandVerifiedGoal(string repositoryPath)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            WorkingDirectory = repositoryPath,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        var dotnetShimPath = Path.Combine(repositoryPath, "shim", "dotnet.cmd");
-        startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = dotnetShimPath;
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-File");
-        startInfo.ArgumentList.Add(Path.Combine(repositoryPath, "scripts", "Land-VerifiedGoal.ps1"));
-        startInfo.ArgumentList.Add("-GoalPrefix");
-        startInfo.ArgumentList.Add("abcdef12");
-        startInfo.ArgumentList.Add("-SkipAcceptance");
-
-        return RunProcess(startInfo, "Land-VerifiedGoal.ps1");
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)
@@ -1279,26 +1197,6 @@ public sealed class LauncherScriptTests
             try
             {
                 Directory.Delete(RepositoryRoot, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-    }
-
-    private sealed class LandVerifiedGoalSandbox(string repositoryPath, string dotnetShimPath) : IDisposable
-    {
-        public string RepositoryPath { get; } = repositoryPath;
-        public string DotnetShimPath { get; } = dotnetShimPath;
-
-        public void Dispose()
-        {
-            try
-            {
-                Directory.Delete(RepositoryPath, recursive: true);
             }
             catch (IOException)
             {

@@ -22,7 +22,9 @@ internal sealed record TerminalGoalSweepGoalResult(
     public bool Changed => Repairs.Count > 0;
 }
 
-internal sealed record TerminalGoalSweepResult(IReadOnlyList<TerminalGoalSweepGoalResult> Goals)
+internal sealed record TerminalGoalSweepResult(
+    IReadOnlyList<TerminalGoalSweepGoalResult> Goals,
+    int ExcludedGoalCount = 0)
 {
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
@@ -57,6 +59,18 @@ internal static class TerminalGoalSweep
             var branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
+
+            if (TryReconcileVerifiedMissingBranchOrWorktree(
+                    kernel,
+                    executionDirectory,
+                    goal,
+                    branchFacts,
+                    prefix,
+                    repairs))
+            {
+                goal = kernel.GetGoal(originalGoal.Id);
+                branchFacts = BuildGoalBranchFacts(executionDirectory, goal);
+            }
 
             if (hasTerminalTaskDesync &&
                 TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix, desyncEvidence, out var dirtyEvidence, out var dirtyCommand))
@@ -165,10 +179,16 @@ internal static class TerminalGoalSweep
                 }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
+                    RecordTerminalDisposition(
+                        kernel,
+                        executionDirectory,
+                        goal,
+                        $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
                     repairs.Add(new TerminalGoalSweepRepair(
                         "merged-branch-cleanup",
                         removeResult.Message,
                         $"workspace remove {prefix}"));
+                    goal = kernel.GetGoal(originalGoal.Id);
                 }
 
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
@@ -199,22 +219,29 @@ internal static class TerminalGoalSweep
             }
         }
 
-        return new TerminalGoalSweepResult(results);
+        return new TerminalGoalSweepResult(results, CountGlobalStaleTerminalExclusions(results));
     }
 
     private sealed record GoalBranchFacts(
         bool IsAcceptedOrVerifiedGitGoal,
         bool IsCompletedGitGoal,
+        bool HasRegisteredWorktree,
+        bool HasGoalBranch,
         bool HasGoalBranchArtifact,
-        bool BranchAlreadyLanded);
+        bool BranchAlreadyLanded)
+    {
+        public bool MissingBranchOrWorktree => IsAcceptedOrVerifiedGitGoal && (!HasRegisteredWorktree || !HasGoalBranch);
+    }
 
     private static GoalBranchFacts BuildGoalBranchFacts(string executionDirectory, Goal goal)
     {
         var isGitWorkTree = GoalWorktrees.IsGitWorkTree(executionDirectory);
         var isAcceptedOrVerifiedGitGoal = (goal.Status is GoalStatus.Verified or GoalStatus.Completed) && isGitWorkTree;
-        var hasGoalBranchArtifact = isAcceptedOrVerifiedGitGoal &&
-            (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
-             GoalWorktrees.HasBranch(executionDirectory, goal.Id));
+        var hasRegisteredWorktree = isAcceptedOrVerifiedGitGoal &&
+            GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
+        var hasGoalBranch = isAcceptedOrVerifiedGitGoal &&
+            GoalWorktrees.HasBranch(executionDirectory, goal.Id);
+        var hasGoalBranchArtifact = hasRegisteredWorktree || hasGoalBranch;
         var branchAlreadyLanded = isAcceptedOrVerifiedGitGoal &&
             hasGoalBranchArtifact &&
             GoalWorktrees.IsBranchMergedIntoCurrent(executionDirectory, goal.Id);
@@ -222,8 +249,94 @@ internal static class TerminalGoalSweep
         return new GoalBranchFacts(
             isAcceptedOrVerifiedGitGoal,
             goal.Status == GoalStatus.Completed && isGitWorkTree,
+            hasRegisteredWorktree,
+            hasGoalBranch,
             hasGoalBranchArtifact,
             branchAlreadyLanded);
+    }
+
+    private static bool TryReconcileVerifiedMissingBranchOrWorktree(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        GoalBranchFacts branchFacts,
+        string prefix,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        if (goal.Status != GoalStatus.Verified ||
+            !branchFacts.IsAcceptedOrVerifiedGitGoal ||
+            branchFacts.BranchAlreadyLanded ||
+            !branchFacts.MissingBranchOrWorktree)
+        {
+            return false;
+        }
+
+        var missing = !branchFacts.HasGoalBranch
+            ? $"branch {GoalWorktrees.BranchName(goal.Id)} is missing"
+            : "registered worktree is missing";
+
+        if (TryBuildReachableCommitEvidence(executionDirectory, goal, out var landedEvidence))
+        {
+            RecordTerminalDisposition(
+                kernel,
+                executionDirectory,
+                goal,
+                $"Terminal sweep reconciled missing goal artifact as landed: {landedEvidence}.");
+            repairs.Add(new TerminalGoalSweepRepair(
+                "missing-branch-landed-reconciled",
+                $"{missing}; {landedEvidence}",
+                $"conduct {prefix} --loop"));
+            return true;
+        }
+
+        RecordTerminalDisposition(
+            kernel,
+            executionDirectory,
+            goal,
+            $"Terminal sweep retired missing goal artifact because landing could not be verified from recorded commits: {missing}.");
+        repairs.Add(new TerminalGoalSweepRepair(
+            "missing-branch-retired",
+            $"{missing}; landing not verifiable from recorded commits; record retired from future conduct sweeps",
+            "retired"));
+        return true;
+    }
+
+    private static bool TryBuildReachableCommitEvidence(
+        string executionDirectory,
+        Goal goal,
+        out string evidence)
+    {
+        var commits = goal.Tasks
+            .Select(task => task.LastDispatch?.ResultCommit)
+            .Where(commit => !string.IsNullOrWhiteSpace(commit))
+            .Select(commit => commit!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (commits.Length == 0 ||
+            commits.Any(commit => !IsCommitReachableFromHead(executionDirectory, commit)))
+        {
+            evidence = string.Empty;
+            return false;
+        }
+
+        evidence = $"reachableResultCommits={string.Join(",", commits)}";
+        return true;
+    }
+
+    private static bool IsCommitReachableFromHead(string executionDirectory, string commit) =>
+        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commit, "HEAD").ExitCode == 0;
+
+    private static void RecordTerminalDisposition(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        string detail)
+    {
+        GoalOperationJournal.Completed(executionDirectory, goal, "conductor:land", detail);
+        GoalOperationJournal.Completed(executionDirectory, goal, "conductor:record", detail);
+        GoalOperationJournal.Completed(executionDirectory, goal, "conductor:cleanup", detail);
+        kernel.CompleteGoal(goal.Id, detail);
     }
 
     public static TerminalGoalSweepResult Diagnose(
@@ -263,7 +376,7 @@ internal static class TerminalGoalSweep
             }
         }
 
-        return new TerminalGoalSweepResult(results);
+        return new TerminalGoalSweepResult(results, CountGlobalStaleTerminalExclusions(results));
     }
 
     private static void AddOwnedEphemeralCleanupRepair(
@@ -407,6 +520,9 @@ internal static class TerminalGoalSweep
             "terminal-live-dispatch" or
             "stale-terminal-excluded" or
             "completed-branch-unmerged";
+
+    private static int CountGlobalStaleTerminalExclusions(IEnumerable<TerminalGoalSweepGoalResult> results) =>
+        results.Sum(goal => goal.Blockers.Count(blocker => blocker.Kind == "stale-terminal-excluded"));
 
     private static bool IsProcessAlive(int processId)
     {
