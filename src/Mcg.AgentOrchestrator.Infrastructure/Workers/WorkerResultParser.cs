@@ -6,8 +6,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// Format-lenient parser for WORKER_RESULT blocks.
 /// Handles markdown decoration on the opener, end marker, and field keys,
 /// and falls back to a field scan when no block opener is present.
-/// Substance checks (commit reachability, test evidence, blockers) remain the
-/// caller's responsibility and are NOT relaxed here.
+/// Substance checks (commit reachability and test evidence) remain the
+/// caller's responsibility and are NOT relaxed here. The blockers field is
+/// advisory context for otherwise successful changed work.
 /// </summary>
 internal static class WorkerResultParser
 {
@@ -83,10 +84,9 @@ internal static class WorkerResultParser
             return false;
         }
 
-        if (!fields.TryGetValue("blockers", out var blockers) ||
-            !blockers.Equals("none", StringComparison.OrdinalIgnoreCase))
+        if (WorkerResultTestsReportFailure(fields["tests"]))
         {
-            diagnostic = $"WORKER_RESULT reported blockers: {blockers}.";
+            diagnostic = $"WORKER_RESULT tests reported failure: {fields["tests"]}.";
             return false;
         }
 
@@ -264,5 +264,25 @@ internal static class WorkerResultParser
         return fields.TryGetValue(key, out var value) &&
             !string.IsNullOrWhiteSpace(value) &&
             !value.Equals("none", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool WorkerResultTestsReportFailure(string value)
+    {
+        var normalized = value.Trim();
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        if (!normalized.Contains("fail", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !normalized.Contains("failed: 0", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("failures: 0", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("0 failed", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("0 failures", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
     }
 }

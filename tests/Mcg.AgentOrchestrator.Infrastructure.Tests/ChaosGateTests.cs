@@ -488,6 +488,40 @@ public sealed class ChaosGateTests
         Assert.Equal(0, task.LastVerification!.ExitCode);
     }
 
+    [Xunit.Fact(DisplayName = "Regression_89a2c42_deferred_verification_blocker_is_advisory_for_dirty_changed_work")]
+    public void Regression89a2c42DeferredVerificationBlockerIsAdvisoryForDirtyChangedWork()
+    {
+        var root = CreateSeededRepo();
+        const string relPath = "src/Feature.cs";
+        var (kernel, goal, task, _) = CreateChaosDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock(
+                relPath,
+                "dotnet test --filter WorkerDispatch",
+                "pass - focused dispatch-runner coverage",
+                blockers: "full suite deferred to orchestrator acceptance gate per current-task.md"),
+            string.Empty,
+            mutateWorktree: wt =>
+            {
+                var fullPath = Path.Combine(wt, relPath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+                File.WriteAllText(fullPath, "// feature");
+            });
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.True(task.LastVerification.HasCommittedChanges);
+        Assert.Contains(task.LastVerification.StandardOutput, text =>
+            text.Contains("full suite deferred", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskCompleted &&
+            evt.Message.Contains("advisory WORKER_RESULT blocker", StringComparison.Ordinal));
+    }
+
     // ── Leniency: missing END_WORKER_RESULT parses to EOF ───────────────────
 
     [Xunit.Fact(DisplayName = "Leniency_MissingEndMarker_treatsEofAsTerminator_and_passes")]
