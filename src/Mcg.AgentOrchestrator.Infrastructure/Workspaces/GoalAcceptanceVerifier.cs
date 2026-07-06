@@ -267,6 +267,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         AddCoveredBroadInfrastructureResults(checks, policyRequiredChecks, changedFiles);
+        AddCoveredBroadInfrastructureResults(checks, manifest.Checks, changedFiles);
         AddCoveredPolicyAliasResults(checks, policyRequiredChecks, effectiveChecks);
         AddPolicyShardReceiptResults(checks, manifest.Checks, effectiveChecks, policyShardPlan);
 
