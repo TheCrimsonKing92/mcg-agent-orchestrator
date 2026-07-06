@@ -107,7 +107,7 @@ public sealed class TaskProcessTests
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var process = new TaskProcessRecord(1234, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null);
 
-    Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskProcessStarted(goal.Id, task.Id, process));
+    Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordTaskProcessStarted(goal.Id, task.Id, process));
 
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", clock.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);

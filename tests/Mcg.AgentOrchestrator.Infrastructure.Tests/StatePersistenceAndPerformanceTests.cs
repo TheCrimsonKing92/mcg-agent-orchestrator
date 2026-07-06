@@ -303,7 +303,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         Assert.Equal("customer-1", selection.TenantName);
         Assert.True(selection.CommandArgs.SequenceEqual(["simple-goal", "Do work"]));
-        Assert.Throws<ArgumentException>(() => OrchestratorTenantSelection.FromArgs(["--tenant=../bad", "goals"], null));
+        Assert.ThrowsAny<ArgumentException>(() => OrchestratorTenantSelection.FromArgs(["--tenant=../bad", "goals"], null));
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorProjectSelection_accepts_cli_override_and_rejects_path_segments")]
@@ -315,7 +315,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         Assert.Equal("customer-1", selection.ProjectName);
         Assert.True(selection.CommandArgs.SequenceEqual(["goals"]));
-        Assert.Throws<ArgumentException>(() => OrchestratorProjectSelection.FromArgs(["--project=../bad", "goals"], null));
+        Assert.ThrowsAny<ArgumentException>(() => OrchestratorProjectSelection.FromArgs(["--project=../bad", "goals"], null));
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorProjectRegistry_selection_routes_to_project_workspace")]

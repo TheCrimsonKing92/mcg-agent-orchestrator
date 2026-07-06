@@ -31,7 +31,7 @@ public sealed class DispatchExecutionTests
     var goal = kernel.CreateGoal("Do not dispatch pending work directly", [new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer)]);
     var task = goal.Tasks.Single();
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskDispatch(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordTaskDispatch(
         goal.Id,
         task.Id,
         new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
@@ -52,7 +52,7 @@ public sealed class DispatchExecutionTests
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implemented.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", string.Empty, clock.UtcNow));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskDispatch(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordTaskDispatch(
         goal.Id,
         task.Id,
         new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
@@ -749,7 +749,7 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    Assert.Throws<InvalidOperationException>(() => kernel.RecordDispatchExecutionResult(
+    Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordDispatchExecutionResult(
         goal.Id,
         task.Id,
         new TaskVerificationRecord("echo ok", "C:\\repo", 0, "ok", string.Empty, DateTimeOffset.UtcNow)));

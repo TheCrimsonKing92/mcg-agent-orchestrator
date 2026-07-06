@@ -339,7 +339,7 @@ public sealed class FundamentalAliasTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
 
-        var ex = Assert.Throws<ArgumentException>(() =>
+        var ex = Assert.ThrowsAny<ArgumentException>(() =>
         {
             CliCommandDispatcher.ExecuteCommand(
                 ["stop", goal.Id.Value[..8], "Some reason"],

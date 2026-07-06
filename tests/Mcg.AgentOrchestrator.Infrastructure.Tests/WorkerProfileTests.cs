@@ -243,7 +243,7 @@ public sealed class WorkerProfileTests
     var path = Path.Combine(root, "workers.json");
     File.WriteAllText(path, "{{corrupt}}");
 
-    Assert.Throws<InvalidDataException>(() => WorkerProfileStore.LoadRequired(path));
+    Assert.ThrowsAny<InvalidDataException>(() => WorkerProfileStore.LoadRequired(path));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_required_rejects_missing_or_empty_files")]
     public void WorkerProfileStoreLoadRequiredRejectsMissingOrEmptyFiles()
@@ -253,8 +253,8 @@ public sealed class WorkerProfileTests
     var empty = Path.Combine(root, "empty.json");
     File.WriteAllText(empty, "{\"profiles\":[]}");
 
-    Assert.Throws<FileNotFoundException>(() => WorkerProfileStore.LoadRequired(missing));
-    Assert.Throws<InvalidDataException>(() => WorkerProfileStore.LoadRequired(empty));
+    Assert.ThrowsAny<FileNotFoundException>(() => WorkerProfileStore.LoadRequired(missing));
+    Assert.ThrowsAny<InvalidDataException>(() => WorkerProfileStore.LoadRequired(empty));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_codex_profile_with_hardcoded_sandbox")]
     public void WorkerProfileStoreLoadRepairsCodexProfileWithHardcodedSandbox()

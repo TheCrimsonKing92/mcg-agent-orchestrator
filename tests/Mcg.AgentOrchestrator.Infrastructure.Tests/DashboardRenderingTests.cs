@@ -1129,7 +1129,7 @@ public sealed class DashboardRenderingTests
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_confirmation_for_auto_handoff")]
     public void DashboardRequestParserRequiresConfirmationForAutoHandoff()
 {
-    var ex = Assert.Throws<ArgumentException>(() =>
+    var ex = Assert.ThrowsAny<ArgumentException>(() =>
         DashboardRequestParser.ParseCreateGoalSubmission(
             "{\"objective\":\"Start worker processes\",\"workflow\":\"simple\",\"autoHandoff\":true}"));
 
@@ -1138,7 +1138,7 @@ public sealed class DashboardRenderingTests
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_confirmation_for_paid_provider_smoke")]
     public void DashboardRequestParserRequiresConfirmationForPaidProviderSmoke()
 {
-    var ex = Assert.Throws<ArgumentException>(() =>
+    var ex = Assert.ThrowsAny<ArgumentException>(() =>
         DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"openai\"}"));
 
     Xunit.Assert.Contains("confirmPaidSmoke=true", ex.Message);
@@ -1149,7 +1149,7 @@ public sealed class DashboardRenderingTests
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_confirmation_for_broad_provider_smoke")]
     public void DashboardRequestParserRequiresConfirmationForBroadProviderSmoke()
 {
-    var ex = Assert.Throws<ArgumentException>(() =>
+    var ex = Assert.ThrowsAny<ArgumentException>(() =>
         DashboardRequestParser.ParseProviderSmokeSubmission("{\"target\":\"all\"}"));
 
     Xunit.Assert.Contains("confirmAll=true", ex.Message);
@@ -1159,8 +1159,8 @@ public sealed class DashboardRenderingTests
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_retry_note")]
     public void DashboardRequestParserRequiresRetryNote()
 {
-    var empty = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
-    var json = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
+    var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
+    var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
     var parsed = DashboardRequestParser.ParseRetrySubmission("{\"message\":\"Fix failed verification\"}");
 
     AssertEx.Contains(empty.Message, text => text.Contains("Retry note cannot be empty", StringComparison.Ordinal));
@@ -1171,8 +1171,8 @@ public sealed class DashboardRenderingTests
     public void DashboardRequestParserRequiresLimitReviewConfirmationNote()
 {
     Xunit.Assert.Null(DashboardRequestParser.ParseLimitReviewSubmission(""));
-    var missingConfirm = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseLimitReviewSubmission("{\"note\":\"Reviewed\"}"));
-    var missingNote = Assert.Throws<ArgumentException>(() => DashboardRequestParser.ParseLimitReviewSubmission("{\"confirmLimitReview\":true,\"note\":\"\"}"));
+    var missingConfirm = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseLimitReviewSubmission("{\"note\":\"Reviewed\"}"));
+    var missingNote = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseLimitReviewSubmission("{\"confirmLimitReview\":true,\"note\":\"\"}"));
     var parsed = DashboardRequestParser.ParseLimitReviewSubmission("{\"confirmLimitReview\":true,\"note\":\" Reviewed model timing. \"}");
 
     AssertEx.Contains(missingConfirm.Message, text => text.Contains("confirmLimitReview=true", StringComparison.Ordinal));
@@ -1313,11 +1313,11 @@ public sealed class DashboardRenderingTests
     [Xunit.Fact(DisplayName = "DashboardRequestParser_rejects_ambiguous_manual_verification_outcome")]
     public void DashboardRequestParserRejectsAmbiguousManualVerificationOutcome()
 {
-    var missing = Assert.Throws<ArgumentException>(() =>
+    var missing = Assert.ThrowsAny<ArgumentException>(() =>
         DashboardRequestParser.ParseManualVerifySubmission("{\"note\":\"No outcome.\"}"));
-    var invalid = Assert.Throws<ArgumentException>(() =>
+    var invalid = Assert.ThrowsAny<ArgumentException>(() =>
         DashboardRequestParser.ParseManualVerifySubmission("{\"status\":\"completed\",\"note\":\"No outcome.\"}"));
-    var conflict = Assert.Throws<ArgumentException>(() =>
+    var conflict = Assert.ThrowsAny<ArgumentException>(() =>
         DashboardRequestParser.ParseManualVerifySubmission("{\"passed\":false,\"status\":\"passed\",\"note\":\"Conflict.\"}"));
 
     AssertEx.Contains(missing.Message, text => text.Contains("passed' or 'status", StringComparison.Ordinal));

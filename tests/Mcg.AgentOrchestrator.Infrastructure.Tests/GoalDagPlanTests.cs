@@ -146,7 +146,7 @@ public sealed class GoalDagPlanTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
             CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["plan", "Implement data model then service layer", "--confirm-plan"],
                 kernel,

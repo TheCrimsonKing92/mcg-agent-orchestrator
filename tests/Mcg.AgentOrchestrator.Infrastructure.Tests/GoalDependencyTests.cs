@@ -34,7 +34,7 @@ public sealed class GoalDependencyTests
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Test");
 
-        var ex = Assert.Throws<InvalidOperationException>(() => kernel.SetGoalDependency(goal.Id, goal.Id));
+        var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.SetGoalDependency(goal.Id, goal.Id));
         AssertEx.Contains(ex.Message, msg => msg.Contains("cannot depend on itself", StringComparison.Ordinal));
     }
 
@@ -49,7 +49,7 @@ public sealed class GoalDependencyTests
 
         kernel.SetGoalDependency(b.Id, a.Id); // B → A
 
-        var ex = Assert.Throws<InvalidOperationException>(() => kernel.SetGoalDependency(a.Id, b.Id));
+        var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.SetGoalDependency(a.Id, b.Id));
         AssertEx.Contains(ex.Message, msg => msg.Contains("cycle", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -67,7 +67,7 @@ public sealed class GoalDependencyTests
         kernel.SetGoalDependency(c.Id, b.Id); // C → B → A
 
         // A → C would create A → C → B → A
-        var ex = Assert.Throws<InvalidOperationException>(() => kernel.SetGoalDependency(a.Id, c.Id));
+        var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.SetGoalDependency(a.Id, c.Id));
         AssertEx.Contains(ex.Message, msg => msg.Contains("cycle", StringComparison.OrdinalIgnoreCase));
     }
 

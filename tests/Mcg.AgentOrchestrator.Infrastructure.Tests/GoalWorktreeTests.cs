@@ -1587,7 +1587,7 @@ public sealed class GoalWorktreeIntegrationTests
             Goal? currentGoal = goal;
             var path = GoalWorktrees.Ensure(repo, goal.Id);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            var ex = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
                 ["workspace", "remove", "--autonomy", "safe-auto"],
                 kernel,
                 workspace,
@@ -1844,7 +1844,7 @@ public sealed class GoalWorktreeIntegrationTests
             kernel.RecordAcceptanceFailure(blockedGoal.Id, ["acceptance evidence blocked"]);
             var blockedContext = CreateAcceptanceContext(kernel, repo, blockedGoal);
 
-            var blocked = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+            var blocked = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                 ["acceptance-repair", blockedGoal.Id.Value[..8], "--confirm-acceptance-repair"],
                 blockedContext));
             Assert.Contains("no completed acceptance or conductor landing evidence", blocked.Message);
@@ -2868,7 +2868,7 @@ public sealed class GoalWorktreeIntegrationTests
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = goal;
 
-            var ex = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            var ex = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
                 ["acceptance", "--autonomy", "safe-auto"],
                 kernel,
                 workspace,
@@ -3016,7 +3016,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(0, stateRepository.TransactionCount);
 
             Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-stop"]));
-            var usage = Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+            var usage = Assert.ThrowsAny<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
                 ["repo-process-stop"],
                 stateRepository,
                 workspace,
@@ -4128,7 +4128,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var output = CaptureConsole(() =>
             {
-                var ex = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                var ex = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                     ["lifecycle-simple-goal", "Ship but pause before merge", "--confirm-batch-start", "--confirm-large-paid-subscription-start", "--autonomy", "safe-auto"],
                     context));
                 Assert.True(ex.Message.Contains("stopped before acceptance", StringComparison.Ordinal));

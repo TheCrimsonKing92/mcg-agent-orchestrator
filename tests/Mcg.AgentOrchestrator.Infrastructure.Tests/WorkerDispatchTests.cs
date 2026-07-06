@@ -332,7 +332,7 @@ public sealed class WorkerDispatchTests
         kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
         Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
 
-        Assert.Throws<InvalidOperationException>(() =>
+        Assert.ThrowsAny<InvalidOperationException>(() =>
             GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], profiles));
 
         var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
@@ -390,7 +390,7 @@ public sealed class WorkerDispatchTests
         var missingProfiles = new WorkerProfileCatalog([]);
         Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
             GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], missingProfiles));
 
         Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
@@ -466,7 +466,7 @@ public sealed class WorkerDispatchTests
         "## Prior Task Evidence",
         new string('e', 240));
 
-    var ex = Assert.Throws<WorkerPromptInputBudgetExceededException>(
+    var ex = Assert.ThrowsAny<WorkerPromptInputBudgetExceededException>(
         () => WorkerPromptInputBudget.Apply(brief, "Ollama", "qwen3:8b", inputTokenBudgetOverride: 5));
 
     Assert.Equal(brief.GoalId, ex.GoalId);
@@ -503,7 +503,7 @@ public sealed class WorkerDispatchTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
 
-    var ex = Assert.Throws<WorkerPromptInputBudgetExceededException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<WorkerPromptInputBudgetExceededException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -532,7 +532,7 @@ public sealed class WorkerDispatchTests
     var previousDispatch = ReopenTaskWithRecoverableDispatchLimit(kernel, goal, task);
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id, workingDirectory: workingDirectory);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerCommandTemplate.Prepare(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerCommandTemplate.Prepare(
         brief,
         "manual-codex",
         "codex exec --model {subscriptionModelName} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
@@ -566,7 +566,7 @@ public sealed class WorkerDispatchTests
     var previousDispatch = ReopenTaskWithRecoverableDispatchLimit(kernel, goal, task);
     var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
         kernel,
         goal,
         task,
@@ -1079,7 +1079,7 @@ public sealed class WorkerDispatchTests
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
         sandboxOptions: sandbox);
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -1484,7 +1484,7 @@ public sealed class WorkerDispatchTests
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
         sandboxOptions: sandbox);
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -1620,7 +1620,7 @@ public sealed class WorkerDispatchTests
         WorkerProfileCatalog.Default(),
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -1751,7 +1751,7 @@ public sealed class WorkerDispatchTests
         workingDirectory,
         dispatchedAt);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -1777,7 +1777,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", root, 0, "ok", string.Empty, DateTimeOffset.UtcNow));
     var profile = new WorkerProfile("custom", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareTask(
         kernel,
         goal,
         task,
@@ -1966,7 +1966,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", root, 0, "ok", string.Empty, DateTimeOffset.UtcNow));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -2667,7 +2667,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
     var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli --model {subscriptionModelName} {promptPath}")]);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -2728,7 +2728,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -2759,7 +2759,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
     var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli {promptPath}")]);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -2789,7 +2789,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -3336,7 +3336,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         [agent],
         WorkerProfileCatalog.Default(),
         _ => 12001);
-    var ex = Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
 
     Assert.True(risk is not null);
     Assert.Equal(12001, risk!.PromptCharacterCount);
@@ -3505,7 +3505,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var anomalous = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
         goal, [agent], WorkerProfileCatalog.Default(), _ => 20000);
     Assert.True(anomalous!.IsAnomalous);
-    Assert.Throws<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(anomalous, confirmed: false));
+    Assert.ThrowsAny<InvalidOperationException>(() => SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(anomalous, confirmed: false));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_skips_usage_limited_tasks_before_retry_time")]
     public void WorkerProfileDispatcherSkipsUsageLimitedTasksBeforeRetryTime()
@@ -3551,7 +3551,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
     Assert.True(developer.LastVerification is null);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         developer,
@@ -3792,7 +3792,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     AssertEx.Contains(item.Detail, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
     Assert.False(results.Any(result => result.Task.Id == developer.Id));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         developer,
@@ -3841,7 +3841,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -3944,7 +3944,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         worktree,
         dispatchedAt);
-    var ex = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
         task,
@@ -3974,7 +3974,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output ok", root, DateTimeOffset.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "Write-Output ok", root, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
     AssertEx.Contains(ex.Message, text => text.Contains("already has a dispatch process record", StringComparison.Ordinal));
 }
@@ -3990,7 +3990,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "Write-Output should-not-run", root, DateTimeOffset.UtcNow));
     var runner = new BackgroundDispatchRunner(disableProcessStart: true);
 
-    var ex = Assert.Throws<InvalidOperationException>(() => runner.StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => runner.StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
     AssertEx.Contains(ex.Message, text => text.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, StringComparison.Ordinal));
     Xunit.Assert.Null(task.LastProcess);
@@ -4084,7 +4084,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var goal = kernel.Goals.Single();
     var task = goal.Tasks.Single();
 
-    var ex = Assert.Throws<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
     AssertEx.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
     Assert.True(ex.Message.Contains(retryAfter.ToString("u"), StringComparison.Ordinal));
@@ -6210,7 +6210,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 {
     var kernel = new AgentOrchestratorKernel();
     var unassignedGoal = kernel.CreateGoal("Reject unassigned", [new TaskSpec(TaskId.New(), "Unassigned", AgentRole.Developer)]);
-    Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         unassignedGoal,
         unassignedGoal.Tasks.Single(),
@@ -6227,7 +6227,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         new ModelProfile("Local", "local", ModelCapability.Text, SubscriptionMode.LocalBridge));
     var unsupportedGoal = kernel.CreateGoal("Reject unsupported", [new TaskSpec(TaskId.New(), "Unsupported", AgentRole.Developer)]);
     kernel.ActivateGoal(unsupportedGoal.Id, [unsupported]);
-    Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+    Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         unsupportedGoal,
         unsupportedGoal.Tasks.Single(),

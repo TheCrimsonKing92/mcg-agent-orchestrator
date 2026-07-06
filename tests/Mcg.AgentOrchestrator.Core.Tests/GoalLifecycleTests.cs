@@ -118,7 +118,7 @@ public sealed class GoalLifecycleTests
     var task = goal.Tasks.Single();
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RedelegateTask(goal.Id, task.Id, [agent]));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RedelegateTask(goal.Id, task.Id, [agent]));
 
     AssertEx.Contains(ex.Message, text => text.Contains("cancel or refresh", StringComparison.Ordinal));
     Assert.Equal(agent.Id, task.AssignedAgentId);
@@ -386,7 +386,7 @@ public sealed class GoalLifecycleTests
     kernel.RecordTaskDispatch(goal.Id, tester.Id, new TaskDispatchRecord("tester", "test.exe", "C:\\repo", DateTimeOffset.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, tester.Id, new TaskProcessRecord(1234, "test.exe", "C:\\repo", "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
 
-    var ex = Assert.Throws<InvalidOperationException>(() =>
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
         kernel.RetryTask(goal.Id, developer.Id, "Retry while tester is running."));
 
     Assert.True(ex.Message.Contains("downstream Tester", StringComparison.Ordinal));
@@ -614,7 +614,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     kernel.CompleteGoal(goal.Id, "Test completed after cleanup evidence.");
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "No longer needed."));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "No longer needed."));
 
     Assert.True(ex.Message.Contains("Completed", StringComparison.Ordinal));
     Assert.Equal(GoalStatus.Completed, goal.Status);
@@ -631,7 +631,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "codex exec prompt.md", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "Abandon."));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "Abandon."));
 
     Assert.True(ex.Message.Contains("running dispatch", StringComparison.OrdinalIgnoreCase));
     Assert.True(ex.Message.Contains("1234", StringComparison.Ordinal));

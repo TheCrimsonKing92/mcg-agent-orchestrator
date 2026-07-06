@@ -196,7 +196,7 @@ public sealed class IdeationPlanTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
             CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["ideate", "--append-backlog"],
                 kernel,

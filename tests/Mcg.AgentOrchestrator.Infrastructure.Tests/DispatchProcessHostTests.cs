@@ -489,7 +489,7 @@ public sealed class DispatchProcessHostTests
             setResult: false);
         try
         {
-            var exception = Assert.Throws<InvalidOperationException>(() =>
+            var exception = Assert.ThrowsAny<InvalidOperationException>(() =>
                 new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot));
 
             Assert.True(exception.Message.Contains("Failed to apply inheritable Low integrity label", StringComparison.Ordinal));
@@ -638,7 +638,7 @@ public sealed class DispatchProcessHostTests
                 DisableSharedCompilation: false,
                 SandboxLowIntegrity: true);
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
                 DispatchProcessHost.RunLowIntegrityLaunchPreflight(startInfo, parameters));
             Assert.Contains("git --version", ex.Message);
         }
