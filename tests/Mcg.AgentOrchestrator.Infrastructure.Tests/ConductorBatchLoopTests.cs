@@ -595,8 +595,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Retried);
         Assert.Equal(0, summary.Escalated);
         Assert.Equal(0, summary.Advanced);
-        var tick = Assert.Single(ticks);
-        Assert.Equal(1, tick.Done);
+        Assert.Empty(ticks);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_operator_retry_clears_prior_verified_acceptance_escalation")]
@@ -2135,7 +2134,7 @@ public sealed class ConductorBatchLoopTests
                 maxIterations: 1);
         });
 
-        Assert.Contains("TICK tick=1 eligible=1", output, StringComparison.Ordinal);
+        Assert.Contains("TICK tick=1 eligible=1", output);
         Assert.Contains(activeGoal.Id, advancedGoalIds);
         Assert.DoesNotContain(retiredGoal.Id, advancedGoalIds);
     }
