@@ -183,6 +183,7 @@ internal static class TerminalGoalSweep
                         kernel,
                         executionDirectory,
                         goal,
+                        GoalTerminalDispositionKind.Landed,
                         $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
                     repairs.Add(new TerminalGoalSweepRepair(
                         "merged-branch-cleanup",
@@ -281,6 +282,7 @@ internal static class TerminalGoalSweep
                 kernel,
                 executionDirectory,
                 goal,
+                GoalTerminalDispositionKind.Landed,
                 $"Terminal sweep reconciled missing goal artifact as landed: {landedEvidence}.");
             repairs.Add(new TerminalGoalSweepRepair(
                 "missing-branch-landed-reconciled",
@@ -293,6 +295,7 @@ internal static class TerminalGoalSweep
             kernel,
             executionDirectory,
             goal,
+            GoalTerminalDispositionKind.Retired,
             $"Terminal sweep retired missing goal artifact because landing could not be verified from recorded commits: {missing}.");
         repairs.Add(new TerminalGoalSweepRepair(
             "missing-branch-retired",
@@ -331,11 +334,13 @@ internal static class TerminalGoalSweep
         AgentOrchestratorKernel kernel,
         string executionDirectory,
         Goal goal,
+        GoalTerminalDispositionKind kind,
         string detail)
     {
-        GoalOperationJournal.Completed(executionDirectory, goal, "conductor:land", detail);
-        GoalOperationJournal.Completed(executionDirectory, goal, "conductor:record", detail);
-        GoalOperationJournal.Completed(executionDirectory, goal, "conductor:cleanup", detail);
+        GoalOperationJournal.RecordTerminalDisposition(
+            executionDirectory,
+            goal,
+            new GoalTerminalDisposition(kind, detail));
         kernel.CompleteGoal(goal.Id, detail);
     }
 

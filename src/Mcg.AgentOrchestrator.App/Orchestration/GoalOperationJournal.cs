@@ -32,6 +32,16 @@ internal sealed record GoalOperationJournalSummary(
     public bool HasEntries => Entries.Count > 0;
 }
 
+internal enum GoalTerminalDispositionKind
+{
+    Landed,
+    Retired
+}
+
+internal sealed record GoalTerminalDisposition(
+    GoalTerminalDispositionKind Kind,
+    string Detail);
+
 internal sealed record GoalLifecycleJournalEntry(
     string IdempotencyKey,
     GoalId GoalId,
@@ -41,6 +51,8 @@ internal sealed record GoalLifecycleJournalEntry(
 
 internal static class GoalOperationJournal
 {
+    public const string TerminalDispositionOperation = "conductor:terminal-disposition";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -117,6 +129,17 @@ internal static class GoalOperationJournal
     public static void Failed(string executionDirectory, Goal goal, string operation, string? detail = null) =>
         Append(executionDirectory, goal.Id, operation, GoalOperationStatus.Failed, detail);
 
+    public static void RecordTerminalDisposition(
+        string executionDirectory,
+        Goal goal,
+        GoalTerminalDisposition disposition)
+    {
+        Completed(executionDirectory, goal, TerminalDispositionOperation, JsonSerializer.Serialize(disposition, JsonOptions));
+        Completed(executionDirectory, goal, "conductor:land", disposition.Detail);
+        Completed(executionDirectory, goal, "conductor:record", disposition.Detail);
+        Completed(executionDirectory, goal, "conductor:cleanup", disposition.Detail);
+    }
+
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
     {
         var path = PathFor(executionDirectory, goalId);
@@ -130,22 +153,37 @@ internal static class GoalOperationJournal
     }
 
     public static bool HasCompletedLandingEvidence(GoalOperationJournalSummary journal) =>
+        HasRetiredTerminalDisposition(journal) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Completed &&
             (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
              entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)));
 
     public static bool HasCompletedRecordEvidence(GoalOperationJournalSummary journal) =>
+        HasRetiredTerminalDisposition(journal) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Completed &&
             (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
              entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase)));
 
     public static bool HasCompletedCleanupEvidence(GoalOperationJournalSummary journal) =>
+        HasRetiredTerminalDisposition(journal) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Completed &&
             (entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) ||
              entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase)));
+
+    public static bool HasRetiredTerminalDisposition(GoalOperationJournalSummary journal)
+    {
+        var latestTerminalDisposition = journal.LatestByOperation
+            .LastOrDefault(entry => entry.Operation.Equals(TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase));
+        if (latestTerminalDisposition is not null)
+        {
+            return IsRetiredTerminalDispositionEntry(latestTerminalDisposition);
+        }
+
+        return journal.LatestByOperation.Any(IsLegacyRetiredTerminalDispositionEntry);
+    }
 
     public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(string executionDirectory) =>
         ReadAll(executionDirectory, []);
@@ -201,6 +239,45 @@ internal static class GoalOperationJournal
             .Where(entry => entry.Status == GoalOperationStatus.Begin)
             .ToArray();
         return new GoalOperationJournalSummary(path, entries, latest, interrupted);
+    }
+
+    private static bool IsRetiredTerminalDispositionEntry(GoalOperationJournalEntry entry)
+    {
+        if (entry.Status != GoalOperationStatus.Completed)
+        {
+            return false;
+        }
+
+        if (entry.Operation.Equals(TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase))
+        {
+            return TryDeserializeTerminalDisposition(entry.Detail) is { Kind: GoalTerminalDispositionKind.Retired };
+        }
+
+        return IsLegacyRetiredTerminalDispositionEntry(entry);
+    }
+
+    private static bool IsLegacyRetiredTerminalDispositionEntry(GoalOperationJournalEntry entry) =>
+        entry.Status == GoalOperationStatus.Completed &&
+        (entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase) ||
+         entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) ||
+         entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase)) &&
+        entry.Detail?.Contains("Terminal sweep retired missing goal artifact", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static GoalTerminalDisposition? TryDeserializeTerminalDisposition(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<GoalTerminalDisposition>(detail, JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static void Append(
