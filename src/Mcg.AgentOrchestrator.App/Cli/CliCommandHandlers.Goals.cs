@@ -2713,7 +2713,6 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return false;
     }
 
-    var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
     var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
     string? testedWorktreeHead = null;
@@ -2757,6 +2756,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         context.Kernel.ClearAcceptanceFailure(goal.Id);
     }
 
+    var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
     var evidence = context.Worktrees.BuildAcceptanceEvidence(context.Kernel, goal, worktreePath, verification, skipVerify);
     ConsoleViews.PrintAcceptanceEvidenceBundle(evidence);
 
@@ -2841,6 +2841,16 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 
             return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
         }));
+
+    if (mergeCommit.GuardFailure)
+    {
+        var failedChecks = new[] { mergeCommit.Message ?? "acceptance state changed during acceptance verification" };
+        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+        context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
+        Console.WriteLine($"BLOCKER step=acceptance-state-guard reason=state-changed detail=\"{EscapeBlockerDetail(failedChecks[0])}\" action=\"Resolve concurrent goal or worktree changes, then rerun acceptance.\"");
+        ConsoleViews.PrintAcceptanceSummary(goal, context.Kernel.BuildGoalAcceptanceSummary(goal.Id));
+        throw new InvalidOperationException(failedChecks[0]);
+    }
 
     if (mergeCommit.Message is not null)
     {
@@ -2935,6 +2945,9 @@ private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerification
     var artifactDetail = string.IsNullOrWhiteSpace(artifactPath) ? "none" : artifactPath;
     return $"BLOCKER step=verification reason=timeout check=\"{timedOutCheck.Name}\" artifacts={artifactDetail} action=\"Inspect verification command, artifact path, and last output above; rerun acceptance after clearing the blocker.\"";
 }
+
+private static string EscapeBlockerDetail(string value) =>
+    value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
 private static void ReconcileLandedCleanedAcceptance(
     CliExecutionContext context,
