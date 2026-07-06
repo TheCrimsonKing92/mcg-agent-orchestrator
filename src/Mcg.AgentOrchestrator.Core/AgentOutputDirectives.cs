@@ -11,7 +11,7 @@ public static class AgentOutputDirectives
         "commands: <commands run or none>",
         "tests: <pass/fail/not-run evidence>",
         "commit: <commit sha or none>",
-        "blockers: <none or exact blocker>",
+        "blockers: <none or exact blocker; put deferred-verification notes in tests>",
         "model_fit: <provider/model - adequate|overkill|underpowered - task shape - reason>",
         "skills: <selected skills used or none>",
         "confidence: <high|medium|low>",

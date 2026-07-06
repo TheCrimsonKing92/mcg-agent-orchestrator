@@ -36,7 +36,7 @@ internal sealed class WorkerResultContractParser
         if (!fields.TryGetValue("blockers", out var blockers) ||
             !blockers.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
-            lines.Add($"- fail: prior {task.RequiredRole} task {task.Id.Value} reported blockers: {blockers}.");
+            lines.Add($"- warn: prior {task.RequiredRole} task {task.Id.Value} reported advisory blockers: {blockers}.");
         }
 
         if (!fields.TryGetValue("skills", out var skills) ||

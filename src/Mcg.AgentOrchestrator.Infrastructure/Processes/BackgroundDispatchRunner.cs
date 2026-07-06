@@ -561,7 +561,7 @@ public sealed class BackgroundDispatchRunner
                 standardError);
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var shouldCommitDirtyWorktree =
-                (exitCode == 0 && worktreeEvidence.HasCommitAfterDispatch) ||
+                (exitCode == 0 && (worktreeEvidence.HasCommitAfterDispatch || successfulWorkerResult)) ||
                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
                 (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit);
 
@@ -595,7 +595,7 @@ public sealed class BackgroundDispatchRunner
                     {
                         standardErrorDiagnostic = AppendDiagnostic(
                             standardErrorDiagnostic,
-                            "Accepted non-zero worker exit because a complete no-blocker WORKER_RESULT and dirty worktree edits were present; " +
+                            "Accepted non-zero worker exit because a complete non-failing WORKER_RESULT and dirty worktree edits were present; " +
                             "orchestrator commit-on-behalf is the commit path.");
                     }
                 }

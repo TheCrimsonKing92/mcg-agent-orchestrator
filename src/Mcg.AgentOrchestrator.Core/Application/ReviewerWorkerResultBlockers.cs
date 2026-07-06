@@ -22,6 +22,50 @@ internal static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryFindHardFailureBlocker(TaskVerificationRecord? verification, out string blocker)
+    {
+        blocker = string.Empty;
+        if (verification is null ||
+            !TryFindBlocker(verification, out blocker))
+        {
+            return false;
+        }
+
+        if (!verification.Succeeded || !verification.HasCommittedChanges)
+        {
+            return true;
+        }
+
+        return TryFindTests(verification, out var tests) && TestsReportFailure(tests);
+    }
+
+    public static bool TryFindAdvisoryBlocker(TaskVerificationRecord? verification, out string blocker)
+    {
+        blocker = string.Empty;
+        return verification is not null &&
+            TryFindBlocker(verification, out blocker) &&
+            !TryFindHardFailureBlocker(verification, out _);
+    }
+
+    public static bool TryFindTests(TaskVerificationRecord? verification, out string tests)
+    {
+        tests = string.Empty;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "tests", out tests))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static IEnumerable<string> EnumerateWorkerResultLines(TaskVerificationRecord verification)
     {
         var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
@@ -77,19 +121,11 @@ internal static class WorkerResultBlockers
     private static bool TryFindBlockersField(string line, out string blocker)
     {
         blocker = string.Empty;
-        var sep = line.IndexOf(':', StringComparison.Ordinal);
-        if (sep <= 0)
+        if (!TryFindField(line, "blockers", out var value))
         {
             return false;
         }
 
-        var key = NormalizeWorkerResultKey(line[..sep]);
-        if (!string.Equals(key, "blockers", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var value = line[(sep + 1)..].Trim();
         if (IsNoBlockerValue(value))
         {
             return false;
@@ -114,6 +150,45 @@ internal static class WorkerResultBlockers
         }
 
         return false;
+    }
+
+    private static bool TryFindField(string line, string fieldName, out string value)
+    {
+        value = string.Empty;
+        var sep = line.IndexOf(':', StringComparison.Ordinal);
+        if (sep <= 0)
+        {
+            return false;
+        }
+
+        var key = NormalizeWorkerResultKey(line[..sep]);
+        if (!string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        value = line[(sep + 1)..].Trim();
+        return true;
+    }
+
+    private static bool TestsReportFailure(string value)
+    {
+        var normalized = value.Trim();
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        if (!normalized.Contains("fail", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !normalized.Contains("failed: 0", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("failures: 0", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("0 failed", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("0 failures", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsBlockerClassification(string line)

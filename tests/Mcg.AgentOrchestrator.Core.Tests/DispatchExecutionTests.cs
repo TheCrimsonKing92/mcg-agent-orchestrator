@@ -295,6 +295,58 @@ public sealed class DispatchExecutionTests
     Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.VerificationHistory.Single().ProviderFailureKind);
     Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
 }
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_exit_zero_committed_work_records_WORKER_RESULT_blocker_as_advisory")]
+    public void RecordDispatchExecutionResultExitZeroCommittedWorkRecordsWorkerResultBlockerAsAdvisory()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Complete dispatch with advisory blocker");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: src/Foo.cs",
+        "commands: dotnet test --filter WorkerDispatch",
+        "tests: pass - focused dispatch-runner coverage",
+        "commit: abc1234",
+        "blockers: full suite deferred to orchestrator acceptance gate per current-task.md",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: dotnet-windows-build-hygiene",
+        "confidence: high",
+        "END_WORKER_RESULT");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskCompleted &&
+        evt.Message.Contains("advisory WORKER_RESULT blocker", StringComparison.Ordinal) &&
+        evt.Message.Contains("full suite deferred", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("WORKER_RESULT reported blocker", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
     public void RecordDispatchExecutionResultFailsNonzeroWorkerResultBlockerBeforeSubscriptionRetry()
 {

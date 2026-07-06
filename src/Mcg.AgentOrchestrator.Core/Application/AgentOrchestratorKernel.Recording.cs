@@ -10,12 +10,17 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Verification {status} ({verification.ExitCode}): {verification.Command}");
-        if (TryFailWorkerResultBlocker(goalId, task, verification))
+        if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: false))
         {
             return;
         }
 
-        TryCompleteTaskWithPassingVerification(goal, task, $"Task completed with passing verification: {verification.Command}");
+        TryCompleteTaskWithPassingVerification(
+            goal,
+            task,
+            BuildCompletionMessageWithAdvisoryBlocker(
+                $"Task completed with passing verification: {verification.Command}",
+                verification));
         RefreshGoalStatus(goal);
     }
 
@@ -53,24 +58,13 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
-        if (TryFailWorkerResultBlocker(goalId, task, verification))
+        if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: true))
         {
             return;
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
-        if (!verification.Succeeded &&
-            WorkerResultBlockers.TryFindBlocker(verification, out var blocker) &&
-            outcome.Kind != DispatchOutcomeKind.RecoverableSubscriptionLimit)
-        {
-            ReportTaskProgress(
-                goalId,
-                task.Id,
-                WorkTaskStatus.Failed,
-                $"WORKER_RESULT reported blocker: {blocker}");
-            return;
-        }
 
         var isRecoverableSubscriptionLimit = outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit;
         if (!verification.Succeeded && isRecoverableSubscriptionLimit)
@@ -117,11 +111,17 @@ public sealed partial class AgentOrchestratorKernel
             taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
-                ? $"Dispatch completed successfully: {task.LastDispatch.Command}"
+                ? BuildCompletionMessageWithAdvisoryBlocker(
+                    $"Dispatch completed successfully: {task.LastDispatch.Command}",
+                    verification)
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
     }
 
-    private bool TryFailWorkerResultBlocker(GoalId goalId, TaskSpec task, TaskVerificationRecord verification)
+    private bool TryFailWorkerResultBlocker(
+        GoalId goalId,
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool enforceFailureEvidenceRule)
     {
         if (verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
@@ -135,7 +135,28 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
+        if (enforceFailureEvidenceRule &&
+            task.RequiredRole != AgentRole.Reviewer &&
+            WorkerResultBlockers.TryFindHardFailureBlocker(verification, out blocker))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"WORKER_RESULT reported blocker: {blocker}");
+            return true;
+        }
+
         return false;
+    }
+
+    private static string BuildCompletionMessageWithAdvisoryBlocker(
+        string message,
+        TaskVerificationRecord verification)
+    {
+        return WorkerResultBlockers.TryFindAdvisoryBlocker(verification, out var blocker)
+            ? $"{message}; advisory WORKER_RESULT blocker: {blocker}"
+            : message;
     }
 
     public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit)

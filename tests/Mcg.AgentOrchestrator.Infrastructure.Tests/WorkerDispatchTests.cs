@@ -5341,7 +5341,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
         task.LastVerification.StandardError,
-        text => text.Contains("complete no-blocker WORKER_RESULT and dirty worktree edits", StringComparison.Ordinal));
+        text => text.Contains("complete non-failing WORKER_RESULT and dirty worktree edits", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     Assert.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
@@ -5746,6 +5746,36 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(parsed, diagnostic);
     Assert.Equal("src/Feature.cs", fields["files"]);
     Assert.Equal("none", fields["blockers"]);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_treats_blockers_as_advisory_when_tests_pass")]
+    public void WorkerResultParserSuccessfulResultTreatsBlockersAsAdvisoryWhenTestsPass()
+{
+    var output = WorkerResultBlock(
+        "src/Feature.cs",
+        "dotnet test --filter WorkerDispatch",
+        "Passed: 2, Failed: 0",
+        blockers: "live loop evidence must be run by the operator");
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out var fields, out var diagnostic);
+
+    Assert.True(parsed, diagnostic);
+    Assert.Equal("live loop evidence must be run by the operator", fields["blockers"]);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_rejects_failing_tests_with_blockers")]
+    public void WorkerResultParserSuccessfulResultRejectsFailingTestsWithBlockers()
+{
+    var output = WorkerResultBlock(
+        "src/Feature.cs",
+        "dotnet test --filter WorkerDispatch",
+        "fail - timed out",
+        blockers: "full Infrastructure no-build timed out at 214s");
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out _, out var diagnostic);
+
+    Assert.False(parsed);
+    Assert.Contains("tests reported failure", diagnostic, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
