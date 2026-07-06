@@ -3,8 +3,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerContextArtifactsVerificationTests
 {
-    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_directs_developers_to_skip_dotnet_self_verify")]
-    public void WorkerContextArtifactsDirectsDevelopersToSkipDotnetSelfVerify()
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_directs_developers_to_run_worker_build_check")]
+    public void WorkerContextArtifactsDirectsDevelopersToRunWorkerBuildCheck()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -18,8 +18,10 @@ public sealed class WorkerContextArtifactsVerificationTests
         var descriptionIndex = currentTask.IndexOf("## Description", StringComparison.Ordinal);
         Xunit.Assert.True(verificationIndex >= 0);
         Xunit.Assert.True(verificationIndex < descriptionIndex);
-        Xunit.Assert.Contains("Do not run raw `dotnet test` or `dotnet build` directly", currentTask);
-        Xunit.Assert.Contains("Do not run `.\\scripts\\Invoke-IsolatedDotnet.ps1` from a subscription worker either", currentTask);
-        Xunit.Assert.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", currentTask);
+        Xunit.Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", currentTask);
+        Xunit.Assert.Contains("for every project whose sources you changed", currentTask);
+        Xunit.Assert.Contains("tests: build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
+        Xunit.Assert.Contains("Do not run raw `dotnet test`", currentTask);
+        Xunit.Assert.Contains("raw test execution can create per-worktree testhost firewall prompts", currentTask);
     }
 }

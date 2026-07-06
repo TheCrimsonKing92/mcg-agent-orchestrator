@@ -559,6 +559,18 @@ public sealed class BackgroundDispatchRunner
                 processRecord.WorkingDirectory,
                 standardOutput,
                 standardError);
+            if (TryFindFailedWorkerBuildCheck(
+                    processRecord.WorkingDirectory,
+                    standardOutput,
+                    standardError,
+                    out var failedBuildCheckDiagnostic))
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    failedBuildCheckDiagnostic);
+            }
+
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var shouldCommitDirtyWorktree =
                 (exitCode == 0 && (worktreeEvidence.HasCommitAfterDispatch || successfulWorkerResult)) ||
@@ -637,7 +649,8 @@ public sealed class BackgroundDispatchRunner
                         $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
                 }
-                else if (exitCode != 0 &&
+                else if (string.IsNullOrEmpty(failedBuildCheckDiagnostic) &&
+                    exitCode != 0 &&
                     HasCompletedVerification(task, standardOutput, standardError))
                 {
                     // Clean worktree, no commit required (e.g. a Tester verifying already-committed work),
@@ -892,6 +905,76 @@ public sealed class BackgroundDispatchRunner
         }
 
         return false;
+    }
+
+    private static bool TryFindFailedWorkerBuildCheck(
+        string workingDirectory,
+        string standardOutput,
+        string standardError,
+        out string diagnostic)
+    {
+        if (TryFindFailedWorkerBuildCheckInText($"{standardOutput}\n{standardError}", out diagnostic))
+        {
+            return true;
+        }
+
+        foreach (var fileName in new[] { "WORKER_RESULT.md", "WORKER_RESULT.txt" })
+        {
+            var path = Path.Combine(workingDirectory, fileName);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (TryFindFailedWorkerBuildCheckInText(File.ReadAllText(path), out diagnostic))
+                {
+                    return true;
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        diagnostic = string.Empty;
+        return false;
+    }
+
+    private static bool TryFindFailedWorkerBuildCheckInText(string text, out string diagnostic)
+    {
+        if (!WorkerResultParser.TryParseFields(text, out var fields, out _) ||
+            !fields.TryGetValue("tests", out var tests) ||
+            !WorkerBuildCheckTestsReportFailure(tests))
+        {
+            diagnostic = string.Empty;
+            return false;
+        }
+
+        diagnostic = $"WORKER_RESULT reported failed worker build check: {tests}";
+        return true;
+    }
+
+    private static bool WorkerBuildCheckTestsReportFailure(string tests)
+    {
+        if (!tests.Contains("Invoke-WorkerBuildCheck", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (tests.Contains("0 errors", StringComparison.OrdinalIgnoreCase) ||
+            tests.Contains("0 error(s)", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return tests.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
+            Regex.IsMatch(tests, @"\b[1-9]\d*\s+errors?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(tests, @"\b[1-9]\d*\s+error\(s\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static bool TesterTaskRequestsFileChanges(TaskSpec task)
