@@ -878,16 +878,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
             cancellationToken).ConfigureAwait(false);
 
-        var retried = false;
+        var transientCompilerLockRetried = false;
         if (!result.TimedOut &&
             result.ExitCode != 0 &&
-            (result.Output.Contains("CS2012", StringComparison.Ordinal) || IsTransientTesthostAbort(result.Output)))
+            IsTransientCompilerLockFailure(result.Output))
         {
-            // CS2012 is a transient obj-dll file lock; a mid-run testhost abort ("host process exited
-            // unexpectedly" / "Test Run Aborted" with no completed verdict) is an environmental crash
-            // (resource pressure, concurrent slot use). Both are transient: a second build-server shutdown
-            // + fresh attempt clears them before the single allowed retry, so a one-off crash stops
-            // spuriously escalating an otherwise-green goal.
             await _runner(
                 ["dotnet", "build-server", "shutdown"],
                 worktreePath,
@@ -901,7 +896,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
-            retried = true;
+            transientCompilerLockRetried = true;
         }
 
         elapsed.Stop();
@@ -921,8 +916,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "goal-acceptance-verifier",
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
-            retried,
-            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output)), retried);
+            transientCompilerLockRetried,
+            BuildManagedDotnetResultSummary(result, transientCompilerLockRetried)), transientCompilerLockRetried);
     }
 
     // A dotnet test run whose own summary banner is "Passed!" (zero failed) but which then exits non-zero
@@ -940,10 +935,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             !output.Contains("Failed!", StringComparison.Ordinal);
     }
 
+    private static bool IsTransientCompilerLockFailure(string output) =>
+        (output.Contains("error CS2012", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("MSB3491", StringComparison.OrdinalIgnoreCase)) &&
+        output.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
+
+    private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried)
+    {
+        var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
+        if (!transientCompilerLockRetried)
+        {
+            return summary;
+        }
+
+        const string remediation = "transient compiler lock detected; build server restarted; check retried";
+        return string.IsNullOrWhiteSpace(summary)
+            ? remediation
+            : $"{remediation}; {summary}";
+    }
+
     // A testhost that crashes MID-run ("host process exited unexpectedly" / "Test Run Aborted") with no
-    // completed all-passed banner and no real test failure is an environmental abort, not a verdict — it
-    // should be retried once like CS2012. A build/compile failure, or a completed run WITH real test
-    // failures, is NOT this and must not be retried (it is a genuine red).
+    // completed all-passed banner and no real test failure is an environmental abort, not a verdict. A
+    // build/compile failure, or a completed run WITH real test failures, is NOT this (it is a genuine red).
     internal static bool IsTransientTesthostAbort(string output)
     {
         if (output.Contains("Build FAILED", StringComparison.Ordinal) ||
