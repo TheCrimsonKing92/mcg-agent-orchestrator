@@ -118,9 +118,9 @@ public sealed class GoalLifecycleTests
     var task = goal.Tasks.Single();
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RedelegateTask(goal.Id, task.Id, [agent]));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RedelegateTask(goal.Id, task.Id, [agent]));
 
-    Assert.Contains(ex.Message, text => text.Contains("cancel or refresh", StringComparison.Ordinal));
+    Assert.Contains("cancel or refresh", ex.Message, StringComparison.Ordinal);
     Assert.Equal(agent.Id, task.AssignedAgentId);
 }
     [Xunit.Fact(DisplayName = "CreateDefaultSoftwareDevelopmentTasks_include_verification_plans")]
@@ -185,8 +185,8 @@ public sealed class GoalLifecycleTests
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskNote &&
         evt.Message == "Use the existing CLI command style.");
-    Assert.Contains(brief, text => text.Contains("TaskNote", StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains("Use the existing CLI command style.", StringComparison.Ordinal));
+    Assert.Contains("TaskNote", brief, StringComparison.Ordinal);
+    Assert.Contains("Use the existing CLI command style.", brief, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
     public void SnapshotRoundtripPreservesAddedTask()
@@ -386,7 +386,7 @@ public sealed class GoalLifecycleTests
     kernel.RecordTaskDispatch(goal.Id, tester.Id, new TaskDispatchRecord("tester", "test.exe", "C:\\repo", DateTimeOffset.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, tester.Id, new TaskProcessRecord(1234, "test.exe", "C:\\repo", "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
 
-    var ex = Assert.Throws<InvalidOperationException>(() =>
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
         kernel.RetryTask(goal.Id, developer.Id, "Retry while tester is running."));
 
     Assert.True(ex.Message.Contains("downstream Tester", StringComparison.Ordinal));
@@ -519,8 +519,8 @@ static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, Agent
     var task = goal.Tasks.First(task => task.RequiredRole == role);
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains(brief, text => text.Contains(heading, StringComparison.Ordinal));
-    Assert.Contains(brief, text => text.Contains(detail, StringComparison.Ordinal));
+    Assert.Contains(heading, brief, StringComparison.Ordinal);
+    Assert.Contains(detail, brief, StringComparison.Ordinal);
 }
 
 static void CompleteWithVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string standardOutput)
@@ -614,7 +614,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     kernel.CompleteGoal(goal.Id, "Test completed after cleanup evidence.");
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "No longer needed."));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "No longer needed."));
 
     Assert.True(ex.Message.Contains("Completed", StringComparison.Ordinal));
     Assert.Equal(GoalStatus.Completed, goal.Status);
@@ -631,7 +631,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(1234, "codex exec prompt.md", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "Abandon."));
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.CancelGoal(goal.Id, "Abandon."));
 
     Assert.True(ex.Message.Contains("running dispatch", StringComparison.OrdinalIgnoreCase));
     Assert.True(ex.Message.Contains("1234", StringComparison.Ordinal));

@@ -260,22 +260,22 @@ public sealed class DashboardHostTests
             using var stopResponse = await client.PostAsync(new Uri(new Uri(url), "api/system/stop-dashboard"), new StringContent(string.Empty));
             var stopDashboard = await stopResponse.Content.ReadAsStringAsync();
 
-            Assert.Contains(goals, text => text.Contains("Prototype: explore the agent orchestrator UI", StringComparison.Ordinal));
+            Assert.Contains("Prototype: explore the agent orchestrator UI", goals, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.OK, workerProfileResponse.StatusCode);
             Assert.Equal(HttpStatusCode.OK, developerAgentResponse.StatusCode);
-            Assert.Contains(developerAgent, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
-            Assert.Contains(simpleGoal, text => text.Contains("\"TotalTasks\": 1", StringComparison.Ordinal));
-            Assert.Contains(simpleGoal, text => text.Contains("\"Role\": \"Developer\"", StringComparison.Ordinal));
+            Assert.Contains("\"Role\": \"Developer\"", developerAgent, StringComparison.Ordinal);
+            Assert.Contains("\"TotalTasks\": 1", simpleGoal, StringComparison.Ordinal);
+            Assert.Contains("\"Role\": \"Developer\"", simpleGoal, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.Conflict, readinessBlockedStartResponse.StatusCode);
-            Assert.Contains(readinessBlockedStart, text => text.Contains("goal readiness preflight blocked start-subscription-ready", StringComparison.Ordinal));
-            Assert.Contains(readinessBlockedStart, text => text.Contains("workspace-missing", StringComparison.Ordinal));
+            Assert.Contains("goal readiness preflight blocked start-subscription-ready", readinessBlockedStart, StringComparison.Ordinal);
+            Assert.Contains("workspace-missing", readinessBlockedStart, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.Created, largeAutoHandoffResponse.StatusCode);
-            Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"AutoHandoff\"", StringComparison.Ordinal));
-            Assert.Contains(largeAutoHandoffGoal, text => text.Contains("\"StopReason\"", StringComparison.Ordinal));
+            Assert.Contains("\"AutoHandoff\"", largeAutoHandoffGoal, StringComparison.Ordinal);
+            Assert.Contains("\"StopReason\"", largeAutoHandoffGoal, StringComparison.Ordinal);
             Assert.False(largeAutoHandoffGoal.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
-            Assert.Contains(simpleGoalDetail, text => text.Contains("\"VerificationSatisfied\"", StringComparison.Ordinal));
-            Assert.Contains(simpleGoalDetail, text => text.Contains(simpleGoalId, StringComparison.Ordinal));
-            Assert.Contains(simpleGoalDetail, text => text.Contains("\"MonitoringStreamPath\"", StringComparison.Ordinal));
+            Assert.Contains("\"VerificationSatisfied\"", simpleGoalDetail, StringComparison.Ordinal);
+            Assert.Contains(simpleGoalId, simpleGoalDetail, StringComparison.Ordinal);
+            Assert.Contains("\"MonitoringStreamPath\"", simpleGoalDetail, StringComparison.Ordinal);
             using (var workSummaryDocument = JsonDocument.Parse(simpleGoalWorkSummary))
             {
                 var summary = workSummaryDocument.RootElement;
@@ -310,24 +310,24 @@ public sealed class DashboardHostTests
             }
             Assert.Equal(HttpStatusCode.Created, manualGoalResponse.StatusCode);
             Assert.Equal(HttpStatusCode.Created, defaultManualGoalResponse.StatusCode);
-            Assert.Contains(simpleGoal, text => text.Contains("\"Status\":", StringComparison.Ordinal));
-            Assert.Contains(manualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
+            Assert.Contains("\"Status\":", simpleGoal, StringComparison.Ordinal);
+            Assert.Contains("\"Status\": \"Assigned\"", manualGoal, StringComparison.Ordinal);
             Assert.False(GoalResponseContainsDispatch(manualGoal));
-            Assert.Contains(defaultManualGoal, text => text.Contains("\"Status\": \"Assigned\"", StringComparison.Ordinal));
+            Assert.Contains("\"Status\": \"Assigned\"", defaultManualGoal, StringComparison.Ordinal);
             Assert.False(GoalResponseContainsDispatch(defaultManualGoal));
             Assert.Equal("no-store", cssResponse.Headers.CacheControl?.ToString());
             Assert.Equal(HttpStatusCode.NotFound, missingTaskResponse.StatusCode);
-            Assert.Contains(missingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
+            Assert.Contains("dashboard not found", missingTask, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.NotFound, longMissingTaskResponse.StatusCode);
-            Assert.Contains(longMissingTask, text => text.Contains("dashboard not found", StringComparison.Ordinal));
-            Assert.Contains(longMissingTask, text => text.Contains("task-start", StringComparison.Ordinal));
-            Assert.Contains(longMissingTask, text => text.Contains("task-tail", StringComparison.Ordinal));
-            Assert.Contains(longMissingTask, text => text.Contains("[truncated", StringComparison.Ordinal));
+            Assert.Contains("dashboard not found", longMissingTask, StringComparison.Ordinal);
+            Assert.Contains("task-start", longMissingTask, StringComparison.Ordinal);
+            Assert.Contains("task-tail", longMissingTask, StringComparison.Ordinal);
+            Assert.Contains("[truncated", longMissingTask, StringComparison.Ordinal);
             Assert.True(!longMissingTask.Contains(new string('t', 2000), StringComparison.Ordinal));
-            Assert.Contains(sourceSurvey, text => text.Contains("\"MaxFiles\": 25", StringComparison.Ordinal));
-            Assert.Contains(defaultSourceSurvey, text => text.Contains("\"MaxFiles\": 200", StringComparison.Ordinal));
-            Assert.Contains(sourceSurvey, text => text.Contains("\"RecommendedCommand\"", StringComparison.Ordinal));
-            Assert.Contains(sourceSurvey, text => text.Contains("!**/.scratch/**", StringComparison.Ordinal));
+            Assert.Contains("\"MaxFiles\": 25", sourceSurvey, StringComparison.Ordinal);
+            Assert.Contains("\"MaxFiles\": 200", defaultSourceSurvey, StringComparison.Ordinal);
+            Assert.Contains("\"RecommendedCommand\"", sourceSurvey, StringComparison.Ordinal);
+            Assert.Contains("!**/.scratch/**", sourceSurvey, StringComparison.Ordinal);
             Assert.False(SourceSurveyContainsFilePathSegment(sourceSurvey, "/bin/"));
             Assert.False(SourceSurveyContainsFilePathSegment(sourceSurvey, "/obj/"));
             var continuationArray = JsonDocument.Parse(continuations).RootElement;
@@ -359,41 +359,41 @@ public sealed class DashboardHostTests
                 Assert.True(cleanupDocument.RootElement.GetProperty("CurrentProcessId").GetInt32() > 0);
                 Assert.Equal("/api/system/stop-dashboard", cleanupDocument.RootElement.GetProperty("StopCurrentUrl").GetString());
                 Assert.Equal("/api/system/run-build-test-cycle", cleanupDocument.RootElement.GetProperty("RunBuildTestCycleUrl").GetString());
-                Assert.Contains(cleanupPlan, text => text.Contains("Invoke-IsolatedDotnet.ps1 build Mcg.AgentOrchestrator.sln --no-restore --verbosity minimal", StringComparison.Ordinal));
-                Assert.Contains(cleanupPlan, text => text.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", StringComparison.Ordinal));
-                Assert.Contains(cleanupPlan, text => text.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", StringComparison.Ordinal));
-                Assert.Contains(cleanupPlan, text => text.Contains("Invoke-DashboardBuildTestCycle.ps1", StringComparison.Ordinal));
+                Assert.Contains("Invoke-IsolatedDotnet.ps1 build Mcg.AgentOrchestrator.sln --no-restore --verbosity minimal", cleanupPlan, StringComparison.Ordinal);
+                Assert.Contains("Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal", cleanupPlan, StringComparison.Ordinal);
+                Assert.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", cleanupPlan, StringComparison.Ordinal);
+                Assert.Contains("Invoke-DashboardBuildTestCycle.ps1", cleanupPlan, StringComparison.Ordinal);
             }
             Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(buildTestRuns).RootElement.ValueKind);
             Assert.Equal(HttpStatusCode.BadRequest, paidSmokeGetResponse.StatusCode);
-            Assert.Contains(paidSmokeGet, text => text.Contains("confirmPaidSmoke=true", StringComparison.Ordinal));
+            Assert.Contains("confirmPaidSmoke=true", paidSmokeGet, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, broadSmokeGetResponse.StatusCode);
-            Assert.Contains(broadSmokeGet, text => text.Contains("broad paid smoke tests are deliberate", StringComparison.Ordinal));
+            Assert.Contains("broad paid smoke tests are deliberate", broadSmokeGet, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, broadSmokePostResponse.StatusCode);
-            Assert.Contains(broadSmokePost, text => text.Contains("confirmAll=true", StringComparison.Ordinal));
+            Assert.Contains("confirmAll=true", broadSmokePost, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, batchStartMissingConfirmResponse.StatusCode);
-            Assert.Contains(batchStartMissingConfirm, text => text.Contains("confirmBatchStart=true", StringComparison.Ordinal));
+            Assert.Contains("confirmBatchStart=true", batchStartMissingConfirm, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, dispatchStartMissingConfirmResponse.StatusCode);
-            Assert.Contains(dispatchStartMissingConfirm, text => text.Contains("confirmDispatchStart=true", StringComparison.Ordinal));
+            Assert.Contains("confirmDispatchStart=true", dispatchStartMissingConfirm, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, subscriptionAdvanceMissingConfirmResponse.StatusCode);
-            Assert.Contains(subscriptionAdvanceMissingConfirm, text => text.Contains("confirmSubscriptionAdvance=true", StringComparison.Ordinal));
+            Assert.Contains("confirmSubscriptionAdvance=true", subscriptionAdvanceMissingConfirm, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, taskRunMissingConfirmResponse.StatusCode);
-            Assert.Contains(taskRunMissingConfirm, text => text.Contains("confirmTaskRun=true", StringComparison.Ordinal));
+            Assert.Contains("confirmTaskRun=true", taskRunMissingConfirm, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, paidApiRunMissingConfirmResponse.StatusCode);
-            Assert.Contains(paidApiRunMissingConfirm, text => text.Contains("confirmPaidApiRun=true", StringComparison.Ordinal));
+            Assert.Contains("confirmPaidApiRun=true", paidApiRunMissingConfirm, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.BadRequest, invalidGoalResponse.StatusCode);
-            Assert.Contains(invalidGoal, text => text.Contains("dashboard invalid request", StringComparison.Ordinal));
-            Assert.Contains(css, text => text.Contains("dashboard-content", StringComparison.Ordinal) || text.Contains("body{font-family", StringComparison.Ordinal));
-            Assert.Contains(js, text => text.Contains("refreshContent", StringComparison.Ordinal));
-            Assert.Contains(js, text => text.Contains("summarizeResponse", StringComparison.Ordinal));
-            Assert.Contains(js, text => text.Contains("new EventSource(url)", StringComparison.Ordinal));
-            Assert.Contains(js, text => text.Contains("addEventListener('timeline'", StringComparison.Ordinal));
+            Assert.Contains("dashboard invalid request", invalidGoal, StringComparison.Ordinal);
+            Assert.Contains("dashboard-content", css, StringComparison.Ordinal);
+            Assert.Contains("refreshContent", js, StringComparison.Ordinal);
+            Assert.Contains("summarizeResponse", js, StringComparison.Ordinal);
+            Assert.Contains("new EventSource(url)", js, StringComparison.Ordinal);
+            Assert.Contains("addEventListener('timeline'", js, StringComparison.Ordinal);
             Assert.Equal(HttpStatusCode.OK, stopResponse.StatusCode);
-            Assert.Contains(stopDashboard, text => text.Contains("\"ProcessId\"", StringComparison.Ordinal));
-            Assert.Contains(stopDashboard, text => text.Contains("\"ListeningPorts\"", StringComparison.Ordinal));
-            Assert.Contains(stopDashboard, text => text.Contains("\"SiblingProcesses\"", StringComparison.Ordinal));
-            Assert.Contains(stopDashboard, text => text.Contains("\"RestartCommand\"", StringComparison.Ordinal));
-            Assert.Contains(stopDashboard, text => text.Contains("prototype-ui", StringComparison.Ordinal));
+            Assert.Contains("\"ProcessId\"", stopDashboard, StringComparison.Ordinal);
+            Assert.Contains("\"ListeningPorts\"", stopDashboard, StringComparison.Ordinal);
+            Assert.Contains("\"SiblingProcesses\"", stopDashboard, StringComparison.Ordinal);
+            Assert.Contains("\"RestartCommand\"", stopDashboard, StringComparison.Ordinal);
+            Assert.Contains("prototype-ui", stopDashboard, StringComparison.Ordinal);
             Assert.True(process.WaitForExit(5000));
         }
         finally
@@ -436,8 +436,8 @@ public sealed class DashboardHostTests
             Assert.True(run.TestSucceeded);
             Assert.True(run.HasOutputLog);
             Assert.True(run.HasErrorLog);
-            Assert.Contains(run.OutputPreview, text => text.Contains("BuildSucceeded        : True", StringComparison.Ordinal));
-            Assert.Contains(run.OutputPreview, text => text.Contains("TestSucceeded         : True", StringComparison.Ordinal));
+            Assert.Contains("BuildSucceeded        : True", run.OutputPreview, StringComparison.Ordinal);
+            Assert.Contains("TestSucceeded         : True", run.OutputPreview, StringComparison.Ordinal);
         }
         finally
         {

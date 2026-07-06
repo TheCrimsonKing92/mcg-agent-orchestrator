@@ -33,7 +33,7 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(VerificationGateStatus.MissingVerification, gate.Tasks.Single(item => item.TaskId == missing.Id).GateStatus);
     Assert.Equal(VerificationGateStatus.FailedVerification, gate.Tasks.Single(item => item.TaskId == failed.Id).GateStatus);
     Assert.Equal(VerificationGateStatus.Passed, gate.Tasks.Single(item => item.TaskId == passed.Id).GateStatus);
-    Assert.Contains(gate.Tasks.Single(item => item.TaskId == failed.Id).Message, text => text.Contains("exit 1", StringComparison.Ordinal));
+    Assert.Contains("exit 1", gate.Tasks.Single(item => item.TaskId == failed.Id).Message, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildVerificationWorklist_reports_only_open_verification_work")]
     public void BuildVerificationWorklistReportsOnlyOpenVerificationWork()
@@ -66,9 +66,9 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(3, worklist.OpenCount);
     Assert.True(worklist.Items.Select(item => item.TaskId).SequenceEqual([notReady.Id, missing.Id, failed.Id]));
     Assert.False(worklist.Items.Any(item => item.TaskId == passed.Id));
-    Assert.Contains(worklist.Items.Single(item => item.TaskId == notReady.Id).SuggestedAction, text => text.Contains("Complete the task", StringComparison.Ordinal));
-    Assert.Contains(worklist.Items.Single(item => item.TaskId == missing.Id).SuggestedAction, text => text.Contains("Record verification", StringComparison.Ordinal));
-    Assert.Contains(worklist.Items.Single(item => item.TaskId == failed.Id).SuggestedAction, text => text.Contains("Inspect", StringComparison.Ordinal));
+    Assert.Contains("Complete the task", worklist.Items.Single(item => item.TaskId == notReady.Id).SuggestedAction, StringComparison.Ordinal);
+    Assert.Contains("Record verification", worklist.Items.Single(item => item.TaskId == missing.Id).SuggestedAction, StringComparison.Ordinal);
+    Assert.Contains("Inspect", worklist.Items.Single(item => item.TaskId == failed.Id).SuggestedAction, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildGoalAcceptanceSummary_reports_blockers_and_accepted_state")]
     public void BuildGoalAcceptanceSummaryReportsBlockersAndAcceptedState()
@@ -176,8 +176,8 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
     Assert.Equal(VerificationGateStatus.FailedVerification, gate.GateStatus);
     Assert.Equal(VerificationGateReason.ReviewerWorkerResultBlocker, gate.Reason);
-    Assert.Contains(gate.Message, text => text.Contains("Finding A blocks acceptance", StringComparison.Ordinal));
-    Assert.Contains(reviewer.LastVerification!.StandardOutput, text => text.Contains("Finding A blocks acceptance", StringComparison.Ordinal));
+    Assert.Contains("Finding A blocks acceptance", gate.Message, StringComparison.Ordinal);
+    Assert.Contains("Finding A blocks acceptance", reviewer.LastVerification!.StandardOutput, StringComparison.Ordinal);
     Assert.False(acceptance.IsAccepted);
     Assert.Contains(acceptance.Blockers, blocker =>
         blocker.TaskId == reviewer.Id &&
@@ -228,8 +228,8 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
     Assert.Equal(VerificationGateStatus.FailedVerification, gate.GateStatus);
     Assert.Equal(VerificationGateReason.ReviewerWorkerResultBlocker, gate.Reason);
-    Assert.Contains(gate.Message, text => text.Contains("decorated blocker survives markdown", StringComparison.Ordinal));
-    Assert.Contains(reviewer.LastVerification!.StandardOutput, text => text.Contains("decorated blocker survives markdown", StringComparison.Ordinal));
+    Assert.Contains("decorated blocker survives markdown", gate.Message, StringComparison.Ordinal);
+    Assert.Contains("decorated blocker survives markdown", reviewer.LastVerification!.StandardOutput, StringComparison.Ordinal);
     Assert.False(acceptance.IsAccepted);
 }
 
@@ -369,7 +369,7 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(AgentRole.Tester, taskItem.Role);
     Assert.Equal(testerTask.Description, taskItem.Description);
     Assert.Equal(WorkTaskStatus.WaitingForHuman, taskItem.TaskStatus);
-    Assert.Contains(taskItem.SuggestedAction, text => text.Contains("Answer", StringComparison.Ordinal));
+    Assert.Contains("Answer", taskItem.SuggestedAction, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "HumanWaitPolicy_defaults_and_dismisses_stale_spec_clarifications_only")]

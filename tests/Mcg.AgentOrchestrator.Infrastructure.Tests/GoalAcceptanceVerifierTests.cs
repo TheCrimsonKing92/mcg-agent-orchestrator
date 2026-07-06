@@ -138,7 +138,7 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[3]);
         Assert.Equal(GetArtifactsPath(calls[1]), GetArtifactsPath(calls[3]));
         Assert.True(result.ArtifactsPath is not null);
-        Assert.Contains(result.ArtifactsPath!, text => text.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(Path.Combine("slots", "slot-"), result.ArtifactsPath!, StringComparison.OrdinalIgnoreCase);
         var check = result.Checks!.Single(item => item.Name == "dotnet test");
         Assert.Equal("goal-acceptance-verifier", check.BrokerName);
         Assert.Equal("goal-abcd1234", check.LeaseId);
@@ -703,7 +703,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(calls[1].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("forbidden changed paths", result.Checks![0].Name);
-        Assert.Contains(result.OutputTail!, text => text.Contains("bin/Debug/generated.dll", StringComparison.Ordinal));
+        Assert.Contains("bin/Debug/generated.dll", result.OutputTail!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_defers_granular_csproj_checks_to_solution_wide_run")]
@@ -1193,7 +1193,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.False(args.Any(arg => arg.Equals("--disable-build-servers", StringComparison.Ordinal)));
         Assert.False(args.Any(arg => arg.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal)));
         Assert.True(args.Any(arg => arg.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !arg.Equals("-maxcpucount:1", StringComparison.Ordinal)));
-        Assert.Contains(GetArtifactsPath(args), text => text.Contains("mcg-dotnet-isolated", StringComparison.Ordinal));
+        Assert.Contains("mcg-dotnet-isolated", GetArtifactsPath(args), StringComparison.Ordinal);
     }
 
     private static string GetArtifactsPath(string[] args)
@@ -1468,7 +1468,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(tamperCheck.Advisory);
         Assert.False(tamperCheck.Passed);
         Assert.True(tamperCheck.OutputTail is not null);
-        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("FooTests.cs", StringComparison.Ordinal));
+        Assert.Contains("FooTests.cs", tamperCheck.OutputTail!, StringComparison.Ordinal);
 
         // Git diff was the last call
         var lastCall = calls.Last();
@@ -1551,8 +1551,9 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.True(tamperCheck.Advisory);
         Assert.False(tamperCheck.Passed);
         Assert.True(tamperCheck.OutputTail is not null);
-        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("tautology", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(tamperCheck.OutputTail!, text => text.Contains("Assert.True(true)", StringComparison.Ordinal));
+        Assert.Contains("tautology", tamperCheck.OutputTail!, StringComparison.OrdinalIgnoreCase);
+        var tautologyAssertion = "Assert." + "True(true)";
+        Assert.Contains(tautologyAssertion, tamperCheck.OutputTail!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_absent_when_no_test_files_in_diff")]

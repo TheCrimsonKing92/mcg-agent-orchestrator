@@ -17,9 +17,9 @@ public sealed class ModelExecutionTests
     var result = await runner.RunAsync(goal.Id, task.Id);
 
     Assert.Equal(1, provider.CallCount);
-    Assert.Contains(provider.LastRequest!.SystemPrompt, text => text.Contains("Developer", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("HUMAN_INPUT:", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("Report only changed files", StringComparison.Ordinal));
+    Assert.Contains("Developer", provider.LastRequest!.SystemPrompt, StringComparison.Ordinal);
+    Assert.Contains("HUMAN_INPUT:", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
+    Assert.Contains("Report only changed files", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
     Assert.True(!provider.LastRequest.SystemPrompt.Contains("Avoid generic status summaries", StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains(goal.Objective, StringComparison.Ordinal));
     Assert.Contains(provider.LastRequest.Messages, message => message.Content.Contains(task.Description, StringComparison.Ordinal));
@@ -153,14 +153,14 @@ public sealed class ModelExecutionTests
     Assert.False(gate.IsSatisfied);
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(VerificationGateStatus.FailedVerification, taskGate.GateStatus);
-    Assert.Contains(taskGate.Message, text => text.Contains("output may be truncated", StringComparison.Ordinal));
+    Assert.Contains("output may be truncated", taskGate.Message, StringComparison.Ordinal);
 
     var worklistItem = kernel.BuildVerificationWorklist(goal.Id).Items.Single(item => item.TaskId == task.Id);
-    Assert.Contains(worklistItem.SuggestedAction, text => text.Contains("stronger model", StringComparison.Ordinal));
-    Assert.Contains(worklistItem.SuggestedAction, text => text.Contains("record model fit", StringComparison.Ordinal));
+    Assert.Contains("stronger model", worklistItem.SuggestedAction, StringComparison.Ordinal);
+    Assert.Contains("record model fit", worklistItem.SuggestedAction, StringComparison.Ordinal);
 
     var blocker = kernel.BuildGoalAcceptanceSummary(goal.Id).Blockers.Single(item => item.TaskId == task.Id);
-    Assert.Contains(blocker.SuggestedAction, text => text.Contains("narrower scope", StringComparison.Ordinal));
+    Assert.Contains("narrower scope", blocker.SuggestedAction, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_goal_and_task_primary_context_in_prompt")]
     public async Task ExecuteAssignedTaskTrimsNoisyGoalAndTaskPrimaryContextInPrompt()
@@ -185,11 +185,11 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("goal-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("goal-tail", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("task-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("task-tail", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains("goal-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("goal-tail", prompt, StringComparison.Ordinal);
+    Assert.Contains("task-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("task-tail", prompt, StringComparison.Ordinal);
+    Assert.Contains("[truncated", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("goal-middle-omitted", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("task-middle-omitted", StringComparison.Ordinal));
     Assert.Equal(objective, goal.Objective);
@@ -219,10 +219,10 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("simple-api-goal-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("simple-api-goal-tail", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("simple-api-task-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("simple-api-task-tail", StringComparison.Ordinal));
+    Assert.Contains("simple-api-goal-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("simple-api-goal-tail", prompt, StringComparison.Ordinal);
+    Assert.Contains("simple-api-task-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("simple-api-task-tail", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("simple-api-goal-middle", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("simple-api-task-middle", StringComparison.Ordinal));
 }
@@ -250,10 +250,10 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("complex-api-goal-middle", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("complex-api-task-middle", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("software-development orchestrator", StringComparison.Ordinal));
-    Assert.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("Avoid generic status summaries", StringComparison.Ordinal));
+    Assert.Contains("complex-api-goal-middle", prompt, StringComparison.Ordinal);
+    Assert.Contains("complex-api-task-middle", prompt, StringComparison.Ordinal);
+    Assert.Contains("software-development orchestrator", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
+    Assert.Contains("Avoid generic status summaries", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
     Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_avoids_repeating_task_description_in_lifecycle_events")]
@@ -305,7 +305,7 @@ public sealed class ModelExecutionTests
 
     var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
 
-    Assert.Contains(ex.Message, text => text.Contains("subscription execution only", StringComparison.Ordinal));
+    Assert.Contains("subscription execution only", ex.Message, StringComparison.Ordinal);
     Assert.Equal(0, provider.CallCount);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
 }
@@ -326,7 +326,7 @@ public sealed class ModelExecutionTests
 
     var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
 
-    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.Contains("already has passing verification", ex.Message, StringComparison.Ordinal);
     Assert.Equal(0, provider.CallCount);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(task.LastVerification?.Succeeded is true);
@@ -347,7 +347,7 @@ public sealed class ModelExecutionTests
         await runner.RunAsync(goal.Id, task.Id);
         var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
 
-        Assert.Contains(ex.Message, text => text.Contains("already has model output", StringComparison.Ordinal));
+        Assert.Contains("already has model output", ex.Message, StringComparison.Ordinal);
         Assert.Equal(1, provider.CallCount);
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.True(task.LastExecution is not null);
@@ -388,7 +388,7 @@ public sealed class ModelExecutionTests
 
     var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
 
-    Assert.Contains(ex.Message, text => text.Contains("already has dispatch evidence", StringComparison.Ordinal));
+    Assert.Contains("already has dispatch evidence", ex.Message, StringComparison.Ordinal);
     Assert.Equal(0, provider.CallCount);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is not null);
@@ -410,7 +410,7 @@ public sealed class ModelExecutionTests
 
     var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
 
-    Assert.Contains(ex.Message, text => text.Contains("status is Running", StringComparison.Ordinal));
+    Assert.Contains("status is Running", ex.Message, StringComparison.Ordinal);
     Assert.Equal(0, provider.CallCount);
 }
 
@@ -453,9 +453,9 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("api-event-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("api-event-tail", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains("api-event-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("api-event-tail", prompt, StringComparison.Ordinal);
+    Assert.Contains("[truncated", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains(new string('z', 900), StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_smaller_timeline_message_budget_for_simple_tasks")]
@@ -481,9 +481,9 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("simple-event-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("simple-event-tail", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains("simple-event-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("simple-event-tail", prompt, StringComparison.Ordinal);
+    Assert.Contains("[truncated", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("simple-event-middle", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_timeline_message_budget_for_complex_tasks")]
@@ -515,9 +515,9 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("complex-event-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("complex-event-middle", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("complex-event-tail", StringComparison.Ordinal));
+    Assert.Contains("complex-event-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("complex-event-middle", prompt, StringComparison.Ordinal);
+    Assert.Contains("complex-event-tail", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("[truncated", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_prefers_decision_timeline_events_over_lifecycle_noise")]
@@ -537,7 +537,7 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("retry-critical-note", StringComparison.Ordinal));
+    Assert.Contains("retry-critical-note", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("routine completed lifecycle noise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_verification_plan_in_prompt")]
@@ -557,9 +557,9 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("api-plan-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("api-plan-tail", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains("api-plan-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("api-plan-tail", prompt, StringComparison.Ordinal);
+    Assert.Contains("[truncated", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("api-plan-middle", StringComparison.Ordinal));
     Assert.Equal(plan, task.VerificationPlan);
 }
@@ -593,9 +593,9 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("complex-api-plan-start", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("complex-api-plan-middle", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("complex-api-plan-tail", StringComparison.Ordinal));
+    Assert.Contains("complex-api-plan-start", prompt, StringComparison.Ordinal);
+    Assert.Contains("complex-api-plan-middle", prompt, StringComparison.Ordinal);
+    Assert.Contains("complex-api-plan-tail", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("[truncated", StringComparison.Ordinal));
     Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
 }
@@ -618,7 +618,7 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, developer.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("developer-specific-plan", StringComparison.Ordinal));
+    Assert.Contains("developer-specific-plan", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("unrelated-tester-noise", StringComparison.Ordinal));
 }
 
@@ -677,9 +677,9 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("GoalCreated", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("TaskDelegated", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("TaskStarted", StringComparison.Ordinal));
+    Assert.Contains("GoalCreated", prompt, StringComparison.Ordinal);
+    Assert.Contains("TaskDelegated", prompt, StringComparison.Ordinal);
+    Assert.Contains("TaskStarted", prompt, StringComparison.Ordinal);
     Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
 }
 
@@ -706,9 +706,9 @@ public sealed class ModelExecutionTests
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
     Assert.True(!prompt.Contains("simple-api-note-04", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("simple-api-note-05", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("simple-api-note-10", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("Recent timeline:", StringComparison.Ordinal));
+    Assert.Contains("simple-api-note-05", prompt, StringComparison.Ordinal);
+    Assert.Contains("simple-api-note-10", prompt, StringComparison.Ordinal);
+    Assert.Contains("Recent timeline:", prompt, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_keeps_larger_timeline_budget_for_complex_tasks")]
@@ -739,8 +739,8 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var prompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Contains(prompt, text => text.Contains("complex-api-note-01", StringComparison.Ordinal));
-    Assert.Contains(prompt, text => text.Contains("complex-api-note-10", StringComparison.Ordinal));
+    Assert.Contains("complex-api-note-01", prompt, StringComparison.Ordinal);
+    Assert.Contains("complex-api-note-10", prompt, StringComparison.Ordinal);
     Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
 }
 
@@ -772,7 +772,7 @@ public sealed class ModelExecutionTests
     Assert.Equal(1024, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.4-mini", goal.Tasks[0].LastExecution!.ModelName);
     Assert.Equal(TaskComplexity.Simple, goal.Tasks[0].LastExecution!.TaskComplexity);
-    Assert.Contains(simplePrompt, text => text.Contains("Call out blockers or follow-up work explicitly", StringComparison.Ordinal));
+    Assert.Contains("Call out blockers or follow-up work explicitly", simplePrompt, StringComparison.Ordinal);
     Assert.True(!simplePrompt.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
 
     await runner.RunAsync(goal.Id, goal.Tasks[1].Id);
@@ -783,7 +783,7 @@ public sealed class ModelExecutionTests
     Assert.Equal(1200, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
     Assert.Equal(TaskComplexity.Complex, goal.Tasks[1].LastExecution!.TaskComplexity);
-    Assert.Contains(complexPrompt, text => text.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+    Assert.Contains("dashboard or orchestrator blocks the ideal path", complexPrompt, StringComparison.Ordinal);
     Assert.True(!complexPrompt.Contains("Keep the response concise", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]
@@ -845,7 +845,7 @@ public sealed class ModelExecutionTests
 
     var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await runner.RunAsync(goal.Id, task.Id));
 
-    Assert.Contains(ex.Message, text => text.Contains("provider unavailable", StringComparison.Ordinal));
+    Assert.Contains("provider unavailable", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskStarted);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
@@ -894,8 +894,8 @@ static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId 
         await runner.RunAsync(goal.Id, task.Id);
 
         var prompt = provider.LastRequest!.Messages.Single().Content;
-        Assert.Contains(prompt, text => text.Contains("## Workspace Diff", StringComparison.Ordinal));
-        Assert.Contains(prompt, text => text.Contains("Foo.cs", StringComparison.Ordinal));
+        Assert.Contains("## Workspace Diff", prompt, StringComparison.Ordinal);
+        Assert.Contains("Foo.cs", prompt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_omits_workspace_diff_section_when_diff_provider_returns_null")]
@@ -960,10 +960,10 @@ static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId 
         await runner.RunAsync(goal.Id, task.Id);
 
         var prompt = provider.LastRequest!.Messages.Single().Content;
-        Assert.Contains(prompt, text => text.Contains("## Workspace Diff", StringComparison.Ordinal));
-        Assert.Contains(prompt, text => text.Contains("diff-head-marker", StringComparison.Ordinal));
-        Assert.Contains(prompt, text => text.Contains("diff-tail-marker", StringComparison.Ordinal));
-        Assert.Contains(prompt, text => text.Contains("[truncated", StringComparison.Ordinal));
+        Assert.Contains("## Workspace Diff", prompt, StringComparison.Ordinal);
+        Assert.Contains("diff-head-marker", prompt, StringComparison.Ordinal);
+        Assert.Contains("diff-tail-marker", prompt, StringComparison.Ordinal);
+        Assert.Contains("[truncated", prompt, StringComparison.Ordinal);
         Assert.True(!prompt.Contains("diff-middle-omitted", StringComparison.Ordinal));
     }
 }

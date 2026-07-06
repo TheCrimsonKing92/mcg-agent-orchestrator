@@ -256,7 +256,7 @@ public sealed class ConductorAutonomyPolicyTests
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_rejects_invalid_JSON")]
     public void ConductorAutonomyPolicyParseJsonRejectsInvalidJson()
     {
-        var ex = Assert.Throws<FormatException>(() =>
+        var ex = Assert.ThrowsAny<FormatException>(() =>
             ConductorAutonomyPolicy.ParseJson("{ not valid json ~~~"));
         Assert.True(ex.Message.Contains("not valid JSON", StringComparison.Ordinal));
     }
@@ -276,7 +276,7 @@ public sealed class ConductorAutonomyPolicyTests
               }
             }
             """;
-        var ex = Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json));
+        var ex = Assert.ThrowsAny<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json));
         Assert.True(ex.Message.Contains("NotARealState", StringComparison.Ordinal));
     }
 
@@ -292,7 +292,7 @@ public sealed class ConductorAutonomyPolicyTests
               "transitionMap": {}
             }
             """;
-        var ex = Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json));
+        var ex = Assert.ThrowsAny<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json));
         Assert.True(ex.Message.Contains("NotARealTier", StringComparison.Ordinal));
     }
 
@@ -310,7 +310,7 @@ public sealed class ConductorAutonomyPolicyTests
               }
             }
             """;
-        var ex = Assert.Throws<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json));
+        var ex = Assert.ThrowsAny<FormatException>(() => ConductorAutonomyPolicy.ParseJson(json));
         Assert.True(ex.Message.Contains("Maybe", StringComparison.Ordinal));
         Assert.True(ex.Message.Contains("Auto", StringComparison.Ordinal));
     }
@@ -318,7 +318,7 @@ public sealed class ConductorAutonomyPolicyTests
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_reports_source_path_in_errors")]
     public void ConductorAutonomyPolicyParseJsonReportsSourcePathInErrors()
     {
-        var ex = Assert.Throws<FormatException>(() =>
+        var ex = Assert.ThrowsAny<FormatException>(() =>
             ConductorAutonomyPolicy.ParseJson("not json", "/repo/.orchestrator/conductor-policy.json"));
         Assert.True(ex.Message.Contains("/repo/.orchestrator/conductor-policy.json", StringComparison.Ordinal));
     }

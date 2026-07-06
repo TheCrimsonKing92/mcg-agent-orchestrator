@@ -137,9 +137,9 @@ public sealed class SpecRefinementTests
 
         var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-        Assert.Contains(brief, text => text.Contains("Refined Spec", StringComparison.Ordinal));
-        Assert.Contains(brief, text => text.Contains("The system provisions a goal worktree on demand.", StringComparison.Ordinal));
-        Assert.Contains(brief, text => text.Contains("WorkspaceReady state entered after create", StringComparison.Ordinal));
+        Assert.Contains("Refined Spec", brief, StringComparison.Ordinal);
+        Assert.Contains("The system provisions a goal worktree on demand.", brief, StringComparison.Ordinal);
+        Assert.Contains("WorkspaceReady state entered after create", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_without_RefinedSpec_has_no_spec_section")]
@@ -170,7 +170,7 @@ public sealed class SpecRefinementTests
 
         var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-        Assert.Contains(brief, text => text.Contains("HTTP method?", StringComparison.Ordinal));
-        Assert.Contains(brief, text => text.Contains("GET", StringComparison.Ordinal));
+        Assert.Contains("HTTP method?", brief, StringComparison.Ordinal);
+        Assert.Contains("GET", brief, StringComparison.Ordinal);
     }
 }

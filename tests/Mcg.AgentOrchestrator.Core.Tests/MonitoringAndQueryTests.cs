@@ -217,7 +217,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(TaskEvidenceKind.Execution, summary.Tasks.Single(item => item.TaskId == executionTask.Id).LatestEvidence);
     Assert.Equal(TaskEvidenceKind.RunningProcess, summary.Tasks.Single(item => item.TaskId == processTask.Id).LatestEvidence);
     Assert.Equal(TaskEvidenceKind.FailedVerification, summary.Tasks.Single(item => item.TaskId == verificationTask.Id).LatestEvidence);
-    Assert.Contains(summary.Tasks.Single(item => item.TaskId == verificationTask.Id).Message, text => text.Contains("failed", StringComparison.Ordinal));
+    Assert.Contains("failed", summary.Tasks.Single(item => item.TaskId == verificationTask.Id).Message, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_surfaces_latest_model_fit_note")]
     public void BuildGoalEvidenceSummarySurfacesLatestModelFitNote()
@@ -329,10 +329,10 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goalId);
     var item = summary.Tasks.Single();
 
-    Assert.Contains(item.Message, text => text.Contains("large paid API prompt 6001 chars", StringComparison.Ordinal));
-    Assert.Contains(item.Message, text => text.Contains("(>6000)", StringComparison.Ordinal));
-    Assert.Contains(item.Message, text => text.Contains("complex paid API model", StringComparison.Ordinal));
-    Assert.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid API work", StringComparison.Ordinal));
+    Assert.Contains("large paid API prompt 6001 chars", item.Message, StringComparison.Ordinal);
+    Assert.Contains("(>6000)", item.Message, StringComparison.Ordinal);
+    Assert.Contains("complex paid API model", item.Message, StringComparison.Ordinal);
+    Assert.Contains("try a local or routine model before repeating paid API work", item.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_dispatch_prompts")]
@@ -358,8 +358,8 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
-    Assert.Contains(item.Message, text => text.Contains("large paid subscription prompt 6001 chars (>6000)", StringComparison.Ordinal));
-    Assert.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid subscription work", StringComparison.Ordinal));
+    Assert.Contains("large paid subscription prompt 6001 chars (>6000)", item.Message, StringComparison.Ordinal);
+    Assert.Contains("try a local or routine model before repeating paid subscription work", item.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_complex_paid_dispatch_model")]
@@ -385,8 +385,8 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
-    Assert.Contains(item.Message, text => text.Contains("complex paid subscription model", StringComparison.Ordinal));
-    Assert.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid subscription work", StringComparison.Ordinal));
+    Assert.Contains("complex paid subscription model", item.Message, StringComparison.Ordinal);
+    Assert.Contains("try a local or routine model before repeating paid subscription work", item.Message, StringComparison.Ordinal);
     Assert.False(item.Message.Contains("large paid subscription prompt", StringComparison.Ordinal));
 }
 
@@ -442,7 +442,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(StageReadinessStatus.NeedsVerification, report.Stages.Single(stage => stage.TaskId == missingVerification.Id).StageStatus);
     Assert.Equal(StageReadinessStatus.VerificationFailed, report.Stages.Single(stage => stage.TaskId == failedVerification.Id).StageStatus);
     Assert.Equal(StageReadinessStatus.Verified, report.Stages.Single(stage => stage.TaskId == verified.Id).StageStatus);
-    Assert.Contains(report.Stages.Single(stage => stage.TaskId == ready.Id).SuggestedAction, text => text.Contains("Run", StringComparison.Ordinal));
+    Assert.Contains("Run", report.Stages.Single(stage => stage.TaskId == ready.Id).SuggestedAction, StringComparison.Ordinal);
     Assert.Equal(TaskEvidenceKind.RunningProcess, report.Stages.Single(stage => stage.TaskId == running.Id).LatestEvidence);
 }
 }

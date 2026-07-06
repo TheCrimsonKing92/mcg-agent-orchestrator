@@ -46,7 +46,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -67,7 +67,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -87,7 +87,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("broad", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("build", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
@@ -120,7 +120,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("broad", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -136,7 +136,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("broad", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -152,7 +152,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -168,7 +168,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("build", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -184,7 +184,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("integration", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("conflict", StringComparison.OrdinalIgnoreCase));
     }
@@ -201,7 +201,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("repeated", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("failure", StringComparison.OrdinalIgnoreCase));
     }
@@ -219,7 +219,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("conflict", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("integration", StringComparison.OrdinalIgnoreCase));
     }
@@ -237,7 +237,7 @@ public sealed class LandingDecisionTests
 
         var decision = LandingDecisionEngine.Decide(inputs);
 
-        var escalate = Assert.IsEscalate(decision);
+        var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
         Assert.True(escalate.Reason.Contains("repeated", StringComparison.OrdinalIgnoreCase) ||
             escalate.Reason.Contains("failure", StringComparison.OrdinalIgnoreCase));
     }
@@ -320,18 +320,4 @@ public sealed class LandingDecisionTests
 
     private static RepositoryChangeSummary DocsOnlyChangeSummary() =>
         RepositoryChangeClassifier.Classify(["README.md"]);
-}
-
-internal static partial class Assert
-{
-    public static LandingDecision.Escalate IsEscalate(LandingDecision decision)
-    {
-        if (decision is not LandingDecision.Escalate escalate)
-        {
-            throw new InvalidOperationException(
-                $"Expected LandingDecision.Escalate but got {decision.GetType().Name}.");
-        }
-
-        return escalate;
-    }
 }

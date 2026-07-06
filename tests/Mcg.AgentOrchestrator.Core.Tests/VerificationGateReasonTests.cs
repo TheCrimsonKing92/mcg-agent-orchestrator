@@ -29,7 +29,7 @@ public sealed class VerificationGateReasonTests
     {
         var gate = MakeGate(VerificationGateReason.NotReady, VerificationGateStatus.NotReady, "Task status is Assigned.");
         var action = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gate);
-        Assert.Contains(action, text => text.Contains("Complete the task", StringComparison.Ordinal));
+        Assert.Contains("Complete the task", action, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_MissingVerification_returns_record_verification_action")]
@@ -37,7 +37,7 @@ public sealed class VerificationGateReasonTests
     {
         var gate = MakeGate(VerificationGateReason.MissingVerification, VerificationGateStatus.MissingVerification, "No verification.");
         var action = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gate);
-        Assert.Contains(action, text => text.Contains("Record verification", StringComparison.Ordinal));
+        Assert.Contains("Record verification", action, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_VerificationFailed_returns_inspect_action")]
@@ -45,7 +45,7 @@ public sealed class VerificationGateReasonTests
     {
         var gate = MakeGate(VerificationGateReason.VerificationFailed, VerificationGateStatus.FailedVerification, "exit 1: dotnet test");
         var action = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gate);
-        Assert.Contains(action, text => text.Contains("Inspect", StringComparison.Ordinal));
+        Assert.Contains("Inspect", action, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_OutputTokenLimit_returns_retry_narrow_scope_action")]
@@ -54,7 +54,7 @@ public sealed class VerificationGateReasonTests
         var gate = MakeGate(VerificationGateReason.OutputTokenLimit, VerificationGateStatus.FailedVerification,
             "Model output may be truncated at 8192 token(s); retry with narrower scope or stronger model before accepting this gate.");
         var action = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gate);
-        Assert.Contains(action, text => text.Contains("narrower scope", StringComparison.Ordinal));
+        Assert.Contains("narrower scope", action, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_DirtyUsefulRecovery_returns_commit_changes_action")]
@@ -63,7 +63,7 @@ public sealed class VerificationGateReasonTests
         var gate = MakeGate(VerificationGateReason.DirtyUsefulRecovery, VerificationGateStatus.FailedVerification,
             "dirty-useful dispatch recovery needed: changed files [src/Foo.cs]; verification evidence: Test run successful.");
         var action = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gate);
-        Assert.Contains(action, text => text.Contains("commit the worker changes", StringComparison.Ordinal));
+        Assert.Contains("commit the worker changes", action, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_DirtyUnverifiedRecovery_returns_run_verification_first_action")]
@@ -72,7 +72,7 @@ public sealed class VerificationGateReasonTests
         var gate = MakeGate(VerificationGateReason.DirtyUnverifiedRecovery, VerificationGateStatus.FailedVerification,
             "dirty-unverified dispatch recovery needed: changed files [src/Foo.cs]; verification evidence: no verification evidence found.");
         var action = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gate);
-        Assert.Contains(action, text => text.Contains("run focused verification", StringComparison.Ordinal));
+        Assert.Contains("run focused verification", action, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationGate_sets_DirtyUsefulRecovery_reason_for_dirty_useful_dispatch")]
@@ -145,7 +145,7 @@ public sealed class VerificationGateReasonTests
         var actionModified = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gateWithModifiedMessage);
 
         Assert.Equal(actionStandard, actionModified);
-        Assert.Contains(actionModified, text => text.Contains("commit the worker changes", StringComparison.Ordinal));
+        Assert.Contains("commit the worker changes", actionModified, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_DirtyUnverifiedRecovery_routes_by_reason_not_message")]
@@ -164,7 +164,7 @@ public sealed class VerificationGateReasonTests
         var actionModified = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gateWithModifiedMessage);
 
         Assert.Equal(actionStandard, actionModified);
-        Assert.Contains(actionModified, text => text.Contains("run focused verification", StringComparison.Ordinal));
+        Assert.Contains("run focused verification", actionModified, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildVerificationSuggestedAction_OutputTokenLimit_routes_by_reason_not_message")]
@@ -183,6 +183,6 @@ public sealed class VerificationGateReasonTests
         var actionModified = AgentOrchestratorKernel.BuildVerificationSuggestedAction(gateWithModifiedMessage);
 
         Assert.Equal(actionStandard, actionModified);
-        Assert.Contains(actionModified, text => text.Contains("narrower scope", StringComparison.Ordinal));
+        Assert.Contains("narrower scope", actionModified, StringComparison.Ordinal);
     }
 }

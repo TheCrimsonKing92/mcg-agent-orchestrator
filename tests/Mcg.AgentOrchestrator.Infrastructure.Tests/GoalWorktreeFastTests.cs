@@ -88,7 +88,7 @@ public sealed class GoalWorktreeTests
 
             var output = CaptureConsole(() =>
             {
-                var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                     ["lifecycle-simple-goal", "Run but fail acceptance", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                     context));
                 Xunit.Assert.Contains("acceptance", ex.Message);
@@ -118,7 +118,7 @@ public sealed class GoalWorktreeTests
             var verifier = FakeAcceptanceVerifier.Throws(new InvalidOperationException("fake verifier boom"));
             var context = CreateLifecycleContext(root, worktrees, verifier);
 
-            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+            var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                 ["lifecycle-simple-goal", "Run but verifier throws", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                 context));
 

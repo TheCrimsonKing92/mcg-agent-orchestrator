@@ -416,30 +416,3 @@ public sealed class GoalChangesReaderTests
 
     private static bool Empty<T>(IReadOnlyList<T> list) => list.Count == 0;
 }
-
-file static class Assert
-{
-    public static void Equal<T>(T expected, T actual) =>
-        Xunit.Assert.Equal(expected, actual);
-
-    public static void Single<T>(IReadOnlyList<T> collection) =>
-        Xunit.Assert.Single(collection);
-
-    public static void Single<T>(IEnumerable<T> collection) =>
-        Xunit.Assert.Single(collection);
-
-    public static void Empty<T>(IReadOnlyList<T> collection) =>
-        Xunit.Assert.Empty(collection);
-
-    public static void Empty<T>(IEnumerable<T> collection) =>
-        Xunit.Assert.Empty(collection);
-
-    public static void Contains<T>(T item, IEnumerable<T> collection) =>
-        Xunit.Assert.Contains(item, collection);
-
-    public static void Null(object? value) =>
-        Xunit.Assert.Null(value);
-
-    public static void NotNull(object? value) =>
-        Xunit.Assert.NotNull(value);
-}

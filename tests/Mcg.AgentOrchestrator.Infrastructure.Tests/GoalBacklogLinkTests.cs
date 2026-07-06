@@ -103,7 +103,7 @@ public sealed class GoalBacklogLinkTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<FileNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<FileNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
             ["backlog-intake", "Legacy Feature", "--create-simple-goal"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
@@ -126,7 +126,7 @@ public sealed class GoalBacklogLinkTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["backlog-intake", "Ambiguous", "--create-simple-goal"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 

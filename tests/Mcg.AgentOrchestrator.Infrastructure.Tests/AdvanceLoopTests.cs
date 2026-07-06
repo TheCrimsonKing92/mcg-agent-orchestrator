@@ -87,7 +87,7 @@ public sealed class AdvanceLoopTests
     Assert.Equal(1, result.StepCount);
     Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
     Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
-    Assert.Contains(result.StopReason, text => text.Contains("stopped before API-backed execution", StringComparison.Ordinal));
+    Assert.Contains("stopped before API-backed execution", result.StopReason, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastExecution is null);
     Assert.True(provider.LastRequest is null);
@@ -119,7 +119,7 @@ public sealed class AdvanceLoopTests
 
     Assert.False(result.Executed);
     Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.AutomationKind);
-    Assert.Contains(result.Message, text => text.Contains("stopped before API-backed execution", StringComparison.Ordinal));
+    Assert.Contains("stopped before API-backed execution", result.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastExecution is null);
     Assert.True(provider.LastRequest is null);
@@ -155,7 +155,7 @@ public sealed class AdvanceLoopTests
 
     Assert.False(result.Executed);
     Assert.Equal(NextActionAutomationKind.StartRecordedDispatch, result.AutomationKind);
-    Assert.Contains(result.Message, text => text.Contains("stopped before starting recorded dispatch", StringComparison.Ordinal));
+    Assert.Contains("stopped before starting recorded dispatch", result.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
     Assert.True(task.LastProcess is null);
@@ -187,9 +187,9 @@ public sealed class AdvanceLoopTests
         goal);
 
     Assert.False(single.Executed);
-    Assert.Contains(single.Message, text => text.Contains("profile-start", StringComparison.Ordinal));
-    Assert.Contains(single.Message, text => text.Contains("profile-tail", StringComparison.Ordinal));
-    Assert.Contains(single.Message, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains("profile-start", single.Message, StringComparison.Ordinal);
+    Assert.Contains("profile-tail", single.Message, StringComparison.Ordinal);
+    Assert.Contains("[truncated", single.Message, StringComparison.Ordinal);
     Assert.True(!single.Message.Contains(new string('p', 2000), StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
 
@@ -205,9 +205,9 @@ public sealed class AdvanceLoopTests
 
     Assert.True(loop.Executed);
     Assert.Equal(1, loop.StepCount);
-    Assert.Contains(loop.StopReason, text => text.Contains("profile-start", StringComparison.Ordinal));
-    Assert.Contains(loop.StopReason, text => text.Contains("profile-tail", StringComparison.Ordinal));
-    Assert.Contains(loop.StopReason, text => text.Contains("[truncated", StringComparison.Ordinal));
+    Assert.Contains("profile-start", loop.StopReason, StringComparison.Ordinal);
+    Assert.Contains("profile-tail", loop.StopReason, StringComparison.Ordinal);
+    Assert.Contains("[truncated", loop.StopReason, StringComparison.Ordinal);
     Assert.True(!loop.StopReason.Contains(new string('p', 2000), StringComparison.Ordinal));
     Assert.True(loopTask.LastDispatch is null);
 }
@@ -245,7 +245,7 @@ public sealed class AdvanceLoopTests
     Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
     Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.Steps[1].AutomationKind);
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, result.BlockingAction!.Kind);
-    Assert.Contains(result.StopReason, text => text.Contains("stopped before starting recorded dispatch", StringComparison.Ordinal));
+    Assert.Contains("stopped before starting recorded dispatch", result.StopReason, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
     Assert.True(task.LastProcess is null);
@@ -286,7 +286,7 @@ public sealed class AdvanceLoopTests
     Assert.Equal(NextActionAutomationKind.DelegatePendingTask, result.Steps[0].AutomationKind);
     Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.Steps[1].AutomationKind);
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, result.BlockingAction!.Kind);
-    Assert.Contains(result.StopReason, text => text.Contains("stopped before starting recorded dispatch", StringComparison.Ordinal));
+    Assert.Contains("stopped before starting recorded dispatch", result.StopReason, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
     Assert.True(task.LastProcess is null);
@@ -325,7 +325,7 @@ public sealed class AdvanceLoopTests
 
     Assert.True(result.Executed);
     Assert.Equal(NextActionAutomationKind.RunAssignedTask, result.AutomationKind);
-    Assert.Contains(result.Message, text => text.Contains("Run the assigned model-backed task", StringComparison.Ordinal));
+    Assert.Contains("Run the assigned model-backed task", result.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
     Assert.True(task.LastProcess is null);
@@ -405,8 +405,8 @@ public sealed class AdvanceLoopTests
         "run",
         string.Empty));
 
-    Assert.Contains(ex.Message, text => text.Contains("stopped before API fallback", StringComparison.Ordinal));
-    Assert.Contains(ex.Message, text => text.Contains("status is Running", StringComparison.Ordinal));
+    Assert.Contains("stopped before API fallback", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("status is Running", ex.Message, StringComparison.Ordinal);
     Assert.True(provider.LastRequest is null);
     Assert.True(task.LastDispatch is not null);
     Assert.True(task.LastExecution is null);
@@ -439,7 +439,7 @@ public sealed class AdvanceLoopTests
         string.Empty);
 
     Assert.Equal(executionRoot, task.LastDispatch!.WorkingDirectory);
-    Assert.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{executionRoot}'", StringComparison.Ordinal));
+    Assert.Contains($"--cd '{executionRoot}'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_starts_only_new_subscription_dispatches")]
@@ -756,7 +756,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     Assert.False(result.Executed);
     Assert.Equal(0, result.StepCount);
     Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
-    Assert.Contains(result.StopReason, text => text.Contains("Subscription retry window is deferred", StringComparison.Ordinal));
+    Assert.Contains("Subscription retry window is deferred", result.StopReason, StringComparison.Ordinal);
     Assert.Equal(task.SubscriptionRetryAfter, result.ContinueAfter);
     Assert.True(DashboardContinuationService.ShouldContinueWatching(result));
 }

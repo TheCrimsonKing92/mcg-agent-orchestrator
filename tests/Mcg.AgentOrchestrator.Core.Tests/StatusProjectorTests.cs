@@ -36,8 +36,8 @@ public sealed class StatusProjectorTests
         Assert.Equal(1, projection.Buckets.Landed.Count);
         Assert.Equal("landed-123456", projection.Buckets.Landed[0].Id);
         Assert.Equal(2, projection.OpenEscalationCount);
-        Assert.Contains(projection.RenderedContent, text => text.Contains("Open escalations: 2", StringComparison.Ordinal));
-        Assert.Contains(projection.RenderedContent, text => text.Contains("https://discord.example/escalations", StringComparison.Ordinal));
+        Assert.Contains("Open escalations: 2", projection.RenderedContent, StringComparison.Ordinal);
+        Assert.Contains("https://discord.example/escalations", projection.RenderedContent, StringComparison.Ordinal);
         Assert.False(projection.Unchanged);
     }
 
@@ -55,7 +55,7 @@ public sealed class StatusProjectorTests
         Assert.Equal("raw-completed", item.Id);
         Assert.Equal("accepting", item.Stage);
         Assert.Equal("integration or cleanup required", item.Health);
-        Assert.Contains(projection.RenderedContent, text => text.Contains("integration or cleanup required", StringComparison.Ordinal));
+        Assert.Contains("integration or cleanup required", projection.RenderedContent, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "StatusProjector_reports_unchanged_for_byte_identical_render")]

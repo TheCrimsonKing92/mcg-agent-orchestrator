@@ -304,7 +304,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
 
-        var loopError = Xunit.Assert.Throws<ArgumentException>(() =>
+        var loopError = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
         {
             CliCommandDispatcher.ExecuteCommand(
                 ["conduct", "--loop", "--watch", "--poll-seconds", invalidPollSeconds, "--max-iterations", "0"],
@@ -317,7 +317,7 @@ public sealed class CliCommandTests
         });
         Xunit.Assert.Contains("--poll-seconds requires a positive integer value.", loopError.Message);
 
-        var scopedError = Xunit.Assert.Throws<ArgumentException>(() =>
+        var scopedError = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
         {
             CliCommandDispatcher.ExecuteCommand(
                 ["conduct", goal.Id.Value[..8], "--watch", "--poll-seconds", invalidPollSeconds, "--max-duration", "0"],
@@ -343,7 +343,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
 
-        var error = Xunit.Assert.Throws<ArgumentException>(() =>
+        var error = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
         {
             CliCommandDispatcher.ExecuteCommand(
                 ["conduct", goal.Id.Value[..8], "--poll-seconds", "5"],
@@ -611,7 +611,7 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["start-subscription-ready", "--confirm-batch-start", "--autonomy", "observe"],
             kernel,
             workspace,
@@ -921,7 +921,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["goal", "Improve things"],
             kernel,
             workspace,
@@ -1704,7 +1704,7 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["drain-goals", "--apply", "--autonomy", "safe-auto"],
             kernel,
             workspace,
@@ -2121,7 +2121,7 @@ public sealed class CliCommandTests
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = existing;
             kernel.ActivateGoal(existing.Id, agents);
-            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
                 [
                     "lifecycle-simple-goal",
                     "Ship another src/Conflict.cs change",
@@ -2349,7 +2349,7 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
         MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
-        var blocked = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["build-lease-cleanup", goal.Id.Value[..8]],
             kernel,
             workspace,
@@ -2442,7 +2442,7 @@ public sealed class CliCommandTests
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["run-goal", "--confirm-batch-start", "--confirm-readiness-risk"],
             kernel,
             workspace,
@@ -2473,7 +2473,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             [
                 "lifecycle-simple-goal",
                 "Update auth token rollback policy in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs",
@@ -2492,7 +2492,7 @@ public sealed class CliCommandTests
         Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
         Xunit.Assert.Null(goal.Tasks.Single().LastProcess);
 
-        var second = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var second = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             [
                 "lifecycle-simple-goal",
                 "Update auth token rollback policy in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs",
@@ -3314,7 +3314,7 @@ public sealed class CliCommandTests
 
         var stderr = CaptureConsoleError(() =>
         {
-            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
                 ["start-subscription-ready", "--confirm-batch-start", "--autonomy", "observe"],
                 kernel,
                 workspace,
@@ -4150,7 +4150,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
 
-        var missingMessage = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+        var missingMessage = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
             ["note", "1"],
             kernel,
             workspace,
@@ -4158,7 +4158,7 @@ public sealed class CliCommandTests
             providers,
             ref profiles,
             ref currentGoal));
-        var emptyMessage = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+        var emptyMessage = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
             ["note", "1", "   "],
             kernel,
             workspace,
@@ -4166,7 +4166,7 @@ public sealed class CliCommandTests
             providers,
             ref profiles,
             ref currentGoal));
-        var unknownTask = Xunit.Assert.Throws<KeyNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
+        var unknownTask = Xunit.Assert.ThrowsAny<KeyNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
             ["note", "99", "Known typo."],
             kernel,
             workspace,
@@ -4327,7 +4327,7 @@ public sealed class CliCommandTests
         var task = goal.Tasks.Single();
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["re-delegate", "1"],
             kernel,
             workspace,
@@ -4394,7 +4394,7 @@ public sealed class CliCommandTests
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
             DateTimeOffset.UtcNow));
 
-        var blocked = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["subscription-dispatch", "1"],
             kernel,
             workspace,
@@ -4402,7 +4402,7 @@ public sealed class CliCommandTests
             providers,
             ref profiles,
             ref currentGoal));
-        var missingNote = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+        var missingNote = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
             ["subscription-dispatch", "1", "--confirm-limit-review"],
             kernel,
             workspace,
@@ -4758,7 +4758,7 @@ public sealed class CliCommandTests
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         _ = await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, "Other clarification", "Other body", $"spec-clarification:{other.Id.Value}:scope:55555555");
 
-        var ex = Xunit.Assert.Throws<ArgumentException>(() =>
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
             ExecuteCliAndCapture(["attention", "answer", "12345678", "55555555", "Do not cross streams."], kernel, workspace));
 
         Xunit.Assert.Contains($"does not belong to goal '{target.Id.Value}'", ex.Message);
@@ -4774,7 +4774,7 @@ public sealed class CliCommandTests
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         _ = await store.RaiseAsync(CollaborationItemType.Clarification, known.Id.Value, "Known clarification", "Known body", $"spec-clarification:{known.Id.Value}:scope:77777777");
 
-        var ex = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+        var ex = Xunit.Assert.ThrowsAny<KeyNotFoundException>(() =>
             ExecuteCliAndCapture(["attention", "answer", "99999999", "77777777", "Use the known answer."], kernel, workspace));
         var queue = await store.GetAttentionQueueAsync();
 
@@ -4790,7 +4790,7 @@ public sealed class CliCommandTests
         var kernel = new AgentOrchestratorKernel();
         _ = kernel.CreateGoal(new GoalId("abcdef12aaaaaaaaaaaaaaaaaaaaaaaa"), "Known goal");
 
-        var ex = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+        var ex = Xunit.Assert.ThrowsAny<KeyNotFoundException>(() =>
             ExecuteCliAndCapture(["attention", "answer", "99999999", "88888888", "Use the answer."], kernel, workspace));
 
         Xunit.Assert.Contains("No goal found matching prefix '99999999'", ex.Message);
@@ -4995,7 +4995,7 @@ public sealed class CliCommandTests
         var kernel = new AgentOrchestratorKernel();
         _ = kernel.CreateGoal(new GoalId("11111111aaaaaaaaaaaaaaaaaaaaaaaa"), "Known goal");
 
-        var ex = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+        var ex = Xunit.Assert.ThrowsAny<KeyNotFoundException>(() =>
             ExecuteCliAndCapture(["attention", "show", "99999999"], kernel, workspace));
 
         Xunit.Assert.Contains("No goal found matching prefix '99999999'", ex.Message);
@@ -5125,7 +5125,7 @@ public sealed class CliCommandTests
         kernel.ActivateGoal(goal.Id, agents);
         var goalPrefix = goal.Id.Value[..8];
 
-        var blocked = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             CliArgumentParser.SplitCommand($"cancel-goal {goalPrefix} Operator stopped stale validation."),
             kernel,
             workspace,
@@ -5938,7 +5938,7 @@ public sealed class CliCommandTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<ArgumentException>(() => CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() => CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["goal", "Fail unknown agent", "--developer", "missing-agent"],
             kernel,
             workspace,
@@ -6197,7 +6197,7 @@ public sealed class CliCommandTests
         Goal? currentGoal = null;
         var missingPath = Path.Combine(root, "does-not-exist.md");
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["backlog-add", "File-backed item", "--body-file", missingPath],
             kernel,
             workspace,
@@ -6256,7 +6256,7 @@ public sealed class CliCommandTests
         Goal? currentGoal = null;
         var missingPath = Path.Combine(root, "does-not-exist.md");
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
             ["simple-goal", "--brief-file", missingPath],
             kernel,
             workspace,
@@ -8533,7 +8533,7 @@ public sealed class CliCommandTests
                 }
             };
 
-            var ex = Xunit.Assert.Throws<TimeoutException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var ex = Xunit.Assert.ThrowsAny<TimeoutException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
                 ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
                 repository,
                 CreateRefinedWorkspace(root),

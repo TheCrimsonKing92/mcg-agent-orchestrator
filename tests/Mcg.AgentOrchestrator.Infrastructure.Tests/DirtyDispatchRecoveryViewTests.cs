@@ -20,10 +20,10 @@ public sealed class DirtyDispatchRecoveryViewTests
     {
         var summary = ConsoleViews.FormatDirtyDispatchRecoverySummary(DirtyUsefulRecovery);
 
-        Assert.Contains(summary, text => text.StartsWith("dirty-useful:", StringComparison.Ordinal));
-        Assert.Contains(summary, text => text.Contains("src/Foo.cs", StringComparison.Ordinal));
-        Assert.Contains(summary, text => text.Contains("tests/FooTests.cs", StringComparison.Ordinal));
-        Assert.Contains(summary, text => text.Contains("Passed: 5", StringComparison.Ordinal));
+        Assert.StartsWith("dirty-useful:", summary, StringComparison.Ordinal);
+        Assert.Contains("src/Foo.cs", summary, StringComparison.Ordinal);
+        Assert.Contains("tests/FooTests.cs", summary, StringComparison.Ordinal);
+        Assert.Contains("Passed: 5", summary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "FormatDirtyDispatchRecoverySummary_formats_dirty_unverified_with_no_evidence_note")]
@@ -31,10 +31,10 @@ public sealed class DirtyDispatchRecoveryViewTests
     {
         var summary = ConsoleViews.FormatDirtyDispatchRecoverySummary(DirtyUnverifiedRecovery);
 
-        Assert.Contains(summary, text => text.StartsWith("dirty-unverified:", StringComparison.Ordinal));
-        Assert.Contains(summary, text => text.Contains("src/Bar.cs", StringComparison.Ordinal));
-        Assert.Contains(summary, text => text.Contains("none found", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(summary, text => text.Contains("rerun focused verification", StringComparison.OrdinalIgnoreCase));
+        Assert.StartsWith("dirty-unverified:", summary, StringComparison.Ordinal);
+        Assert.Contains("src/Bar.cs", summary, StringComparison.Ordinal);
+        Assert.Contains("none found", summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("rerun focused verification", summary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "BuildDirtyDispatchRecoverySuggestedCommand_points_to_task_details")]
@@ -51,11 +51,11 @@ public sealed class DirtyDispatchRecoveryViewTests
     {
         const int taskNumber = 7;
         var output = CaptureConsole(() => ConsoleViews.PrintDirtyDispatchRecovery(taskNumber, DirtyUnverifiedRecovery));
-        Assert.Contains(output, text => text.Contains("C:\\worktrees\\goal-abc", StringComparison.Ordinal));
-        Assert.Contains(output, text => text.Contains("status --short", StringComparison.Ordinal));
-        Assert.Contains(output, text => text.Contains("add -A", StringComparison.Ordinal));
-        Assert.Contains(output, text => text.Contains("commit -m", StringComparison.Ordinal));
-        Assert.Contains(output, text => text.Contains($"verify-manual {taskNumber} passed", StringComparison.Ordinal));
-        Assert.Contains(output, text => text.Contains("dirty-unverified", StringComparison.Ordinal));
+        Assert.Contains("C:\\worktrees\\goal-abc", output, StringComparison.Ordinal);
+        Assert.Contains("status --short", output, StringComparison.Ordinal);
+        Assert.Contains("add -A", output, StringComparison.Ordinal);
+        Assert.Contains("commit -m", output, StringComparison.Ordinal);
+        Assert.Contains($"verify-manual {taskNumber} passed", output, StringComparison.Ordinal);
+        Assert.Contains("dirty-unverified", output, StringComparison.Ordinal);
     }
 }

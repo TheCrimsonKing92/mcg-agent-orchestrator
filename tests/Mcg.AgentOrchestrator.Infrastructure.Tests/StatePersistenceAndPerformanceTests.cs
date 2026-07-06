@@ -41,12 +41,12 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.True(restored.Goals.Any(goal => goal.Objective == "Persisted dogfood goal"));
         Assert.Equal("Write-Output custom", restoredWorkers.GetRequired("custom-dogfood").CommandTemplate);
         Assert.Equal("Write-Output {promptPath}", restoredWorkers.GetRequired("local-echo").CommandTemplate);
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", StringComparison.Ordinal));
+        Assert.Contains("codex exec", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--model {subscriptionModelName}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--sandbox {sandboxMode}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--cd {workingDirectory}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.DoesNotContain("{promptPath}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 
         File.Delete(workerPath);
@@ -59,12 +59,12 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.True(File.Exists(workerPath));
         Assert.True(File.Exists(Path.Combine(workspace, ".orchestrator", "agents.json")));
         Assert.True(LoadState(statePath).Goals.Any(goal => goal.Objective == "Persisted dogfood goal"));
-        Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("codex exec", StringComparison.Ordinal));
-        Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
-        Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
-        Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
-        Assert.Contains(repairedWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-        Assert.Contains(repairedWorkers.GetRequired("claude-cli").CommandTemplate, text => text.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", StringComparison.Ordinal));
+        Assert.Contains("codex exec", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--model {subscriptionModelName}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--sandbox {sandboxMode}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--cd {workingDirectory}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.DoesNotContain("{promptPath}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_uses_local_agent_fallback_when_supplied")]
@@ -136,10 +136,10 @@ public sealed class StatePersistenceAndPerformanceTests
         PrototypeWorkspaceSeeder.Create(root);
 
         var restoredWorkers = WorkerProfileStore.Load(workerPath);
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--sandbox {sandboxMode}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--cd {workingDirectory}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
+        Assert.Contains("--sandbox {sandboxMode}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--cd {workingDirectory}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("--model {subscriptionModelName}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_upgrades_codex_profiles_missing_model_or_reasoning_propagation")]
     public void PrototypeWorkspaceSeederUpgradesCodexProfilesMissingModelOrReasoningPropagation()
@@ -154,8 +154,8 @@ public sealed class StatePersistenceAndPerformanceTests
         PrototypeWorkspaceSeeder.Create(root);
 
         var restoredWorkers = WorkerProfileStore.Load(workerPath);
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("--model {subscriptionModelName}", StringComparison.Ordinal));
-        Assert.Contains(restoredWorkers.GetRequired("codex-cli").CommandTemplate, text => text.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.Ordinal));
+        Assert.Contains("--model {subscriptionModelName}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_upgrades_stale_persisted_agent_catalog")]
     public void PrototypeWorkspaceSeederUpgradesStalePersistedAgentCatalog()
@@ -303,7 +303,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         Assert.Equal("customer-1", selection.TenantName);
         Assert.True(selection.CommandArgs.SequenceEqual(["simple-goal", "Do work"]));
-        Assert.Throws<ArgumentException>(() => OrchestratorTenantSelection.FromArgs(["--tenant=../bad", "goals"], null));
+        Assert.ThrowsAny<ArgumentException>(() => OrchestratorTenantSelection.FromArgs(["--tenant=../bad", "goals"], null));
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorProjectSelection_accepts_cli_override_and_rejects_path_segments")]
@@ -315,7 +315,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         Assert.Equal("customer-1", selection.ProjectName);
         Assert.True(selection.CommandArgs.SequenceEqual(["goals"]));
-        Assert.Throws<ArgumentException>(() => OrchestratorProjectSelection.FromArgs(["--project=../bad", "goals"], null));
+        Assert.ThrowsAny<ArgumentException>(() => OrchestratorProjectSelection.FromArgs(["--project=../bad", "goals"], null));
     }
 
     [Xunit.Fact(DisplayName = "OrchestratorProjectRegistry_selection_routes_to_project_workspace")]
@@ -529,9 +529,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(logPath, restoredTask.LastVerification!.StandardOutputPath);
         Assert.Equal(0, restoredTask.LastVerification.ExitCode);
         // Bounded preview must begin with the head of the original text
-        Assert.Contains(
-            restoredTask.LastVerification.StandardOutput,
-            text => text.StartsWith(new string('A', 4096), StringComparison.Ordinal));
+        Assert.StartsWith(new string('A', 4096), restoredTask.LastVerification.StandardOutput, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_preserves_full_inline_output_when_no_path_is_set")]

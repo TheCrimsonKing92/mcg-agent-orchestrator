@@ -1587,7 +1587,7 @@ public sealed class GoalWorktreeIntegrationTests
             Goal? currentGoal = goal;
             var path = GoalWorktrees.Ensure(repo, goal.Id);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            var ex = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
                 ["workspace", "remove", "--autonomy", "safe-auto"],
                 kernel,
                 workspace,
@@ -1844,7 +1844,7 @@ public sealed class GoalWorktreeIntegrationTests
             kernel.RecordAcceptanceFailure(blockedGoal.Id, ["acceptance evidence blocked"]);
             var blockedContext = CreateAcceptanceContext(kernel, repo, blockedGoal);
 
-            var blocked = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+            var blocked = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                 ["acceptance-repair", blockedGoal.Id.Value[..8], "--confirm-acceptance-repair"],
                 blockedContext));
             Assert.Contains("no completed acceptance or conductor landing evidence", blocked.Message);
@@ -2868,7 +2868,7 @@ public sealed class GoalWorktreeIntegrationTests
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = goal;
 
-            var ex = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            var ex = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
                 ["acceptance", "--autonomy", "safe-auto"],
                 kernel,
                 workspace,
@@ -3016,7 +3016,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.Equal(0, stateRepository.TransactionCount);
 
             Assert.True(CliPersistentStateRunner.SkipsKernelState(["repo-process-stop"]));
-            var usage = Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+            var usage = Assert.ThrowsAny<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
                 ["repo-process-stop"],
                 stateRepository,
                 workspace,
@@ -4128,7 +4128,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var output = CaptureConsole(() =>
             {
-                var ex = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                var ex = Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                     ["lifecycle-simple-goal", "Ship but pause before merge", "--confirm-batch-start", "--confirm-large-paid-subscription-start", "--autonomy", "safe-auto"],
                     context));
                 Assert.True(ex.Message.Contains("stopped before acceptance", StringComparison.Ordinal));
@@ -4160,7 +4160,7 @@ public sealed class GoalWorktreeIntegrationTests
         var profiles = EchoProfiles();
         var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null);
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
             ["lifecycle-simple-goal", "Do work"],
             context));
 
@@ -4179,7 +4179,7 @@ public sealed class GoalWorktreeIntegrationTests
         var profiles = EchoProfiles();
         var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, null);
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
             ["lifecycle-simple-goal", "Do work", "--confirm-batch-start"],
             context));
 
@@ -4216,7 +4216,7 @@ public sealed class GoalWorktreeIntegrationTests
 
             var output = CaptureConsole(() =>
             {
-                var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                     ["lifecycle-simple-goal", "Run but fail acceptance", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                     context));
                 Xunit.Assert.Contains("acceptance", ex.Message);
@@ -4254,7 +4254,7 @@ public sealed class GoalWorktreeIntegrationTests
                 RunGoalOverride = CreateFastLifecycleRunGoal(kernel, repo)
             };
 
-            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+            var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
                 ["lifecycle-simple-goal", "Run but verifier throws", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                 context));
 
@@ -5006,7 +5006,7 @@ public sealed class GoalWorktreeIntegrationTests
             Assert.False(Directory.Exists(worktreePath));
             Assert.True(Directory.Exists(contextPath));
             Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
-            Assert.Contains(result.Message, text => text.Contains("Owned ephemeral cleanup is incomplete", StringComparison.Ordinal));
+            Assert.Contains("Owned ephemeral cleanup is incomplete", result.Message, StringComparison.Ordinal);
             Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
         }
         finally

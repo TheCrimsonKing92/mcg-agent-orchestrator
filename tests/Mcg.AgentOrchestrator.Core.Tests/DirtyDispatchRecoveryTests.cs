@@ -185,8 +185,8 @@ public sealed class DirtyDispatchRecoveryTests
         var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
         var taskSummary = summary.Tasks.First(t => t.TaskId == devTask.Id);
 
-        Assert.Contains(taskSummary.Message, text => text.Contains("dirty-useful", StringComparison.Ordinal));
-        Assert.Contains(taskSummary.Message, text => text.Contains("src/Foo.cs", StringComparison.Ordinal));
+        Assert.Contains("dirty-useful", taskSummary.Message, StringComparison.Ordinal);
+        Assert.Contains("src/Foo.cs", taskSummary.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "TryBuildDirtyDispatchRecovery_returns_unavailable_changed_files_when_no_status_short_in_stderr")]

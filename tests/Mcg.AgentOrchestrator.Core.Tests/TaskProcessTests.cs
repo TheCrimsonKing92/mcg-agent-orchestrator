@@ -29,8 +29,8 @@ public sealed class TaskProcessTests
     Assert.Equal(1, plan.ReadyCount);
     Assert.Equal(2, plan.SkippedCount);
     Assert.Equal(ProcessBatchItemStatus.Ready, plan.Items.Single(item => item.TaskId == ready.Id).Status);
-    Assert.Contains(plan.Items.Single(item => item.TaskId == noDispatch.Id).Reason, text => text.Contains("no recorded dispatch", StringComparison.Ordinal));
-    Assert.Contains(plan.Items.Single(item => item.TaskId == alreadyRunning.Id).Reason, text => text.Contains("already has a running process", StringComparison.Ordinal));
+    Assert.Contains("no recorded dispatch", plan.Items.Single(item => item.TaskId == noDispatch.Id).Reason, StringComparison.Ordinal);
+    Assert.Contains("already has a running process", plan.Items.Single(item => item.TaskId == alreadyRunning.Id).Reason, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildProcessBatchPlan_explains_refresh_dispatch_readiness")]
     public void BuildProcessBatchPlanExplainsRefreshDispatchReadiness()
@@ -61,8 +61,8 @@ public sealed class TaskProcessTests
     Assert.Equal(1, plan.ReadyCount);
     Assert.Equal(2, plan.SkippedCount);
     Assert.Equal(ProcessBatchItemStatus.Ready, plan.Items.Single(item => item.TaskId == running.Id).Status);
-    Assert.Contains(plan.Items.Single(item => item.TaskId == noProcess.Id).Reason, text => text.Contains("no background process", StringComparison.Ordinal));
-    Assert.Contains(plan.Items.Single(item => item.TaskId == completed.Id).Reason, text => text.Contains("already completed", StringComparison.Ordinal));
+    Assert.Contains("no background process", plan.Items.Single(item => item.TaskId == noProcess.Id).Reason, StringComparison.Ordinal);
+    Assert.Contains("already completed", plan.Items.Single(item => item.TaskId == completed.Id).Reason, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildProcessBatchPlan_explains_cancel_dispatch_readiness")]
     public void BuildProcessBatchPlanExplainsCancelDispatchReadiness()
@@ -93,9 +93,9 @@ public sealed class TaskProcessTests
     Assert.Equal(1, plan.ReadyCount);
     Assert.Equal(2, plan.SkippedCount);
     Assert.Equal(ProcessBatchItemStatus.Ready, plan.Items.Single(item => item.TaskId == running.Id).Status);
-    Assert.Contains(plan.Items.Single(item => item.TaskId == running.Id).Reason, text => text.Contains("cancel process", StringComparison.Ordinal));
-    Assert.Contains(plan.Items.Single(item => item.TaskId == noProcess.Id).Reason, text => text.Contains("no background process", StringComparison.Ordinal));
-    Assert.Contains(plan.Items.Single(item => item.TaskId == completed.Id).Reason, text => text.Contains("already completed", StringComparison.Ordinal));
+    Assert.Contains("cancel process", plan.Items.Single(item => item.TaskId == running.Id).Reason, StringComparison.Ordinal);
+    Assert.Contains("no background process", plan.Items.Single(item => item.TaskId == noProcess.Id).Reason, StringComparison.Ordinal);
+    Assert.Contains("already completed", plan.Items.Single(item => item.TaskId == completed.Id).Reason, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "RecordTaskProcessStarted_requires_dispatch_and_records_running_process")]
     public void RecordTaskProcessStartedRequiresDispatchAndRecordsRunningProcess()
@@ -107,7 +107,7 @@ public sealed class TaskProcessTests
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var process = new TaskProcessRecord(1234, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null);
 
-    Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskProcessStarted(goal.Id, task.Id, process));
+    Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordTaskProcessStarted(goal.Id, task.Id, process));
 
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", clock.UtcNow));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);

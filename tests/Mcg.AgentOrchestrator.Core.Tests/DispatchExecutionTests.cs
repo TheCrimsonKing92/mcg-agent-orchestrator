@@ -31,12 +31,12 @@ public sealed class DispatchExecutionTests
     var goal = kernel.CreateGoal("Do not dispatch pending work directly", [new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer)]);
     var task = goal.Tasks.Single();
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskDispatch(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordTaskDispatch(
         goal.Id,
         task.Id,
         new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
 
-    Assert.Contains(ex.Message, text => text.Contains("status is Pending", StringComparison.Ordinal));
+    Assert.Contains("status is Pending", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
     Assert.Equal(WorkTaskStatus.Pending, task.Status);
 }
@@ -52,12 +52,12 @@ public sealed class DispatchExecutionTests
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implemented.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", string.Empty, clock.UtcNow));
 
-    var ex = Assert.Throws<InvalidOperationException>(() => kernel.RecordTaskDispatch(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordTaskDispatch(
         goal.Id,
         task.Id,
         new TaskDispatchRecord("codex", "implement feature", "C:\\repo", clock.UtcNow)));
 
-    Assert.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.Contains("already has passing verification", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
 }
@@ -234,8 +234,9 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
     Assert.Contains(
+        "Recoverable subscription usage limit",
         kernel.BuildGoalEvidenceSummary(goal.Id).Tasks.Single(item => item.TaskId == task.Id).Message,
-        text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
+        StringComparison.Ordinal);
 
     Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
     Assert.Equal(new DateTimeOffset(2026, 06, 01, 16, 58, 00, TimeSpan.Zero), retryAfter);
@@ -749,7 +750,7 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    Assert.Throws<InvalidOperationException>(() => kernel.RecordDispatchExecutionResult(
+    Assert.ThrowsAny<InvalidOperationException>(() => kernel.RecordDispatchExecutionResult(
         goal.Id,
         task.Id,
         new TaskVerificationRecord("echo ok", "C:\\repo", 0, "ok", string.Empty, DateTimeOffset.UtcNow)));

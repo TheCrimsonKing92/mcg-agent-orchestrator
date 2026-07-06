@@ -494,8 +494,8 @@ public sealed class ConductorDriverTests
         // and acceptance never verifies the pre-integration branch.
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
         Assert.False(acceptanceCalled);
-        Assert.Contains(escalationReason!, text => text.Contains("pre-landing rebase conflict", StringComparison.Ordinal));
-        Assert.Contains(escalationReason!, text => text.Contains("src/Foo.cs", StringComparison.Ordinal));
+        Assert.Contains("pre-landing rebase conflict", escalationReason!, StringComparison.Ordinal);
+        Assert.Contains("src/Foo.cs", escalationReason!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_retries_task_with_feedback")]
@@ -539,10 +539,10 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(1, task.CriterionRetryCount);
-        Assert.Contains(retryMessage!, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
+        Assert.Contains("docs/usage.md is missing Ready", retryMessage!, StringComparison.Ordinal);
         Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal)));
-        Assert.Contains(brief.Content, text => text.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", StringComparison.Ordinal));
-        Assert.Contains(brief.Content, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
+        Assert.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("docs/usage.md is missing Ready", brief.Content, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_escalates_after_retry_budget")]
@@ -577,8 +577,8 @@ public sealed class ConductorDriverTests
 
         Assert.False(landCalled);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
-        Assert.Contains(escalationReason!, text => text.Contains("Acceptance criteria unmet after 1 retries", StringComparison.Ordinal));
-        Assert.Contains(escalationReason!, text => text.Contains("docs/usage.md missing", StringComparison.Ordinal));
+        Assert.Contains("Acceptance criteria unmet after 1 retries", escalationReason!, StringComparison.Ordinal);
+        Assert.Contains("docs/usage.md missing", escalationReason!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_all_acceptance_criteria_met_lands")]
@@ -798,8 +798,8 @@ public sealed class ConductorDriverTests
 
         Assert.False(retryCalled);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
-        Assert.Contains(escalationReason!, text => text.Contains("Acceptance criteria unmet after 0 retries", StringComparison.Ordinal));
-        Assert.Contains(escalationReason!, text => text.Contains("focused command failed", StringComparison.Ordinal));
+        Assert.Contains("Acceptance criteria unmet after 0 retries", escalationReason!, StringComparison.Ordinal);
+        Assert.Contains("focused command failed", escalationReason!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_policy_risk_gate_escalates_Security_risk")]
@@ -1568,8 +1568,8 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
         Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Escalated)result.Outcome).State);
         Assert.True(escalationReason is not null);
-        Assert.Contains(escalationReason!, v => v.Contains("conflict", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(escalationReason!, v => v.Contains("src/Foo.cs", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("conflict", escalationReason!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("src/Foo.cs", escalationReason!, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Dispatch-start reason clarity (Defect 2 fix) ─────────────────────
@@ -1649,6 +1649,6 @@ public sealed class ConductorDriverTests
 
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
         Assert.Equal(spawnFailReason, escalationReason);
-        Assert.Contains(escalationReason!, v => v.Contains("spawn", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("spawn", escalationReason!, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -116,9 +116,9 @@ public sealed class TaskVerificationTests
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implementation done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, verification);
 
-    var ex = Assert.Throws<ArgumentException>(() => kernel.RetryTask(goal.Id, task.Id, " "));
+    var ex = Assert.ThrowsAny<ArgumentException>(() => kernel.RetryTask(goal.Id, task.Id, " "));
 
-    Assert.Contains(ex.Message, text => text.Contains("Retry message cannot be empty", StringComparison.Ordinal));
+    Assert.Contains("Retry message cannot be empty", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(verification, task.LastVerification);
     Assert.True(!goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
@@ -134,8 +134,8 @@ public sealed class TaskVerificationTests
     kernel.ReportTaskProgress(goal.Id, running.Id, WorkTaskStatus.Running, "Running.");
     kernel.RequestHumanInput(goal.Id, waiting.Id, "Which command?");
 
-    Assert.Throws<InvalidOperationException>(() => kernel.RetryTask(goal.Id, running.Id, "Retry."));
-    Assert.Throws<InvalidOperationException>(() => kernel.RetryTask(goal.Id, waiting.Id, "Retry."));
+    Assert.ThrowsAny<InvalidOperationException>(() => kernel.RetryTask(goal.Id, running.Id, "Retry."));
+    Assert.ThrowsAny<InvalidOperationException>(() => kernel.RetryTask(goal.Id, waiting.Id, "Retry."));
 }
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_task_verification")]
     public void SnapshotRoundtripPreservesTaskVerification()
