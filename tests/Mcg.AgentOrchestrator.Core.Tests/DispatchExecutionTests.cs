@@ -341,10 +341,10 @@ public sealed class DispatchExecutionTests
         evt.Kind == ProgressKind.TaskCompleted &&
         evt.Message.Contains("advisory WORKER_RESULT blocker", StringComparison.Ordinal) &&
         evt.Message.Contains("full suite deferred", StringComparison.Ordinal));
-    Assert.DoesNotContain(goal.Timeline, evt =>
+    Assert.False(goal.Timeline.Any(evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
-        evt.Message.Contains("WORKER_RESULT reported blocker", StringComparison.Ordinal));
+        evt.Message.Contains("WORKER_RESULT reported blocker", StringComparison.Ordinal)));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
