@@ -5929,6 +5929,108 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_regression_exit_zero_dirty_without_prior_commit_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerRegressionExitZeroDirtyWithoutPriorCommitIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented feature." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(
+        task.Status == WorkTaskStatus.Completed,
+        task.LastVerification?.StandardError ?? "missing verification");
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.HasCommittedChanges);
+    Assert.Contains("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal("Developer task.: Implemented feature.", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
+    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
+    var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
+    Assert.Equal(head, task.LastDispatch?.ResultCommit);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal) &&
+        evt.Message.Contains($"sha={head}", StringComparison.Ordinal) &&
+        evt.Message.Contains("provenance=orchestrator", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_clean_worker_commit_records_worker_provenance_without_double_commit")]
+    public void BackgroundDispatchRunnerExitZeroCleanWorkerCommitRecordsWorkerProvenanceWithoutDoubleCommit()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Committed implementation." + Environment.NewLine + WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var workerCommit = ReadGit(worktree, ["rev-parse", "HEAD"]);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.HasCommittedChanges);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal(workerCommit, ReadGit(worktree, ["rev-parse", "HEAD"]));
+    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
+    Assert.Equal(workerCommit, task.LastDispatch?.ResultCommit);
+    Assert.DoesNotContain("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal) &&
+        evt.Message.Contains($"sha={workerCommit}", StringComparison.Ordinal) &&
+        evt.Message.Contains("provenance=worker", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_clean_no_change_does_not_create_empty_commit")]
+    public void BackgroundDispatchRunnerExitZeroCleanNoChangeDoesNotCreateEmptyCommit()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "No file changes were needed.",
+        string.Empty,
+        clock);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var startingHead = ReadGit(worktree, ["rev-parse", "HEAD"]);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.False(task.LastVerification.HasCommittedChanges);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal(startingHead, ReadGit(worktree, ["rev-parse", "HEAD"]));
+    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD"]));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_commit_and_residual_dirty_worktree_commits_residual")]
     public void BackgroundDispatchRunnerFileRoleWithCommitAndResidualDirtyWorktreeCommitsResidual()
 {

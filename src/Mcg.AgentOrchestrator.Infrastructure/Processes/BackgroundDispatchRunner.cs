@@ -9,6 +9,7 @@ public sealed record DispatchRefreshOutcome(
     TaskProcessRecord ProcessRecord,
     TaskVerificationRecord? Verification,
     string? ResultCommit = null,
+    string? ResultCommitProvenance = null,
     DispatchRecoveryDecision? RecoveryDecision = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
     DispatchDiagnosticPayload? DiagnosticPayload = null);
@@ -518,7 +519,16 @@ public sealed class BackgroundDispatchRunner
     {
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification, outcome.ProviderFailureKind);
         if (outcome.ResultCommit is not null)
+        {
             kernel.RecordDispatchResultCommit(goalId, taskId, outcome.ResultCommit);
+            if (!string.IsNullOrWhiteSpace(outcome.ResultCommitProvenance))
+            {
+                kernel.RecordTaskNote(
+                    goalId,
+                    taskId,
+                    $"TaskOutputCommitted: sha={outcome.ResultCommit}; provenance={outcome.ResultCommitProvenance}.");
+            }
+        }
     }
 
     private DispatchRefreshOutcome BuildCompletedProcessOutcome(
@@ -538,6 +548,7 @@ public sealed class BackgroundDispatchRunner
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
         var hasCommittedChanges = false;
+        var orchestratorCommitted = false;
         if (RequiresFileChangeEvidence(task) &&
             TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
         {
@@ -546,7 +557,6 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var originalExitCode = exitCode;
-            var orchestratorCommitted = false;
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
@@ -573,7 +583,7 @@ public sealed class BackgroundDispatchRunner
 
             var provider = ResolveWorkerProvider(task.LastDispatch);
             var shouldCommitDirtyWorktree =
-                (exitCode == 0 && (worktreeEvidence.HasCommitAfterDispatch || successfulWorkerResult)) ||
+                exitCode == 0 ||
                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
                 (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit);
 
@@ -698,6 +708,9 @@ public sealed class BackgroundDispatchRunner
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
         var resultCommit = TryGetWorktreeHead(processRecord.WorkingDirectory);
+        var resultCommitProvenance = hasCommittedChanges
+            ? orchestratorCommitted ? "orchestrator" : "worker"
+            : null;
 
         // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
         var heartbeatStdoutBytes = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
@@ -722,6 +735,7 @@ public sealed class BackgroundDispatchRunner
             completed,
             verification,
             resultCommit,
+            resultCommitProvenance,
             recoveryDecision,
             providerFailureKind,
             new DispatchDiagnosticPayload(exitCode, standardOutput, standardError));
@@ -1029,6 +1043,27 @@ public sealed class BackgroundDispatchRunner
                 return staged.ExitCode == 0
                     ? CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no staged changes after git add.")
                     : CommitWorktreeEditsResult.FromGitFailure("diff", ["diff", "--cached", "--name-only"], staged);
+            }
+
+            var substantive = GitCli.Run(
+                workingDirectory,
+                "diff",
+                "--cached",
+                "--ignore-all-space",
+                "--quiet",
+                "--exit-code",
+                "--");
+            if (substantive.ExitCode == 0)
+            {
+                return CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no substantive staged changes after ignoring whitespace.");
+            }
+
+            if (substantive.ExitCode != 1)
+            {
+                return CommitWorktreeEditsResult.FromGitFailure(
+                    "diff",
+                    ["diff", "--cached", "--ignore-all-space", "--quiet", "--exit-code", "--"],
+                    substantive);
             }
 
             var commitArgs = new[] { "commit", "-m", subject };
