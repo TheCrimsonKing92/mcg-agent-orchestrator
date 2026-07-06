@@ -210,23 +210,6 @@ public static string FindRepositoryRoot()
 
 }
 
-internal static class AssertEx
-{
-    public static void Contains<T>(IEnumerable<T> values, Func<T, bool> predicate)
-        => Xunit.Assert.Contains(values, new Predicate<T>(predicate));
-
-    public static void Contains(string value, Func<string, bool> predicate)
-    {
-        if (!predicate(value))
-        {
-            throw new InvalidOperationException("Expected matching text was not found.");
-        }
-    }
-
-    public static void DoesNotContain<T>(IEnumerable<T> values, Func<T, bool> predicate)
-        => Xunit.Assert.DoesNotContain(values, new Predicate<T>(predicate));
-}
-
 internal sealed class CapturingHandler : HttpMessageHandler
 {
     private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;

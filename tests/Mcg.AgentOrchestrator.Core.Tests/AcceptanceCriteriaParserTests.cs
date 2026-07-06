@@ -104,8 +104,8 @@ public sealed class AcceptanceCriteriaParserTests
         var criteria = AcceptanceCriteriaParser.Parse(text);
 
         Assert.Equal(2, criteria.Count);
-        AssertEx.Contains(criteria, c => c.Type == "command-exit" && c.Command == "dotnet build Mcg.AgentOrchestrator.sln -c Release");
-        AssertEx.Contains(criteria, c => c.Type == "file-exists" && c.Path == ".orchestrator/goal-acceptance-criteria.json");
+        Assert.Contains(criteria, c => c.Type == "command-exit" && c.Command == "dotnet build Mcg.AgentOrchestrator.sln -c Release");
+        Assert.Contains(criteria, c => c.Type == "file-exists" && c.Path == ".orchestrator/goal-acceptance-criteria.json");
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_stops_at_next_h2_heading")]

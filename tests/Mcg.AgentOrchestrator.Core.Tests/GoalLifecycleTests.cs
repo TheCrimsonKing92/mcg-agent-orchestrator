@@ -50,7 +50,7 @@ public sealed class GoalLifecycleTests
     Assert.Equal(WorkTaskStatus.Pending, task.Status);
     Assert.Equal(AgentRole.Developer, task.RequiredRole);
     Assert.Equal("Implement a custom integration", task.Description);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskAdded &&
         evt.Message.Contains("Added Developer task", StringComparison.Ordinal));
@@ -68,8 +68,8 @@ public sealed class GoalLifecycleTests
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.Equal(agents.Single(agent => agent.Role == AgentRole.Reviewer).Id, task.AssignedAgentId);
     Assert.Equal(GoalStatus.Active, goal.Status);
-    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskAdded);
-    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskDelegated);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskAdded);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskDelegated);
 }
     [Xunit.Fact(DisplayName = "RedelegateTask_reassigns_assigned_task_to_current_role_agent")]
     public void RedelegateTaskReassignsAssignedTaskToCurrentRoleAgent()
@@ -86,7 +86,7 @@ public sealed class GoalLifecycleTests
     Assert.Equal(task, updated);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.Equal(newAgent.Id, task.AssignedAgentId);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRedelegated &&
         evt.Message.Contains(oldAgent.Id.Value, StringComparison.Ordinal) &&
@@ -120,7 +120,7 @@ public sealed class GoalLifecycleTests
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => kernel.RedelegateTask(goal.Id, task.Id, [agent]));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("cancel or refresh", StringComparison.Ordinal));
+    Assert.Contains("cancel or refresh", ex.Message, StringComparison.Ordinal);
     Assert.Equal(agent.Id, task.AssignedAgentId);
 }
     [Xunit.Fact(DisplayName = "CreateDefaultSoftwareDevelopmentTasks_include_verification_plans")]
@@ -130,11 +130,11 @@ public sealed class GoalLifecycleTests
 
     Assert.Equal(5, tasks.Count);
     Assert.True(tasks.All(task => !string.IsNullOrWhiteSpace(task.VerificationPlan)), "Each default SDLC task should include a verification plan.");
-    AssertEx.Contains(tasks, task => task.RequiredRole == AgentRole.Planner && task.VerificationPlan!.Contains("likely files", StringComparison.OrdinalIgnoreCase));
-    AssertEx.Contains(tasks, task => task.RequiredRole == AgentRole.Researcher && task.VerificationPlan!.Contains("commands", StringComparison.OrdinalIgnoreCase));
-    AssertEx.Contains(tasks, task => task.RequiredRole == AgentRole.Developer && task.VerificationPlan!.Contains("changed files", StringComparison.OrdinalIgnoreCase));
-    AssertEx.Contains(tasks, task => task.RequiredRole == AgentRole.Tester && task.VerificationPlan!.Contains("concrete pass/fail evidence", StringComparison.OrdinalIgnoreCase));
-    AssertEx.Contains(tasks, task => task.RequiredRole == AgentRole.Reviewer && task.VerificationPlan!.Contains("test gaps", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Planner && task.VerificationPlan!.Contains("likely files", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Researcher && task.VerificationPlan!.Contains("commands", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Developer && task.VerificationPlan!.Contains("changed files", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Tester && task.VerificationPlan!.Contains("concrete pass/fail evidence", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Reviewer && task.VerificationPlan!.Contains("test gaps", StringComparison.OrdinalIgnoreCase));
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_role_specific_quality_requirements")]
     public void BuildTaskBriefIncludesRoleSpecificQualityRequirements()
@@ -161,7 +161,7 @@ public sealed class GoalLifecycleTests
 
     Assert.Equal(task, updated);
     Assert.Equal("Run dotnet build and focused tests.", task.VerificationPlan);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskVerificationPlanUpdated &&
         evt.Message.Contains("Verification plan updated", StringComparison.Ordinal));
@@ -181,12 +181,12 @@ public sealed class GoalLifecycleTests
 
     Assert.Equal(task, updated);
     Assert.Equal(originalStatus, task.Status);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskNote &&
         evt.Message == "Use the existing CLI command style.");
-    AssertEx.Contains(brief, text => text.Contains("TaskNote", StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains("Use the existing CLI command style.", StringComparison.Ordinal));
+    Assert.Contains("TaskNote", brief, StringComparison.Ordinal);
+    Assert.Contains("Use the existing CLI command style.", brief, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
     public void SnapshotRoundtripPreservesAddedTask()
@@ -204,7 +204,7 @@ public sealed class GoalLifecycleTests
     Assert.Equal("Verify a custom scenario", restoredTask.Description);
     Assert.Equal(AgentRole.Tester, restoredTask.RequiredRole);
     Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
-    AssertEx.Contains(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskAdded);
+    Assert.Contains(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskAdded);
 }
 
     [Xunit.Fact(DisplayName = "ResolveState_returns_Created_for_draft_goal")]
@@ -355,11 +355,11 @@ public sealed class GoalLifecycleTests
     Assert.Null(reviewer.LastVerification);
     Assert.Single(tester.VerificationHistory);
     Assert.Single(reviewer.VerificationHistory);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == tester.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("Invalidated Tester task", StringComparison.Ordinal));
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == reviewer.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("Invalidated Reviewer task", StringComparison.Ordinal));
@@ -409,7 +409,7 @@ public sealed class GoalLifecycleTests
 
     Assert.True(repaired);
     Assert.Equal(GoalStatus.Active, goal.Status);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.Kind == ProgressKind.GoalPolicyDecision &&
         evt.Message.Contains("repair terminal/nonterminal desync", StringComparison.Ordinal));
 }
@@ -519,8 +519,8 @@ static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, Agent
     var task = goal.Tasks.First(task => task.RequiredRole == role);
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    AssertEx.Contains(brief, text => text.Contains(heading, StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains(detail, StringComparison.Ordinal));
+    Assert.Contains(heading, brief, StringComparison.Ordinal);
+    Assert.Contains(detail, brief, StringComparison.Ordinal);
 }
 
 static void CompleteWithVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string standardOutput)
@@ -549,7 +549,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     var restoredTask = restored.GetTask(goal.Id, task.Id);
 
     Assert.Equal("Run dotnet test after implementation.", restoredTask.VerificationPlan);
-    AssertEx.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
+    Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
 }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_criterion_retry_state")]
@@ -578,7 +578,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
 
     Assert.Equal(goal, cancelled);
     Assert.Equal(GoalStatus.Cancelled, goal.Status);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId is null &&
         evt.Kind == ProgressKind.GoalCancelled &&
         evt.Message == "Superseded by a cleaner validation goal.");
@@ -599,7 +599,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     var restoredGoal = restored.GetGoal(goal.Id);
 
     Assert.Equal(GoalStatus.Superseded, restoredGoal.Status);
-    AssertEx.Contains(restoredGoal.Timeline, evt =>
+    Assert.Contains(restoredGoal.Timeline, evt =>
         evt.TaskId is null &&
         evt.Kind == ProgressKind.GoalSuperseded &&
         evt.Message == "Replacement goal has narrower evidence.");
@@ -653,8 +653,8 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Developer finished implementation.");
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskStarted);
-    AssertEx.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskStarted);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.True(goal.Timeline.SequenceEqual(goal.Timeline.OrderBy(evt => evt.OccurredAt)), "Timeline should stay ordered.");
 }
     [Xunit.Fact(DisplayName = "Human_input_request_pauses_task_and_goal")]
@@ -672,7 +672,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
     Assert.False(request.IsCompleted);
     Assert.Equal(request.Id, kernel.GetPendingHumanInput(goal.Id).Single().Id);
-    AssertEx.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputRequested && evt.TaskId == task.Id);
+    Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputRequested && evt.TaskId == task.Id);
 }
     [Xunit.Fact(DisplayName = "Submitting_human_input_resumes_waiting_task")]
     public void SubmittingHumanInputResumesWaitingTask()
@@ -688,7 +688,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
-    AssertEx.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputReceived && evt.TaskId == task.Id);
+    Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputReceived && evt.TaskId == task.Id);
 }
     [Xunit.Fact(DisplayName = "SourceBacklogItemId_roundtrips_through_snapshot")]
     public void SourceBacklogItemIdRoundtripsThoughSnapshot()

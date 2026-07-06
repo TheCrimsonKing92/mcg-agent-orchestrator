@@ -21,7 +21,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, monitor.PendingHumanInputCount);
     Assert.Equal(1, monitor.TaskStatusCounts.Single(count => count.Status == WorkTaskStatus.Completed).Count);
     Assert.Equal(1, monitor.TaskStatusCounts.Single(count => count.Status == WorkTaskStatus.WaitingForHuman).Count);
-    AssertEx.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.PendingHumanInput && item.TaskId == plannerTask.Id);
+    Assert.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.PendingHumanInput && item.TaskId == plannerTask.Id);
 }
     [Xunit.Fact(DisplayName = "BuildMonitor_flags_failed_running_dispatch_and_missing_verification")]
     public void BuildMonitorFlagsFailedRunningDispatchAndMissingVerification()
@@ -40,9 +40,9 @@ public sealed class MonitoringAndQueryTests
 
     var monitor = kernel.BuildMonitor(goal.Id);
 
-    AssertEx.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.RunningDispatch && item.TaskId == developerTask.Id);
-    AssertEx.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.FailedTask && item.TaskId == testerTask.Id);
-    AssertEx.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.MissingVerification && item.TaskId == reviewerTask.Id);
+    Assert.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.RunningDispatch && item.TaskId == developerTask.Id);
+    Assert.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.FailedTask && item.TaskId == testerTask.Id);
+    Assert.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.MissingVerification && item.TaskId == reviewerTask.Id);
 }
     [Xunit.Fact(DisplayName = "BuildMonitor_flags_failed_verification")]
     public void BuildMonitorFlagsFailedVerification()
@@ -63,7 +63,7 @@ public sealed class MonitoringAndQueryTests
 
     var monitor = kernel.BuildMonitor(goal.Id);
 
-    AssertEx.Contains(monitor.AttentionItems, item =>
+    Assert.Contains(monitor.AttentionItems, item =>
         item.Kind == TaskAttentionKind.FailedVerification &&
         item.TaskId == testerTask.Id &&
         item.Message.Contains("exit=1", StringComparison.Ordinal));
@@ -82,7 +82,7 @@ public sealed class MonitoringAndQueryTests
     var monitor = restored.BuildMonitor(goal.Id);
 
     Assert.Equal(goal.Id, monitor.GoalId);
-    AssertEx.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.RunningDispatch && item.TaskId == developerTask.Id);
+    Assert.Contains(monitor.AttentionItems, item => item.Kind == TaskAttentionKind.RunningDispatch && item.TaskId == developerTask.Id);
 }
     [Xunit.Fact(DisplayName = "QueryTasks_filters_by_status_role_and_id_prefix")]
     public void QueryTasksFiltersByStatusRoleAndIdPrefix()
@@ -217,7 +217,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(TaskEvidenceKind.Execution, summary.Tasks.Single(item => item.TaskId == executionTask.Id).LatestEvidence);
     Assert.Equal(TaskEvidenceKind.RunningProcess, summary.Tasks.Single(item => item.TaskId == processTask.Id).LatestEvidence);
     Assert.Equal(TaskEvidenceKind.FailedVerification, summary.Tasks.Single(item => item.TaskId == verificationTask.Id).LatestEvidence);
-    AssertEx.Contains(summary.Tasks.Single(item => item.TaskId == verificationTask.Id).Message, text => text.Contains("failed", StringComparison.Ordinal));
+    Assert.Contains("failed", summary.Tasks.Single(item => item.TaskId == verificationTask.Id).Message, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_surfaces_latest_model_fit_note")]
     public void BuildGoalEvidenceSummarySurfacesLatestModelFitNote()
@@ -270,16 +270,16 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(1, codexFit.OverkillCount);
     Assert.Equal(1, codexFit.UnderpoweredCount);
     Assert.Equal(0, codexFit.UnknownCount);
-    AssertEx.Contains(codexFit.TaskShapes!, shape => shape == "label-only change");
-    AssertEx.Contains(codexFit.TaskShapes!, shape => shape == "missed test coverage");
+    Assert.Contains(codexFit.TaskShapes!, shape => shape == "label-only change");
+    Assert.Contains(codexFit.TaskShapes!, shape => shape == "missed test coverage");
     var miniFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.4-mini");
     Assert.Equal(2, miniFit.NoteCount);
     Assert.Equal(1, miniFit.AdequateCount);
     Assert.Equal(1, miniFit.OverkillCount);
     Assert.Equal(0, miniFit.UnderpoweredCount);
     Assert.Equal(0, miniFit.UnknownCount);
-    AssertEx.Contains(miniFit.TaskShapes!, shape => shape == "focused parser fix");
-    AssertEx.Contains(miniFit.TaskShapes!, shape => shape == "text-only docs change");
+    Assert.Contains(miniFit.TaskShapes!, shape => shape == "focused parser fix");
+    Assert.Contains(miniFit.TaskShapes!, shape => shape == "text-only docs change");
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_api_prompts")]
@@ -329,10 +329,10 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goalId);
     var item = summary.Tasks.Single();
 
-    AssertEx.Contains(item.Message, text => text.Contains("large paid API prompt 6001 chars", StringComparison.Ordinal));
-    AssertEx.Contains(item.Message, text => text.Contains("(>6000)", StringComparison.Ordinal));
-    AssertEx.Contains(item.Message, text => text.Contains("complex paid API model", StringComparison.Ordinal));
-    AssertEx.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid API work", StringComparison.Ordinal));
+    Assert.Contains("large paid API prompt 6001 chars", item.Message, StringComparison.Ordinal);
+    Assert.Contains("(>6000)", item.Message, StringComparison.Ordinal);
+    Assert.Contains("complex paid API model", item.Message, StringComparison.Ordinal);
+    Assert.Contains("try a local or routine model before repeating paid API work", item.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_large_paid_dispatch_prompts")]
@@ -358,8 +358,8 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
-    AssertEx.Contains(item.Message, text => text.Contains("large paid subscription prompt 6001 chars (>6000)", StringComparison.Ordinal));
-    AssertEx.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid subscription work", StringComparison.Ordinal));
+    Assert.Contains("large paid subscription prompt 6001 chars (>6000)", item.Message, StringComparison.Ordinal);
+    Assert.Contains("try a local or routine model before repeating paid subscription work", item.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildGoalEvidenceSummary_flags_complex_paid_dispatch_model")]
@@ -385,8 +385,8 @@ public sealed class MonitoringAndQueryTests
     var summary = kernel.BuildGoalEvidenceSummary(goal.Id);
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
-    AssertEx.Contains(item.Message, text => text.Contains("complex paid subscription model", StringComparison.Ordinal));
-    AssertEx.Contains(item.Message, text => text.Contains("try a local or routine model before repeating paid subscription work", StringComparison.Ordinal));
+    Assert.Contains("complex paid subscription model", item.Message, StringComparison.Ordinal);
+    Assert.Contains("try a local or routine model before repeating paid subscription work", item.Message, StringComparison.Ordinal);
     Assert.False(item.Message.Contains("large paid subscription prompt", StringComparison.Ordinal));
 }
 
@@ -442,7 +442,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(StageReadinessStatus.NeedsVerification, report.Stages.Single(stage => stage.TaskId == missingVerification.Id).StageStatus);
     Assert.Equal(StageReadinessStatus.VerificationFailed, report.Stages.Single(stage => stage.TaskId == failedVerification.Id).StageStatus);
     Assert.Equal(StageReadinessStatus.Verified, report.Stages.Single(stage => stage.TaskId == verified.Id).StageStatus);
-    AssertEx.Contains(report.Stages.Single(stage => stage.TaskId == ready.Id).SuggestedAction, text => text.Contains("Run", StringComparison.Ordinal));
+    Assert.Contains("Run", report.Stages.Single(stage => stage.TaskId == ready.Id).SuggestedAction, StringComparison.Ordinal);
     Assert.Equal(TaskEvidenceKind.RunningProcess, report.Stages.Single(stage => stage.TaskId == running.Id).LatestEvidence);
 }
 }

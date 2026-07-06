@@ -65,7 +65,7 @@ public sealed class WorkerContextArtifactsCharacterizationTests
 
         var requirements = WorkerContextArtifacts.SelectSkillRequirements(goal, currentTask, workingDirectory);
         Assert.Equal(new WorkerSkillSelector().SelectSkillRequirements(goal, currentTask, workingDirectory), requirements);
-        AssertEx.Contains(requirements, requirement => requirement.Name == "dotnet-windows-build-hygiene" && requirement.Available);
+        Assert.Contains(requirements, requirement => requirement.Name == "dotnet-windows-build-hygiene" && requirement.Available);
     }
 
     [Xunit.Fact(DisplayName = "WorkerResultContractParser_extracts_contract_fields")]

@@ -37,7 +37,7 @@ public sealed class RunEventStoreTests
         Assert.Equal(2, recent.Count);
         Assert.NotNull(first);
         Assert.Equal("updated summary", first!.Summary);
-        AssertEx.Contains(recent, record => record.GoalId == "goal-2");
+        Assert.Contains(recent, record => record.GoalId == "goal-2");
     }
 
     [Xunit.Fact(DisplayName = "SqliteRunEventStore_appends_records_without_mutating_prior_events")]

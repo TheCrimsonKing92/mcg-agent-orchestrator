@@ -16,7 +16,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         _ = new SqliteOrchestratorStateRepository(db, statements.Add);
 
         Assert.DoesNotContain(statements, IsWriteCategoryStartupStatement);
-        AssertEx.Contains(statements, s => s.StartsWith("PRAGMA busy_timeout", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(statements, s => s.StartsWith("PRAGMA busy_timeout", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_fresh_schema_creates_expected_catalog_objects")]
@@ -268,9 +268,9 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
         var nonTerminal = await repo.LoadGoalsAsync([active.Id, failed.Id]);
 
-        AssertEx.DoesNotContain(nonTerminal.Goals, goal => goal.Id == completed.Id);
-        AssertEx.Contains(nonTerminal.Goals, goal => goal.Id == active.Id);
-        AssertEx.Contains(nonTerminal.Goals, goal => goal.Id == failed.Id);
+        Assert.DoesNotContain(nonTerminal.Goals, goal => goal.Id == completed.Id);
+        Assert.Contains(nonTerminal.Goals, goal => goal.Id == active.Id);
+        Assert.Contains(nonTerminal.Goals, goal => goal.Id == failed.Id);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_requests_roundtrip")]

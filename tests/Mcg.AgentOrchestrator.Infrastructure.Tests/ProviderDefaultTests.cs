@@ -74,13 +74,13 @@ public sealed class ProviderDefaultTests
         var preview = ProviderSmokeRunner.FormatProviderSmokeResponseText(response);
         var evidence = ProviderSmokeRunner.FormatProviderSmokeEvidence(result, "fake-model");
 
-        AssertEx.Contains(preview, text => text.Contains("smoke-start", StringComparison.Ordinal));
-        AssertEx.Contains(preview, text => text.Contains("smoke-tail", StringComparison.Ordinal));
-        AssertEx.Contains(preview, text => text.Contains("[truncated", StringComparison.Ordinal));
+        Assert.Contains("smoke-start", preview, StringComparison.Ordinal);
+        Assert.Contains("smoke-tail", preview, StringComparison.Ordinal);
+        Assert.Contains("[truncated", preview, StringComparison.Ordinal);
         Assert.True(!preview.Contains(new string('s', 2000), StringComparison.Ordinal));
-        AssertEx.Contains(evidence, text => text.Contains("Fake: ok model=fake-model", StringComparison.Ordinal));
-        AssertEx.Contains(evidence, text => text.Contains("Usage: input=1 output=2", StringComparison.Ordinal));
-        AssertEx.Contains(evidence, text => text.Contains("smoke-tail", StringComparison.Ordinal));
+        Assert.Contains("Fake: ok model=fake-model", evidence, StringComparison.Ordinal);
+        Assert.Contains("Usage: input=1 output=2", evidence, StringComparison.Ordinal);
+        Assert.Contains("smoke-tail", evidence, StringComparison.Ordinal);
         Assert.True(!evidence.Contains(new string('s', 2000), StringComparison.Ordinal));
     }
 
@@ -196,8 +196,8 @@ public sealed class ProviderDefaultTests
             .RunAsync(goal.Id, task.Id);
 
         Assert.Equal(2048, provider.LastRequest!.Options.MaxOutputTokens);
-        AssertEx.Contains(provider.LastRequest.SystemPrompt, text => text.Contains("## Implementation", StringComparison.Ordinal));
-        AssertEx.Contains(provider.LastRequest.Messages.Single().Content, text => text.Contains("/no_think", StringComparison.Ordinal));
+        Assert.Contains("## Implementation", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("/no_think", provider.LastRequest.Messages.Single().Content, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Scripted_provider_throws_configuration_error_instead_of_completing")]
@@ -212,8 +212,8 @@ public sealed class ProviderDefaultTests
         var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
             async () => await provider.CompleteAsync(request, CancellationToken.None));
 
-        AssertEx.Contains(ex.Message, text => text.Contains("offline adapter", StringComparison.Ordinal));
-        AssertEx.Contains(ex.Message, text => text.Contains("Configure a live provider", StringComparison.Ordinal));
+        Assert.Contains("offline adapter", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Configure a live provider", ex.Message, StringComparison.Ordinal);
         Assert.False(ex.Message.Contains("expensive prompt text", StringComparison.Ordinal));
     }
 

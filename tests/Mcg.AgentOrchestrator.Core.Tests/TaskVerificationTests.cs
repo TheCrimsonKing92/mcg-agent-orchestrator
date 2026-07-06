@@ -24,7 +24,7 @@ public sealed class TaskVerificationTests
     Assert.Equal(1, task.VerificationHistory.Count);
     Assert.Equal(verification, task.VerificationHistory.Single());
     Assert.True(task.LastVerification!.Succeeded);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskVerificationRecorded &&
         evt.Message.Contains("passed", StringComparison.Ordinal));
@@ -99,7 +99,7 @@ public sealed class TaskVerificationTests
     Assert.Equal(failed, task.VerificationHistory.Single());
     Assert.Equal(VerificationGateStatus.NotReady, gate.GateStatus);
     Assert.Equal(StageReadinessStatus.ReadyToRun, stage.StageStatus);
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("Fix and rerun", StringComparison.Ordinal));
@@ -118,7 +118,7 @@ public sealed class TaskVerificationTests
 
     var ex = Assert.ThrowsAny<ArgumentException>(() => kernel.RetryTask(goal.Id, task.Id, " "));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("Retry message cannot be empty", StringComparison.Ordinal));
+    Assert.Contains("Retry message cannot be empty", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(verification, task.LastVerification);
     Assert.True(!goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
@@ -274,7 +274,7 @@ public sealed class TaskVerificationTests
     Assert.Equal<TaskVerificationRecord?>(null, restoredTask.LastVerification);
     Assert.Equal(1, restoredTask.VerificationHistory.Count);
     Assert.Equal("dotnet test", restoredTask.VerificationHistory.Single().Command);
-    AssertEx.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
+    Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
 }
 
     [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_verification_current_state_but_preserves_history")]

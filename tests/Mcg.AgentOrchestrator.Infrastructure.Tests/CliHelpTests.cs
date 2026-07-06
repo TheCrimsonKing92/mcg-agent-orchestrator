@@ -106,7 +106,7 @@ public sealed class CliHelpTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
             args,
             kernel,
             workspace,
@@ -299,7 +299,7 @@ public sealed class CliHelpTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var ex = Xunit.Assert.Throws<ArgumentException>(() =>
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
         {
             CliCommandDispatcher.ExecuteCommand(
                 args,

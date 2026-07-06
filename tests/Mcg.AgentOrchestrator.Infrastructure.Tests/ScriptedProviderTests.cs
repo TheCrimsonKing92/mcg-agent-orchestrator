@@ -22,7 +22,7 @@ public sealed class ScriptedProviderTests
             async () => await runner.RunAsync(goal.Id, task.Id));
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        AssertEx.Contains(ex.Message, text => text.Contains("offline adapter", StringComparison.Ordinal));
+        Assert.Contains("offline adapter", ex.Message, StringComparison.Ordinal);
         Assert.False(goal.Timeline.Any(evt => evt.Kind == ProgressKind.HumanInputRequested));
     }
 }

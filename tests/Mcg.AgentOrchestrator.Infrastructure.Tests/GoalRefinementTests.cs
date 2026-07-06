@@ -736,7 +736,7 @@ public sealed class GoalRefinementTests
             providers);
 
         Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
-        var blocked = Xunit.Assert.Throws<InvalidOperationException>(
+        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(
             () => GoalManagementCommandService.SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,

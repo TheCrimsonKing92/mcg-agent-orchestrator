@@ -35,7 +35,7 @@ public sealed class WorkerSandboxCapabilityPlannerTests
 
         Assert.False(result.Allowed);
         Assert.Equal("blocked", result.Status);
-        AssertEx.Contains(result.Detail, text => text.Contains(".git internals", StringComparison.Ordinal));
+        Assert.Contains(".git internals", result.Detail, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_brief_mentioning_dot_git_bare")]

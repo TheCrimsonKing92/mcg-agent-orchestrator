@@ -33,7 +33,7 @@ public sealed class AgentHarnessDocsDriftTests
             "Owns: Claude Code harness operating guidance.",
             "Owns: Edited Claude harness guidance.",
             StringComparison.Ordinal);
-        var contractException = Xunit.Assert.Throws<InvalidOperationException>(
+        var contractException = Xunit.Assert.ThrowsAny<InvalidOperationException>(
             () => Validate(docs.Agents, contractDrift));
         Xunit.Assert.True(contractException.Message.Contains("CLAUDE.md contract Owns", StringComparison.Ordinal));
 
@@ -41,7 +41,7 @@ public sealed class AgentHarnessDocsDriftTests
             "- evidence",
             "- evidence\n- invented-shared-discipline",
             StringComparison.Ordinal);
-        var anchorException = Xunit.Assert.Throws<InvalidOperationException>(
+        var anchorException = Xunit.Assert.ThrowsAny<InvalidOperationException>(
             () => Validate(docs.Agents, anchorDrift));
         Xunit.Assert.True(anchorException.Message.Contains("Shared anchor lists must match", StringComparison.Ordinal));
     }

@@ -74,8 +74,8 @@ public sealed class OperatorChannelTests
         Assert.Equal(item.GoalPrefix, escalation.GoalPrefix);
         Assert.Equal("FailedTask", escalation.Kind);
         Assert.Equal(item.Title, escalation.Title);
-        AssertEx.Contains(escalation.Summary, s => s.Contains(item.Objective));
-        AssertEx.Contains(escalation.Summary, s => s.Contains(item.Message));
+        Assert.Contains(item.Objective, escalation.Summary);
+        Assert.Contains(item.Message, escalation.Summary);
         Assert.Equal(item.Evidence, escalation.KeyEvidence);
         Assert.True(escalation.Actions.Count >= 1);
     }
@@ -228,7 +228,7 @@ public sealed class OperatorChannelTests
         Assert.True(result.Decision is null);
         Assert.True(result.RequiresConfirmation);
         Assert.True(result.ConfirmationCustomId is not null);
-        AssertEx.Contains(result.ConfirmationCustomId!, s => s.Contains("mcgo-confirmed"));
+        Assert.Contains("mcgo-confirmed", result.ConfirmationCustomId!);
     }
 
     [Xunit.Fact(DisplayName = "DiscordInteractionHandler_confirmed_action_maps_to_decision")]
@@ -258,7 +258,7 @@ public sealed class OperatorChannelTests
         var result = DiscordInteractionHandler.Process(payload, ["authorized-user-111"]);
 
         Assert.True(result.ErrorMessage is not null);
-        AssertEx.Contains(result.ErrorMessage!, s => s.Contains("allowlist"));
+        Assert.Contains("allowlist", result.ErrorMessage!);
         Assert.True(result.Decision is null);
     }
 
@@ -447,8 +447,8 @@ public sealed class OperatorChannelTests
         await channel.SendEscalationAsync(escalation);
 
         var item = (await store.GetAttentionQueueAsync()).Single();
-        AssertEx.Contains(item.Body, s => s.Contains("`land abc123`"));
-        AssertEx.Contains(item.Body, s => s.Contains("**Response:**"));
+        Assert.Contains("`land abc123`", item.Body);
+        Assert.Contains("**Response:**", item.Body);
     }
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_message_includes_goal_reason_command_and_response")]
@@ -471,11 +471,11 @@ public sealed class OperatorChannelTests
         await channel.SendEscalationAsync(escalation);
 
         var content = (await store.GetAttentionQueueAsync()).Single().Body;
-        AssertEx.Contains(content, s => s.Contains("`abc12345`"));
-        AssertEx.Contains(content, s => s.Contains("Improve escalation content"));
-        AssertEx.Contains(content, s => s.Contains("Acceptance output tail: test failure"));
-        AssertEx.Contains(content, s => s.Contains("`acceptance abc12345 --autonomy supervised-auto`"));
-        AssertEx.Contains(content, s => s.Contains("**Response:**"));
+        Assert.Contains("`abc12345`", content);
+        Assert.Contains("Improve escalation content", content);
+        Assert.Contains("Acceptance output tail: test failure", content);
+        Assert.Contains("`acceptance abc12345 --autonomy supervised-auto`", content);
+        Assert.Contains("**Response:**", content);
     }
 
     // ---- OperatorChannelFactory ----
@@ -574,8 +574,8 @@ public sealed class OperatorChannelTests
         await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
 
         var text = output.ToString();
-        AssertEx.Contains(text, s => s.Contains("not configured"));
-        AssertEx.Contains(text, s => s.Contains("MCGO_DISCORD_BOT_TOKEN"));
+        Assert.Contains("not configured", text);
+        Assert.Contains("MCGO_DISCORD_BOT_TOKEN", text);
     }
 
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_configured_channel_raises_queue_item")]
@@ -639,7 +639,7 @@ public sealed class OperatorChannelTests
         Assert.Equal(CollaborationItemType.Decision, item.Type);
         Assert.Equal(CollaborationItemStatus.Raised, item.Status);
         Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
-        AssertEx.Contains(item.Body, s => s.Contains("LandingEscalation"));
+        Assert.Contains("LandingEscalation", item.Body);
     }
 
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_conductor_escalation_uses_state_aware_actionable_content")]
@@ -669,10 +669,10 @@ public sealed class OperatorChannelTests
         var content = queued.Body;
         Assert.Equal(goal.Id.Value, queued.GoalId);
         Assert.Equal(CollaborationItemType.Decision, queued.Type);
-        AssertEx.Contains(content, s => s.Contains(goal.Id.Value[..8]));
-        AssertEx.Contains(content, s => s.Contains("Acceptance output tail: Unit test failed"));
-        AssertEx.Contains(content, s => s.Contains($"`acceptance {goal.Id.Value[..8]} --autonomy supervised-auto`"));
-        AssertEx.Contains(content, s => s.Contains("**Response:**"));
+        Assert.Contains(goal.Id.Value[..8], content);
+        Assert.Contains("Acceptance output tail: Unit test failed", content);
+        Assert.Contains($"`acceptance {goal.Id.Value[..8]} --autonomy supervised-auto`", content);
+        Assert.Contains("**Response:**", content);
 
         var report = Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.Build(
             kernel,
@@ -682,7 +682,7 @@ public sealed class OperatorChannelTests
             goal.Id.Value[..8]);
         var item = report.Items.Single(item => item.Kind == OperatorInboxKind.LandingEscalation);
         Assert.Equal(OperatorInboxSeverity.Blocker, item.Severity);
-        AssertEx.Contains(item.Message, s => s.Contains("Acceptance output tail: Unit test failed"));
+        Assert.Contains("Acceptance output tail: Unit test failed", item.Message);
         Assert.Equal($"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto", item.SuggestedCommand);
     }
 
@@ -714,7 +714,7 @@ public sealed class OperatorChannelTests
         await channel.SendEscalationAsync(escalation);
 
         var sentContent = (await store.GetAttentionQueueAsync()).Single().Body;
-        AssertEx.Contains(sentContent, s => s.Contains("https://localhost:5001/goals/abc123"));
+        Assert.Contains("https://localhost:5001/goals/abc123", sentContent);
     }
 
     // ---- helpers ----

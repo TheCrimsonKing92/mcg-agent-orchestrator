@@ -19,7 +19,6 @@ internal static class CoreTestData
         ];
     }
 }
-
 internal sealed class FakeClock : IClock
 {
     private DateTimeOffset _utcNow = new(2026, 06, 01, 12, 00, 00, TimeSpan.Zero);
@@ -70,21 +69,4 @@ internal sealed class FakeModelProvider : IModelProvider
 
         return Task.FromResult(new ModelResponse(_responseText, _usage, _stopReason));
     }
-}
-
-internal static partial class AssertEx
-{
-    public static void Contains<T>(IEnumerable<T> values, Func<T, bool> predicate)
-        => Xunit.Assert.Contains(values, new Predicate<T>(predicate));
-
-    public static void Contains(string value, Func<string, bool> predicate)
-    {
-        if (!predicate(value))
-        {
-            throw new InvalidOperationException("Expected matching text was not found.");
-        }
-    }
-
-    public static void DoesNotContain<T>(IEnumerable<T> values, Func<T, bool> predicate)
-        => Xunit.Assert.DoesNotContain(values, new Predicate<T>(predicate));
 }

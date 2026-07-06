@@ -39,7 +39,7 @@ public sealed class WorkerDispatchTests
         Assert.Contains("Warning: assigned agent 'old-planner'", stderr);
         Assert.Contains("Planner", stderr);
         Assert.Contains("new-planner", stderr);
-        AssertEx.Contains(goal.Timeline, evt =>
+        Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskRedelegated &&
             evt.Message.Contains("old-planner", StringComparison.Ordinal) &&
@@ -69,7 +69,7 @@ public sealed class WorkerDispatchTests
         Assert.Equal(agent.Id, task.AssignedAgentId);
         Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
         Assert.DoesNotContain("Warning:", stderr);
-        AssertEx.DoesNotContain(goal.Timeline, evt =>
+        Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskRedelegated);
     }
@@ -102,7 +102,7 @@ public sealed class WorkerDispatchTests
             root,
             DateTimeOffset.UtcNow);
 
-        AssertEx.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
+        Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
         Assert.NotNull(prepared.PromptPath);
         Assert.Null(repairedTask.LastProcess);
     }
@@ -208,8 +208,8 @@ public sealed class WorkerDispatchTests
     Assert.True(File.Exists(preparation.PromptPath));
     Assert.Equal("brief content", File.ReadAllText(preparation.PromptPath));
     Assert.Equal("brief content".Length, preparation.PromptCharacterCount);
-    AssertEx.Contains(preparation.Command, text => text.Contains("agent-cli --prompt", StringComparison.Ordinal));
-    AssertEx.Contains(preparation.Command, text => text.Contains("--role Developer", StringComparison.Ordinal));
+    Assert.Contains("agent-cli --prompt", preparation.Command, StringComparison.Ordinal);
+    Assert.Contains("--role Developer", preparation.Command, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_renders_latest_retry_feedback_into_fresh_prompt_before_dispatch")]
@@ -240,7 +240,7 @@ public sealed class WorkerDispatchTests
         modelName: "gpt-5.5");
 
     var prompt = File.ReadAllText(result.PromptPath);
-    AssertEx.Contains(prompt, text => text.Contains(latestFeedback, StringComparison.Ordinal));
+    Assert.Contains(latestFeedback, prompt, StringComparison.Ordinal);
     Assert.Equal(result.PromptPath, developer.LastDispatch!.PromptPath);
     Assert.DoesNotContain(result.PromptPath, developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(File.Exists(developer.LastDispatch.PromptPath));
@@ -286,7 +286,7 @@ public sealed class WorkerDispatchTests
     Assert.True(File.Exists(first.PromptPath));
     Assert.True(File.Exists(second.PromptPath));
     Assert.Equal(second.PromptPath, developer.LastDispatch!.PromptPath);
-    AssertEx.Contains(File.ReadAllText(second.PromptPath), text => text.Contains("latest retry feedback for second prompt", StringComparison.Ordinal));
+    Assert.Contains("latest retry feedback for second prompt", File.ReadAllText(second.PromptPath), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "StartDispatches_refreshes_recorded_prompt_before_worker_start")]
@@ -337,7 +337,7 @@ public sealed class WorkerDispatchTests
 
         var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
         Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
-        AssertEx.Contains(File.ReadAllText(refreshedPromptPath), text => text.Contains(lateState, StringComparison.Ordinal));
+        Assert.Contains(lateState, File.ReadAllText(refreshedPromptPath), StringComparison.Ordinal);
         Assert.DoesNotContain(refreshedPromptPath, developer.LastDispatch.Command, StringComparison.Ordinal);
         Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
         Xunit.Assert.Null(developer.LastProcess);
@@ -539,8 +539,8 @@ public sealed class WorkerDispatchTests
         promptRoot,
         WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workingDirectory, null)));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("subscription-dispatch", StringComparison.Ordinal));
+    Assert.Contains("{subscriptionModelName}", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("subscription-dispatch", ex.Message, StringComparison.Ordinal);
     Assert.False(Directory.Exists(promptRoot));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.Equal(previousDispatch, task.LastDispatch);
@@ -575,9 +575,9 @@ public sealed class WorkerDispatchTests
         workingDirectory,
         dispatchedAt));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("codex-cli", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("{subscriptionReasoningEffort}", StringComparison.Ordinal));
+    Assert.Contains("codex-cli", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("{subscriptionModelName}", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("{subscriptionReasoningEffort}", ex.Message, StringComparison.Ordinal);
     Assert.False(Directory.Exists(promptRoot));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.Equal(previousDispatch, task.LastDispatch);
@@ -628,10 +628,10 @@ public sealed class WorkerDispatchTests
         dispatchedAt);
 
     Assert.Equal("custom-codex", task.LastDispatch!.WorkerName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.3-codex'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='medium'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-reasoning 'high'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--cd '{workingDirectory}'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal("gpt-5.3-codex", task.LastDispatch.ModelName);
     Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
@@ -640,13 +640,13 @@ public sealed class WorkerDispatchTests
     var prompt = File.ReadAllText(dispatchResult.PromptPath);
     Assert.Equal(prompt.Length, task.LastDispatch.PromptCharacterCount);
     Assert.Equal(expectedPromptCharacters, task.LastDispatch.PromptCharacterCount);
-    AssertEx.Contains(prompt, text => text.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <task shape> - <short reason>", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains("WORKER_RESULT", StringComparison.Ordinal));
+    Assert.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <task shape> - <short reason>", prompt, StringComparison.Ordinal);
+    Assert.Contains("WORKER_RESULT", prompt, StringComparison.Ordinal);
     var preflightPath = Path.Combine(contextDirectory, "subscription-preflight.md");
     Assert.True(File.Exists(preflightPath));
-    AssertEx.Contains(File.ReadAllText(preflightPath), text => text.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", StringComparison.Ordinal));
-    AssertEx.Contains(File.ReadAllText(Path.Combine(contextDirectory, "digest.md")), text => text.Contains("subscription-preflight.md", StringComparison.Ordinal));
-    AssertEx.Contains(File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), text => text.Contains("deterministic profile, sandbox, worktree", StringComparison.Ordinal));
+    Assert.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", File.ReadAllText(preflightPath), StringComparison.Ordinal);
+    Assert.Contains("subscription-preflight.md", File.ReadAllText(Path.Combine(contextDirectory, "digest.md")), StringComparison.Ordinal);
+    Assert.Contains("deterministic profile, sandbox, worktree", File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_reports_goal_worktree_git_metadata_access_without_worker_start")]
@@ -825,7 +825,7 @@ public sealed class WorkerDispatchTests
     Assert.True(state.Worktree.IsDirty == true);
     Assert.False(string.IsNullOrWhiteSpace(state.Worktree.HeadCommit));
     Assert.NotNull(state.Worktree.CommitsAfterDispatch);
-    AssertEx.Contains(state.Worktree.StatusEntries, entry => entry.Contains("operator-state-surface.txt", StringComparison.Ordinal));
+    Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("operator-state-surface.txt", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "Dashboard_work_summary_surfaces_authoritative_dispatch_state")]
@@ -860,8 +860,8 @@ public sealed class WorkerDispatchTests
     Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, state.RecoveryDecision.Action);
     Assert.Equal(process.ProcessId, state.ProcessTree.WrapperProcessId);
     Assert.Equal(222, state.ProcessTree.ChildProcessId);
-    AssertEx.Contains(state.ProcessTree.Processes, node => node.ProcessId == process.ProcessId);
-    AssertEx.Contains(state.ProcessTree.Processes, node => node.ProcessId == 222);
+    Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == process.ProcessId);
+    Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == 222);
     Assert.True(state.Artifacts.StandardOutputExists);
     Assert.Equal(13, state.Artifacts.StandardOutputBytes);
     Assert.True(state.Artifacts.ExitCodeExists);
@@ -869,7 +869,7 @@ public sealed class WorkerDispatchTests
     Assert.True(state.Worktree.IsDirty == true);
     Assert.False(string.IsNullOrWhiteSpace(state.Worktree.HeadCommit));
     Assert.NotNull(state.Worktree.CommitsAfterDispatch);
-    AssertEx.Contains(state.Worktree.StatusEntries, entry => entry.Contains("dispatch-state-evidence.txt", StringComparison.Ordinal));
+    Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("dispatch-state-evidence.txt", StringComparison.Ordinal));
     Assert.True(state.StaleThresholds.RecentHeartbeatGraceSeconds > 0);
     Assert.True(state.StaleThresholds.LiveIdleTimeoutSeconds > state.StaleThresholds.RecentHeartbeatGraceSeconds);
     Assert.Contains("dirty_worktree=True", state.Summary);
@@ -900,7 +900,7 @@ public sealed class WorkerDispatchTests
 
     Assert.Equal(OperatorDispositionState.Wait, disposition.State);
     Assert.Equal("wait", disposition.NextSafeCommand);
-    AssertEx.Contains(disposition.Dispatches, dispatch => dispatch.TaskId == task.Id && dispatch.State == OperatorDispositionState.Wait);
+    Assert.Contains(disposition.Dispatches, dispatch => dispatch.TaskId == task.Id && dispatch.State == OperatorDispositionState.Wait);
 }
 
     [Xunit.Fact(DisplayName = "GoalOperatorDisposition_blocks_completed_dirty_worker")]
@@ -1039,7 +1039,7 @@ public sealed class WorkerDispatchTests
         sandboxOptions: sandbox);
 
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
-    AssertEx.Contains(preflight.Findings, finding => finding.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", StringComparison.Ordinal));
+    Assert.Contains(preflight.Findings, finding => finding.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", StringComparison.Ordinal));
     Assert.Null(task.LastDispatch);
     Assert.Null(task.LastProcess);
     Assert.True(Directory.Exists(contextPath));
@@ -1496,8 +1496,8 @@ public sealed class WorkerDispatchTests
 
     Assert.False(preflight.Allowed);
     Assert.Equal("blocked", preflight.CapabilityStatus);
-    AssertEx.Contains(string.Join("\n", preflight.Findings), text => text.Contains(".agents/skills", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
+    Assert.Contains(".agents/skills", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
+    Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.False(Directory.Exists(promptRoot));
     Assert.True(task.LastDispatch is null);
 }
@@ -1533,7 +1533,7 @@ public sealed class WorkerDispatchTests
 
     Assert.True(preflight.Allowed);
     Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
-    AssertEx.Contains(string.Join("\n", preflight.Findings), text => text.Contains("repo-scoped .agents/skills", StringComparison.Ordinal));
+    Assert.Contains("repo-scoped .agents/skills", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_repo_scoped_skill_full_permission_smoke_creates_and_commits_from_goal_worktree")]
@@ -1631,9 +1631,9 @@ public sealed class WorkerDispatchTests
         DateTimeOffset.Parse("2026-06-13T12:00:00Z")));
 
     Assert.False(preflight.Allowed);
-    AssertEx.Contains(string.Join("\n", preflight.Findings), text => text.Contains("missing required local skill", StringComparison.Ordinal));
-    AssertEx.Contains(string.Join("\n", preflight.Findings), text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("missing required local skill", StringComparison.Ordinal));
+    Assert.Contains("missing required local skill", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
+    Assert.Contains("dotnet-windows-build-hygiene", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
+    Assert.Contains("missing required local skill", ex.Message, StringComparison.Ordinal);
     Assert.False(Directory.Exists(promptRoot));
     Assert.True(task.LastDispatch is null);
 }
@@ -1711,8 +1711,8 @@ public sealed class WorkerDispatchTests
     var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
 
     Assert.True(File.Exists(dispatch.PromptPath));
-    AssertEx.Contains(task.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='high'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
     Assert.Equal("high", task.LastDispatch.ReasoningEffort);
@@ -1761,7 +1761,7 @@ public sealed class WorkerDispatchTests
         workingDirectory,
         dispatchedAt.AddMinutes(1)));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("status is Running", StringComparison.Ordinal));
+    Assert.Contains("status is Running", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 
@@ -1786,7 +1786,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         root,
         DateTimeOffset.UtcNow));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.Contains("already has passing verification", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_uses_complex_model_only_for_complex_subscription_tasks")]
@@ -1841,20 +1841,20 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         workingDirectory,
         dispatchedAt);
 
-    AssertEx.Contains(simpleTask.LastDispatch!.Command, text => text.Contains("--model 'gpt-5-mini-codex'", StringComparison.Ordinal));
-    AssertEx.Contains(simpleTask.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
-    AssertEx.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5-mini'", StringComparison.Ordinal));
-    AssertEx.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'low'", StringComparison.Ordinal));
-    AssertEx.Contains(simpleTask.LastDispatch.Command, text => text.Contains("--complexity 'Simple'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5-mini-codex'", simpleTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='low'", simpleTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-model 'gpt-5-mini'", simpleTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-reasoning 'low'", simpleTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--complexity 'Simple'", simpleTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", simpleTask.LastDispatch.ProviderName);
     Assert.Equal("gpt-5-mini-codex", simpleTask.LastDispatch.ModelName);
     Assert.Equal("low", simpleTask.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, simpleTask.LastDispatch.TaskComplexity);
-    AssertEx.Contains(complexTask.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
-    AssertEx.Contains(complexTask.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
-    AssertEx.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5.5'", StringComparison.Ordinal));
-    AssertEx.Contains(complexTask.LastDispatch.Command, text => text.Contains("--api-reasoning 'high'", StringComparison.Ordinal));
-    AssertEx.Contains(complexTask.LastDispatch.Command, text => text.Contains("--complexity 'Complex'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.5'", complexTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='high'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-model 'gpt-5.5'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-reasoning 'high'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--complexity 'Complex'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", complexTask.LastDispatch.ProviderName);
     Assert.Equal("gpt-5.5", complexTask.LastDispatch.ModelName);
     Assert.Equal("high", complexTask.LastDispatch.ReasoningEffort);
@@ -1941,9 +1941,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         workingDirectory,
         dispatchedAt);
 
-    AssertEx.Contains(task.LastDispatch!.Command, text => text.Contains("--model 'gpt-5-mini-codex'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--complexity 'Simple'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5-mini-codex'", task.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='low'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--complexity 'Simple'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("gpt-5-mini-codex", task.LastDispatch.ModelName);
     Assert.Equal("low", task.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
@@ -1976,7 +1976,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         root,
         DateTimeOffset.UtcNow));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("already has passing verification", StringComparison.Ordinal));
+    Assert.Contains("already has passing verification", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_subscription_alias_when_complex_model_is_absent")]
@@ -2016,9 +2016,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt);
 
-    AssertEx.Contains(task.LastDispatch!.Command, text => text.Contains("--model 'gpt-5-mini-codex'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--api-model 'gpt-5-mini'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--complexity 'Complex'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5-mini-codex'", task.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-model 'gpt-5-mini'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--complexity 'Complex'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_ready_tasks_and_returns_prompt_paths")]
     public void WorkerProfileDispatcherPreparesReadyTasksAndReturnsPromptPaths()
@@ -2044,8 +2044,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal(goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer).Id, result.Task.Id);
     Assert.True(File.Exists(result.PromptPath));
     var prompt = File.ReadAllText(result.PromptPath);
-    AssertEx.Contains(prompt, text => text.Contains("Dispatch local subscription workers", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains(result.Task.VerificationPlan!, StringComparison.Ordinal));
+    Assert.Contains("Dispatch local subscription workers", prompt, StringComparison.Ordinal);
+    Assert.Contains(result.Task.VerificationPlan!, prompt, StringComparison.Ordinal);
     Assert.True(result.Task.LastDispatch is not null);
     Assert.Equal("codex-cli", result.Task.LastDispatch!.WorkerName);
     Assert.Equal(workingDirectory, result.Task.LastDispatch.WorkingDirectory);
@@ -2068,7 +2068,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var result = WorkerProfileDispatcher.PrepareTask(kernel, goal, task, profile, promptRoot, workingDirectory, DateTimeOffset.UtcNow);
 
     var prompt = File.ReadAllText(result.PromptPath);
-    AssertEx.Contains(prompt, text => text.Contains($"Working directory, use absolute paths: {workingDirectory}", StringComparison.Ordinal));
+    Assert.Contains($"Working directory, use absolute paths: {workingDirectory}", prompt, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_includes_current_branch_and_head_in_dispatched_prompt")]
     public void WorkerProfileDispatcherIncludesCurrentBranchAndHeadInDispatchedPrompt()
@@ -2097,10 +2097,10 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         DateTimeOffset.Parse("2026-06-27T12:01:00Z"));
 
     var prompt = File.ReadAllText(firstDispatch.PromptPath);
-    AssertEx.Contains(prompt, text => text.Contains("Current target context:", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
+    Assert.Contains("Current target context:", prompt, StringComparison.Ordinal);
+    Assert.Contains($"- Branch: {branch}", prompt, StringComparison.Ordinal);
+    Assert.Contains($"- HEAD commit: {head}", prompt, StringComparison.Ordinal);
+    Assert.Contains("latest developer retry feedback", prompt, StringComparison.Ordinal);
 
     var reviewerDispatch = WorkerProfileDispatcher.PrepareTask(
         kernel,
@@ -2112,10 +2112,10 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         DateTimeOffset.Parse("2026-06-27T12:01:30Z"));
 
     var reviewerPrompt = File.ReadAllText(reviewerDispatch.PromptPath);
-    AssertEx.Contains(reviewerPrompt, text => text.Contains("Current target context:", StringComparison.Ordinal));
-    AssertEx.Contains(reviewerPrompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
-    AssertEx.Contains(reviewerPrompt, text => text.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
-    AssertEx.Contains(reviewerPrompt, text => text.Contains("latest developer retry feedback", StringComparison.Ordinal));
+    Assert.Contains("Current target context:", reviewerPrompt, StringComparison.Ordinal);
+    Assert.Contains($"- Branch: {branch}", reviewerPrompt, StringComparison.Ordinal);
+    Assert.Contains($"- HEAD commit: {head}", reviewerPrompt, StringComparison.Ordinal);
+    Assert.Contains("latest developer retry feedback", reviewerPrompt, StringComparison.Ordinal);
 
     kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
         "dotnet test",
@@ -2142,8 +2142,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         DateTimeOffset.Parse("2026-06-27T12:04:00Z"));
 
     var redispatchPrompt = File.ReadAllText(redispatch.PromptPath);
-    AssertEx.Contains(redispatchPrompt, text => text.Contains($"- Branch: {branch}", StringComparison.Ordinal));
-    AssertEx.Contains(redispatchPrompt, text => text.Contains($"- HEAD commit: {redispatchHead}", StringComparison.Ordinal));
+    Assert.Contains($"- Branch: {branch}", redispatchPrompt, StringComparison.Ordinal);
+    Assert.Contains($"- HEAD commit: {redispatchHead}", redispatchPrompt, StringComparison.Ordinal);
     Assert.True(!redispatchPrompt.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_assigned_agent_when_catalog_still_contains_it")]
@@ -2219,16 +2219,16 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
     Assert.Equal("codex-cli", developer.LastDispatch!.WorkerName);
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", StringComparison.Ordinal));
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains("--sandbox 'workspace-write'", StringComparison.Ordinal));
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains($"--cd '{workingDirectory}'", StringComparison.Ordinal));
+    Assert.Contains("codex exec", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='low'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--cd '{workingDirectory}'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.False(developer.LastDispatch.Command.Contains("{workingDirectory}", StringComparison.Ordinal));
     Assert.Equal("codex-cli", researcher.LastDispatch!.WorkerName);
-    AssertEx.Contains(researcher.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
-    AssertEx.Contains(researcher.LastDispatch.Command, text => text.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", StringComparison.Ordinal));
-    AssertEx.Contains(researcher.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+    Assert.Contains("codex exec", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='low'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(File.Exists(results.Single(result => result.Task.Id == developer.Id).PromptPath));
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
@@ -2330,7 +2330,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     Assert.Single(results);
     var developer = goal.Tasks.Single();
     Assert.Equal("claude-cli", developer.LastDispatch!.WorkerName);
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains("claude --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", StringComparison.Ordinal));
+    Assert.Contains("claude --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(" -p", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("Anthropic", developer.LastDispatch.ProviderName);
@@ -2387,7 +2387,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     Assert.Equal("codex-oss-cli", task.LastDispatch!.WorkerName);
     Assert.Equal(ProviderKind.OpenAICodexOssCli, task.LastDispatch.WorkerProviderKind);
     Assert.Equal("Ollama", task.LastDispatch.ProviderName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("codex exec --skip-git-repo-check --oss --local-provider ollama", StringComparison.Ordinal));
+    Assert.Contains("codex exec --skip-git-repo-check --oss --local-provider ollama", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(task.LastDispatch.PromptPath!, task.LastDispatch.Command, StringComparison.Ordinal);
@@ -2431,8 +2431,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         workingDirectory,
         dispatchedAt);
 
-    AssertEx.Contains(developer.LastDispatch!.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
-    AssertEx.Contains(developer.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.5'", developer.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='high'", developer.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]
     public void SubscriptionDispatchOverrideModelBeatsComplexPath()
@@ -2468,7 +2468,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
 
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex-spark'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_sets_dispatch_provider_label")]
     public void SubscriptionDispatchOverrideProfileSetsDispatchProviderLabel()
@@ -2505,13 +2505,13 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
 
     Assert.True(preflight.Allowed);
-    AssertEx.Contains(preflight.Findings, text => text.Equals("profile: codex-cli", StringComparison.Ordinal));
-    AssertEx.Contains(preflight.Findings, text => text.Equals("model: OpenAI/gpt-5.3-codex-spark", StringComparison.Ordinal));
+    Assert.Contains(preflight.Findings, text => text.Equals("profile: codex-cli", StringComparison.Ordinal));
+    Assert.Contains(preflight.Findings, text => text.Equals("model: OpenAI/gpt-5.3-codex-spark", StringComparison.Ordinal));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("codex exec", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.3-codex-spark'", StringComparison.Ordinal));
+    Assert.Contains("codex exec", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_replaces_agent_default")]
     public void SubscriptionDispatchOverrideProfileReplacesAgentDefault()
@@ -2575,7 +2575,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, reasoningOverride);
 
     Assert.Equal("low", task.LastDispatch!.ReasoningEffort);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='low'", StringComparison.Ordinal));
+    Assert.Contains("model_reasoning_effort='low'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_no_override_preserves_complex_model_default")]
     public void SubscriptionDispatchNoOverridePreservesComplexModelDefault()
@@ -2610,7 +2610,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
 
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
     Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_pins_anthropic_subscription_model")]
     public void WorkerProfileDispatcherPinsAnthropicSubscriptionModel()
@@ -2646,7 +2646,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         sandboxOptions: sandbox);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("claude --model 'claude-sonnet' --permission-mode 'plan'", StringComparison.Ordinal));
+    Assert.Contains("claude --model 'claude-sonnet' --permission-mode 'plan'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
 }
@@ -2677,7 +2677,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         root,
         DateTimeOffset.UtcNow));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("{subscriptionReasoningEffort}", StringComparison.Ordinal));
+    Assert.Contains("{subscriptionReasoningEffort}", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_to_api_model_settings_for_default_openai_subscription_profile")]
@@ -2709,8 +2709,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         dispatchedAt);
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastDispatch.Command, text => text.Contains("model_reasoning_effort='high'", StringComparison.Ordinal));
+    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='high'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_echo_only_subscription_profiles")]
     public void WorkerProfileDispatcherRejectsEchoOnlySubscriptionProfiles()
@@ -2738,8 +2738,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         root,
         DateTimeOffset.UtcNow));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("only echoes prompt path", StringComparison.Ordinal));
+    Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("only echoes prompt path", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_profiles_without_model_pinning")]
@@ -2769,7 +2769,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         root,
         DateTimeOffset.UtcNow));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
+    Assert.Contains("{subscriptionModelName}", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_developer_subscription_profiles_that_cannot_patch")]
@@ -2799,9 +2799,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         root,
         DateTimeOffset.UtcNow));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("not patch-capable", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("missing", StringComparison.Ordinal));
+    Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("not patch-capable", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("missing", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_echo_only_profiles_not_preparable")]
@@ -2820,7 +2820,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(developer.ProfileIsEchoOnly);
     Assert.False(developer.ProfileIsPatchCapable);
     Assert.False(developer.CanPrepare);
-    AssertEx.Contains(developer.Detail, text => text.Contains("only echoes the prompt path", StringComparison.Ordinal));
+    Assert.Contains("only echoes the prompt path", developer.Detail, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_unpinned_model_profiles_not_preparable")]
     public void SubscriptionPlanMarksUnpinnedModelProfilesNotPreparable()
@@ -2845,7 +2845,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var reviewer = plan.Items.First(item => item.Role == AgentRole.Reviewer);
     Assert.True(reviewer.ProfileExists);
     Assert.False(reviewer.CanPrepare);
-    AssertEx.Contains(reviewer.Detail, text => text.Contains("{subscriptionModelName}", StringComparison.Ordinal));
+    Assert.Contains("{subscriptionModelName}", reviewer.Detail, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_unpinned_reasoning_profiles_not_preparable")]
     public void SubscriptionPlanMarksUnpinnedReasoningProfilesNotPreparable()
@@ -2870,7 +2870,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var reviewer = plan.Items.First(item => item.Role == AgentRole.Reviewer);
     Assert.True(reviewer.ProfileExists);
     Assert.False(reviewer.CanPrepare);
-    AssertEx.Contains(reviewer.Detail, text => text.Contains("{subscriptionReasoningEffort}", StringComparison.Ordinal));
+    Assert.Contains("{subscriptionReasoningEffort}", reviewer.Detail, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPlan_marks_non_patching_developer_profiles_not_preparable")]
     public void SubscriptionPlanMarksNonPatchingDeveloperProfilesNotPreparable()
@@ -2888,7 +2888,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(developer.ProfileExists);
     Assert.False(developer.ProfileIsPatchCapable);
     Assert.False(developer.CanPrepare);
-    AssertEx.Contains(developer.Detail, text => text.Contains("not patch-capable", StringComparison.Ordinal));
+    Assert.Contains("not patch-capable", developer.Detail, StringComparison.Ordinal);
     Assert.True(planner.CanPrepare);
 }
 
@@ -3309,9 +3309,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(capacityAction.Alternatives.Any(alternative => alternative.Contains("different provider", StringComparison.OrdinalIgnoreCase)));
     Assert.True(item.RetryDelaySeconds is > 0);
     Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
-    AssertEx.Contains(item.Detail, text => text.Contains("Recoverable subscription usage limit", StringComparison.Ordinal));
-    AssertEx.Contains(item.Detail, text => text.Contains("2 previous recoverable subscription usage limit failures", StringComparison.Ordinal));
-    AssertEx.Contains(item.Detail, text => text.Contains("retry after", StringComparison.Ordinal));
+    Assert.Contains("Recoverable subscription usage limit", item.Detail, StringComparison.Ordinal);
+    Assert.Contains("2 previous recoverable subscription usage limit failures", item.Detail, StringComparison.Ordinal);
+    Assert.Contains("retry after", item.Detail, StringComparison.Ordinal);
     Assert.Equal(developer.SubscriptionRetryAfter, DashboardResponseMapper.ToTaskSummaryDto(goal, developer).SubscriptionRetryAfter);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_large_paid_ready_subscription_start_before_dispatch")]
@@ -3346,10 +3346,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(risk.TaskCountExceedsThreshold);
     Assert.False(risk.UsesComplexPaidModel);
     Assert.Equal("large paid subscription start", SubscriptionPromptCostGuard.BuildInlineLabel(risk));
-    AssertEx.Contains(ex.Message, text => text.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("thresholds 18000 chars or 3 task(s)", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("Inspect the generated prompt before paid subscription start", StringComparison.Ordinal));
+    Assert.Contains("--confirm-large-paid-subscription-start", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("thresholds 18000 chars or 3 task(s)", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("Paid subscription start requires explicit confirmation", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("Inspect the generated prompt before paid subscription start", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_paid_batch_fanout_with_small_prompts_is_advisory_not_blocking")]
@@ -3560,8 +3560,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         promptRoot,
         workingDirectory,
         failureAt.AddMinutes(30)));
-    AssertEx.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("subscription retry deferred until", StringComparison.Ordinal));
+    Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("subscription retry deferred until", ex.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_blocks_same_provider_tasks_during_provider_cooldown")]
@@ -3629,8 +3629,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(limitedTask.SubscriptionRetryAfter, providerBudget.RetryAfter);
     Assert.Equal(TaskDisplayNumber.Resolve(goal, limitedTask.Id), providerBudget.SourceTaskNumber);
     Assert.Equal(1, providerBudget.RecoverableLimitFailureCount);
-    AssertEx.Contains(sameProviderItem.Detail, text => text.Contains("Provider OpenAI is cooling down", StringComparison.Ordinal));
-    AssertEx.Contains(sameProviderItem.Detail, text => text.Contains(TaskDisplayNumber.Resolve(goal, limitedTask.Id).ToString(), StringComparison.Ordinal));
+    Assert.Contains("Provider OpenAI is cooling down", sameProviderItem.Detail, StringComparison.Ordinal);
+    Assert.Contains(TaskDisplayNumber.Resolve(goal, limitedTask.Id).ToString(), sameProviderItem.Detail, StringComparison.Ordinal);
     Assert.False(preflight.Allowed);
     Assert.True(preflight.Findings.Any(finding => finding.Contains("provider OpenAI is cooling down", StringComparison.Ordinal)));
     Assert.False(results.Any(result => result.Task.Id == sameProviderTask.Id));
@@ -3788,8 +3788,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
     Assert.False(item.CanPrepare);
-    AssertEx.Contains(item.Detail, text => text.Contains("Repeated recoverable subscription usage limit", StringComparison.Ordinal));
-    AssertEx.Contains(item.Detail, text => text.Contains("inspect model, profile, or timing", StringComparison.Ordinal));
+    Assert.Contains("Repeated recoverable subscription usage limit", item.Detail, StringComparison.Ordinal);
+    Assert.Contains("inspect model, profile, or timing", item.Detail, StringComparison.Ordinal);
     Assert.False(results.Any(result => result.Task.Id == developer.Id));
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -3801,8 +3801,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         promptRoot,
         workingDirectory,
         retryWindowPassed));
-    AssertEx.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("repeated recoverable subscription limits require operator review", StringComparison.Ordinal));
+    Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("repeated recoverable subscription limits require operator review", ex.Message, StringComparison.Ordinal);
 
     kernel.AcknowledgeSubscriptionLimitReview(goal.Id, developer.Id, "Reviewed profile and provider timing.");
     var reviewedPlan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
@@ -3851,9 +3851,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         workingDirectory,
         dispatchedAt));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("Subscription preflight failed", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("goal workspace", StringComparison.Ordinal));
-    AssertEx.Contains(ex.Message, text => text.Contains("Developer", StringComparison.Ordinal));
+    Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("goal workspace", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("Developer", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is null);
 }
@@ -3958,7 +3958,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(preflight.Findings.Any(finding => finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains("build environment: goal lease not yet created", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase)));
-    AssertEx.Contains(ex.Message, text => text.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal));
+    Assert.Contains("worktree has 1 uncommitted change", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is null);
 }
@@ -3976,7 +3976,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("already has a dispatch process record", StringComparison.Ordinal));
+    Assert.Contains("already has a dispatch process record", ex.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refuses_process_start_when_disabled_for_environment")]
@@ -3992,7 +3992,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => runner.StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
-    AssertEx.Contains(ex.Message, text => text.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, StringComparison.Ordinal));
+    Assert.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, ex.Message, StringComparison.Ordinal);
     Xunit.Assert.Null(task.LastProcess);
 }
 
@@ -4086,7 +4086,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, Path.Combine(root, "logs")));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("retry after", StringComparison.Ordinal));
+    Assert.Contains("retry after", ex.Message, StringComparison.Ordinal);
     Assert.True(ex.Message.Contains(retryAfter.ToString("u"), StringComparison.Ordinal));
     Xunit.Assert.Null(task.LastProcess);
 }
@@ -4347,8 +4347,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Equal(WorkTaskStatus.Completed, developer.Status);
         Assert.Equal(0, developer.LastVerification!.ExitCode);
         Assert.Equal(clock.UtcNow, developer.LastProcess!.CompletedAt);
-        AssertEx.DoesNotContain(nextActions, action => action.TaskId == developer.Id);
-        AssertEx.Contains(nextActions, action => action.TaskId == tester.Id && action.Kind == NextActionKind.RunAssignedTask);
+        Assert.DoesNotContain(nextActions, action => action.TaskId == developer.Id);
+        Assert.Contains(nextActions, action => action.TaskId == tester.Id && action.Kind == NextActionKind.RunAssignedTask);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_ignores_stale_child_pid_when_exit_file_exists")]
@@ -4465,9 +4465,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.True(File.Exists(exit));
-    AssertEx.Contains(task.LastVerification!.StandardOutput, text => text.Contains("Implemented the change.", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("Tokens used", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
+    Assert.Contains("Implemented the change.", task.LastVerification!.StandardOutput, StringComparison.Ordinal);
+    Assert.Contains("Tokens used", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("wrapper appears hung after codex final output", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_refresh_uses_provider_identity_for_codex_exit_file_behavior")]
@@ -4504,7 +4504,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     {
         Assert.Equal(1, refreshed.ExitCode);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        AssertEx.Contains(task.LastVerification!.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
+        Assert.Contains("wrapper appears hung after codex final output", task.LastVerification!.StandardError, StringComparison.Ordinal);
     }
     else
     {
@@ -4544,8 +4544,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.True(File.Exists(exit));
-    AssertEx.Contains(task.LastVerification!.StandardError, text => text.Contains("no observable progress", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("heartbeat state=running", StringComparison.Ordinal));
+    Assert.Contains("no observable progress", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("heartbeat state=running", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_records_WORKER_RESULT_blocker_as_task_failure_without_subscription_retry")]
@@ -4594,11 +4594,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(ProviderFailureKind.Unknown, task.LastVerification.ProviderFailureKind);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
-    AssertEx.Contains(goal.Timeline, evt =>
+    Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
         evt.Message.Contains("full Infrastructure no-build timed out at 214s", StringComparison.Ordinal));
-    AssertEx.DoesNotContain(goal.Timeline, evt =>
+    Assert.DoesNotContain(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
@@ -4634,8 +4634,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.True(File.Exists(exit));
-    AssertEx.Contains(task.LastVerification!.StandardError, text => text.Contains("never launched", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("ownedCpuMs=0", StringComparison.Ordinal));
+    Assert.Contains("never launched", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("ownedCpuMs=0", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_child_alive_and_idle")]
@@ -4881,8 +4881,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(File.Exists(exit));
     Assert.Equal("0", File.ReadAllText(exit));
-    AssertEx.Contains(task.LastVerification!.StandardError, text => text.Contains("Wrapper process reaped", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
+    Assert.Contains("Wrapper process reaped", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_claude_cli_wrapper_completes_when_worktree_evidence_passes")]
@@ -4930,8 +4930,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(File.Exists(exit));
     Assert.Equal("0", File.ReadAllText(exit));
-    AssertEx.Contains(task.LastVerification!.StandardError, text => text.Contains("Wrapper process reaped", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
+    Assert.Contains("Wrapper process reaped", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_Developer_worktree_evidence_missing")]
@@ -4974,7 +4974,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.True(File.Exists(exit));
     Assert.Equal("1", File.ReadAllText(exit));
-    AssertEx.Contains(task.LastVerification!.StandardError, text => text.Contains("wrapper appears hung after codex final output", StringComparison.Ordinal));
+    Assert.Contains("wrapper appears hung after codex final output", task.LastVerification!.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_unchanged_dispatch_fails")]
@@ -4993,9 +4993,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("branch=goal/", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
+    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("branch=goal/", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("worktree=clean", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5015,8 +5015,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("changed_paths=none", StringComparison.Ordinal));
+    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("changed_paths=none", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5044,9 +5044,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("commits_after_dispatch=1", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("changed_paths=.qwen/settings.json", StringComparison.Ordinal));
+    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("changed_paths=.qwen/settings.json", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5095,7 +5095,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_without_passing_evidence_fails")]
@@ -5116,7 +5116,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5138,8 +5138,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=clean", StringComparison.Ordinal));
+    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("worktree=clean", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5160,9 +5160,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("worktree=dirty", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=?? dirty.txt", StringComparison.Ordinal));
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("worktree=dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("status_short=?? dirty.txt", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dirty_worktree_with_verification_evidence_only_stays_failed")]
@@ -5184,11 +5184,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "left the worktree dirty",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_self_committing_provider_dirty_verified_without_low_integrity_evidence_stays_failed")]
@@ -5210,9 +5209,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_without_low_integrity_stays_failed")]
@@ -5233,11 +5232,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "left the worktree dirty",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_without_low_integrity_stays_failed")]
@@ -5273,11 +5271,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "left the worktree dirty",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_does_not_activate_commit_path_from_provider_display_name")]
@@ -5301,11 +5298,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "left the worktree dirty",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_non_self_committing_provider_exit1_dirty_successful_worker_result_commits_on_behalf")]
@@ -5344,12 +5340,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "complete non-failing WORKER_RESULT and dirty worktree edits",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("complete non-failing WORKER_RESULT and dirty worktree edits", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_without_typed_sandbox_evidence_stays_failed")]
@@ -5373,7 +5368,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_git_metadata_permission_failure_is_nonfatal_with_dirty_worker_result")]
@@ -5407,15 +5402,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "Classified worker git metadata write failure as non-fatal",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("Classified worker git metadata write failure as non-fatal", StringComparison.Ordinal));
     Assert.Contains(
-        "index_lock=",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("index_lock=", StringComparison.Ordinal));
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dotnet_1312_dirty_worker_result_is_committed_by_orchestrator")]
@@ -5442,12 +5435,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "Orchestrator committed the worker's verified worktree edits",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_git_1312_commits_work_without_sandbox_marker")]
@@ -5478,11 +5470,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "Orchestrator committed the worker's verified worktree edits",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), text => text.Contains("feature.txt", StringComparison.Ordinal));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
     Assert.DoesNotContain(WorkerSandboxPreparer.MarkerFileName, ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
     Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.MarkerFileName]));
 }
@@ -5536,9 +5527,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "Accepted on verification evidence despite a non-zero worker exit",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+        text => text.Contains("Accepted on verification evidence despite a non-zero worker exit", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_clean_worktree_nonzero_exit_without_evidence_stays_failed")]
@@ -5785,7 +5775,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out _, out var diagnostic);
 
     Assert.False(parsed);
-    AssertEx.Contains(diagnostic, text => text.Contains("tests reported failure", StringComparison.Ordinal));
+    Assert.Contains("tests reported failure", diagnostic, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
@@ -5943,7 +5933,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         task.Status == WorkTaskStatus.Completed,
         task.LastVerification?.StandardError ?? "missing verification");
     Assert.Equal(0, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("Orchestrator committed the worker's verified worktree edits", StringComparison.Ordinal));
+    Assert.Contains("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     Assert.Equal("Developer task.: Committed implementation.", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
@@ -5989,14 +5979,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains(
-        "Orchestrator commit-on-behalf git command failed",
         task.LastVerification.StandardError,
-        StringComparison.Ordinal);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("operation=commit", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=M seed.txt", StringComparison.Ordinal));
+        text => text.Contains("Orchestrator commit-on-behalf git command failed", StringComparison.Ordinal));
+    Assert.Contains("operation=commit", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("status_short=M seed.txt", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("seed.txt", StringComparison.Ordinal));
+    Assert.Contains("seed.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
     Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
 }
 
@@ -6027,7 +6016,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    AssertEx.Contains(ReadGit(worktree, ["status", "--short"]), text => text.Contains("seed.txt", StringComparison.Ordinal));
+    Assert.Contains("seed.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
     Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
 }
 
@@ -6067,8 +6056,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("left the worktree dirty", StringComparison.Ordinal));
-    AssertEx.Contains(task.LastVerification.StandardError, text => text.Contains("status_short=M seed.txt", StringComparison.Ordinal));
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("status_short=M seed.txt", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_file_role_completion_is_unchanged")]
@@ -6103,7 +6092,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await new LocalDispatchRunner().ExecuteLatestDispatchAsync(kernel, goal.Id, task.Id));
 
-    AssertEx.Contains(ex.Message, text => text.Contains("status is Completed", StringComparison.Ordinal));
+    Assert.Contains("status is Completed", ex.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_read_only_codex_sandbox")]
@@ -6129,7 +6118,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         workingDirectory,
         dispatchedAt);
 
-    AssertEx.Contains(researcher.LastDispatch!.Command, text => text.Contains("--sandbox 'read-only'", StringComparison.Ordinal));
+    Assert.Contains("--sandbox 'read-only'", researcher.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_uses_workspace_write_codex_sandbox")]
@@ -6161,7 +6150,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         workingDirectory,
         dispatchedAt);
 
-    AssertEx.Contains(developer.LastDispatch!.Command, text => text.Contains("--sandbox 'workspace-write'", StringComparison.Ordinal));
+    Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.True(!developer.LastDispatch.Command.Contains("read-only", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
@@ -6202,8 +6191,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
-    AssertEx.Contains(developerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'bypassPermissions'", StringComparison.Ordinal));
-    AssertEx.Contains(reviewerTask.LastDispatch!.Command, text => text.Contains("--permission-mode 'plan'", StringComparison.Ordinal));
+    Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'plan'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_subscription_dispatch_without_supported_assignment")]
     public void WorkerProfileDispatcherRejectsSubscriptionDispatchWithoutSupportedAssignment()
@@ -6267,9 +6256,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var handoffPath = Path.Combine(workingDirectory, ".orchestrator-handoff.md");
     Assert.True(File.Exists(handoffPath));
     var content = File.ReadAllText(handoffPath);
-    AssertEx.Contains(content, text => text.Contains("Developer: Fix the login bug.", StringComparison.Ordinal));
-    AssertEx.Contains(content, text => text.Contains(stdoutHead, StringComparison.Ordinal));
-    AssertEx.Contains(content, text => text.Contains("[truncated 10000 chars]", StringComparison.Ordinal));
+    Assert.Contains("Developer: Fix the login bug.", content, StringComparison.Ordinal);
+    Assert.Contains(stdoutHead, content, StringComparison.Ordinal);
+    Assert.Contains("[truncated 10000 chars]", content, StringComparison.Ordinal);
     Assert.True(!content.Contains(stdoutTail, StringComparison.Ordinal));
 }
 
@@ -6299,7 +6288,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var content = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-handoff.md"));
     Assert.True(!content.Contains("STALE CONTENT", StringComparison.Ordinal));
-    AssertEx.Contains(content, text => text.Contains("Prior completed work.", StringComparison.Ordinal));
+    Assert.Contains("Prior completed work.", content, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_brief_contains_handoff_file_pointer_line")]
@@ -6326,13 +6315,13 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var result = WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
 
     var brief = File.ReadAllText(result.PromptPath);
-    AssertEx.Contains(brief, text => text.Contains(".orchestrator-context", StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains("manifest.md", StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains("digest.md", StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
+    Assert.Contains(".orchestrator-context", brief, StringComparison.Ordinal);
+    Assert.Contains("manifest.md", brief, StringComparison.Ordinal);
+    Assert.Contains("digest.md", brief, StringComparison.Ordinal);
+    Assert.Contains("prior-task-summaries.md", brief, StringComparison.Ordinal);
     Assert.True(brief.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < brief.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains("Full evidence available in the context files", StringComparison.Ordinal));
-    AssertEx.Contains(brief, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
+    Assert.Contains("Full evidence available in the context files", brief, StringComparison.Ordinal);
+    Assert.Contains("## Prior Task Evidence", brief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_writes_context_artifacts_with_repo_guidance_and_fuller_prior_evidence")]
@@ -6401,7 +6390,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(deterministicArtifact.GetProperty("exists").GetBoolean());
     Assert.True(deterministicArtifact.GetProperty("byteCount").GetInt64() > 0);
     Assert.Equal(64, deterministicArtifact.GetProperty("sha256").GetString()!.Length);
-    AssertEx.Contains(deterministicArtifact.GetProperty("freshness").GetString()!, text => text.Contains("dispatch preparation", StringComparison.Ordinal));
+    Assert.Contains("dispatch preparation", deterministicArtifact.GetProperty("freshness").GetString()!, StringComparison.Ordinal);
     Assert.True(deterministicArtifact.GetProperty("roleVisibility").EnumerateArray().Any(item => item.GetString() == "Reviewer"));
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "AGENTS.md"));
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "selected-skills.md"));
@@ -6410,70 +6399,70 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "context-package.json"));
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "source-survey.md"));
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "diff-summary.md"));
-    AssertEx.Contains(manifest, text => text.Contains("artifact-registry.json", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("digest.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("workflow-brokers.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("context-budget.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("selected-skills.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("source-survey.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("diff-summary.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("context-package.json", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("Missing Artifact Fallback", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("Role Artifact Priorities", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("AGENTS.md", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("## Current Task", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("workflow-brokers.md", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("context-budget.md", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("selected-skills.md", StringComparison.Ordinal));
-    AssertEx.Contains(contextBudget, text => text.Contains("artifact-registry.json: authoritative list", StringComparison.Ordinal));
-    AssertEx.Contains(contextBudget, text => text.Contains("embed: digest.md", StringComparison.Ordinal));
-    AssertEx.Contains(contextBudget, text => text.Contains("retrieve by handle: prior-task-evidence.md", StringComparison.Ordinal));
-    AssertEx.Contains(contextBudget, text => text.Contains("omit from prompt prose", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("## Prior Completed Outcomes", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("prior-task-summaries.md", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("prior-task-evidence.md", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains(".orchestrator-handoff.md", StringComparison.Ordinal));
-    AssertEx.Contains(deterministic, text => text.Contains("## .NET Verification Delegated To Acceptance", StringComparison.Ordinal));
-    AssertEx.Contains(deterministic, text => text.Contains("Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", StringComparison.Ordinal));
-    AssertEx.Contains(deterministic, text => text.Contains("The orchestrator acceptance gate verifies .NET changes through stable slots", StringComparison.Ordinal));
-    AssertEx.Contains(deterministic, text => text.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", StringComparison.Ordinal));
-    AssertEx.Contains(deterministic, text => text.Contains("## Required Verification Policy", StringComparison.Ordinal));
-    AssertEx.Contains(deterministic, text => text.Contains("Requires tests:", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains("build-test-selection", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains("source-survey", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains("diff-summary", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains("acceptance-evidence", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains(".orchestrator/dogfood-log.db", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains("dogfood-log list", StringComparison.Ordinal));
+    Assert.Contains("artifact-registry.json", manifest, StringComparison.Ordinal);
+    Assert.Contains("digest.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("workflow-brokers.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("context-budget.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("selected-skills.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("source-survey.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("diff-summary.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("prior-task-summaries.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("prior-task-evidence.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("context-package.json", manifest, StringComparison.Ordinal);
+    Assert.Contains("Missing Artifact Fallback", manifest, StringComparison.Ordinal);
+    Assert.Contains("Role Artifact Priorities", manifest, StringComparison.Ordinal);
+    Assert.Contains("AGENTS.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("## Current Task", digest, StringComparison.Ordinal);
+    Assert.Contains("## Role Artifact Priorities", digest, StringComparison.Ordinal);
+    Assert.Contains("workflow-brokers.md", digest, StringComparison.Ordinal);
+    Assert.Contains("context-budget.md", digest, StringComparison.Ordinal);
+    Assert.Contains("selected-skills.md", digest, StringComparison.Ordinal);
+    Assert.Contains("artifact-registry.json: authoritative list", contextBudget, StringComparison.Ordinal);
+    Assert.Contains("embed: digest.md", contextBudget, StringComparison.Ordinal);
+    Assert.Contains("retrieve by handle: prior-task-evidence.md", contextBudget, StringComparison.Ordinal);
+    Assert.Contains("omit from prompt prose", contextBudget, StringComparison.Ordinal);
+    Assert.Contains("## Prior Completed Outcomes", digest, StringComparison.Ordinal);
+    Assert.Contains("prior-task-summaries.md", digest, StringComparison.Ordinal);
+    Assert.Contains("prior-task-evidence.md", digest, StringComparison.Ordinal);
+    Assert.Contains(".orchestrator-handoff.md", digest, StringComparison.Ordinal);
+    Assert.Contains("## .NET Verification Delegated To Acceptance", deterministic, StringComparison.Ordinal);
+    Assert.Contains("Subscription workers must not run `dotnet test`, `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`", deterministic, StringComparison.Ordinal);
+    Assert.Contains("The orchestrator acceptance gate verifies .NET changes through stable slots", deterministic, StringComparison.Ordinal);
+    Assert.Contains("tests: not-run - orchestrator acceptance gate verifies via stable slots", deterministic, StringComparison.Ordinal);
+    Assert.Contains("## Required Verification Policy", deterministic, StringComparison.Ordinal);
+    Assert.Contains("Requires tests:", deterministic, StringComparison.Ordinal);
+    Assert.Contains("build-test-selection", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains("source-survey", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains("diff-summary", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains("acceptance-evidence", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains(".orchestrator/dogfood-log.db", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains("dogfood-log list", workflowBrokers, StringComparison.Ordinal);
     Assert.DoesNotContain("Artifact: DOGFOOD_LOG.md", workflowBrokers, StringComparison.Ordinal);
-    AssertEx.Contains(workflowBrokers, text => text.Contains("Broker Output Contract", StringComparison.Ordinal));
-    AssertEx.Contains(workflowBrokers, text => text.Contains("WORKER_RESULT blockers", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Changed files: Not reported.", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Behavior changes: Not reported.", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Verification: `dotnet test`", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Model fit: Not reported.", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("Status: missing", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("Source files indexed:", StringComparison.Ordinal));
-    AssertEx.Contains(diffSummary, text => text.Contains("Git Status", StringComparison.Ordinal));
-    AssertEx.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("Run worker dispatch tests.", StringComparison.Ordinal));
-    AssertEx.Contains(File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), text => text.Contains("skills: <selected skills used or none>", StringComparison.Ordinal));
-    AssertEx.Contains(File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), text => text.Contains(artifactOnlyTail, StringComparison.Ordinal));
+    Assert.Contains("Broker Output Contract", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains("WORKER_RESULT blockers", workflowBrokers, StringComparison.Ordinal);
+    Assert.Contains("Changed files: Not reported.", summaries, StringComparison.Ordinal);
+    Assert.Contains("Behavior changes: Not reported.", summaries, StringComparison.Ordinal);
+    Assert.Contains("Verification: `dotnet test`", summaries, StringComparison.Ordinal);
+    Assert.Contains("Model fit: Not reported.", summaries, StringComparison.Ordinal);
+    Assert.Contains("dotnet-windows-build-hygiene", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("Status: missing", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("Source files indexed:", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("Git Status", diffSummary, StringComparison.Ordinal);
+    Assert.Contains("Run worker dispatch tests.", File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), StringComparison.Ordinal);
+    Assert.Contains("skills: <selected skills used or none>", File.ReadAllText(Path.Combine(contextDirectory, "current-task.md")), StringComparison.Ordinal);
+    Assert.Contains(artifactOnlyTail, File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md")), StringComparison.Ordinal);
     var packageDirectory = Path.Combine(contextDirectory, "packages", currentTask.Id.Value);
     Assert.True(File.Exists(Path.Combine(packageDirectory, "manifest.md")));
     Assert.True(File.Exists(Path.Combine(packageDirectory, "artifact-registry.json")));
     Assert.True(File.Exists(Path.Combine(packageDirectory, "prior-task-evidence.md")));
     using var packageDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(contextDirectory, "context-package.json")));
     Assert.Equal(currentTask.Id.Value, packageDocument.RootElement.GetProperty("taskId").GetString());
-    AssertEx.Contains(packageDocument.RootElement.GetProperty("missingArtifactFallback").GetString()!, text => text.Contains("missing artifact", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains("missing artifact", packageDocument.RootElement.GetProperty("missingArtifactFallback").GetString()!, StringComparison.OrdinalIgnoreCase);
     var prompt = File.ReadAllText(result.PromptPath);
-    AssertEx.Contains(prompt, text => text.Contains(contextDirectory, StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains("artifact-registry.json", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains("## Prior Task Evidence", StringComparison.Ordinal));
-    AssertEx.Contains(prompt, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
+    Assert.Contains(contextDirectory, prompt, StringComparison.Ordinal);
+    Assert.Contains("artifact-registry.json", prompt, StringComparison.Ordinal);
+    Assert.Contains("## Prior Task Evidence", prompt, StringComparison.Ordinal);
+    Assert.Contains("Read prior-task-summaries.md first", prompt, StringComparison.Ordinal);
     Assert.True(prompt.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < prompt.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.True(!prompt.Contains(inlineHead, StringComparison.Ordinal));
     Assert.True(!prompt.Contains(artifactOnlyTail, StringComparison.Ordinal));
@@ -6512,12 +6501,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var currentTaskArtifact = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
-    AssertEx.Contains(currentTaskArtifact, text => text.Contains("## Last Dispatch", StringComparison.Ordinal));
-    AssertEx.Contains(currentTaskArtifact, text => text.Contains("codex exec retry-prompt.md", StringComparison.Ordinal));
-    AssertEx.Contains(currentTaskArtifact, text => text.Contains("## Last Verification", StringComparison.Ordinal));
-    AssertEx.Contains(currentTaskArtifact, text => text.Contains("current retry stdout evidence", StringComparison.Ordinal));
-    AssertEx.Contains(currentTaskArtifact, text => text.Contains("current retry stderr evidence", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("retry evidence when present", StringComparison.Ordinal));
+    Assert.Contains("## Last Dispatch", currentTaskArtifact, StringComparison.Ordinal);
+    Assert.Contains("codex exec retry-prompt.md", currentTaskArtifact, StringComparison.Ordinal);
+    Assert.Contains("## Last Verification", currentTaskArtifact, StringComparison.Ordinal);
+    Assert.Contains("current retry stdout evidence", currentTaskArtifact, StringComparison.Ordinal);
+    Assert.Contains("current retry stderr evidence", currentTaskArtifact, StringComparison.Ordinal);
+    Assert.Contains("retry evidence when present", manifest, StringComparison.Ordinal);
 }
 
     [Xunit.Theory(DisplayName = "WorkerContextArtifacts_writes_role_specific_priorities_and_prior_summaries")]
@@ -6556,17 +6545,17 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
     var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
     var summaries = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-summaries.md"));
-    AssertEx.Contains(manifest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains(expectedPrimaryPriority, StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains(expectedSecondaryPriority, StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains("## Role Artifact Priorities", StringComparison.Ordinal));
-    AssertEx.Contains(digest, text => text.Contains(expectedPrimaryPriority, StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Changed files: src/Context.cs, tests/ContextTests.cs", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Behavior changes: context bundles summarize prior work before full evidence", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Verification: `dotnet test --filter WorkerContextArtifacts`", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Verification result: passed focused tests", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Risks: none reported", StringComparison.Ordinal));
-    AssertEx.Contains(summaries, text => text.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", StringComparison.Ordinal));
+    Assert.Contains("## Role Artifact Priorities", manifest, StringComparison.Ordinal);
+    Assert.Contains(expectedPrimaryPriority, manifest, StringComparison.Ordinal);
+    Assert.Contains(expectedSecondaryPriority, manifest, StringComparison.Ordinal);
+    Assert.Contains("## Role Artifact Priorities", digest, StringComparison.Ordinal);
+    Assert.Contains(expectedPrimaryPriority, digest, StringComparison.Ordinal);
+    Assert.Contains("Changed files: src/Context.cs, tests/ContextTests.cs", summaries, StringComparison.Ordinal);
+    Assert.Contains("Behavior changes: context bundles summarize prior work before full evidence", summaries, StringComparison.Ordinal);
+    Assert.Contains("Verification: `dotnet test --filter WorkerContextArtifacts`", summaries, StringComparison.Ordinal);
+    Assert.Contains("Verification result: passed focused tests", summaries, StringComparison.Ordinal);
+    Assert.Contains("Risks: none reported", summaries, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", summaries, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_relevant_skills_and_registers_skill_artifact")]
@@ -6595,14 +6584,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var artifacts = registryDocument.RootElement.GetProperty("artifacts").EnumerateArray().ToArray();
     var skillArtifact = artifacts.Single(artifact => artifact.GetProperty("path").GetString() == "selected-skills.md");
     Assert.True(skillArtifact.GetProperty("exists").GetBoolean());
-    AssertEx.Contains(selectedSkills, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("orchestrator-dogfood", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("aspnet-core", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("playwright", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("skill-authoring", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("Status: available", StringComparison.Ordinal));
-    AssertEx.Contains(selectedSkills, text => text.Contains("WORKER_RESULT skills field", StringComparison.Ordinal));
-    AssertEx.Contains(skillArtifact.GetProperty("summary").GetString()!, text => text.Contains("skill selection", StringComparison.Ordinal));
+    Assert.Contains("dotnet-windows-build-hygiene", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("orchestrator-dogfood", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("aspnet-core", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("playwright", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("skill-authoring", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("Status: available", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("WORKER_RESULT skills field", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("skill selection", skillArtifact.GetProperty("summary").GetString()!, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_different_skill_manifests_for_tasks_in_same_goal")]
@@ -6636,10 +6625,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var implementationPackageSkills = File.ReadAllText(Path.Combine(contextDirectory, "packages", implementation.Id.Value, "selected-skills.md"));
     var reviewPackageSkills = File.ReadAllText(Path.Combine(contextDirectory, "packages", review.Id.Value, "selected-skills.md"));
 
-    AssertEx.Contains(implementationSkills, text => text.Contains("dotnet-windows-build-hygiene", StringComparison.Ordinal));
-    AssertEx.Contains(implementationSkills, text => text.Contains("aspnet-core", StringComparison.Ordinal));
-    AssertEx.Contains(implementationSkills, text => text.Contains("playwright", StringComparison.Ordinal));
-    AssertEx.Contains(reviewSkills, text => text.Contains("orchestrator-worker-verification", StringComparison.Ordinal));
+    Assert.Contains("dotnet-windows-build-hygiene", implementationSkills, StringComparison.Ordinal);
+    Assert.Contains("aspnet-core", implementationSkills, StringComparison.Ordinal);
+    Assert.Contains("playwright", implementationSkills, StringComparison.Ordinal);
+    Assert.Contains("orchestrator-worker-verification", reviewSkills, StringComparison.Ordinal);
     Assert.False(reviewSkills.Contains("aspnet-core", StringComparison.Ordinal));
     Assert.False(reviewSkills.Contains("playwright", StringComparison.Ordinal));
     Assert.False(string.Equals(implementationSkills, reviewSkills, StringComparison.Ordinal));
@@ -6674,20 +6663,20 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var diffSummary = File.ReadAllText(Path.Combine(contextDirectory, "diff-summary.md"));
     using var registryDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")));
     var artifacts = registryDocument.RootElement.GetProperty("artifacts").EnumerateArray().ToArray();
-    AssertEx.Contains(sourceSurvey, text => text.Contains("src/Feature/FeatureService.cs", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("tests/Feature.Tests/FeatureServiceTests.cs", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("## Likely Tests", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("## Public API Symbols", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("public class FeatureService", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("## Call-Site Hints", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("FeatureService.cs: featureservice", StringComparison.OrdinalIgnoreCase));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("## Ownership Hints", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("src/Feature: production source", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("tests/Feature.Tests: test source", StringComparison.Ordinal));
-    AssertEx.Contains(sourceSurvey, text => text.Contains("Regeneration: generated at dispatch preparation", StringComparison.Ordinal));
+    Assert.Contains("src/Feature/FeatureService.cs", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("tests/Feature.Tests/FeatureServiceTests.cs", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("## Likely Tests", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("## Public API Symbols", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("public class FeatureService", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("## Call-Site Hints", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("FeatureService.cs: featureservice", sourceSurvey, StringComparison.OrdinalIgnoreCase);
+    Assert.Contains("## Ownership Hints", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("src/Feature: production source", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("tests/Feature.Tests: test source", sourceSurvey, StringComparison.Ordinal);
+    Assert.Contains("Regeneration: generated at dispatch preparation", sourceSurvey, StringComparison.Ordinal);
     Assert.False(sourceSurvey.Contains("bin/Generated.cs", StringComparison.Ordinal));
-    AssertEx.Contains(diffSummary, text => text.Contains("src/Feature/FeatureService.cs", StringComparison.Ordinal));
-    AssertEx.Contains(diffSummary, text => text.Contains("Regeneration: generated at dispatch preparation", StringComparison.Ordinal));
+    Assert.Contains("src/Feature/FeatureService.cs", diffSummary, StringComparison.Ordinal);
+    Assert.Contains("Regeneration: generated at dispatch preparation", diffSummary, StringComparison.Ordinal);
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "source-survey.md"));
     Assert.True(artifacts.Any(artifact => artifact.GetProperty("path").GetString() == "diff-summary.md"));
 }
@@ -6726,15 +6715,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     var checklist = File.ReadAllText(Path.Combine(contextDirectory, "deterministic-verification.md"));
     var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
-    AssertEx.Contains(checklist, text => text.Contains("Acceptance manifest: present: config/acceptance-manifest.json", StringComparison.Ordinal));
-    AssertEx.Contains(checklist, text => text.Contains("prior Developer verification passed", StringComparison.Ordinal));
-    AssertEx.Contains(checklist, text => text.Contains("reported WORKER_RESULT contract", StringComparison.Ordinal));
-    AssertEx.Contains(checklist, text => text.Contains("reported generated path changes: bin/generated.dll", StringComparison.Ordinal));
-    AssertEx.Contains(checklist, text => text.Contains("prior Tester task", StringComparison.Ordinal));
-    AssertEx.Contains(checklist, text => text.Contains("no model-fit evidence", StringComparison.Ordinal));
-    AssertEx.Contains(checklist, text => text.Contains("## Test Impact Plan", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("deterministic-verification.md", StringComparison.Ordinal));
-    AssertEx.Contains(manifest, text => text.Contains("check deterministic failures", StringComparison.Ordinal));
+    Assert.Contains("Acceptance manifest: present: config/acceptance-manifest.json", checklist, StringComparison.Ordinal);
+    Assert.Contains("prior Developer verification passed", checklist, StringComparison.Ordinal);
+    Assert.Contains("reported WORKER_RESULT contract", checklist, StringComparison.Ordinal);
+    Assert.Contains("reported generated path changes: bin/generated.dll", checklist, StringComparison.Ordinal);
+    Assert.Contains("prior Tester task", checklist, StringComparison.Ordinal);
+    Assert.Contains("no model-fit evidence", checklist, StringComparison.Ordinal);
+    Assert.Contains("## Test Impact Plan", checklist, StringComparison.Ordinal);
+    Assert.Contains("deterministic-verification.md", manifest, StringComparison.Ordinal);
+    Assert.Contains("check deterministic failures", manifest, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_writes_unmet_acceptance_criterion_retry_feedback")]
@@ -6758,8 +6747,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
 
     var currentTask = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
-    AssertEx.Contains(currentTask, text => text.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", StringComparison.Ordinal));
-    AssertEx.Contains(currentTask, text => text.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal));
+    Assert.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", currentTask, StringComparison.Ordinal);
+    Assert.Contains("docs/usage.md is missing Ready", currentTask, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_latest_acceptance_failure_before_context_digest_on_retry")]
@@ -6881,14 +6870,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(retryStart < prompt.IndexOf("Current target context:", StringComparison.Ordinal), prompt);
     Assert.True(retryStart < prompt.IndexOf("## Prior Task Evidence", StringComparison.Ordinal), prompt);
     Assert.True(retryStart < prompt.IndexOf("## Recent Timeline", StringComparison.Ordinal), prompt);
-    AssertEx.Contains(prompt, text => text.Contains(exactBlocker, StringComparison.Ordinal));
+    Assert.Contains(exactBlocker, prompt, StringComparison.Ordinal);
 
     var retryBlock = prompt[retryStart..retryEnd];
-    AssertEx.Contains(retryBlock, text => text.Contains(exactBlocker, StringComparison.Ordinal));
-    AssertEx.Contains(retryBlock, text => text.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", StringComparison.Ordinal));
-    AssertEx.Contains(retryBlock, text => text.Contains("PrepareSubscriptionTask", StringComparison.Ordinal));
-    AssertEx.Contains(retryBlock, text => text.Contains("- Branch: goal/41c6e2a2", StringComparison.Ordinal));
-    AssertEx.Contains(retryBlock, text => text.Contains("- HEAD commit: abcdef123456", StringComparison.Ordinal));
+    Assert.Contains(exactBlocker, retryBlock, StringComparison.Ordinal);
+    Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", retryBlock, StringComparison.Ordinal);
+    Assert.Contains("PrepareSubscriptionTask", retryBlock, StringComparison.Ordinal);
+    Assert.Contains("- Branch: goal/41c6e2a2", retryBlock, StringComparison.Ordinal);
+    Assert.Contains("- HEAD commit: abcdef123456", retryBlock, StringComparison.Ordinal);
     Assert.DoesNotContain("Old retry reason for prior history.", retryBlock, StringComparison.Ordinal);
 }
 
@@ -6952,11 +6941,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var result = WorkerPromptInputBudget.Apply(brief, "Ollama", "qwen3:8b", budget);
 
     Assert.True(result.Trimmed);
-    AssertEx.Contains(result.DroppedSections, section => section == "evidence");
-    AssertEx.Contains(result.DroppedSections, section => section == "digest");
-    AssertEx.Contains(result.Brief.Content, text => text.Contains("LATEST DEVELOPER RETRY BLOCKER", StringComparison.Ordinal));
-    AssertEx.Contains(result.Brief.Content, text => text.Contains(exactBlocker, StringComparison.Ordinal));
-    AssertEx.Contains(result.Brief.Content, text => text.Contains("PrepareSubscriptionTask", StringComparison.Ordinal));
+    Assert.Contains(result.DroppedSections, section => section == "evidence");
+    Assert.Contains(result.DroppedSections, section => section == "digest");
+    Assert.Contains("LATEST DEVELOPER RETRY BLOCKER", result.Brief.Content, StringComparison.Ordinal);
+    Assert.Contains(exactBlocker, result.Brief.Content, StringComparison.Ordinal);
+    Assert.Contains("PrepareSubscriptionTask", result.Brief.Content, StringComparison.Ordinal);
     Assert.DoesNotContain(new string('p', 400), result.Brief.Content, StringComparison.Ordinal);
     Assert.DoesNotContain(new string('d', 400), result.Brief.Content, StringComparison.Ordinal);
 }
@@ -7012,7 +7001,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(currentTask.LastDispatch!.PromptCharacterCount <= PaidPromptThresholds.PromptThreshold(
         currentTask.LastDispatch.TaskComplexity,
         currentTask.LastDispatch.UsesComplexModel));
-    AssertEx.Contains(prompt, text => text.Contains("Read prior-task-summaries.md first", StringComparison.Ordinal));
+    Assert.Contains("Read prior-task-summaries.md first", prompt, StringComparison.Ordinal);
     Assert.True(prompt.IndexOf("prior-task-summaries.md", StringComparison.Ordinal) < prompt.IndexOf("prior-task-evidence.md", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("prior-output-head", StringComparison.Ordinal));
     Assert.True(!prompt.Contains("prior-output-tail", StringComparison.Ordinal));
