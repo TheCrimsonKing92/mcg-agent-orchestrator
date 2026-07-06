@@ -6560,7 +6560,7 @@ public sealed class CliCommandTests
             var repository = new InMemoryTransactionalStateRepository(kernel);
 
             var changed = false;
-            CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            var output = CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
                 ["acceptance", "--skip-verify", "--keep-workspace"],
                 repository,
                 CreateRefinedWorkspace(root),
@@ -6571,6 +6571,9 @@ public sealed class CliCommandTests
 
             Xunit.Assert.Equal(1, repository.TransactionCount);
             Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+            Xunit.Assert.False(changed);
+            Xunit.Assert.Contains("Acceptance evidence bundle: passed", output);
+            Xunit.Assert.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", output);
             var storedGoal = (await repository.LoadAsync()).GetGoal(goal.Id);
             Xunit.Assert.Null(storedGoal.LatestAcceptanceFailure);
             Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
@@ -6602,16 +6605,39 @@ public sealed class CliCommandTests
         repository.BeforeNextTransaction = stored =>
             stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Task moved during acceptance.");
 
-        var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["acceptance", "--skip-verify", "--keep-workspace"],
-            repository,
-            CreateRefinedWorkspace(root),
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal)));
+        InvalidOperationException? caught = null;
+        var output = CaptureConsole(() =>
+        {
+            try
+            {
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["acceptance", "--skip-verify", "--keep-workspace"],
+                    repository,
+                    CreateRefinedWorkspace(root),
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            }
+            catch (InvalidOperationException ex)
+            {
+                caught = ex;
+            }
+        });
 
-        Xunit.Assert.Contains("changed during acceptance verification", ex.Message);
+        Xunit.Assert.NotNull(caught);
+        Xunit.Assert.Contains("changed during acceptance verification", caught!.Message);
+        Xunit.Assert.Contains("BLOCKER step=acceptance-state-guard", output);
+        Xunit.Assert.Contains("state changed during acceptance verification", output);
+        Xunit.Assert.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", output);
+        var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+        Xunit.Assert.NotNull(storedGoal.LatestAcceptanceFailure);
+        Xunit.Assert.Contains(storedGoal.LatestAcceptanceFailure.FailedChecks, check =>
+            check.Contains("state changed during acceptance verification", StringComparison.Ordinal));
+        var acceptance = repository.LoadAsync().GetAwaiter().GetResult().BuildGoalAcceptanceSummary(goal.Id);
+        Xunit.Assert.Contains(acceptance.Blockers, blocker =>
+            blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
+            blocker.Message.Contains("state changed during acceptance verification", StringComparison.Ordinal));
         Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
         Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
     }

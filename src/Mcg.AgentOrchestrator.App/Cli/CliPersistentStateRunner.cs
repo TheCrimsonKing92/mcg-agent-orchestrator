@@ -710,22 +710,37 @@ internal static class CliPersistentStateRunner
                             ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
                         if (transactionGoal.Status != GoalStatus.Verified)
                         {
-                            throw new InvalidOperationException(
-                                $"Goal '{request.GoalId.Value[..8]}' changed during acceptance verification; retry acceptance.");
+                            var guardedResult = GuardedAcceptanceFailure(
+                                transactionKernel,
+                                request.GoalId,
+                                $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
+                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
                         }
 
                         var currentFingerprint = BuildGoalFingerprint(transactionKernel, request.GoalId);
                         if (!string.Equals(currentFingerprint, request.ExpectedGoalFingerprint, StringComparison.Ordinal))
                         {
-                            throw new InvalidOperationException(
+                            var guardedResult = GuardedAcceptanceFailure(
+                                transactionKernel,
+                                request.GoalId,
                                 $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
+                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
                         }
 
                         var currentHead = ResolveWorktreeHead(workspace.ExecutionDirectory, request.GoalId);
                         if (!string.Equals(currentHead, request.TestedWorktreeHead, StringComparison.Ordinal))
                         {
-                            throw new InvalidOperationException(
+                            var guardedResult = GuardedAcceptanceFailure(
+                                transactionKernel,
+                                request.GoalId,
                                 $"Goal '{request.GoalId.Value[..8]}' worktree changed during acceptance verification; retry acceptance.");
+                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
                         }
 
                         var result = request.Merge();
@@ -846,6 +861,15 @@ internal static class CliPersistentStateRunner
         }
 
         return head.Output.Trim();
+    }
+
+    private static AcceptanceMergeCommitResult GuardedAcceptanceFailure(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        string reason)
+    {
+        kernel.RecordAcceptanceFailure(goalId, [reason]);
+        return new AcceptanceMergeCommitResult(false, reason, GuardFailure: true);
     }
 
     private static IReadOnlyDictionary<(GoalId GoalId, TaskId TaskId), ProcessRefreshIdentity> CaptureRunningProcessIdentities(

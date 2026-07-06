@@ -77,7 +77,8 @@ internal sealed record AcceptanceMergeCommitRequest(
 
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
-    string? Message);
+    string? Message,
+    bool GuardFailure = false);
 
 internal interface ICliGoalWorktreeService
 {
