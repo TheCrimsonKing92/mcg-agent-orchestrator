@@ -108,15 +108,15 @@ public sealed class GoalAcceptanceVerifierTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_once_on_CS2012_and_returns_passed")]
-    public async Task GoalAcceptanceVerifierRetriesOnceOnCs2012AndReturnsPassed()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_CS2012_file_lock_and_returns_passed")]
+    public async Task GoalAcceptanceVerifierSelfHealsOnceOnCs2012FileLockAndReturnsPassed()
     {
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),                                                     // build-server shutdown
-            new(1, "error CS2012: Cannot open 'Core.dll' for writing"),     // dotnet test - CS2012
-            new(0, ""),                                                     // build-server shutdown (retry)
-            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")  // dotnet test - retry passes
+            new(0, ""),                                                                                 // build-server shutdown
+            new(1, "error CS2012: Cannot open 'Core.dll' for writing because it is being used by another process."),
+            new(0, ""),                                                                                 // build-server shutdown (retry)
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")                              // dotnet test - retry passes
         ]);
 
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -144,18 +144,19 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("goal-abcd1234", check.LeaseId);
         Assert.True(check.DurationMilliseconds is >= 0);
         Assert.True(check.LockRemediationApplied);
+        Assert.True(check.ResultSummary?.Contains("transient compiler lock detected; build server restarted; check retried", StringComparison.Ordinal) == true);
         Assert.True(check.ResultSummary?.Contains("Failed: 0", StringComparison.Ordinal) == true);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_once_on_CS2012_and_returns_failed_when_retry_also_fails")]
-    public async Task GoalAcceptanceVerifierRetriesOnceOnCs2012AndReturnsFailedWhenRetryAlsoFails()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_compiler_lock_and_returns_failed_when_retry_also_fails")]
+    public async Task GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
     {
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
-            new(1, "error CS2012: Cannot open 'Core.dll' for writing"),
+            new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
             new(0, ""),
-            new(1, "error CS2012: Cannot open 'Core.dll' for writing -- still locked")
+            new(1, "error CS2012: Cannot open 'Core.dll' for writing because it is being used by another process.")
         ]);
 
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -174,15 +175,18 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(4, calls.Count);
         AssertIsolatedTestCommand(calls[1]);
         AssertIsolatedTestCommand(calls[3]);
+        var check = result.Checks!.Single(item => item.Name == "dotnet test");
+        Assert.True(check.LockRemediationApplied);
+        Assert.Equal("transient compiler lock detected; build server restarted; check retried", check.ResultSummary);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_does_not_retry_non_CS2012_failure")]
-    public async Task GoalAcceptanceVerifierDoesNotRetryNonCs2012Failure()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_does_not_self_heal_non_lock_failure")]
+    public async Task GoalAcceptanceVerifierDoesNotSelfHealNonLockFailure()
     {
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
-            new(1, "Failed 3 tests.\nError: assertion failed")
+            new(1, "error CS2012: Cannot open 'Core.dll' for writing")
         ]);
 
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -199,6 +203,7 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(2, calls.Count);
         AssertIsolatedTestCommand(calls[1]);
+        Assert.False(result.Checks!.Single(item => item.Name == "dotnet test").LockRemediationApplied);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_failed_check_with_timeout_diagnostics")]
