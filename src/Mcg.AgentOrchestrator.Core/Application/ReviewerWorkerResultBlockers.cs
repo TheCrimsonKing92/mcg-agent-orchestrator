@@ -216,7 +216,7 @@ internal static class WorkerResultBlockers
     {
         return task.RequiredRole switch
         {
-            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => true,
+            AgentRole.Researcher => true,
             AgentRole.Tester => !TaskRequestsFileChanges(task),
             _ => false
         };
