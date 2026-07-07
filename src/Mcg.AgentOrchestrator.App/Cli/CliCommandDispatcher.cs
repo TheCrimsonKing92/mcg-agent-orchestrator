@@ -20,7 +20,9 @@ public static bool ExecuteCommand(
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
     IGoalAcceptanceVerifier? acceptanceVerifier = null,
     Func<long>? goalMarkLandedElapsedMilliseconds = null,
-    CliPhaseTimingRecorder? phaseTimings = null)
+    CliPhaseTimingRecorder? phaseTimings = null,
+    TimeSpan? stableSlotAcquisitionTimeout = null,
+    Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, int>? stableSlotSelector = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
     kernel.SetEventWriter(eventWriter);
@@ -40,7 +42,9 @@ public static bool ExecuteCommand(
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),
-        GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds
+        GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
+        StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,
+        StableSlotSelector = stableSlotSelector
     };
     var changed = CliCommandHandlers.Execute(parts, context);
     agents = context.Agents;

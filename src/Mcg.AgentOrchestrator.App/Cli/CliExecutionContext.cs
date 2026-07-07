@@ -57,6 +57,10 @@ public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }
 
 public CliPhaseTimingRecorder PhaseTimings { get; } = phaseTimings ?? CliPhaseTimingRecorder.Null;
 
+public TimeSpan? StableSlotAcquisitionTimeout { get; init; }
+
+public Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, int>? StableSlotSelector { get; init; }
+
 public TimeSpan? RunGoalPollInterval { get; init; }
 
 public RunGoalService.SleepFunc? RunGoalSleep { get; init; }

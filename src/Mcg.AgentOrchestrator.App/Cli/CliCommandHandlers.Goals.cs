@@ -2774,12 +2774,27 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         else
         {
             var verificationStarted = System.Diagnostics.Stopwatch.StartNew();
-            verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles).GetAwaiter().GetResult();
+            int? stableSlotIndex = null;
+            try
+            {
+                var stableSlotSelector = context.StableSlotSelector ?? SelectFirstAvailableStableSlot;
+                stableSlotIndex = stableSlotSelector(
+                    context.StableSlotAcquisitionTimeout,
+                    wait => Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+            }
+            catch (IOException ex)
+            {
+                Console.WriteLine($"BLOCKER step=verification reason=build-slot-timeout detail=\"{EscapeBlockerDetail(ex.Message)}\" action=\"Wait for a stable dotnet build slot to clear, then rerun acceptance.\"");
+                throw new InvalidOperationException("acceptance blocked waiting for a stable dotnet build slot.", ex);
+            }
+
+            verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
             verificationStarted.Stop();
             context.PhaseTimings.Record(
                 "verification-suite",
                 verificationStarted.Elapsed,
                 ("goal", goal.Id.Value[..8]),
+                ("slot", stableSlotIndex.HasValue ? $"slot-{stableSlotIndex.Value}" : null),
                 ("passed", verification.Passed),
                 ("exit", verification.ExitCode),
                 ("checks", verification.Checks?.Count ?? 0));
@@ -2944,6 +2959,21 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 
     RecordAcceptanceCompleted(context, goal);
     return true;
+}
+
+private static int SelectFirstAvailableStableSlot(TimeSpan? timeout, Action<DotnetBuildStableSlotWait>? onWait)
+{
+    using var stableSlotLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(timeout, onWait);
+    return ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
+        ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
+}
+
+private static int? ParseStableSlotIndex(string slotOwnerToken)
+{
+    return slotOwnerToken.StartsWith("slot-", StringComparison.OrdinalIgnoreCase) &&
+        int.TryParse(slotOwnerToken[5..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
+            ? slotIndex
+            : null;
 }
 
 private static bool TryNormalizePrematureCompletedGoalForAcceptance(
