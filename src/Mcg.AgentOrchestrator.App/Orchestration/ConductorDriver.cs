@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -9,6 +10,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class ConductorDriver
 {
+    private const int MaxCriterionRetryEvidenceLines = 30;
+    private static readonly Regex AcceptanceRetryEvidencePattern = new(
+        @"error CS\d+|error MSB\d+|\[FAIL\]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
@@ -988,11 +994,13 @@ internal sealed class ConductorDriver
 
             if (task.CriterionRetryCount < policy.MaxCriterionRetries)
             {
+                var retryFeedback = FormatCriterionRetryFeedback(acceptance.UnmetCriteria);
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,
-                    acceptance.UnmetCriteria.Select(FormatUnmetCriterion).ToArray());
-                var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): {criteria}";
+                    retryFeedback);
+                var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): " +
+                    string.Join(Environment.NewLine, retryFeedback);
                 _retryTask(goal.Id, task.Id, retryMessage);
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
@@ -1136,6 +1144,68 @@ internal sealed class ConductorDriver
         string.IsNullOrWhiteSpace(holder.CommandLine)
             ? $"pid={holder.ProcessId} name={holder.ProcessName}"
             : $"pid={holder.ProcessId} name={holder.ProcessName} command=\"{holder.CommandLine}\"";
+
+    private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)
+    {
+        var concreteEvidence = ExtractConcreteRetryEvidence(criteria);
+        if (concreteEvidence.Count == 0)
+        {
+            return criteria.Select(FormatUnmetCriterion).ToArray();
+        }
+
+        var cappedEvidence = concreteEvidence.Take(MaxCriterionRetryEvidenceLines).ToList();
+        if (concreteEvidence.Count > MaxCriterionRetryEvidenceLines)
+        {
+            cappedEvidence.Add($"... truncated {concreteEvidence.Count - MaxCriterionRetryEvidenceLines} acceptance evidence line(s)");
+        }
+
+        var feedback = new List<string>
+        {
+            "Concrete acceptance failure evidence:",
+        };
+        feedback.AddRange(cappedEvidence);
+        feedback.Add("Acceptance criteria summary:");
+        feedback.AddRange(criteria.Select(FormatUnmetCriterion));
+        return feedback.ToArray();
+    }
+
+    private static List<string> ExtractConcreteRetryEvidence(IReadOnlyList<AcceptanceCheckResult> criteria)
+    {
+        var outputEvidence = criteria
+            .SelectMany(ExtractConcreteOutputEvidence)
+            .ToList();
+        if (outputEvidence.Count == 0)
+        {
+            return [];
+        }
+
+        var evidence = criteria
+            .Where(criterion => !criterion.Passed)
+            .Select(FormatFailedCheckEvidence)
+            .ToList();
+        evidence.AddRange(outputEvidence);
+        return evidence;
+    }
+
+    private static string FormatFailedCheckEvidence(AcceptanceCheckResult criterion) =>
+        $"failed check: {criterion.Name} (exit code {criterion.ExitCode})";
+
+    private static IEnumerable<string> ExtractConcreteOutputEvidence(AcceptanceCheckResult criterion)
+    {
+        foreach (var line in SplitEvidenceLines(criterion.OutputTail))
+        {
+            if (AcceptanceRetryEvidencePattern.IsMatch(line))
+            {
+                yield return line;
+            }
+        }
+    }
+
+    private static IEnumerable<string> SplitEvidenceLines(string text) =>
+        text
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd())
+            .Where(line => !string.IsNullOrWhiteSpace(line));
 
     private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
     {

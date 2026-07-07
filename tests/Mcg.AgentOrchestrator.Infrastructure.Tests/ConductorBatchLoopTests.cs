@@ -50,6 +50,7 @@ public sealed class ConductorBatchLoopTests
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null) =>
         new ConductorDriver(
@@ -64,7 +65,7 @@ public sealed class ConductorBatchLoopTests
                 : AcceptanceVerificationSummary.Failed,
             null,
             retryTask,
-            null,
+            recordCriterionRetryFeedback,
             null,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
             land is null
@@ -242,6 +243,66 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal([passing.Id.Value], landed);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_slot_path_unmet_acceptance_retries_with_concrete_feedback")]
+    public void BatchLoopSlotPathUnmetAcceptanceRetriesWithConcreteFeedback()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/RetryEvidence.cs");
+        var passing = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/PassingRetryEvidence.cs");
+        var task = goal.Tasks.Single();
+        string? retryMessage = null;
+        int? observedSlot = null;
+        var unmet = new AcceptanceCheckResult(
+            "command-exit dotnet test --filter SlotRetryEvidence",
+            false,
+            1,
+            string.Join(Environment.NewLine,
+            [
+                "src/RetryEvidence.cs(4,5): error CS0103: The name 'missing' does not exist in the current context",
+                "[xUnit.net 00:00:02.00]     Mcg.AgentOrchestrator.Tests.SlotRetryEvidenceTests.ReportsFailingTest [FAIL]",
+            ]),
+            ResultSummary: "slot acceptance failed",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (candidate, slot) =>
+            {
+                if (candidate.Id == goal.Id)
+                {
+                    observedSlot = slot;
+                    return new AcceptanceVerificationSummary(true, [unmet]);
+                }
+
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            getLandingFileScopes: candidate => candidate.Id == goal.Id
+                ? ["src/Mcg.AgentOrchestrator.App/Orchestration/RetryEvidence.cs"]
+                : ["src/Mcg.AgentOrchestrator.App/Orchestration/PassingRetryEvidence.cs"]);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
+
+        Assert.Equal(2, summary.Advanced);
+        Assert.NotNull(observedSlot);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(WorkTaskStatus.Completed, passing.Tasks.Single().Status);
+        Assert.Contains("src/RetryEvidence.cs(4,5): error CS0103", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("SlotRetryEvidenceTests.ReportsFailingTest [FAIL]", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("failed check: command-exit dotnet test --filter SlotRetryEvidence (exit code 1)", brief.Content, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_slot_exhaustion_queues_extra_goal")]
