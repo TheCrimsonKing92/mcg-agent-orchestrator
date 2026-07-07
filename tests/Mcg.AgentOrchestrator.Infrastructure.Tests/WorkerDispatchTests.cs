@@ -6214,7 +6214,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
-        AgentRole.Reviewer,
+        AgentRole.Researcher,
         WorkerResultBlock(
             "none",
             "reviewed deterministic evidence",
