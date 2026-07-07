@@ -5,15 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 
-// These tests mutate the process-global MCG_DOTNET_ISOLATED_ROOT env var (via EnvVarScope). xUnit
-// runs distinct test classes in parallel, so without a shared collection they clobber each other's
-// root and flake. Pinning every env-var-mutating class to one non-parallel collection serializes them.
-[Xunit.CollectionDefinition("IsolatedDotnetRoot", DisableParallelization = true)]
-public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>
-{
-}
-
-// Pins MCG_DOTNET_ISOLATED_ROOT to an ephemeral per-run temp root for the ENTIRE IsolatedDotnetRoot
+// Pins MCG_DOTNET_ISOLATED_ROOT to an ephemeral per-run temp root for the ENTIRE EnvMutation
 // collection, so lease-acquiring tests (GoalAcceptanceVerifier/LocalProcessVerifier, which do NOT set
 // their own per-test scope) never touch the shared firewall slots (e.g. slot-0). Without this, when the
 // suite itself runs inside a slot-routed harness holding slot-0, those tests deadlock waiting for the
@@ -46,7 +38,7 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
     }
 }
 
-[Xunit.Collection("IsolatedDotnetRoot")]
+[Xunit.Collection("EnvMutation")]
 public sealed class DotnetBuildEnvironmentManagerTests
 {
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]

@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+[Xunit.Collection("EnvMutation")]
 public sealed class GoalBacklogLinkTests
 {
     // ── Intake: create with link ──────────────────────────────────────────────

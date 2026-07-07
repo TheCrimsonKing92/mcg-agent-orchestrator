@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Extensions.Hosting;
 
+[Xunit.Collection("EnvMutation")]
 public sealed class AdvanceLoopTests
 {
     private const string BlockingCodexProfileCommand =

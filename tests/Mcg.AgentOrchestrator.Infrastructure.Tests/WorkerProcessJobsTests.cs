@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("ProcessSpawning")]
+[Xunit.Collection("EnvMutation")]
 public sealed class WorkerProcessJobsTests : IDisposable
 {
     private readonly string? _originalProtectedPid = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID");
