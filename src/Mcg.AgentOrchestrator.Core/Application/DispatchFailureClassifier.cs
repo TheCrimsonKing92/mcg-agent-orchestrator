@@ -271,8 +271,7 @@ public static class DispatchFailureClassifier
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
         if (verification.Succeeded &&
-            (!IsTransientEmptyOutputDispatchFlake(verification) ||
-             HasArtifactEvidence(workerResultPresent, hasCommittedChanges)))
+            HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return new DispatchOutcome(
                 DispatchOutcomeKind.VerifiedSuccess,
@@ -579,6 +578,34 @@ public static class DispatchFailureClassifier
 
     private static bool HasArtifactEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent || hasCommittedChanges;
+
+    private static bool HasDispatchCompletionEvidence(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges)
+    {
+        if (hasCommittedChanges)
+        {
+            return true;
+        }
+
+        if (workerResultPresent)
+        {
+            return CanCompleteWithoutChangeEvidence(task, verification) &&
+                verification.HeartbeatStandardOutputBytes > 0;
+        }
+
+        return !IsTransientEmptyOutputDispatchFlake(verification);
+    }
+
+    private static bool CanCompleteWithoutChangeEvidence(TaskSpec task, TaskVerificationRecord verification) =>
+        task.RequiredRole switch
+        {
+            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => true,
+            AgentRole.Tester => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
+            _ => false
+        };
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent && hasCommittedChanges;
