@@ -22,7 +22,7 @@ public static bool ExecuteCommand(
     Func<long>? goalMarkLandedElapsedMilliseconds = null,
     CliPhaseTimingRecorder? phaseTimings = null,
     TimeSpan? stableSlotAcquisitionTimeout = null,
-    Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, int>? stableSlotSelector = null)
+    Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
     kernel.SetEventWriter(eventWriter);

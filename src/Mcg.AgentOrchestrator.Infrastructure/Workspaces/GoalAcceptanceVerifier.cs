@@ -35,6 +35,7 @@ public interface IGoalAcceptanceVerifier
         GoalId? goalId = null,
         IReadOnlyList<string>? changedFiles = null,
         int? stableSlotIndex = null,
+        DotnetBuildEnvironmentLease? stableSlotLease = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -125,6 +126,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId = null,
         IReadOnlyList<string>? changedFiles = null,
         int? stableSlotIndex = null,
+        DotnetBuildEnvironmentLease? stableSlotLease = null,
         CancellationToken cancellationToken = default)
     {
         // Shut down build servers to release file locks before running tests.
@@ -170,7 +172,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -185,7 +187,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                     scopedNames.Contains(c.Name)))
                 {
-                    var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+                    var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                     retried |= checkResult.Retried;
                     checks.Add(checkResult.Result);
                     if (!checkResult.Result.Passed)
@@ -203,7 +205,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -215,7 +217,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             if (nonDotnetPassed)
             {
-                var slnRun = await RunCheckAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+                var slnRun = await RunCheckAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= slnRun.Retried;
                 checks.Add(slnRun.Result);
 
@@ -241,7 +243,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
                         !deferredNames.Contains(c.Name)))
                     {
-                        var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+                        var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                         retried |= checkResult.Retried;
                         checks.Add(checkResult.Result);
                         if (!checkResult.Result.Passed)
@@ -256,7 +258,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             foreach (var check in effectiveChecks)
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -279,7 +281,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Advisory checks: always run, failures are recorded but do not affect overall Passed.
         foreach (var advisoryCheck in advisoryChecks)
         {
-            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result with { Advisory = true });
         }
 
@@ -985,6 +987,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId,
         int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
@@ -1002,11 +1005,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (RunFileExistsCheck(check, worktreePath), false);
 
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
-            return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+            return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
 
         return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
-            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false)
-            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false);
+            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false)
+            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<AcceptanceCheckResult> RunGrepCheckAsync(
@@ -1073,6 +1076,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId,
         int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
         var arguments = BuildCommandArguments(check);
@@ -1084,6 +1088,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
+                stableSlotLease,
                 $"acceptance-{Slug(check.Name)}",
                 cancellationToken).ConfigureAwait(false);
         }
@@ -1113,6 +1118,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId,
         int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
         return await RunManagedDotnetCheckAsync(
@@ -1121,6 +1127,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             worktreePath,
             goalId,
             stableSlotIndex,
+            stableSlotLease,
             $"acceptance-{Slug(check.Name)}",
             cancellationToken).ConfigureAwait(false);
     }
@@ -1131,62 +1138,78 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         GoalId? goalId,
         int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
         string attemptName,
         CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
-        var environment = stableSlotIndex.HasValue
+        var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
             ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
-        using var leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
-        var result = await _runner(
-            WithBuildEnvironmentArguments(arguments, environment),
-            worktreePath,
-            AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
-            cancellationToken).ConfigureAwait(false);
-
-        var transientCompilerLockRetried = false;
-        if (!result.TimedOut &&
-            result.ExitCode != 0 &&
-            IsTransientCompilerLockFailure(result.Output))
+            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName));
+        FileStream? leaseLock = null;
+        try
         {
-            await _runner(
-                ["dotnet", "build-server", "shutdown"],
-                worktreePath,
-                AcceptanceCheckTimeouts.DefaultTimeout,
-                cancellationToken).ConfigureAwait(false);
-            environment = stableSlotIndex.HasValue
-                ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-                : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
-            leaseLock.Dispose();
-            using var retryLeaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
-            result = await _runner(
+            leaseLock = stableSlotLease is null
+                ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken)
+                : null;
+
+            var result = await _runner(
                 WithBuildEnvironmentArguments(arguments, environment),
                 worktreePath,
                 AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
-            transientCompilerLockRetried = true;
-        }
 
-        elapsed.Stop();
-        // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
-        // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
-        // block a green goal, while never masking a build/compile failure and still surfacing the tail.
-        var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-        var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
-        return (new AcceptanceCheckResult(
-            result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
-            passed,
-            result.ExitCode,
-            result.TimedOut
-                ? BuildTimeoutOutput(result)
-                : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
-            environment.ArtifactsPath,
-            "goal-acceptance-verifier",
-            environment.LeaseId,
-            (long)elapsed.Elapsed.TotalMilliseconds,
-            transientCompilerLockRetried,
-            BuildManagedDotnetResultSummary(result, transientCompilerLockRetried)), transientCompilerLockRetried);
+            var transientCompilerLockRetried = false;
+            if (!result.TimedOut &&
+                result.ExitCode != 0 &&
+                IsTransientCompilerLockFailure(result.Output))
+            {
+                await _runner(
+                    ["dotnet", "build-server", "shutdown"],
+                    worktreePath,
+                    AcceptanceCheckTimeouts.DefaultTimeout,
+                    cancellationToken).ConfigureAwait(false);
+                if (stableSlotLease is null)
+                {
+                    environment = stableSlotIndex.HasValue
+                        ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+                        : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
+                    leaseLock?.Dispose();
+                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
+                }
+
+                result = await _runner(
+                    WithBuildEnvironmentArguments(arguments, environment),
+                    worktreePath,
+                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                    cancellationToken).ConfigureAwait(false);
+                transientCompilerLockRetried = true;
+            }
+
+            elapsed.Stop();
+            // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
+            // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
+            // block a green goal, while never masking a build/compile failure and still surfacing the tail.
+            var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+            var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
+            return (new AcceptanceCheckResult(
+                result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
+                passed,
+                result.ExitCode,
+                result.TimedOut
+                    ? BuildTimeoutOutput(result)
+                    : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
+                environment.ArtifactsPath,
+                "goal-acceptance-verifier",
+                environment.LeaseId,
+                (long)elapsed.Elapsed.TotalMilliseconds,
+                transientCompilerLockRetried,
+                BuildManagedDotnetResultSummary(result, transientCompilerLockRetried)), transientCompilerLockRetried);
+        }
+        finally
+        {
+            leaseLock?.Dispose();
+        }
     }
 
     // A dotnet test run whose own summary banner is "Passed!" (zero failed) but which then exits non-zero

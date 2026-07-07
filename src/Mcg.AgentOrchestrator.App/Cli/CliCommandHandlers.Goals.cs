@@ -2775,20 +2775,27 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             var verificationStarted = System.Diagnostics.Stopwatch.StartNew();
             int? stableSlotIndex = null;
+            DotnetBuildEnvironmentLease? stableSlotLease = null;
             try
             {
                 var stableSlotSelector = context.StableSlotSelector ?? SelectFirstAvailableStableSlot;
-                stableSlotIndex = stableSlotSelector(
+                stableSlotLease = stableSlotSelector(
                     context.StableSlotAcquisitionTimeout,
                     wait => Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+                stableSlotIndex = ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
+                    ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
             }
             catch (IOException ex)
             {
+                stableSlotLease?.Dispose();
                 Console.WriteLine($"BLOCKER step=verification reason=build-slot-timeout detail=\"{EscapeBlockerDetail(ex.Message)}\" action=\"Wait for a stable dotnet build slot to clear, then rerun acceptance.\"");
                 throw new InvalidOperationException("acceptance blocked waiting for a stable dotnet build slot.", ex);
             }
 
-            verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
+            using (stableSlotLease)
+            {
+                verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
+            }
             verificationStarted.Stop();
             context.PhaseTimings.Record(
                 "verification-suite",
@@ -2961,11 +2968,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     return true;
 }
 
-private static int SelectFirstAvailableStableSlot(TimeSpan? timeout, Action<DotnetBuildStableSlotWait>? onWait)
+private static DotnetBuildEnvironmentLease SelectFirstAvailableStableSlot(TimeSpan? timeout, Action<DotnetBuildStableSlotWait>? onWait)
 {
-    using var stableSlotLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(timeout, onWait);
-    return ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
-        ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
+    return DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(timeout, onWait);
 }
 
 private static int? ParseStableSlotIndex(string slotOwnerToken)

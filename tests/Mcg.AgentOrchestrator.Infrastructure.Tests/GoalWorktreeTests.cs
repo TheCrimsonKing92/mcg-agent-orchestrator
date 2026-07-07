@@ -5746,6 +5746,7 @@ public sealed class GoalWorktreeIntegrationTests
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
             int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
             CancellationToken cancellationToken = default)
         {
             RunCount++;

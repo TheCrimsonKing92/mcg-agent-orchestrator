@@ -59,7 +59,7 @@ public CliPhaseTimingRecorder PhaseTimings { get; } = phaseTimings ?? CliPhaseTi
 
 public TimeSpan? StableSlotAcquisitionTimeout { get; init; }
 
-public Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, int>? StableSlotSelector { get; init; }
+public Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? StableSlotSelector { get; init; }
 
 public TimeSpan? RunGoalPollInterval { get; init; }
 

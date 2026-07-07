@@ -138,6 +138,7 @@ public sealed class ConductorDriverTests
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
             int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
     }
