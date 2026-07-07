@@ -348,6 +348,187 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("WORKER_RESULT reported blocker", StringComparison.Ordinal)));
 }
 
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_completes_read_only_role_with_worker_result_output_and_no_changes")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void RecordDispatchExecutionResultCompletesReadOnlyRoleWithWorkerResultOutputAndNoChanges(AgentRole role)
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Complete no-change read-only role", [new TaskSpec(TaskId.New(), "Inspect current state", role)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("none", "not-run - read-only analysis completed", "none");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: false,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_tester_with_worker_result_output_no_failing_tests_and_no_changes")]
+    public void RecordDispatchExecutionResultCompletesTesterWithWorkerResultOutputNoFailingTestsAndNoChanges()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Complete tester verification", [new TaskSpec(TaskId.New(), "Verify behavior", AgentRole.Tester)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("none", "pass - verification-only review completed", "none");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: false,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_complete_tester_with_failing_tests_and_no_changes")]
+    public void RecordDispatchExecutionResultDoesNotCompleteTesterWithFailingTestsAndNoChanges()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reject failed tester verification", [new TaskSpec(TaskId.New(), "Verify behavior", AgentRole.Tester)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("none", "fail - focused verification failed", "none");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: false,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(DispatchOutcomeKind.UnknownFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
+    Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_complete_developer_worker_result_without_changes")]
+    public void RecordDispatchExecutionResultDoesNotCompleteDeveloperWorkerResultWithoutChanges()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reject no-change implementation");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("none", "not-run - no source changes", "none");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: false,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(DispatchOutcomeKind.UnknownFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
+    Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_worker_result_blocker_still_fails_gate")]
+    public void RecordDispatchExecutionResultReviewerWorkerResultBlockerStillFailsGate()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Gate reviewer blocker", [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("none", "pass - review completed", "unresolved correctness issue");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: false,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("Reviewer WORKER_RESULT reported blocker", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
     public void RecordDispatchExecutionResultFailsNonzeroWorkerResultBlockerBeforeSubscriptionRetry()
 {
@@ -609,6 +790,22 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
         "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
         completedAt);
 }
+
+private static string WorkerResultStdout(string files, string tests, string blockers)
+{
+    return string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        $"files: {files}",
+        "commands: none",
+        $"tests: {tests}",
+        "commit: none",
+        $"blockers: {blockers}",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "skills: dotnet-windows-build-hygiene",
+        "confidence: high",
+        "END_WORKER_RESULT");
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_when_exit_code_0_but_no_output")]
     public void RecordDispatchExecutionResultFailsTaskWhenExitCode0ButNoOutput()
 {

@@ -188,6 +188,52 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_stable_slot_skips_leased_slot_zero")]
+    public void DotnetBuildEnvironmentManagerFirstAvailableStableSlotSkipsLeasedSlotZero()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using var slot0Lock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0);
+
+        using var selected = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(1));
+
+        Assert.Equal("slot-1", selected.Environment.SlotOwnerToken);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_all_stable_slots_leased_reports_wait_and_times_out")]
+    public void DotnetBuildEnvironmentManagerAllStableSlotsLeasedReportsWaitAndTimesOut()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var locks = new List<FileStream>();
+        try
+        {
+            for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
+            {
+                var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(slot);
+                locks.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment));
+                Thread.Sleep(5);
+            }
+
+            var waits = new List<DotnetBuildStableSlotWait>();
+            var ex = Assert.Throws<IOException>(() =>
+                DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                    TimeSpan.FromMilliseconds(150),
+                    waits.Add));
+
+            Assert.Contains("Timed out waiting for an available stable dotnet build slot", ex.Message);
+            var wait = Assert.Single(waits);
+            Assert.Equal(0, wait.SlotIndex);
+            Assert.Equal(Environment.ProcessId, wait.OwnerProcessId);
+        }
+        finally
+        {
+            foreach (var lease in locks)
+            {
+                lease.Dispose();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_artifacts_for_same_goal_slot")]
     public void DotnetBuildEnvironmentManagerReusesArtifactsForSameGoalSlot()
     {

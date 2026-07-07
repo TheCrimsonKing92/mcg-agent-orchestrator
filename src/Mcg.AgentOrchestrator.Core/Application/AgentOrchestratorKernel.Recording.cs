@@ -20,6 +20,7 @@ public sealed partial class AgentOrchestratorKernel
             task,
             BuildCompletionMessageWithAdvisoryBlocker(
                 $"Task completed with passing verification: {verification.Command}",
+                task,
                 verification));
         RefreshGoalStatus(goal);
     }
@@ -111,9 +112,10 @@ public sealed partial class AgentOrchestratorKernel
             taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
-                ? BuildCompletionMessageWithAdvisoryBlocker(
-                    $"Dispatch completed successfully: {task.LastDispatch.Command}",
-                    verification)
+                 ? BuildCompletionMessageWithAdvisoryBlocker(
+                     $"Dispatch completed successfully: {task.LastDispatch.Command}",
+                     task,
+                     verification)
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
     }
 
@@ -125,7 +127,8 @@ public sealed partial class AgentOrchestratorKernel
     {
         if (verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindBlocker(verification, out var blocker))
+            !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
+            WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var blocker))
         {
             ReportTaskProgress(
                 goalId,
@@ -137,6 +140,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (enforceFailureEvidenceRule &&
             task.RequiredRole != AgentRole.Reviewer &&
+            !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(verification, out blocker))
         {
             ReportTaskProgress(
@@ -152,9 +156,12 @@ public sealed partial class AgentOrchestratorKernel
 
     private static string BuildCompletionMessageWithAdvisoryBlocker(
         string message,
+        TaskSpec task,
         TaskVerificationRecord verification)
     {
-        return WorkerResultBlockers.TryFindAdvisoryBlocker(verification, out var blocker)
+        return (WorkerResultBlockers.TryFindAdvisoryBlocker(verification, out var blocker) ||
+                (WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
+                 WorkerResultBlockers.TryFindBlocker(verification, out blocker)))
             ? $"{message}; advisory WORKER_RESULT blocker: {blocker}"
             : message;
     }

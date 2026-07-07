@@ -34,6 +34,10 @@ public sealed record DotnetTesthostFirewallPath(
     string Configuration,
     string Path);
 
+public sealed record DotnetBuildStableSlotWait(
+    int SlotIndex,
+    int? OwnerProcessId);
+
 public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
@@ -129,9 +133,13 @@ public static class DotnetBuildEnvironmentManager
     }
 
     public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
+        TimeSpan? timeout = null,
+        Action<DotnetBuildStableSlotWait>? onWait = null,
         CancellationToken cancellationToken = default)
     {
-        var timeoutAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var waitTimeout = timeout ?? TimeSpan.FromMinutes(5);
+        var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
+        var waitingReported = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -147,6 +155,19 @@ public static class DotnetBuildEnvironmentManager
             if (DateTimeOffset.UtcNow >= timeoutAt)
             {
                 throw new IOException("Timed out waiting for an available stable dotnet build slot.");
+            }
+
+            var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
+            if (!waitingReported)
+            {
+                onWait?.Invoke(new DotnetBuildStableSlotWait(leastRecentlyLeased.SlotIndex, leastRecentlyLeased.OwnerProcessId));
+                waitingReported = true;
+            }
+
+            var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
+            if (TryAcquireLeaseExecutionLock(target, out var targetStream))
+            {
+                return new DotnetBuildEnvironmentLease(target, targetStream);
             }
 
             Thread.Sleep(100);
@@ -279,10 +300,16 @@ public static class DotnetBuildEnvironmentManager
 
     public static FileStream AcquireLeaseExecutionLock(
         DotnetBuildEnvironment environment,
+        CancellationToken cancellationToken = default) =>
+        AcquireLeaseExecutionLock(environment, timeout: null, cancellationToken);
+
+    public static FileStream AcquireLeaseExecutionLock(
+        DotnetBuildEnvironment environment,
+        TimeSpan? timeout,
         CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
-        var timeoutAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? TimeSpan.FromMinutes(5));
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -318,6 +345,22 @@ public static class DotnetBuildEnvironmentManager
                 Thread.Sleep(100);
             }
         }
+    }
+
+    private static (int SlotIndex, int? OwnerProcessId, DateTimeOffset LastAcquiredAt) FindLeastRecentlyLeasedStableSlot()
+    {
+        var oldest = (SlotIndex: 0, OwnerProcessId: (int?)null, LastAcquiredAt: DateTimeOffset.MaxValue);
+        for (var slot = 0; slot < StableSlotCount; slot++)
+        {
+            var marker = TryReadStableSlotOwnerMarker(slot);
+            var acquiredAt = marker?.LastAcquiredAt ?? DateTimeOffset.MinValue;
+            if (acquiredAt < oldest.LastAcquiredAt)
+            {
+                oldest = (slot, marker?.OwnerProcessId, acquiredAt);
+            }
+        }
+
+        return oldest;
     }
 
     private static DotnetBuildEnvironment CreateGoalLease(GoalId goalId, string attemptName)
@@ -519,6 +562,24 @@ public static class DotnetBuildEnvironmentManager
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             return false;
+        }
+    }
+
+    private static ArtifactsOwnerMarker? TryReadStableSlotOwnerMarker(int slotIndex)
+    {
+        var ownerPath = Path.Combine(StableSlotArtifactsPath(slotIndex), ArtifactsOwnerFileName);
+        if (!File.Exists(ownerPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<ArtifactsOwnerMarker>(File.ReadAllText(ownerPath), JsonOptions);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
         }
     }
 

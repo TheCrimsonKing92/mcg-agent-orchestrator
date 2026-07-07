@@ -956,7 +956,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     reconcileSweep,
                     (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
+                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
+                    (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1013,7 +1014,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
-                    wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
+                    wk => watchReaper.RequeueInterruptedDispatches(wk),
+                    (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal); }).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
@@ -2774,12 +2776,34 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         else
         {
             var verificationStarted = System.Diagnostics.Stopwatch.StartNew();
-            verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles).GetAwaiter().GetResult();
+            int? stableSlotIndex = null;
+            DotnetBuildEnvironmentLease? stableSlotLease = null;
+            try
+            {
+                var stableSlotSelector = context.StableSlotSelector ?? SelectFirstAvailableStableSlot;
+                stableSlotLease = stableSlotSelector(
+                    context.StableSlotAcquisitionTimeout,
+                    wait => Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+                stableSlotIndex = ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
+                    ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
+            }
+            catch (IOException ex)
+            {
+                stableSlotLease?.Dispose();
+                Console.WriteLine($"BLOCKER step=verification reason=build-slot-timeout detail=\"{EscapeBlockerDetail(ex.Message)}\" action=\"Wait for a stable dotnet build slot to clear, then rerun acceptance.\"");
+                throw new InvalidOperationException("acceptance blocked waiting for a stable dotnet build slot.", ex);
+            }
+
+            using (stableSlotLease)
+            {
+                verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
+            }
             verificationStarted.Stop();
             context.PhaseTimings.Record(
                 "verification-suite",
                 verificationStarted.Elapsed,
                 ("goal", goal.Id.Value[..8]),
+                ("slot", stableSlotIndex.HasValue ? $"slot-{stableSlotIndex.Value}" : null),
                 ("passed", verification.Passed),
                 ("exit", verification.ExitCode),
                 ("checks", verification.Checks?.Count ?? 0));
@@ -2944,6 +2968,19 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 
     RecordAcceptanceCompleted(context, goal);
     return true;
+}
+
+private static DotnetBuildEnvironmentLease SelectFirstAvailableStableSlot(TimeSpan? timeout, Action<DotnetBuildStableSlotWait>? onWait)
+{
+    return DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(timeout, onWait);
+}
+
+private static int? ParseStableSlotIndex(string slotOwnerToken)
+{
+    return slotOwnerToken.StartsWith("slot-", StringComparison.OrdinalIgnoreCase) &&
+        int.TryParse(slotOwnerToken[5..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
+            ? slotIndex
+            : null;
 }
 
 private static bool TryNormalizePrematureCompletedGoalForAcceptance(

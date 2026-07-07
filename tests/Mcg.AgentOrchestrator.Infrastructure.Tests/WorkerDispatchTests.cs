@@ -5064,6 +5064,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         clock,
         taskDescription: "Verify behavior with automated and manual checks",
         verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
+    WriteHeartbeat(process, clock.UtcNow, clock.UtcNow, "completed", 256, 0, childPid: null, exitFileExists: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -6160,6 +6161,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             WorkerResultBlock("none", "inspected existing tests", "existing focused test covers behavior", "none"),
         string.Empty,
         clock);
+    WriteHeartbeat(task.LastProcess!, clock.UtcNow, clock.UtcNow, "completed", 128, 0, childPid: null, exitFileExists: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -6205,6 +6207,33 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_no_change_role_worker_result_blocker_is_advisory_when_tests_do_not_fail")]
+    public void BackgroundDispatchRunnerNoChangeRoleWorkerResultBlockerIsAdvisoryWhenTestsDoNotFail()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Researcher,
+        WorkerResultBlock(
+            "none",
+            "reviewed deterministic evidence",
+            "pass",
+            "none",
+            blockers: "live conduct evidence deferred to operator post-landing"),
+        string.Empty,
+        clock);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        "advisory WORKER_RESULT blocker",
+        goal.Timeline.Last(evt => evt.Kind == ProgressKind.TaskCompleted).Message,
+        StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "LocalDispatchRunner_rejects_inactive_dispatch_execution")]

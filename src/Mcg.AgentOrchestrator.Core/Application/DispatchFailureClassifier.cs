@@ -42,6 +42,13 @@ public sealed record ProviderSubscriptionCooldown(
 
 public static class DispatchFailureClassifier
 {
+    private enum DispatchRoleOutputCapability
+    {
+        RequiresChangeEvidence,
+        ReadOnly,
+        VerificationOnly
+    }
+
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
 
     public static DispatchOutcome ClassifyProviderFailure(
@@ -271,8 +278,7 @@ public static class DispatchFailureClassifier
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
         if (verification.Succeeded &&
-            (!IsTransientEmptyOutputDispatchFlake(verification) ||
-             HasArtifactEvidence(workerResultPresent, hasCommittedChanges)))
+            HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return new DispatchOutcome(
                 DispatchOutcomeKind.VerifiedSuccess,
@@ -579,6 +585,47 @@ public static class DispatchFailureClassifier
 
     private static bool HasArtifactEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent || hasCommittedChanges;
+
+    private static bool HasDispatchCompletionEvidence(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges)
+    {
+        if (hasCommittedChanges)
+        {
+            return true;
+        }
+
+        if (workerResultPresent)
+        {
+            return CanCompleteWithoutChangeEvidence(task, verification) &&
+                HasPopulatedStandardOutput(verification);
+        }
+
+        return !IsTransientEmptyOutputDispatchFlake(verification);
+    }
+
+    private static bool CanCompleteWithoutChangeEvidence(TaskSpec task, TaskVerificationRecord verification) =>
+        GetDispatchRoleOutputCapability(task.RequiredRole) switch
+        {
+            DispatchRoleOutputCapability.ReadOnly => true,
+            DispatchRoleOutputCapability.VerificationOnly => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
+            _ => false
+        };
+
+    private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
+        verification.HeartbeatStandardOutputBytes > 0 ||
+        !string.IsNullOrWhiteSpace(verification.StandardOutput) ||
+        HasStandardOutputFileBytes(verification);
+
+    private static DispatchRoleOutputCapability GetDispatchRoleOutputCapability(AgentRole role) =>
+        role switch
+        {
+            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => DispatchRoleOutputCapability.ReadOnly,
+            AgentRole.Tester => DispatchRoleOutputCapability.VerificationOnly,
+            _ => DispatchRoleOutputCapability.RequiresChangeEvidence
+        };
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent && hasCommittedChanges;

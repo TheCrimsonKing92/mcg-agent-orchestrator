@@ -66,7 +66,8 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindBlocker(task.LastVerification, out var reviewerBlocker))
+            !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, task.LastVerification) &&
+            WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var reviewerBlocker))
         {
             return new TaskVerificationGate(
                 task.Id,

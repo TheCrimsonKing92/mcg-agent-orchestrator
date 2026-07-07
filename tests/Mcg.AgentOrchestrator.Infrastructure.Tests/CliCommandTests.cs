@@ -6544,6 +6544,112 @@ public sealed class CliCommandTests
         Xunit.Assert.Matches(@"PHASE_TIMING command=acceptance phase=verification-check elapsedMs=\d+ .*name=""probe verifier""", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_pins_selected_stable_slot_and_records_receipt")]
+    public void CliAcceptancePinsSelectedStableSlotAndRecordsReceipt()
+    {
+        var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var isolatedRoot = Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-cli-{Guid.NewGuid():N}");
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+        var root = CreateShortAcceptanceRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Pin acceptance slot", [task]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+            CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+            var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+            using var slot0Lock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0);
+            var leaseHeldObserved = false;
+            var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
+            {
+                var reacquire = Xunit.Assert.Throws<IOException>(() =>
+                    DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                        stableSlotLease!.Environment,
+                        TimeSpan.FromMilliseconds(50)));
+                Xunit.Assert.Contains("Timed out waiting for build lease execution lock", reacquire.Message);
+                leaseHeldObserved = true;
+            });
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["acceptance", "--keep-workspace"],
+                kernel,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal,
+                acceptanceVerifier: verifier,
+                phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+                stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+            Xunit.Assert.Equal(1, verifier.LastStableSlotIndex);
+            Xunit.Assert.Equal("slot-1", verifier.LastStableSlotLease?.Environment.SlotOwnerToken);
+            Xunit.Assert.True(leaseHeldObserved);
+            Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=verification-suite", output);
+            Xunit.Assert.Contains("slot=slot-1", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
+            if (Directory.Exists(isolatedRoot))
+            {
+                Directory.Delete(isolatedRoot, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_slot_timeout_prints_wait_and_blocker_to_stdout")]
+    public void CliAcceptanceSlotTimeoutPrintsWaitAndBlockerToStdout()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Timeout acceptance slot", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+
+        var output = CaptureConsole(() =>
+        {
+            var ex = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+                ["acceptance", "--keep-workspace"],
+                kernel,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal,
+                acceptanceVerifier: new ProbeAcceptanceVerifier(() => { }),
+                phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+                stableSlotAcquisitionTimeout: TimeSpan.FromMilliseconds(1),
+                stableSlotSelector: (_, onWait) =>
+                {
+                    onWait?.Invoke(new DotnetBuildStableSlotWait(2, 12345));
+                    throw new IOException("Timed out waiting for an available stable dotnet build slot.");
+                }));
+            Xunit.Assert.Contains("stable dotnet build slot", ex.Message);
+        });
+
+        Xunit.Assert.Contains("waiting for slot-2 lease held by pid 12345", output);
+        Xunit.Assert.Contains("BLOCKER step=verification reason=build-slot-timeout", output);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_target_scoped_reconcile_preserves_target_dispatch_refresh")]
     public async Task PersistentRunnerAcceptanceTargetScopedReconcilePreservesTargetDispatchRefresh()
     {
@@ -8378,19 +8484,36 @@ public sealed class CliCommandTests
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
     }
 
-    private sealed class ProbeAcceptanceVerifier(Action onRun) : IGoalAcceptanceVerifier
+    private sealed class ProbeAcceptanceVerifier : IGoalAcceptanceVerifier
     {
+        private readonly Action<DotnetBuildEnvironmentLease?> _onRun;
+
+        public ProbeAcceptanceVerifier(Action onRun)
+            : this(_ => onRun())
+        {
+        }
+
+        public ProbeAcceptanceVerifier(Action<DotnetBuildEnvironmentLease?> onRun)
+        {
+            _onRun = onRun;
+        }
+
         public int RunCount { get; private set; }
+
+        public int? LastStableSlotIndex { get; private set; }
 
         public Task<AcceptanceVerificationResult> RunAsync(
             string worktreePath,
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
             int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
             CancellationToken cancellationToken = default)
         {
             RunCount++;
-            onRun();
+            LastStableSlotIndex = stableSlotIndex;
+            LastStableSlotLease = stableSlotLease;
+            _onRun(stableSlotLease);
             return Task.FromResult(new AcceptanceVerificationResult(
                 true,
                 false,
@@ -8399,6 +8522,8 @@ public sealed class CliCommandTests
                 ArtifactsPath: Path.Combine(worktreePath, "artifacts"),
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.", DurationMilliseconds: 7)]));
         }
+
+        public DotnetBuildEnvironmentLease? LastStableSlotLease { get; private set; }
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_carries_prompt_budget_through_state_commit")]
