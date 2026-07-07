@@ -587,8 +587,11 @@ public sealed class BackgroundDispatchRunner
             }
 
             var provider = ResolveWorkerProvider(task.LastDispatch);
+            var normalIntegrityCommitEvidence =
+                task.LastDispatch.SandboxLowIntegrity != true &&
+                (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
-                (exitCode == 0 && lowIntegrityConfinementEvidence) ||
+                (exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
                 (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence);
 
