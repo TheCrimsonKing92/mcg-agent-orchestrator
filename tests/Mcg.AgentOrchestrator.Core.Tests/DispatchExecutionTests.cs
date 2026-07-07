@@ -421,6 +421,41 @@ public sealed class DispatchExecutionTests
     Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_complete_tester_with_failing_tests_and_no_changes")]
+    public void RecordDispatchExecutionResultDoesNotCompleteTesterWithFailingTestsAndNoChanges()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reject failed tester verification", [new TaskSpec(TaskId.New(), "Verify behavior", AgentRole.Tester)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("none", "fail - focused verification failed", "none");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: false,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(DispatchOutcomeKind.UnknownFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
+    Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_complete_developer_worker_result_without_changes")]
     public void RecordDispatchExecutionResultDoesNotCompleteDeveloperWorkerResultWithoutChanges()
 {
