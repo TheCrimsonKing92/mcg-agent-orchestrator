@@ -42,6 +42,13 @@ public sealed record ProviderSubscriptionCooldown(
 
 public static class DispatchFailureClassifier
 {
+    private enum DispatchRoleOutputCapability
+    {
+        RequiresChangeEvidence,
+        ReadOnly,
+        VerificationOnly
+    }
+
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
 
     public static DispatchOutcome ClassifyProviderFailure(
@@ -600,11 +607,19 @@ public static class DispatchFailureClassifier
     }
 
     private static bool CanCompleteWithoutChangeEvidence(TaskSpec task, TaskVerificationRecord verification) =>
-        task.RequiredRole switch
+        GetDispatchRoleOutputCapability(task.RequiredRole) switch
         {
-            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => true,
-            AgentRole.Tester => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
+            DispatchRoleOutputCapability.ReadOnly => true,
+            DispatchRoleOutputCapability.VerificationOnly => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
             _ => false
+        };
+
+    private static DispatchRoleOutputCapability GetDispatchRoleOutputCapability(AgentRole role) =>
+        role switch
+        {
+            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => DispatchRoleOutputCapability.ReadOnly,
+            AgentRole.Tester => DispatchRoleOutputCapability.VerificationOnly,
+            _ => DispatchRoleOutputCapability.RequiresChangeEvidence
         };
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>

@@ -36,6 +36,25 @@ public sealed class DispatchOutcomeClassifyTests
         string stderr = "") =>
         new("cmd", "C:\\repo", exitCode, stdout, stderr, DateTimeOffset.UtcNow);
 
+    private static TaskVerificationRecord WorkerResultVerification(string stdout, bool hasCommittedChanges = false) =>
+        new(
+            "cmd",
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: hasCommittedChanges,
+            HeartbeatStandardOutputBytes: stdout.Length);
+
+    private static string WorkerResultStdout(string tests, string blockers = "none") =>
+        $"WORKER_RESULT:{Environment.NewLine}" +
+        $"files: none{Environment.NewLine}" +
+        $"tests: {tests}{Environment.NewLine}" +
+        $"blockers: {blockers}{Environment.NewLine}" +
+        "END_WORKER_RESULT";
+
     [Xunit.Fact(DisplayName = "Classify returns VerifiedSuccess for exit zero success")]
     public void ClassifyVerifiedSuccess()
     {
@@ -44,6 +63,39 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
         Xunit.Assert.Equal(0, outcome.ExitCode);
+    }
+
+    [Xunit.Theory(DisplayName = "Classify completes read-only role with worker result output and no changes")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void ClassifyCompletesReadOnlyRoleWithWorkerResultOutputAndNoChanges(AgentRole role)
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(role),
+            WorkerResultVerification(WorkerResultStdout("not-run - read-only output recorded")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify completes tester with worker result output and no failing tests")]
+    public void ClassifyCompletesTesterWithWorkerResultOutputAndNoFailingTests()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(WorkerResultStdout("pass - verification completed")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify keeps developer worker result without changes incomplete")]
+    public void ClassifyKeepsDeveloperWorkerResultWithoutChangesIncomplete()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout("not-run - no source changes")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
     }
 
     [Xunit.Fact(DisplayName = "Classify keeps exit zero worker evidence as completion despite usage limit text")]
