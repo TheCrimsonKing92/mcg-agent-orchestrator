@@ -5064,6 +5064,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         clock,
         taskDescription: "Verify behavior with automated and manual checks",
         verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
+    WriteHeartbeat(process, clock.UtcNow, clock.UtcNow, "completed", 256, 0, childPid: null, exitFileExists: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
@@ -6160,6 +6161,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             WorkerResultBlock("none", "inspected existing tests", "existing focused test covers behavior", "none"),
         string.Empty,
         clock);
+    WriteHeartbeat(task.LastProcess!, clock.UtcNow, clock.UtcNow, "completed", 128, 0, childPid: null, exitFileExists: true);
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
