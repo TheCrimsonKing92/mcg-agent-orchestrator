@@ -101,7 +101,7 @@ internal sealed class ConductorBatchLoop
 
             _sweep(kernel);
             _recoverInterruptedDispatches(kernel);
-            ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, reapedGoals);
+            ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, escalatedGoals, reapedGoals);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals);
 
             var parkedExcludedCount = CountParkedExcludedGoals(kernel, onlyGoalId, excludedGoals);
@@ -188,7 +188,7 @@ internal sealed class ConductorBatchLoop
                     if (depHoldReason.StartsWith("dependency escalated", StringComparison.Ordinal))
                     {
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals);
                         ReapGoalOnce(kernel, goal, reapedGoals);
                         tickEscalated++;
                     }
@@ -210,7 +210,7 @@ internal sealed class ConductorBatchLoop
                     }
 
                     escalatedGoals.Add(goal.Id.Value);
-                    SetAside(goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals);
+                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals);
                     ReapGoalOnce(kernel, goal, reapedGoals);
                     tickEscalated++;
                     continue;
@@ -237,7 +237,7 @@ internal sealed class ConductorBatchLoop
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                         kernel.RecordGoalPolicyDecision(goal.Id, msg);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals);
                         ReapGoalOnce(kernel, goal, reapedGoals);
                         tickEscalated++;
                         continue;
@@ -279,7 +279,7 @@ internal sealed class ConductorBatchLoop
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); SetAside(goal, GetSetAsideCondition(result), setAsideGoals); ReapGoalOnce(kernel, goal, reapedGoals); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals); ReapGoalOnce(kernel, goal, reapedGoals); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
             }
 
@@ -812,6 +812,7 @@ internal sealed class ConductorBatchLoop
         ConductorDriver driver,
         string? onlyGoalId,
         Dictionary<string, BatchSetAsideEntry> setAsideGoals,
+        HashSet<string> escalatedGoals,
         HashSet<string> reapedGoals)
     {
         foreach (var entry in setAsideGoals.Values.ToArray())
@@ -822,25 +823,25 @@ internal sealed class ConductorBatchLoop
             }
 
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == entry.GoalId);
-            if (goal is null || IsTerminalGoal(goal) || IsSetAsideConditionStillBlocked(goal, driver, entry.Condition))
+            if (goal is null || IsTerminalGoal(goal))
+            {
+                continue;
+            }
+
+            var currentFingerprint = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+            if (string.Equals(currentFingerprint, entry.StateFingerprint, StringComparison.Ordinal))
             {
                 continue;
             }
 
             setAsideGoals.Remove(entry.GoalId);
+            escalatedGoals.Remove(entry.GoalId);
             reapedGoals.Remove(entry.GoalId);
+            kernel.RecordGoalPolicyDecision(
+                goal.Id,
+                $"Batch loop re-admitted escalated goal after state changed ({entry.Condition}).");
         }
     }
-
-    private static bool IsSetAsideConditionStillBlocked(
-        Goal goal,
-        ConductorDriver driver,
-        BatchSetAsideCondition condition) =>
-        condition switch
-        {
-            BatchSetAsideCondition.AwaitingClarification => driver.GetFacts(goal).HasOpenClarification,
-            _ => true
-        };
 
     private static BatchSetAsideCondition GetSetAsideCondition(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Escalated { State: GoalLifecycleState.AwaitingClarification }
@@ -848,10 +849,52 @@ internal sealed class ConductorBatchLoop
             : BatchSetAsideCondition.LifecycleEscalation;
 
     private static void SetAside(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
         Goal goal,
         BatchSetAsideCondition condition,
         Dictionary<string, BatchSetAsideEntry> setAsideGoals) =>
-        setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(goal.Id.Value, condition);
+        setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
+            goal.Id.Value,
+            condition,
+            BuildEscalatedGoalStateFingerprint(kernel, driver, goal));
+
+    private static string BuildEscalatedGoalStateFingerprint(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        Goal goal)
+    {
+        var lifecycleState = TryResolveLifecycleState(driver, goal);
+        var attentionCount = kernel.GetPendingHumanInput(goal.Id).Count;
+        var taskParts = goal.Tasks
+            .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
+            .Select(task =>
+                string.Join(
+                    ":",
+                    new[]
+                    {
+                    task.Id.Value,
+                    task.Status.ToString(),
+                    task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
+                    task.LastProcess is null ? "process=none" : $"process={task.LastProcess.IsRunning}:{task.LastProcess.CompletedAt?.UtcTicks}:{task.LastProcess.ExitCode}:{task.LastProcess.WasCancelled}",
+                    task.LastVerification is null ? "verification=none" : $"verification={task.LastVerification.Succeeded}:{task.LastVerification.ExitCode}:{task.LastVerification.CompletedAt.UtcTicks}",
+                    task.LastExecution is null ? "execution=none" : $"execution={task.LastExecution.StopReason}:{task.LastExecution.CompletedAt.UtcTicks}"
+                    }));
+
+        return string.Join("|", new[] { goal.Status.ToString(), lifecycleState, $"attention={attentionCount}" }.Concat(taskParts));
+    }
+
+    private static string TryResolveLifecycleState(ConductorDriver driver, Goal goal)
+    {
+        try
+        {
+            return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString();
+        }
+        catch
+        {
+            return "LifecycleState=unknown";
+        }
+    }
 
     private void ReapNonTerminalEligibleGoals(
         AgentOrchestratorKernel kernel,
@@ -1077,7 +1120,7 @@ internal enum WatchSleepResult
     WakeSignaled
 }
 
-internal sealed record BatchSetAsideEntry(string GoalId, BatchSetAsideCondition Condition);
+internal sealed record BatchSetAsideEntry(string GoalId, BatchSetAsideCondition Condition, string StateFingerprint);
 
 internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int SlotIndex);
 

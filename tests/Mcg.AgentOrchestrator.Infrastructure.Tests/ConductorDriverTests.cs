@@ -509,11 +509,15 @@ public sealed class ConductorDriverTests
         var retryCalled = false;
         string? retryMessage = null;
         var unmet = new AcceptanceCheckResult(
-            "grep-present docs/usage.md contains Ready",
+            "command-exit dotnet test --filter RetryEvidence",
             false,
             1,
-            "Pattern 'Ready' was not found.",
-            ResultSummary: "docs/usage.md is missing Ready",
+            string.Join(Environment.NewLine,
+            [
+                "src/Foo.cs(12,34): error CS1002: ; expected",
+                "[xUnit.net 00:00:01.23]     Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]",
+            ]),
+            ResultSummary: "focused conductor tests failed",
             Advisory: true);
 
         var driver = MakeDriver(
@@ -540,10 +544,82 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(1, task.CriterionRetryCount);
-        Assert.Contains("docs/usage.md is missing Ready", retryMessage!, StringComparison.Ordinal);
-        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("docs/usage.md is missing Ready", StringComparison.Ordinal)));
+        Assert.Contains("failed check: command-exit dotnet test --filter RetryEvidence (exit code 1)", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("src/Foo.cs(12,34): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]", retryMessage!, StringComparison.Ordinal);
+        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("src/Foo.cs(12,34): error CS1002: ; expected", StringComparison.Ordinal)));
+        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]", StringComparison.Ordinal)));
         Assert.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", brief.Content, StringComparison.Ordinal);
-        Assert.Contains("docs/usage.md is missing Ready", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("src/Foo.cs(12,34): error CS1002: ; expected", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("focused conductor tests failed", brief.Content, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_caps_concrete_evidence")]
+    public void ConductorDriverVerifiedUnmetAcceptanceRetryFeedbackCapsConcreteEvidence()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        string? retryMessage = null;
+        var output = string.Join(Environment.NewLine,
+            Enumerable.Range(1, 35).Select(index => $"src/Foo{index}.cs({index},1): error CS1002: ; expected"));
+        var unmet = new AcceptanceCheckResult(
+            "command-exit dotnet test --filter ManyFailures",
+            false,
+            1,
+            output,
+            ResultSummary: "many compiler errors",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Contains("src/Foo29.cs(29,1): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/Foo30.cs(30,1): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("... truncated 6 acceptance evidence line(s)", retryMessage!, StringComparison.Ordinal);
+        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("... truncated 6 acceptance evidence line(s)", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_preserves_no_evidence_fallback")]
+    public void ConductorDriverVerifiedUnmetAcceptanceRetryFeedbackPreservesNoEvidenceFallback()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        string? retryMessage = null;
+        var unmet = new AcceptanceCheckResult(
+            "grep-present docs/usage.md contains Ready",
+            false,
+            1,
+            "Pattern 'Ready' was not found.",
+            ResultSummary: "docs/usage.md is missing Ready",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Contains("docs/usage.md is missing Ready", retryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain("Concrete acceptance failure evidence", retryMessage!, StringComparison.Ordinal);
+        Assert.Equal(["grep-present docs/usage.md contains Ready: docs/usage.md is missing Ready"], task.CriterionRetryFeedback);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_escalates_after_retry_budget")]

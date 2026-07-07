@@ -50,6 +50,7 @@ public sealed class ConductorBatchLoopTests
         Action<Goal, GoalLifecycleState, string>? writeEscalation = null,
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null) =>
         new ConductorDriver(
@@ -64,7 +65,7 @@ public sealed class ConductorBatchLoopTests
                 : AcceptanceVerificationSummary.Failed,
             null,
             retryTask,
-            null,
+            recordCriterionRetryFeedback,
             null,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
             land is null
@@ -242,6 +243,66 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal([passing.Id.Value], landed);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_slot_path_unmet_acceptance_retries_with_concrete_feedback")]
+    public void BatchLoopSlotPathUnmetAcceptanceRetriesWithConcreteFeedback()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/RetryEvidence.cs");
+        var passing = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/PassingRetryEvidence.cs");
+        var task = goal.Tasks.Single();
+        string? retryMessage = null;
+        int? observedSlot = null;
+        var unmet = new AcceptanceCheckResult(
+            "command-exit dotnet test --filter SlotRetryEvidence",
+            false,
+            1,
+            string.Join(Environment.NewLine,
+            [
+                "src/RetryEvidence.cs(4,5): error CS0103: The name 'missing' does not exist in the current context",
+                "[xUnit.net 00:00:02.00]     Mcg.AgentOrchestrator.Tests.SlotRetryEvidenceTests.ReportsFailingTest [FAIL]",
+            ]),
+            ResultSummary: "slot acceptance failed",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (candidate, slot) =>
+            {
+                if (candidate.Id == goal.Id)
+                {
+                    observedSlot = slot;
+                    return new AcceptanceVerificationSummary(true, [unmet]);
+                }
+
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            getLandingFileScopes: candidate => candidate.Id == goal.Id
+                ? ["src/Mcg.AgentOrchestrator.App/Orchestration/RetryEvidence.cs"]
+                : ["src/Mcg.AgentOrchestrator.App/Orchestration/PassingRetryEvidence.cs"]);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id);
+
+        Assert.Equal(2, summary.Advanced);
+        Assert.NotNull(observedSlot);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(WorkTaskStatus.Completed, passing.Tasks.Single().Status);
+        Assert.Contains("src/RetryEvidence.cs(4,5): error CS0103", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("SlotRetryEvidenceTests.ReportsFailingTest [FAIL]", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("failed check: command-exit dotnet test --filter SlotRetryEvidence (exit code 1)", brief.Content, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_slot_exhaustion_queues_extra_goal")]
@@ -997,6 +1058,94 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, escalations);
         Assert.Equal(1, workspaceCreates);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_readmits_escalated_goal_when_task_state_changes_mid_run")]
+    public void BatchLoopReadmitsEscalatedGoalWhenTaskStateChangesMidRun()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var repaired = false;
+        var escalations = 0;
+        var workspaceCreates = 0;
+
+        var driver = MakeDriver(
+            createWorkspace: _ =>
+            {
+                workspaceCreates++;
+                return "C:\\goal";
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                if (!repaired)
+                {
+                    kernel.RetryTask(goal.Id, task.Id, "Operator repaired failed task.");
+                    repaired = true;
+                }
+
+                return false;
+            });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, escalations);
+        Assert.Equal(1, workspaceCreates);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_keeps_unchanged_escalated_goal_set_aside_without_reescalating")]
+    public void BatchLoopKeepsUnchangedEscalatedGoalSetAsideWithoutReescalating()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var failedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "failed goal");
+        var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held goal");
+        var failedTask = failedGoal.Tasks.Single();
+        kernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var escalations = 0;
+        var heldAttempts = 0;
+
+        var driver = MakeDriver(
+            getFacts: goal => goal.Id == heldGoal.Id
+                ? new GoalLifecycleFacts(WorkspaceExists: true)
+                : GoalLifecycleFacts.None,
+            dispatchAndStart: goal =>
+            {
+                if (goal.Id == heldGoal.Id)
+                {
+                    heldAttempts++;
+                    return DispatchStartOutcome.EmptyBatch("Held for operator approval.");
+                }
+
+                return DispatchStartOutcome.Started();
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, escalations);
+        Assert.Equal(3, heldAttempts);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_keeps_unresolved_clarification_set_aside_without_reescalating")]
