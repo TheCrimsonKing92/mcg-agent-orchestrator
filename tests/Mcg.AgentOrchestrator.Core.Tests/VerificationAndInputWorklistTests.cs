@@ -504,5 +504,59 @@ public sealed class VerificationAndInputWorklistTests
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
 }
+
+    [Xunit.Fact(DisplayName = "Answering_last_human_input_restores_running_task_and_goal_status")]
+    public void AnsweringLastHumanInputRestoresRunningTaskAndGoalStatus()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Resume after input", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which option?");
+
+    Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+    Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+
+    kernel.SubmitHumanInput(request.Id, "Use option A.");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskUpdated &&
+        evt.Message == "Human input resolved; restored task status to Running.");
+}
+
+    [Xunit.Fact(DisplayName = "Answering_one_of_multiple_human_inputs_does_not_restore_prematurely")]
+    public void AnsweringOneOfMultipleHumanInputsDoesNotRestorePrematurely()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Wait for both answers", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    var first = kernel.RequestHumanInput(goal.Id, task.Id, "First choice?");
+    var second = kernel.RequestHumanInput(goal.Id, task.Id, "Second choice?");
+
+    kernel.SubmitHumanInput(first.Id, "A");
+
+    Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+    Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+    Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskUpdated &&
+        evt.Message.Contains("restored task status", StringComparison.Ordinal));
+
+    kernel.SubmitHumanInput(second.Id, "B");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+}
 }
 

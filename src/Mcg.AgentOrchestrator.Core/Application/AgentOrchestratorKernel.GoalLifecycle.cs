@@ -589,15 +589,38 @@ public sealed partial class AgentOrchestratorKernel
         if (request.TaskId is not null)
         {
             var task = goal.FindTask(request.TaskId);
-            if (!TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered."))
+            if (!_humanInputRequests.Values.Any(candidate =>
+                    candidate.GoalId == goal.Id &&
+                    candidate.TaskId == task.Id &&
+                    !candidate.IsCompleted))
             {
-                task.SetStatus(WorkTaskStatus.Running);
+                RestoreTaskAfterHumanInput(goal, task);
             }
         }
 
         RefreshGoalStatus(goal);
 
         Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer);
+    }
+
+    private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)
+    {
+        if (TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered."))
+        {
+            return;
+        }
+
+        var restoredStatus = task.LastProcess is { IsRunning: true } ||
+            (task.LastDispatch is not null && task.LastProcess is null)
+            ? WorkTaskStatus.Running
+            : task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned;
+        if (task.Status == restoredStatus)
+        {
+            return;
+        }
+
+        task.SetStatus(restoredStatus);
+        Append(goal, task.Id, ProgressKind.TaskUpdated, $"Human input resolved; restored task status to {restoredStatus}.");
     }
 
     public void DismissHumanInput(HumanInputRequestId requestId)

@@ -999,6 +999,94 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, workspaceCreates);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_readmits_escalated_goal_when_task_state_changes_mid_run")]
+    public void BatchLoopReadmitsEscalatedGoalWhenTaskStateChangesMidRun()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var repaired = false;
+        var escalations = 0;
+        var workspaceCreates = 0;
+
+        var driver = MakeDriver(
+            createWorkspace: _ =>
+            {
+                workspaceCreates++;
+                return "C:\\goal";
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                if (!repaired)
+                {
+                    kernel.RetryTask(goal.Id, task.Id, "Operator repaired failed task.");
+                    repaired = true;
+                }
+
+                return false;
+            });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, escalations);
+        Assert.Equal(1, workspaceCreates);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_keeps_unchanged_escalated_goal_set_aside_without_reescalating")]
+    public void BatchLoopKeepsUnchangedEscalatedGoalSetAsideWithoutReescalating()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var failedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "failed goal");
+        var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held goal");
+        var failedTask = failedGoal.Tasks.Single();
+        kernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var escalations = 0;
+        var heldAttempts = 0;
+
+        var driver = MakeDriver(
+            getFacts: goal => goal.Id == heldGoal.Id
+                ? new GoalLifecycleFacts(WorkspaceExists: true)
+                : GoalLifecycleFacts.None,
+            dispatchAndStart: goal =>
+            {
+                if (goal.Id == heldGoal.Id)
+                {
+                    heldAttempts++;
+                    return DispatchStartOutcome.EmptyBatch("Held for operator approval.");
+                }
+
+                return DispatchStartOutcome.Started();
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, escalations);
+        Assert.Equal(3, heldAttempts);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_keeps_unresolved_clarification_set_aside_without_reescalating")]
     public void BatchLoopKeepsUnresolvedClarificationSetAsideWithoutReescalating()
     {
