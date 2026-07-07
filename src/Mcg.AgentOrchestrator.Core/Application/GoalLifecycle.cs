@@ -33,9 +33,6 @@ public static class GoalLifecycle
         if (goal.Status == GoalStatus.WaitingForHuman)
             return GoalLifecycleState.AwaitingHumanInput;
 
-        if (goal.Status == GoalStatus.Parked)
-            return GoalLifecycleState.AwaitingHumanInput;
-
         // Goal is holding for spec clarification (raised Clarification items not yet resolved)
         if (facts.HasOpenClarification)
             return GoalLifecycleState.AwaitingClarification;

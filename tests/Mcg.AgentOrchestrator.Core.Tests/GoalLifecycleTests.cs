@@ -514,6 +514,23 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.AwaitingHumanInput, GoalLifecycle.ResolveState(goal));
 }
 
+    [Xunit.Fact(DisplayName = "ResolveState_does_not_treat_parked_goal_as_awaiting_human_input")]
+    public void ResolveStateDoesNotTreatParkedGoalAsAwaitingHumanInput()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Parked goal");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var request = kernel.RequestHumanInput(goal.Id, null, "Can this wait?");
+
+    kernel.ParkGoal(goal.Id, "deferred");
+
+    Assert.True(request.IsCompleted);
+    Assert.DoesNotContain(kernel.HumanInputRequests, candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted);
+    Assert.Equal(GoalStatus.Parked, goal.Status);
+    Assert.NotEqual(GoalLifecycleState.AwaitingHumanInput, GoalLifecycle.ResolveState(goal));
+    Assert.Equal(GoalLifecycleState.Created, GoalLifecycle.ResolveState(goal));
+}
+
 static void AssertBriefContains(AgentOrchestratorKernel kernel, Goal goal, AgentRole role, string heading, string detail)
 {
     var task = goal.Tasks.First(task => task.RequiredRole == role);

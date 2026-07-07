@@ -455,19 +455,25 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.False(calls[2].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
         Assert.False(calls[2].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
-        Assert.Equal(["git diff whitespace", "focused CLI infrastructure tests"], result.Checks!.Select(check => check.Name).ToArray());
+        Assert.Contains(result.Checks!, check => check.Name == "focused CLI infrastructure tests");
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "core tests" &&
+            check.ResultSummary?.Contains("skipped: no changed file in dependency closure", StringComparison.Ordinal) == true);
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "infrastructure tests" &&
+            check.ResultSummary?.Contains("covered by: focused CLI infrastructure tests", StringComparison.Ordinal) == true);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_replaces_project_level_infrastructure_check_for_focused_cli_scope")]
-    public async Task GoalAcceptanceVerifierReplacesProjectLevelInfrastructureCheckForFocusedCliScope()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_skips_core_policy_shard_for_infrastructure_test_only_scope")]
+    public async Task GoalAcceptanceVerifierSkipsCorePolicyShardForInfrastructureTestOnlyScope()
     {
         var root = CreateCheckedInManifestShapeWorkspace();
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
             new(0, ""),
-            new(0, "Core tests passed."),
             new(0, "Focused CLI tests passed."),
+            new(0, ""),
             new(0, "")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -478,16 +484,14 @@ public sealed class GoalAcceptanceVerifierTests
 
         var result = await verifier.RunAsync(
             root,
-            changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
+            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerProfileTests.cs"]);
 
         Assert.True(result.Passed);
         Assert.Equal(5, calls.Count);
-        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
-        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[3][2]);
-        Assert.Contains("--filter", calls[3]);
-        Assert.Contains(calls[3], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
-        Assert.False(calls[3].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
-        Assert.False(calls[3].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
+        Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.OrdinalIgnoreCase));
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[2][2]);
+        Assert.Contains("--filter", calls[2]);
+        Assert.Contains(calls[2], argument => argument.Contains("WorkerProfileTests", StringComparison.Ordinal));
         Assert.DoesNotContain(
             calls,
             call => call.Length > 2 &&
@@ -495,9 +499,13 @@ public sealed class GoalAcceptanceVerifierTests
                 call[1].Equals("test", StringComparison.OrdinalIgnoreCase) &&
                 call[2].Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.OrdinalIgnoreCase) &&
                 !call.Contains("--filter", StringComparer.OrdinalIgnoreCase));
-        Assert.Equal(
-            ["git diff whitespace", "core tests", "focused CLI infrastructure tests", "forbidden changed paths"],
-            result.Checks!.Select(check => check.Name).ToArray());
+        var coreReceipt = result.Checks!.Single(check => check.Name == "core tests");
+        Assert.True(coreReceipt.Passed);
+        Assert.Contains("skipped: no changed file in dependency closure", coreReceipt.ResultSummary, StringComparison.Ordinal);
+        Assert.Contains("changed projects: Infrastructure.Tests", coreReceipt.ResultSummary, StringComparison.Ordinal);
+        Assert.Contains("dependency closure: Infrastructure.Tests", coreReceipt.ResultSummary, StringComparison.Ordinal);
+        var infrastructureReceipt = result.Checks.Single(check => check.Name == "infrastructure tests");
+        Assert.Contains("covered by: focused changed infrastructure tests", infrastructureReceipt.ResultSummary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_infrastructure_suite_for_multiple_app_subsystems")]
@@ -548,12 +556,12 @@ public sealed class GoalAcceptanceVerifierTests
             check.ResultSummary == "covered by 18 partitioned checks");
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_infrastructure_suite_for_app_plus_shared_infrastructure_or_script_changes")]
-    public async Task GoalAcceptanceVerifierPartitionsInfrastructureSuiteForAppPlusSharedInfrastructureOrScriptChanges()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_safety_valves_force_full_policy_shards")]
+    public async Task GoalAcceptanceVerifierSafetyValvesForceFullPolicyShards()
     {
-        var root = CreateStandardManifestWorkspace();
+        var root = CreateCheckedInManifestShapeWorkspace();
 
-        static async Task AssertPartitionedInfrastructureRunAsync(string root, IReadOnlyList<string> changedFiles)
+        static async Task AssertFullShardRunAsync(string root, IReadOnlyList<string> changedFiles)
         {
             var calls = new List<string[]>();
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -569,6 +577,7 @@ public sealed class GoalAcceptanceVerifierTests
             var result = await verifier.RunAsync(root, changedFiles: changedFiles);
 
             Assert.True(result.Passed);
+            Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
             var infrastructureCalls = calls
                 .Where(call => call.Length > 2 &&
                     call[0] == "dotnet" &&
@@ -579,6 +588,8 @@ public sealed class GoalAcceptanceVerifierTests
             foreach (var call in infrastructureCalls)
                 Assert.Contains("--filter", call);
             Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
+            Assert.DoesNotContain(result.Checks!, check =>
+                check.ResultSummary?.Contains("skipped: no changed file in dependency closure", StringComparison.Ordinal) == true);
             Assert.Contains(infrastructureCalls, call =>
                 call.Any(argument => argument.Contains("FullyQualifiedName!~DashboardHostTests", StringComparison.Ordinal) &&
                     argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
@@ -589,17 +600,20 @@ public sealed class GoalAcceptanceVerifierTests
             Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
         }
 
-        await AssertPartitionedInfrastructureRunAsync(
+        await AssertFullShardRunAsync(
             root,
             [
-                "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.ReportPreviews.cs",
                 "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
             ]);
-        await AssertPartitionedInfrastructureRunAsync(
+        await AssertFullShardRunAsync(
             root,
             [
-                "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
                 "scripts/Invoke-IsolatedDotnet.ps1"
+            ]);
+        await AssertFullShardRunAsync(
+            root,
+            [
+                "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj"
             ]);
     }
 
@@ -895,20 +909,19 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.False(result.Checks.Any(c => c.Name == "infrastructure tests"));
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_core_manifest_check_for_core_scope")]
-    public async Task GoalAcceptanceVerifierSubstitutesSolutionCheckWithCoreManifestCheckForCoreScope()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_core_and_dependent_infrastructure_shards_for_core_scope")]
+    public async Task GoalAcceptanceVerifierRunsCoreAndDependentInfrastructureShardsForCoreScope()
     {
-        var root = CreateStandardManifestWorkspace();
+        var root = CreateCheckedInManifestShapeWorkspace();
         var calls = new List<string[]>();
-        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
-            new(0, ""),
-            new(0, "Core tests passed.")
-        ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
-            return Task.FromResult(responses.Dequeue());
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                0,
+                args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                    ? "Tests passed."
+                    : ""));
         });
 
         var result = await verifier.RunAsync(
@@ -916,10 +929,23 @@ public sealed class GoalAcceptanceVerifierTests
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        Assert.Equal(3, calls.Count);
+        Assert.Equal(22, calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
-        Assert.DoesNotContain(calls[2], arg => arg.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(["git diff whitespace", "core tests"], result.Checks!.Select(check => check.Name).ToArray());
+        var infrastructureCalls = calls
+            .Where(call => call.Length > 2 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
+            .ToArray();
+        Assert.Equal(18, infrastructureCalls.Length);
+        foreach (var call in infrastructureCalls)
+            Assert.Contains("--filter", call);
+        Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
+        Assert.Contains(result.Checks!, check => check.Name == "core tests");
+        Assert.Contains(result.Checks!, check =>
+            check.Name == "infrastructure tests" &&
+            check.Passed &&
+            check.ResultSummary == "covered by 18 partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_partitioned_infrastructure_checks_for_infra_scope")]
@@ -1060,6 +1086,47 @@ public sealed class GoalAcceptanceVerifierTests
         finally
         {
             Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_full_shards_override_runs_all_policy_shards")]
+    public async Task GoalAcceptanceVerifierFullShardsOverrideRunsAllPolicyShards()
+    {
+        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
+        Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", "1");
+        try
+        {
+            var root = CreateCheckedInManifestShapeWorkspace();
+            var calls = new List<string[]>();
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Tests passed."
+                        : ""));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/Foo.cs"]);
+
+            Assert.True(result.Passed);
+            Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+            var infrastructureCalls = calls
+                .Where(call => call.Length > 2 &&
+                    call[0] == "dotnet" &&
+                    call[1] == "test" &&
+                    call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
+                .ToArray();
+            Assert.Equal(18, infrastructureCalls.Length);
+            Assert.DoesNotContain(result.Checks!, check =>
+                check.ResultSummary?.Contains("skipped: no changed file in dependency closure", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previous);
         }
     }
 

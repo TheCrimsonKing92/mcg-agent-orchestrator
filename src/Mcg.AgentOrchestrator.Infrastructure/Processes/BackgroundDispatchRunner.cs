@@ -9,6 +9,7 @@ public sealed record DispatchRefreshOutcome(
     TaskProcessRecord ProcessRecord,
     TaskVerificationRecord? Verification,
     string? ResultCommit = null,
+    string? ResultCommitProvenance = null,
     DispatchRecoveryDecision? RecoveryDecision = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
     DispatchDiagnosticPayload? DiagnosticPayload = null);
@@ -518,7 +519,16 @@ public sealed class BackgroundDispatchRunner
     {
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification, outcome.ProviderFailureKind);
         if (outcome.ResultCommit is not null)
+        {
             kernel.RecordDispatchResultCommit(goalId, taskId, outcome.ResultCommit);
+            if (!string.IsNullOrWhiteSpace(outcome.ResultCommitProvenance))
+            {
+                kernel.RecordTaskNote(
+                    goalId,
+                    taskId,
+                    $"TaskOutputCommitted: sha={outcome.ResultCommit}; provenance={outcome.ResultCommitProvenance}.");
+            }
+        }
     }
 
     private DispatchRefreshOutcome BuildCompletedProcessOutcome(
@@ -538,6 +548,7 @@ public sealed class BackgroundDispatchRunner
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
         var hasCommittedChanges = false;
+        var orchestratorCommitted = false;
         if (RequiresFileChangeEvidence(task) &&
             TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
         {
@@ -546,7 +557,6 @@ public sealed class BackgroundDispatchRunner
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
             var originalExitCode = exitCode;
-            var orchestratorCommitted = false;
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
@@ -555,6 +565,11 @@ public sealed class BackgroundDispatchRunner
                 standardOutput,
                 standardError,
                 providerFailureKind);
+            var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
+                task.LastDispatch,
+                processRecord,
+                standardError,
+                sandboxCommitBlocked);
             var successfulWorkerResult = HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
                 standardOutput,
@@ -572,10 +587,13 @@ public sealed class BackgroundDispatchRunner
             }
 
             var provider = ResolveWorkerProvider(task.LastDispatch);
+            var normalIntegrityCommitEvidence =
+                task.LastDispatch.SandboxLowIntegrity != true &&
+                (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
-                (exitCode == 0 && (worktreeEvidence.HasCommitAfterDispatch || successfulWorkerResult)) ||
+                (exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
-                (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit);
+                (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence);
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -618,6 +636,13 @@ public sealed class BackgroundDispatchRunner
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
+                if (task.LastDispatch.SandboxLowIntegrity && !lowIntegrityConfinementEvidence)
+                {
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Low-integrity dispatch exited 0 with a dirty worktree, but deterministic low-integrity confinement evidence was absent; refusing orchestrator commit-on-behalf.");
+                }
+
                 if (commitAttempted && !commitAttempt.Succeeded && commitAttempt.Diagnostic.Length > 0)
                 {
                     standardErrorDiagnostic = AppendDiagnostic(
@@ -698,6 +723,9 @@ public sealed class BackgroundDispatchRunner
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
         var resultCommit = TryGetWorktreeHead(processRecord.WorkingDirectory);
+        var resultCommitProvenance = hasCommittedChanges
+            ? orchestratorCommitted ? "orchestrator" : "worker"
+            : null;
 
         // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
         var heartbeatStdoutBytes = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
@@ -722,6 +750,7 @@ public sealed class BackgroundDispatchRunner
             completed,
             verification,
             resultCommit,
+            resultCommitProvenance,
             recoveryDecision,
             providerFailureKind,
             new DispatchDiagnosticPayload(exitCode, standardOutput, standardError));
@@ -804,6 +833,63 @@ public sealed class BackgroundDispatchRunner
             standardError,
             DateTimeOffset.UtcNow);
         return DispatchFailureClassifier.Classify(task, verification, providerFailureKind).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
+    }
+
+    private static bool HasLowIntegrityConfinementEvidence(
+        TaskDispatchRecord? dispatch,
+        TaskProcessRecord processRecord,
+        string standardError,
+        bool sandboxCommitBlocked)
+    {
+        if (dispatch?.SandboxLowIntegrity != true)
+        {
+            return false;
+        }
+
+        return sandboxCommitBlocked ||
+            HasCompletedSandboxPreparationEvent(standardError) ||
+            HasLowIntegritySetupArtifact(processRecord.WorkingDirectory);
+    }
+
+    private static bool HasCompletedSandboxPreparationEvent(string standardError)
+    {
+        foreach (var line in standardError.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.Contains("sandbox-prep", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (root.TryGetProperty("event", out var evt) &&
+                    root.TryGetProperty("phase", out var phase) &&
+                    string.Equals(evt.GetString(), "sandbox-prep", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(phase.GetString(), "complete", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasLowIntegritySetupArtifact(string workingDirectory)
+    {
+        try
+        {
+            return File.Exists(Path.Combine(workingDirectory, ".mcg-sandbox", DispatchProcessHost.LowIntegritySetupArtifactName));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private ProviderFailureKind ParseProviderFailureKind(
@@ -1029,6 +1115,27 @@ public sealed class BackgroundDispatchRunner
                 return staged.ExitCode == 0
                     ? CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no staged changes after git add.")
                     : CommitWorktreeEditsResult.FromGitFailure("diff", ["diff", "--cached", "--name-only"], staged);
+            }
+
+            var substantive = GitCli.Run(
+                workingDirectory,
+                "diff",
+                "--cached",
+                "--ignore-all-space",
+                "--quiet",
+                "--exit-code",
+                "--");
+            if (substantive.ExitCode == 0)
+            {
+                return CommitWorktreeEditsResult.Failed("Orchestrator commit-on-behalf found no substantive staged changes after ignoring whitespace.");
+            }
+
+            if (substantive.ExitCode != 1)
+            {
+                return CommitWorktreeEditsResult.FromGitFailure(
+                    "diff",
+                    ["diff", "--cached", "--ignore-all-space", "--quiet", "--exit-code", "--"],
+                    substantive);
             }
 
             var commitArgs = new[] { "commit", "-m", subject };

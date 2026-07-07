@@ -19,7 +19,8 @@ public static bool ExecuteCommand(
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
     IGoalAcceptanceVerifier? acceptanceVerifier = null,
-    Func<long>? goalMarkLandedElapsedMilliseconds = null)
+    Func<long>? goalMarkLandedElapsedMilliseconds = null,
+    CliPhaseTimingRecorder? phaseTimings = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
     kernel.SetEventWriter(eventWriter);
@@ -34,7 +35,8 @@ public static bool ExecuteCommand(
         reloadKernel,
         persistKernel,
         finalizeAcceptanceMerge,
-        persistGoalKernel)
+        persistGoalKernel,
+        phaseTimings: phaseTimings)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

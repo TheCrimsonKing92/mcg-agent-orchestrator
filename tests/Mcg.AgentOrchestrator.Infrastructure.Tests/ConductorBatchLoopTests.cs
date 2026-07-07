@@ -2359,6 +2359,67 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(staleGoal.Id, staleTask.Id).Status);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_parked_goal_is_counted_in_summary_without_escalation_and_resumes_when_active")]
+    public void BatchLoopParkedGoalIsCountedInSummaryWithoutEscalationAndResumesWhenActive()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var parkedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Parked conductor goal");
+        var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
+        var request = kernel.RequestHumanInput(parkedGoal.Id, null, "Should this continue?");
+        kernel.ParkGoal(parkedGoal.Id, "operator deferred");
+
+        Assert.True(request.IsCompleted);
+        Assert.DoesNotContain(kernel.HumanInputRequests, candidate => candidate.GoalId == parkedGoal.Id && !candidate.IsCompleted);
+
+        var advancedGoalIds = new List<GoalId>();
+        var escalationReasons = new List<string>();
+        var driver = MakeDriver(
+            createWorkspace: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return "/tmp/workspace";
+            },
+            writeEscalation: (_, _, reason) => escalationReasons.Add(reason));
+
+        var parkedOutput = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+        });
+
+        Assert.Empty(escalationReasons);
+        Assert.DoesNotContain(parkedGoal.Id, advancedGoalIds);
+        Assert.Contains(activeGoal.Id, advancedGoalIds);
+        Assert.Contains("TICK tick=1 eligible=1", parkedOutput);
+        Assert.Contains("TICK_EXCLUDED tick=1 kind=parked count=1", parkedOutput);
+        Assert.Contains("TICK_END tick=1 advanced=1 held=0 escalated=0 done=0", parkedOutput);
+        Assert.DoesNotContain($"GOAL goal={parkedGoal.Id.Value[..8]}", parkedOutput);
+        Assert.DoesNotContain("AwaitingHumanInput", parkedOutput, StringComparison.Ordinal);
+
+        kernel = WithGoalStatus(kernel, parkedGoal.Id, GoalStatus.Active);
+        advancedGoalIds.Clear();
+        escalationReasons.Clear();
+
+        var resumedOutput = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+        });
+
+        Assert.Empty(escalationReasons);
+        Assert.Contains(parkedGoal.Id, advancedGoalIds);
+        Assert.Contains($"GOAL goal={parkedGoal.Id.Value[..8]} result=executed state=Created", resumedOutput);
+        Assert.DoesNotContain("TICK_EXCLUDED tick=1 kind=parked", resumedOutput);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_retired_verified_goal_is_excluded_from_tick_eligible_set")]
     public void BatchLoopRetiredVerifiedGoalIsExcludedFromTickEligibleSet()
     {
