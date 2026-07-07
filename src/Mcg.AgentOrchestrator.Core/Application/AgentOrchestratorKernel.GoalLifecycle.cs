@@ -613,7 +613,7 @@ public sealed partial class AgentOrchestratorKernel
         var restoredStatus = task.LastProcess is { IsRunning: true } ||
             (task.LastDispatch is not null && task.LastProcess is null)
             ? WorkTaskStatus.Running
-            : task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned;
+            : task.LastDispatch is not null ? WorkTaskStatus.Assigned : WorkTaskStatus.Running;
         if (task.Status == restoredStatus)
         {
             return;
