@@ -2718,9 +2718,26 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     string? testedWorktreeHead = null;
     if (worktreePath is not null)
     {
-        if (context.Worktrees.NeedsRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id))
+        var rebaseCheckStarted = System.Diagnostics.Stopwatch.StartNew();
+        var needsRebase = context.Worktrees.NeedsRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+        rebaseCheckStarted.Stop();
+        context.PhaseTimings.Record(
+            "workspace-rebase-check",
+            rebaseCheckStarted.Elapsed,
+            ("goal", goal.Id.Value[..8]),
+            ("needed", needsRebase));
+
+        if (needsRebase)
         {
+            var rebaseStarted = System.Diagnostics.Stopwatch.StartNew();
             var rebase = context.Worktrees.TryRebaseOntoMain(context.Workspace.ExecutionDirectory, goal.Id);
+            rebaseStarted.Stop();
+            context.PhaseTimings.Record(
+                "workspace-rebase",
+                rebaseStarted.Elapsed,
+                ("goal", goal.Id.Value[..8]),
+                ("status", rebase.Status),
+                ("updated", rebase.UpdatedBranch));
             Console.WriteLine($"Workspace rebase: {FormatWorkspaceRebase(rebase)}");
 
             if (!rebase.UpdatedBranch)
@@ -2732,23 +2749,70 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 return false;
             }
         }
+        else
+        {
+            context.PhaseTimings.Record(
+                "workspace-rebase",
+                TimeSpan.Zero,
+                ("goal", goal.Id.Value[..8]),
+                ("status", "skipped"),
+                ("reason", "already-up-to-date"));
+        }
 
         testedWorktreeHead = context.Worktrees.ResolveHead(worktreePath);
         var changedFiles = context.Worktrees.GetChangedFiles(worktreePath);
         if (skipVerify)
         {
+            context.PhaseTimings.Record(
+                "verification-suite",
+                TimeSpan.Zero,
+                ("goal", goal.Id.Value[..8]),
+                ("status", "skipped"),
+                ("reason", "--skip-verify"));
             Console.WriteLine("Verification: skipped (--skip-verify)");
         }
         else
         {
+            var verificationStarted = System.Diagnostics.Stopwatch.StartNew();
             verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles).GetAwaiter().GetResult();
+            verificationStarted.Stop();
+            context.PhaseTimings.Record(
+                "verification-suite",
+                verificationStarted.Elapsed,
+                ("goal", goal.Id.Value[..8]),
+                ("passed", verification.Passed),
+                ("exit", verification.ExitCode),
+                ("checks", verification.Checks?.Count ?? 0));
             foreach (var check in verification.Checks ?? [])
             {
+                context.PhaseTimings.Record(
+                    "verification-check",
+                    TimeSpan.FromMilliseconds(check.DurationMilliseconds ?? 0),
+                    ("goal", goal.Id.Value[..8]),
+                    ("name", check.Name),
+                    ("passed", check.Passed),
+                    ("exit", check.ExitCode),
+                    ("advisory", check.Advisory));
                 Console.WriteLine($"Verification check: {(check.Passed ? "passed" : "failed")} - {check.Name}" +
                     (check.ExitCode is null ? "" : $" (exit {check.ExitCode})") +
                     (string.IsNullOrWhiteSpace(check.ArtifactsPath) ? "" : $" artifacts={check.ArtifactsPath}"));
             }
         }
+    }
+    else
+    {
+        context.PhaseTimings.Record(
+            "workspace-rebase",
+            TimeSpan.Zero,
+            ("goal", goal.Id.Value[..8]),
+            ("status", "skipped"),
+            ("reason", "no-worktree"));
+        context.PhaseTimings.Record(
+            "verification-suite",
+            TimeSpan.Zero,
+            ("goal", goal.Id.Value[..8]),
+            ("status", "skipped"),
+            ("reason", "no-worktree"));
     }
 
     if (skipVerify || verification is { Passed: true })
@@ -2820,27 +2884,36 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return false;
     }
 
+    var mergeStarted = System.Diagnostics.Stopwatch.StartNew();
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
-        goal.Id,
-        expectedGoalFingerprint,
-        testedWorktreeHead,
-        Merge: () =>
-        {
-            var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
-            var merge = context.Worktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
-
-            if (merge is null)
+            goal.Id,
+            expectedGoalFingerprint,
+            testedWorktreeHead,
+            Merge: () =>
             {
-                return new AcceptanceMergeCommitResult(true, null);
-            }
+                var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
+                var merge = context.Worktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
 
-            if (merge.FastForwarded && pendingRollback is not null)
-            {
-                GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
-            }
+                if (merge is null)
+                {
+                    return new AcceptanceMergeCommitResult(true, null);
+                }
 
-            return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
-        }));
+                if (merge.FastForwarded && pendingRollback is not null)
+                {
+                    GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
+                }
+
+                return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
+            }));
+    mergeStarted.Stop();
+    context.PhaseTimings.Record(
+        "workspace-merge",
+        mergeStarted.Elapsed,
+        ("goal", goal.Id.Value[..8]),
+        ("fastForwarded", mergeCommit.FastForwarded),
+        ("guardFailure", mergeCommit.GuardFailure),
+        ("message", mergeCommit.Message));
 
     if (mergeCommit.GuardFailure)
     {

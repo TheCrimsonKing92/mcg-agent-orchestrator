@@ -677,11 +677,42 @@ internal static class CliPersistentStateRunner
             return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier);
         }
 
-        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveAcceptanceGoalPrefix(args));
+        var phaseTimings = new CliPhaseTimingRecorder("acceptance");
+        var resolveStarted = System.Diagnostics.Stopwatch.StartNew();
+        var (goalId, resolvedGoalCount) = ResolveAcceptanceGoalId(stateRepository, currentGoal?.Id.Value, ResolveAcceptanceGoalPrefix(args));
+        resolveStarted.Stop();
+        phaseTimings.Record(
+            "startup-goal-resolve",
+            resolveStarted.Elapsed,
+            ("goal", goalId.Value[..8]),
+            ("goalCount", resolvedGoalCount));
+
+        var loadStarted = System.Diagnostics.Stopwatch.StartNew();
         var kernel = LoadSingleGoalKernel(stateRepository, goalId);
+        loadStarted.Stop();
+        phaseTimings.Record(
+            "startup-load-target-goal",
+            loadStarted.Elapsed,
+            ("goal", goalId.Value[..8]),
+            ("goalCount", 1));
+        var initialGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
+
+        var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
+        var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId);
+        reconcileStarted.Stop();
+        ConsoleViews.PrintTerminalGoalSweep(targetSweep);
+        phaseTimings.Record(
+            "reconcile-sweep",
+            reconcileStarted.Elapsed,
+            ("goal", goalId.Value[..8]),
+            ("scope", "target"),
+            ("mode", "target-scoped-fast-path"),
+            ("goalsWalked", 1),
+            ("repairs", targetSweep.Goals.Sum(goal => goal.Repairs.Count)),
+            ("blockers", targetSweep.Goals.Sum(goal => goal.Blockers.Count)));
+
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
         var updatedCurrentGoal = currentGoal;
-        var initialGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
         var acceptanceFinalStatePersisted = false;
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
@@ -776,7 +807,8 @@ internal static class CliPersistentStateRunner
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
             Persist,
             finalizeAcceptanceMerge: Finalize,
-            acceptanceVerifier: acceptanceVerifier);
+            acceptanceVerifier: acceptanceVerifier,
+            phaseTimings: phaseTimings);
 
         currentGoal = updatedCurrentGoal;
 
@@ -1120,6 +1152,37 @@ internal static class CliPersistentStateRunner
         var latest = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult().FirstOrDefault()
             ?? throw new InvalidOperationException("Create a goal first with: goal <objective>");
         return new GoalId(latest.Id);
+    }
+
+    private static (GoalId GoalId, int? GoalCount) ResolveAcceptanceGoalId(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string? currentGoalId,
+        string? idOrPrefix)
+    {
+        if (!string.IsNullOrWhiteSpace(idOrPrefix))
+        {
+            var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+            var matches = summaries
+                .Where(goal => goal.Id.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var goalId = matches.Count switch
+            {
+                1 => new GoalId(matches[0].Id),
+                0 => throw new KeyNotFoundException($"Goal '{idOrPrefix}' was not found."),
+                _ => throw new InvalidOperationException($"Goal prefix '{idOrPrefix}' is ambiguous.")
+            };
+            return (goalId, summaries.Count);
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentGoalId))
+        {
+            return (new GoalId(currentGoalId), null);
+        }
+
+        var allGoals = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        var latest = allGoals.FirstOrDefault()
+            ?? throw new InvalidOperationException("Create a goal first with: goal <objective>");
+        return (new GoalId(latest.Id), allGoals.Count);
     }
 
     private static AgentOrchestratorKernel LoadSingleGoalKernel(

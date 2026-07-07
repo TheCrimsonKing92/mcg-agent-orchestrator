@@ -16,7 +16,8 @@ internal sealed class CliExecutionContext(
     Action<AgentOrchestratorKernel>? persistKernel = null,
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
-    Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null)
+    Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null,
+    CliPhaseTimingRecorder? phaseTimings = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -54,6 +55,8 @@ public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleE
 
 public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }
 
+public CliPhaseTimingRecorder PhaseTimings { get; } = phaseTimings ?? CliPhaseTimingRecorder.Null;
+
 public TimeSpan? RunGoalPollInterval { get; init; }
 
 public RunGoalService.SleepFunc? RunGoalSleep { get; init; }
@@ -67,6 +70,40 @@ public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest re
     stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);
 
 public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
+}
+
+internal sealed class CliPhaseTimingRecorder(string commandName, bool enabled = true)
+{
+    public static CliPhaseTimingRecorder Null { get; } = new("none", enabled: false);
+
+    public void Record(string phase, TimeSpan elapsed, params (string Key, object? Value)[] context)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        var fields = context
+            .Where(item => item.Value is not null)
+            .Select(item => $"{item.Key}={FormatValue(item.Value!)}")
+            .ToArray();
+        var suffix = fields.Length == 0 ? string.Empty : " " + string.Join(' ', fields);
+        Console.WriteLine($"PHASE_TIMING command={commandName} phase={phase} elapsedMs={Math.Max(0, (long)elapsed.TotalMilliseconds)}{suffix}");
+    }
+
+    private static string FormatValue(object value)
+    {
+        var text = value switch
+        {
+            bool flag => flag ? "true" : "false",
+            TimeSpan duration => $"{Math.Max(0, (long)duration.TotalMilliseconds)}ms",
+            _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty
+        };
+
+        return text.IndexOfAny([' ', '\t', '\r', '\n', '"']) < 0
+            ? text
+            : $"\"{text.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+    }
 }
 
 internal sealed record AcceptanceMergeCommitRequest(

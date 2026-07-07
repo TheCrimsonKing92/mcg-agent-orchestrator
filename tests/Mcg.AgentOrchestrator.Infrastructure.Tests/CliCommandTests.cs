@@ -6515,7 +6515,7 @@ public sealed class CliCommandTests
             verifierObservedUnlockedState = true;
         });
 
-        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             ["acceptance", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),
@@ -6533,6 +6533,69 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
         Xunit.Assert.False(repository.IsInTransaction);
         Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=startup-goal-resolve", output);
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=startup-load-target-goal", output);
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=reconcile-sweep", output);
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=workspace-rebase", output);
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=verification-suite", output);
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=verification-check", output);
+        Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=workspace-merge", output);
+        Xunit.Assert.Matches(@"PHASE_TIMING command=acceptance phase=verification-check elapsedMs=\d+ .*name=""probe verifier""", output);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_target_scoped_reconcile_preserves_target_dispatch_refresh")]
+    public async Task PersistentRunnerAcceptanceTargetScopedReconcilePreservesTargetDispatchRefresh()
+    {
+        var root = CreateShortAcceptanceRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var currentTask = new TaskSpec(TaskId.New(), "Current work", AgentRole.Developer);
+            var targetTask = new TaskSpec(TaskId.New(), "Target work", AgentRole.Developer);
+            var current = kernel.CreateGoal("Current acceptance context", [currentTask]);
+            var target = kernel.CreateGoal("Target acceptance context", [targetTask]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = current;
+            kernel.ActivateGoal(current.Id, agents);
+            kernel.ActivateGoal(target.Id, agents);
+            RecordRunningProcess(kernel, target, targetTask, root);
+            File.WriteAllText(targetTask.LastProcess!.ExitCodePath, "0");
+            File.WriteAllText(targetTask.LastProcess.StandardOutputPath, "done");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance", target.Id.Value[..8], "--skip-verify", "--keep-workspace", "--no-record"],
+                repository,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=reconcile-sweep", output);
+            Xunit.Assert.Contains("mode=target-scoped-fast-path", output);
+            Xunit.Assert.Contains("goalsWalked=1", output);
+            Xunit.Assert.Equal(0, repository.LoadCount);
+            Xunit.Assert.Equal(1, repository.LoadGoalCount);
+            Xunit.Assert.Contains(target.Id.Value, repository.LoadedGoalIds);
+            Xunit.Assert.DoesNotContain(current.Id.Value, repository.LoadedGoalIds);
+            Xunit.Assert.Equal(target.Id, currentGoal!.Id);
+
+            var currentSnapshot = await repository.LoadGoalAsync(current.Id);
+            var targetSnapshot = await repository.LoadGoalAsync(target.Id);
+            var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([currentSnapshot!, targetSnapshot!], []));
+            Xunit.Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(current.Id, currentTask.Id).Status);
+            var restoredTargetTask = restored.GetTask(target.Id, targetTask.Id);
+            Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTargetTask.Status);
+            Xunit.Assert.Equal(0, restoredTargetTask.LastProcess!.ExitCode);
+            Xunit.Assert.NotNull(restoredTargetTask.LastVerification);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, null);
+        }
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_final_state_is_persisted_by_goal_cas")]
@@ -8333,7 +8396,7 @@ public sealed class CliCommandTests
                 0,
                 "Passed.",
                 ArtifactsPath: Path.Combine(worktreePath, "artifacts"),
-                Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.")]));
+                Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.", DurationMilliseconds: 7)]));
         }
     }
 
