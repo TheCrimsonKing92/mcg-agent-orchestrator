@@ -151,7 +151,7 @@ public sealed class VerificationAndInputWorklistTests
         "WORKER_RESULT:",
         "files: src/Foo.cs",
         "commands: dotnet test --filter Foo",
-        "tests: Passed",
+        "tests: Failed: 1",
         "commit: abc123",
         "blockers: Finding A blocks acceptance",
         "model_fit: OpenAI/gpt-5.5 - adequate - review",

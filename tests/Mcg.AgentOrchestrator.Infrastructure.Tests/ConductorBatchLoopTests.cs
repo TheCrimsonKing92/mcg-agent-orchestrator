@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -1851,6 +1852,59 @@ public sealed class ConductorBatchLoopTests
         Assert.True(sweepCalls >= 2);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
         Assert.False(summary.StopRequested);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_refreshes_exited_readonly_dispatch_before_advance_and_does_not_redispatch_it")]
+    public void BatchLoopRefreshesExitedReadonlyDispatchBeforeAdvanceAndDoesNotRedispatchIt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
+        var researcher = new TaskSpec(TaskId.New(), "Research constraints.", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Two role handoff", [planner, researcher]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-refresh-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var stdout = Path.Combine(root, "planner.out.log");
+        var stderr = Path.Combine(root, "planner.err.log");
+        var exit = Path.Combine(root, "planner.exit.txt");
+        File.WriteAllText(stdout, string.Join(Environment.NewLine,
+            "Planner complete.",
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: none",
+            "tests: not-run - planning only",
+            "commit: none",
+            "blockers: none",
+            "model_fit: OpenAI/gpt-5.5 - adequate - planning",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT"));
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, planner.Id, new TaskDispatchRecord("planner-worker", "planner.exe", root, now));
+        var running = new TaskProcessRecord(4242, "planner.exe", root, stdout, stderr, exit, now, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, planner.Id, running);
+
+        var dispatchCalls = new List<TaskId>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var next = g.Tasks.Single(task => task.Status == WorkTaskStatus.Assigned);
+                dispatchCalls.Add(next.Id);
+                kernel.RecordTaskDispatch(g.Id, next.Id, new TaskDispatchRecord("next-worker", "next.exe", root, DateTimeOffset.UtcNow));
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop(
+            refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); })
+            .Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+
+        Assert.Equal(WorkTaskStatus.Completed, planner.Status);
+        Assert.Equal(WorkTaskStatus.Running, researcher.Status);
+        Assert.Equal([researcher.Id], dispatchCalls);
+        Assert.Equal(1, summary.Advanced);
     }
 
     [Xunit.Fact(DisplayName = "WatchMode_exit_wake_reconciles_before_stop_file_exit")]

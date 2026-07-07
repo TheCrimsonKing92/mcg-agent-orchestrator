@@ -17,6 +17,7 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
+    private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
 
     public ConductorBatchLoop(
@@ -24,12 +25,14 @@ internal sealed class ConductorBatchLoop
         Action<AgentOrchestratorKernel, Goal>? reapGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel, Goal>? detachGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null,
+        Action<AgentOrchestratorKernel, Goal>? refreshGoalDispatchesBeforeAdvance = null,
         ConductorWatchProgressReporter? watchProgressReporter = null)
     {
         _sweep = sweep ?? (_ => { });
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
+        _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
     }
 
@@ -226,6 +229,14 @@ internal sealed class ConductorBatchLoop
                 {
                     try
                     {
+                        var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+                        _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                        var afterRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+                        if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
+                        {
+                            changedGoalIds.Add(goal.Id);
+                        }
+
                         result = driver.AdvanceOnce(goal, policy);
                     }
                     catch (Exception ex)

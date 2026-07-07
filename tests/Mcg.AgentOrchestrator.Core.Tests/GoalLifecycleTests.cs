@@ -703,9 +703,13 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     kernel.SubmitHumanInput(request.Id, "Use main.");
 
     Assert.Equal(GoalStatus.Active, goal.Status);
-    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
     Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputReceived && evt.TaskId == task.Id);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.TaskUpdated &&
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("restored task status to Assigned", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "SourceBacklogItemId_roundtrips_through_snapshot")]
     public void SourceBacklogItemIdRoundtripsThoughSnapshot()

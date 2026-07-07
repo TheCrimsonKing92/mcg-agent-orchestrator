@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 internal static class WorkerResultBlockers
@@ -45,6 +47,25 @@ internal static class WorkerResultBlockers
         return verification is not null &&
             TryFindBlocker(verification, out blocker) &&
             !TryFindHardFailureBlocker(verification, out _);
+    }
+
+    public static bool IsAdvisoryNoChangeContractBlocker(TaskSpec task, TaskVerificationRecord? verification)
+    {
+        return verification is { Succeeded: true } &&
+            IsNoChangeContractRole(task) &&
+            TryFindBlocker(verification, out _) &&
+            !TryFindFailingTests(verification, out _);
+    }
+
+    public static bool TryFindFailingTests(TaskVerificationRecord? verification, out string tests)
+    {
+        if (TryFindTests(verification, out tests) && TestsReportFailure(tests))
+        {
+            return true;
+        }
+
+        tests = string.Empty;
+        return false;
     }
 
     public static bool TryFindTests(TaskVerificationRecord? verification, out string tests)
@@ -189,6 +210,26 @@ internal static class WorkerResultBlockers
             !normalized.Contains("0 failed", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("0 failures", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNoChangeContractRole(TaskSpec task)
+    {
+        return task.RequiredRole switch
+        {
+            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => true,
+            AgentRole.Tester => !TaskRequestsFileChanges(task),
+            _ => false
+        };
+    }
+
+    private static bool TaskRequestsFileChanges(TaskSpec task)
+    {
+        var text = $"{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
+        return Regex.IsMatch(
+            text,
+            @"\b(add|create|write|implement|update|modify|edit|fix)\b.{0,80}\b(test|tests|coverage|fixture|fixtures|source|file|files)\b|" +
+            @"\b(test|tests|coverage|fixture|fixtures|source|file|files)\b.{0,80}\b(add|create|write|implement|update|modify|edit|fix)\b",
+            RegexOptions.CultureInvariant);
     }
 
     private static bool ContainsBlockerClassification(string line)

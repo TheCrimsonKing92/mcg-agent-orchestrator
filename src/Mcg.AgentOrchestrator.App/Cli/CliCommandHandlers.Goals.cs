@@ -956,7 +956,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     reconcileSweep,
                     (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel)).Run(
+                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
+                    (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1013,7 +1014,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
-                    wk => watchReaper.RequeueInterruptedDispatches(wk)).Run(
+                    wk => watchReaper.RequeueInterruptedDispatches(wk),
+                    (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal); }).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
