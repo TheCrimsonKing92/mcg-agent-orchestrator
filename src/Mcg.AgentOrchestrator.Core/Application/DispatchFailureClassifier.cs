@@ -600,7 +600,7 @@ public static class DispatchFailureClassifier
         if (workerResultPresent)
         {
             return CanCompleteWithoutChangeEvidence(task, verification) &&
-                verification.HeartbeatStandardOutputBytes > 0;
+                HasPopulatedStandardOutput(verification);
         }
 
         return !IsTransientEmptyOutputDispatchFlake(verification);
@@ -613,6 +613,11 @@ public static class DispatchFailureClassifier
             DispatchRoleOutputCapability.VerificationOnly => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
             _ => false
         };
+
+    private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
+        verification.HeartbeatStandardOutputBytes > 0 ||
+        !string.IsNullOrWhiteSpace(verification.StandardOutput) ||
+        HasStandardOutputFileBytes(verification);
 
     private static DispatchRoleOutputCapability GetDispatchRoleOutputCapability(AgentRole role) =>
         role switch
