@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("IsolatedDotnetRoot")]
+[Xunit.Collection("EnvMutation")]
 public sealed class GoalAcceptanceVerifierTests
 {
     [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_classifies_transient_testhost_abort_vs_real_failure")]

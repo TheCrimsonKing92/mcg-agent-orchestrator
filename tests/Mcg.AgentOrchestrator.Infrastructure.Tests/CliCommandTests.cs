@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 
+[Xunit.Collection("EnvMutation")]
 public sealed class CliCommandTests
 {
     [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_splits_confirmation_and_force_flags")]

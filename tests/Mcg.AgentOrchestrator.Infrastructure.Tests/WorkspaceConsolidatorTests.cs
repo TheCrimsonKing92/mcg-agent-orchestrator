@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 
+[Xunit.Collection("EnvMutation")]
 public sealed class WorkspaceConsolidatorTests
 {
     [Xunit.Fact(DisplayName = "ResolveRepoRoot_finds_git_root_from_nested_subdirectory")]
