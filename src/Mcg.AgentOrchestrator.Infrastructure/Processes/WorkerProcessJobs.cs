@@ -163,10 +163,18 @@ public static class WorkerProcessJobs
             {
                 accounting = capturedAccounting;
             }
+            else if (OperatingSystem.IsWindows())
+            {
+                accounting = WorkerProcessJobAccounting.Empty;
+            }
         }
         catch
         {
             // Accounting is best-effort; disposal remains mandatory.
+            if (OperatingSystem.IsWindows())
+            {
+                accounting = WorkerProcessJobAccounting.Empty;
+            }
         }
 
         var killed = !kill;

@@ -81,7 +81,11 @@ internal sealed class OwnedProcessGroup : IDisposable
     public bool TryReadAccounting(out WorkerProcessJobAccounting accounting)
     {
         accounting = WorkerProcessJobAccounting.Empty;
-        if (_disposed || !OperatingSystem.IsWindows() || _jobHandle is null)
+        if (_disposed ||
+            !OperatingSystem.IsWindows() ||
+            _jobHandle is null ||
+            _jobHandle.IsClosed ||
+            _jobHandle.IsInvalid)
         {
             return false;
         }
@@ -158,7 +162,7 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool QueryInformationJobObject(
-            SafeFileHandle hJob,
+            IntPtr hJob,
             int jobObjectInfoClass,
             IntPtr lpJobObjectInfo,
             uint cbJobObjectInfoLength,
@@ -170,6 +174,11 @@ internal sealed class OwnedProcessGroup : IDisposable
         public static bool TryReadAccounting(SafeFileHandle job, out WorkerProcessJobAccounting accounting)
         {
             accounting = WorkerProcessJobAccounting.Empty;
+            if (job.IsClosed || job.IsInvalid)
+            {
+                return false;
+            }
+
             if (!TryQuery(job, JobObjectBasicAccountingInformation, out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION basic) ||
                 !TryQuery(job, JobObjectExtendedLimitInformation, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION extended))
             {
@@ -191,11 +200,18 @@ internal sealed class OwnedProcessGroup : IDisposable
             where T : struct
         {
             value = default;
+            var addedRef = false;
             var length = Marshal.SizeOf<T>();
             var buffer = Marshal.AllocHGlobal(length);
             try
             {
-                if (!QueryInformationJobObject(job, infoClass, buffer, (uint)length, IntPtr.Zero))
+                job.DangerousAddRef(ref addedRef);
+                if (job.IsClosed || job.IsInvalid)
+                {
+                    return false;
+                }
+
+                if (!QueryInformationJobObject(job.DangerousGetHandle(), infoClass, buffer, (uint)length, IntPtr.Zero))
                 {
                     return false;
                 }
@@ -205,6 +221,11 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
             finally
             {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+
                 Marshal.FreeHGlobal(buffer);
             }
         }
