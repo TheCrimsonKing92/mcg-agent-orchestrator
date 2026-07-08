@@ -1635,6 +1635,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
+        WorkerProcessJobAccounting? killedAccounting = null;
         var elapsed = Stopwatch.StartNew();
         var startInfo = new ProcessStartInfo
         {
@@ -1687,7 +1688,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (OperationCanceledException)
             {
-                try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
+                try { WorkerProcessJobs.TryKillOrFallback(process.Id, out killedAccounting); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 if (cancellationToken.IsCancellationRequested)
                     throw;
@@ -1700,6 +1701,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
             WorkerProcessJobs.Release(process.Id, out var accounting);
+            accounting ??= killedAccounting;
             startedProcessId = null;
             return new CommandResult(
                 exitCode,

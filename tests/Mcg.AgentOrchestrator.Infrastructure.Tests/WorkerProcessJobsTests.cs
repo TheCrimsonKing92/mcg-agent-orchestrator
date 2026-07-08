@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("EnvMutation")]
@@ -176,6 +177,50 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_try_kill_returns_job_accounting_counters")]
+    public void WorkerProcessJobsTryKillReturnsJobAccountingCounters()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Process? wrapper = null;
+        try
+        {
+            wrapper = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(
+                WorkerShell.BaseArguments().Concat([
+                    "$bytes = New-Object byte[] 1048576; Start-Sleep -Seconds 30; [GC]::KeepAlive($bytes)"
+                ])))
+                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+            Assert.True(WorkerProcessJobs.TryRegister(wrapper));
+
+            Assert.True(WorkerProcessJobs.TryKillOrFallback(wrapper.Id, out var accounting));
+
+            Assert.NotNull(accounting);
+            Assert.True(accounting.CpuMilliseconds >= 0);
+            Assert.True(accounting.PeakMemoryBytes > 0);
+            Assert.True(accounting.IoBytes >= 0);
+            Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            if (wrapper is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
+                wrapper.Dispose();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild")]
     public void WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild()
     {
@@ -220,6 +265,51 @@ public sealed class WorkerProcessJobsTests : IDisposable
 
             try { File.Delete(marker); } catch { }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_source_routes_owned_group_close_through_accounting_helper")]
+    public void WorkerProcessJobsSourceRoutesOwnedGroupCloseThroughAccountingHelper()
+    {
+        AssertOwnedGroupCloseRoutesThroughAccountingHelper();
+    }
+
+    private static void AssertOwnedGroupCloseRoutesThroughAccountingHelper(
+        [CallerFilePath] string sourceFilePath = "")
+    {
+        var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
+        var productionRoot = Path.Combine(repoRoot, "src", "Mcg.AgentOrchestrator.Infrastructure");
+        var offenders = Directory.EnumerateFiles(productionRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => new { path, line, lineNumber = index + 1 }))
+            .Where(item =>
+                item.path.EndsWith("OwnedProcessGroup.cs", StringComparison.OrdinalIgnoreCase) is false &&
+                IsReadAccountingAndDisposeHelperLine(item.path, item.lineNumber) is false &&
+                (item.line.Contains("workerGroup?.Dispose()", StringComparison.Ordinal) ||
+                 item.line.Contains("workerGroup?.Kill()", StringComparison.Ordinal) ||
+                 item.line.Contains("processGroup?.Dispose()", StringComparison.Ordinal) ||
+                 item.line.Contains("processGroup?.Kill()", StringComparison.Ordinal) ||
+                 item.line.Contains("group.Dispose()", StringComparison.Ordinal) ||
+                 item.line.Contains("group.Kill()", StringComparison.Ordinal)) &&
+                !item.line.Contains("ReadAccountingAndDispose", StringComparison.Ordinal))
+            .Select(item => $"{Path.GetRelativePath(repoRoot, item.path)}:{item.lineNumber}:{item.line.Trim()}")
+            .ToArray();
+
+        Assert.True(offenders.Length == 0, string.Join(Environment.NewLine, offenders));
+    }
+
+    private static bool IsReadAccountingAndDisposeHelperLine(string path, int lineNumber)
+    {
+        if (!path.EndsWith(Path.Combine("Processes", "WorkerProcessJobs.cs"), StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var lines = File.ReadAllLines(path);
+        var start = Array.FindIndex(lines, line => line.Contains("internal static bool ReadAccountingAndDispose(", StringComparison.Ordinal));
+        var end = Array.FindIndex(lines, line => line.Contains("internal static bool HasRegisteredJob", StringComparison.Ordinal));
+        return start >= 0 && end > start && lineNumber > start && lineNumber <= end;
     }
 
     private static Process StartLongRunningShell()

@@ -82,7 +82,7 @@ public static class WorkerProcessJobs
                 return true;
             }
 
-            group.Dispose();
+            ReadAccountingAndDispose(group, kill: false, out _);
         }
         catch (Win32Exception)
         {
@@ -101,21 +101,23 @@ public static class WorkerProcessJobs
             return false;
         }
 
+        return TryKillOrFallback(processId, out _);
+    }
+
+    public static bool TryKillOrFallback(int processId, out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (IsProtectedProcessOrAncestor(processId) || ProtectedPidIsDescendantOf(processId))
+        {
+            return false;
+        }
+
         if (Jobs.TryRemove(processId, out var group))
         {
-            try
+            if (ReadAccountingAndDispose(group, kill: true, out accounting))
             {
-                group.Kill();
                 Registry?.MarkReleased(processId, $"spawn_registry: killed pid={processId}");
                 return true;
-            }
-            catch
-            {
-                // Fall through to PID tree cleanup for legacy or already-exited records.
-            }
-            finally
-            {
-                group.Dispose();
             }
         }
 
@@ -138,26 +140,55 @@ public static class WorkerProcessJobs
         accounting = null;
         if (Jobs.TryRemove(processId, out var group))
         {
-            try
-            {
-                if (group.TryReadAccounting(out var capturedAccounting))
-                {
-                    accounting = capturedAccounting;
-                }
-
-                group.Kill();
-            }
-            catch
-            {
-                // Already-dead or access-denied races are diagnostics, not state-machine failures.
-            }
-            finally
-            {
-                group.Dispose();
-            }
+            ReadAccountingAndDispose(group, kill: true, out accounting);
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+    }
+
+    internal static bool ReadAccountingAndDispose(
+        OwnedProcessGroup? group,
+        bool kill,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (group is null)
+        {
+            return !kill;
+        }
+
+        try
+        {
+            if (group.TryReadAccounting(out var capturedAccounting))
+            {
+                accounting = capturedAccounting;
+            }
+        }
+        catch
+        {
+            // Accounting is best-effort; disposal remains mandatory.
+        }
+
+        var killed = !kill;
+        try
+        {
+            if (kill)
+            {
+                group.Kill();
+            }
+
+            killed = true;
+        }
+        catch
+        {
+            // Fall back to PID cleanup at the caller when the owned job cannot be closed.
+        }
+        finally
+        {
+            try { group.Dispose(); } catch { }
+        }
+
+        return killed;
     }
 
     internal static bool HasRegisteredJob(int processId) => Jobs.ContainsKey(processId);
