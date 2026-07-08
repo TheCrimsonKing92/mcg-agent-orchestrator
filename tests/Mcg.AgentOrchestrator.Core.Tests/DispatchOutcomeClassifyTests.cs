@@ -30,6 +30,27 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
+    private static TaskSpec DispatchedTaskWithResultCommit(string baseCommit, string resultCommit)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify committed dispatch test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec prompt",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, resultCommit);
+        return task;
+    }
+
     private static TaskVerificationRecord Verification(
         int exitCode,
         string stdout,
@@ -106,6 +127,23 @@ public sealed class DispatchOutcomeClassifyTests
             WorkerResultVerification(WorkerResultStdout("TRX 5/5 passed")));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Theory(DisplayName = "Classify treats post-dispatch result commit as Developer change evidence")]
+    [Xunit.InlineData("1d2223c2/2c233f17", "ce5e35c1")]
+    [Xunit.InlineData("57cb9f11/cd72a0d3", "bae19444")]
+    public void ClassifyTreatsPostDispatchResultCommitAsDeveloperChangeEvidence(string preservedInstance, string resultCommit)
+    {
+        var verification = WorkerResultVerification(
+            WorkerResultStdout($"dotnet test --filter DispatchOutcomeClassifyTests passed; preserved instance {preservedInstance}"),
+            hasCommittedChanges: false);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", resultCommit),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(0, outcome.ExitCode);
     }
 
     [Xunit.Fact(DisplayName = "Classify fails exit zero worker result with failing tests")]

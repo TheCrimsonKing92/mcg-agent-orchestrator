@@ -553,10 +553,11 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         DispatchRefreshOutcome outcome)
     {
-        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, outcome.Verification, outcome.ProviderFailureKind);
+        var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
         {
             kernel.RecordDispatchResultCommit(goalId, taskId, outcome.ResultCommit);
+            verification = MarkCommittedChangesFromResultCommit(kernel.GetTask(goalId, taskId), verification);
             if (!string.IsNullOrWhiteSpace(outcome.ResultCommitProvenance))
             {
                 kernel.RecordTaskNote(
@@ -565,6 +566,23 @@ public sealed class BackgroundDispatchRunner
                     $"TaskOutputCommitted: sha={outcome.ResultCommit}; provenance={outcome.ResultCommitProvenance}.");
             }
         }
+
+        kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
+    }
+
+    private static TaskVerificationRecord? MarkCommittedChangesFromResultCommit(TaskSpec task, TaskVerificationRecord? verification)
+    {
+        if (verification is null ||
+            verification.HasCommittedChanges ||
+            task.LastDispatch is not { } dispatch ||
+            string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+            string.IsNullOrWhiteSpace(dispatch.ResultCommit) ||
+            string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase))
+        {
+            return verification;
+        }
+
+        return verification with { HasCommittedChanges = true };
     }
 
     private DispatchRefreshOutcome BuildCompletedProcessOutcome(

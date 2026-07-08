@@ -273,7 +273,7 @@ public static class DispatchFailureClassifier
             ? verification.ProviderFailureKind
             : providerFailureKind;
         workerResultPresent = workerResultPresent || verification.WorkerResultPresent;
-        hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges;
+        hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges || HasDispatchResultCommitEvidence(task);
         var exitCode = verification.ExitCode;
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
@@ -438,6 +438,18 @@ public static class DispatchFailureClassifier
             null,
             RecoveryRecommendation.OperatorNeeded,
             BuildEvidenceSummary(verification));
+    }
+
+    private static bool HasDispatchResultCommitEvidence(TaskSpec task)
+    {
+        if (task.LastDispatch is not { } dispatch ||
+            string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+            string.IsNullOrWhiteSpace(dispatch.ResultCommit))
+        {
+            return false;
+        }
+
+        return !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildEvidenceSummary(TaskVerificationRecord verification)

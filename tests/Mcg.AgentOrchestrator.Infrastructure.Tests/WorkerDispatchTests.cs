@@ -6160,6 +6160,54 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         evt.Message.Contains("provenance=orchestrator", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_apply_refresh_orchestrator_result_commit_completes_stale_verification_shape")]
+    public void BackgroundDispatchRunnerApplyRefreshOrchestratorResultCommitCompletesStaleVerificationShape()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-07-08T13:16:47Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        string.Empty,
+        string.Empty,
+        clock);
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    var completedProcess = process with { CompletedAt = clock.UtcNow.AddSeconds(30), ExitCode = 0 };
+    var verification = new TaskVerificationRecord(
+        process.Command,
+        process.WorkingDirectory,
+        0,
+        WorkerResultBlock("src/Feature.cs", "implemented feature", "dotnet test --filter WorkerDispatchTests passed"),
+        string.Empty,
+        completedProcess.CompletedAt.Value,
+        StandardOutputPath: process.StandardOutputPath,
+        StandardErrorPath: process.StandardErrorPath,
+        WorkerResultPresent: true,
+        HasCommittedChanges: false);
+    var outcome = new DispatchRefreshOutcome(
+        completedProcess,
+        verification,
+        ResultCommit: "ce5e35c1",
+        ResultCommitProvenance: "orchestrator");
+
+    BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.HasCommittedChanges);
+    Assert.Equal("ce5e35c1", task.LastDispatch?.ResultCommit);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal) &&
+        evt.Message.Contains("sha=ce5e35c1", StringComparison.Ordinal) &&
+        evt.Message.Contains("provenance=orchestrator", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_clean_worker_commit_records_worker_provenance_without_double_commit")]
     public void BackgroundDispatchRunnerExitZeroCleanWorkerCommitRecordsWorkerProvenanceWithoutDoubleCommit()
 {
