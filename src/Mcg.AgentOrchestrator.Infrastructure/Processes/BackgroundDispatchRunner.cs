@@ -696,6 +696,7 @@ public sealed class BackgroundDispatchRunner
             {
                 var requiresCommitEvidence =
                     RequiresPostDispatchCommitEvidence(task, standardOutput, standardError, workerResultPresent) &&
+                    !HasCompletedVerification(task, standardOutput, standardError) &&
                     !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
@@ -709,22 +710,6 @@ public sealed class BackgroundDispatchRunner
                         "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
                         $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
-                }
-                else if (string.IsNullOrEmpty(failedBuildCheckDiagnostic) &&
-                    exitCode != 0 &&
-                    HasCompletedVerification(task, standardOutput, standardError))
-                {
-                    // Clean worktree, no commit required (e.g. a Tester verifying already-committed work),
-                    // and the worker produced verification evidence — but it exited non-zero. Under the
-                    // Low-IL sandbox the worker's exit code is unreliable (a benign access-denied during
-                    // shutdown yields a non-zero exit even on success). The deliverable is present and the
-                    // acceptance gate re-verifies, so accept rather than fail on the exit code.
-                    exitCode = 0;
-                    standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        "Accepted on verification evidence despite a non-zero worker exit (clean worktree; " +
-                        "worker exit codes are unreliable under the low-integrity sandbox). " +
-                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}.");
                 }
             }
 
@@ -851,7 +836,8 @@ public sealed class BackgroundDispatchRunner
 
     private static bool HasCompletedVerification(TaskSpec task, string standardOutput, string standardError)
     {
-        return HasClassifiedVerificationEvidence(task, standardOutput, standardError);
+        return HasClassifiedVerificationEvidence(task, standardOutput, standardError) &&
+            !TryFindFailingTestsInWorkerResult($"{standardOutput}\n{standardError}", out _);
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
@@ -1079,6 +1065,30 @@ public sealed class BackgroundDispatchRunner
 
         diagnostic = $"WORKER_RESULT reported failed worker build check: {tests}";
         return true;
+    }
+
+    private static bool TryFindFailingTestsInWorkerResult(string text, out string tests)
+    {
+        tests = string.Empty;
+        if (!WorkerResultParser.TryParseFields(text, out var fields, out _) ||
+            !fields.TryGetValue("tests", out var parsedTests))
+        {
+            return false;
+        }
+
+        tests = parsedTests ?? string.Empty;
+        var normalized = tests.Trim();
+        if (normalized.Length == 0 ||
+            !normalized.Contains("fail", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !normalized.Contains("failed: 0", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("failures: 0", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("0 failed", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("0 failures", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool WorkerBuildCheckTestsReportFailure(string tests)

@@ -98,6 +98,26 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
     }
 
+    [Xunit.Fact(DisplayName = "Classify completes any role with exit zero and green test evidence")]
+    public void ClassifyCompletesAnyRoleWithExitZeroAndGreenTestEvidence()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout("TRX 5/5 passed")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify fails exit zero worker result with failing tests")]
+    public void ClassifyFailsExitZeroWorkerResultWithFailingTests()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(WorkerResultStdout("Failed: 1, Passed: 4")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+    }
+
     [Xunit.Fact(DisplayName = "Classify keeps exit zero worker evidence as completion despite usage limit text")]
     public void ClassifyExitZeroWorkerEvidenceOverridesUsageLimitText()
     {

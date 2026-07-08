@@ -278,6 +278,19 @@ public static class DispatchFailureClassifier
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
         if (verification.Succeeded &&
+            WorkerResultBlockers.TryFindFailingTests(verification, out _))
+        {
+            return new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildEvidenceSummary(verification));
+        }
+
+        if (verification.Succeeded &&
             HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return new DispatchOutcome(
@@ -597,6 +610,11 @@ public static class DispatchFailureClassifier
             return true;
         }
 
+        if (HasPassingVerificationEvidence(verification))
+        {
+            return true;
+        }
+
         if (workerResultPresent)
         {
             return CanCompleteWithoutChangeEvidence(task, verification) &&
@@ -613,6 +631,10 @@ public static class DispatchFailureClassifier
             DispatchRoleOutputCapability.VerificationOnly => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
             _ => false
         };
+
+    private static bool HasPassingVerificationEvidence(TaskVerificationRecord verification) =>
+        HasVerificationEvidence(verification.StandardOutput, verification.StandardError) &&
+        !WorkerResultBlockers.TryFindFailingTests(verification, out _);
 
     private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
         verification.HeartbeatStandardOutputBytes > 0 ||
