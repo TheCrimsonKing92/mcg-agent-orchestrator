@@ -2057,15 +2057,15 @@ public sealed class CliCommandTests
     public void CrossGoalSubscriptionStartPlannerBatchesIndependentGoalsAndSerializesConflicts()
     {
         var kernel = new AgentOrchestratorKernel();
-        var first = kernel.CreateGoal("Update src/Alpha.cs", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Planner)]);
+        var first = kernel.CreateGoal("Update src/Alpha.cs", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Developer)]);
         var second = kernel.CreateGoal("Update src/Beta.cs", [new TaskSpec(TaskId.New(), "Change src/Beta.cs", AgentRole.Researcher)]);
         var conflict = kernel.CreateGoal("Update src/Alpha.cs too", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Researcher)]);
         IReadOnlyList<AgentDefinition> agents =
         [
             new(
-                new AgentId("planner-openai"),
-                "Planner OpenAI",
-                AgentRole.Planner,
+                new AgentId("developer-openai"),
+                "Developer OpenAI",
+                AgentRole.Developer,
                 new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
@@ -2086,6 +2086,12 @@ public sealed class CliCommandTests
         Assert.Equal(3, plan.Candidates.Count);
         Assert.True(plan.FirstBatchCandidates.Any(candidate => candidate.GoalId == first.Id.Value));
         Assert.True(plan.FirstBatchCandidates.Any(candidate => candidate.GoalId == second.Id.Value));
+        Assert.Contains(plan.Candidates, candidate =>
+            candidate.GoalId == first.Id.Value && candidate.ProviderKey == "OpenAI/gpt-5.5");
+        Assert.Contains(plan.Candidates, candidate =>
+            candidate.GoalId == second.Id.Value && candidate.ProviderKey == "Anthropic/claude-haiku-4-5");
+        Assert.Contains(plan.Candidates, candidate =>
+            candidate.GoalId == conflict.Id.Value && candidate.ProviderKey == "Anthropic/claude-haiku-4-5");
         Assert.True(plan.ParallelPlan.Decisions.Any(decision =>
             decision.IntentId == conflict.Id.Value &&
             decision.Disposition == ParallelExecutionDisposition.Serialized));

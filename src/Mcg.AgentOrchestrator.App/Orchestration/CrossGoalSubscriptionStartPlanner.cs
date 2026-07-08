@@ -106,7 +106,7 @@ internal static class CrossGoalSubscriptionStartPlanner
         }
 
         var providerKeys = readyItems
-            .Select(item => item.ProviderName)
+            .Select(BuildProviderModelKey)
             .Where(provider => !string.IsNullOrWhiteSpace(provider))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -127,6 +127,19 @@ internal static class CrossGoalSubscriptionStartPlanner
             providerKey,
             subscriptionPlan.ReadyStartCostRisk is not null,
             detail);
+    }
+
+    private static string? BuildProviderModelKey(SubscriptionPlanItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.ProviderName))
+        {
+            return null;
+        }
+
+        var modelName = item.SubscriptionModelName ?? item.SubscriptionModelAlias ?? item.ModelName;
+        return string.IsNullOrWhiteSpace(modelName)
+            ? item.ProviderName
+            : $"{item.ProviderName}/{modelName}";
     }
 
     private static string[] InferFileScopes(Goal goal, TaskSpec task)
