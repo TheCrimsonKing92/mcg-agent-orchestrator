@@ -44,6 +44,7 @@ internal sealed record GoalObjectivePlan(
     TaskComplexity EstimatedComplexity,
     string? HistoricalTimeEstimate,
     IReadOnlyList<string> RiskLabels,
+    IReadOnlyList<string> CapabilityWarnings,
     GoalIntakePipelineDecision PipelineDecision,
     IReadOnlyList<string> FileScopes,
     IReadOnlyList<string> RequiredTools,
@@ -107,6 +108,17 @@ internal static class GoalObjectivePlanner
         "webhook"
     ];
 
+    private static readonly (Regex Pattern, string Label)[] CapabilityWarningSignals =
+    [
+        (new Regex(@"\bgit\s+fetch\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git fetch"),
+        (new Regex(@"\bgit\s+pull\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git pull"),
+        (new Regex(@"\bgit\s+push\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git push"),
+        (new Regex(@"\bgit\s+rebase\b|\brebase\s+(?:onto\s+)?(?:origin|upstream|remote|[A-Za-z0-9_.-]+/[A-Za-z0-9_.\-/]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git rebase"),
+        (new Regex(@"(?<![\w.-])gh\s+[A-Za-z0-9][A-Za-z0-9-]*\b|\bGitHub CLI\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "gh CLI"),
+        (new Regex(@"(?<![\w.-])(?:https://|http://)(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s]+|(?<![\w.-])git@(?:github\.com|gitlab\.com|bitbucket\.org):[^\s]+|(?<![\w.-])ssh://git@(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s]+", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "remote repository URL"),
+        (new Regex(@"\b(?:log\s+in|login|sign\s+in|authenticate)\s+(?:to|with)\s+(?:git|github|gitlab|bitbucket)\b|\b(?:use|provide)\s+(?:my|your|operator)\s+(?:git|github|gitlab|bitbucket)?\s*(?:credential|credentials|token|pat)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "credential-required action")
+    ];
+
     private static readonly HashSet<string> GenericWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "add",
@@ -130,11 +142,13 @@ internal static class GoalObjectivePlanner
         IEnumerable<TaskDurationStatsRecord>? durationStats = null)
     {
         var normalized = objective.Trim();
-        var tokens = BuildTokenSet(normalized);
-        var fileScopes = InferFileScopes(normalized);
-        var estimated = TaskComplexityEstimator.Estimate(normalized, normalized, AgentRole.Developer);
+        var classificationText = BuildActionableClassificationText(normalized);
+        var tokens = BuildTokenSet(classificationText);
+        var fileScopes = InferFileScopes(classificationText);
+        var estimated = TaskComplexityEstimator.Estimate(classificationText, classificationText, AgentRole.Developer);
         var historicalEstimate = BuildHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
         var riskLabels = BuildRiskLabels(tokens, fileScopes, estimated);
+        var capabilityWarnings = BuildCapabilityWarnings(normalized);
         var pipelineDecision = SelectPipeline(riskLabels, fileScopes, pipelineOverride);
         var workflow = pipelineDecision.Workflow;
         var requiredTools = BuildRequiredTools(fileScopes, tokens);
@@ -148,6 +162,7 @@ internal static class GoalObjectivePlanner
             estimated,
             historicalEstimate,
             riskLabels,
+            capabilityWarnings,
             pipelineDecision,
             fileScopes,
             requiredTools,
@@ -175,6 +190,51 @@ internal static class GoalObjectivePlanner
         }
 
         throw new InvalidOperationException($"Goal objective needs clarification before task creation. {plan.Recommendation}");
+    }
+
+    public static IReadOnlyList<string> BuildCapabilityWarnings(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+
+        return CapabilityWarningSignals
+            .Where(signal => signal.Pattern.IsMatch(text))
+            .Select(signal => $"Brief capability warning: workers cannot perform credential-required or operator-only actions; operator-side action required for {signal.Label}.")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string BuildActionableClassificationText(string objective)
+    {
+        var withoutParentheticalMeta = Regex.Replace(
+            objective,
+            @"\((?=[^)]*\b(?:classif(?:y|ier|ication)|risk label|router|validat(?:e|ing))\b)[^)]*\)",
+            " ",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        var parts = Regex.Split(withoutParentheticalMeta, @"(?<=[.!?])\s+|\r?\n+")
+            .Select(part => part.Trim())
+            .Where(part => !string.IsNullOrWhiteSpace(part) && !IsMetaCommentary(part))
+            .ToArray();
+
+        return parts.Length == 0 ? objective : string.Join(" ", parts);
+    }
+
+    private static bool IsMetaCommentary(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return StartsWithAny(lower, "note:", "context:", "background:", "regression:", "why:", "because ") ||
+            (lower.Contains("classif", StringComparison.Ordinal) &&
+                lower.Contains("risk", StringComparison.Ordinal) &&
+                lower.Contains("label", StringComparison.Ordinal)) ||
+            (lower.Contains("validat", StringComparison.Ordinal) &&
+                lower.Contains("router", StringComparison.Ordinal));
+    }
+
+    private static bool StartsWithAny(string text, params string[] prefixes)
+    {
+        return prefixes.Any(prefix => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsAmbiguous(string objective, HashSet<string> tokens, string[] fileScopes)

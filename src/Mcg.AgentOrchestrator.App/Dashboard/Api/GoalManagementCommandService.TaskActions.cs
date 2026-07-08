@@ -94,6 +94,10 @@ public static async Task<object?> ApplyTaskActionAsync(
         case "retry":
             var retry = DashboardRequestParser.ParseRetrySubmission(body);
             kernel.RetryTask(goal.Id, task.Id, retry.Message);
+            GoalLifecycleCommands.RecordCapabilityWarnings(
+                kernel,
+                goal.Id,
+                GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
             return null;
 
         case "verification-plan":

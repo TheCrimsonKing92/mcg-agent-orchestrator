@@ -98,7 +98,12 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             RequireRemainingArgument(parts, retryTarget.NextIndex, retryUsage);
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, retryPolicy, AutonomyAction.Retry, "retry");
-            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, parts[retryTarget.NextIndex]);
+            var retryMessage = parts[retryTarget.NextIndex];
+            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage);
+            GoalLifecycleCommands.RecordCapabilityWarnings(
+                context.Kernel,
+                context.CurrentGoal.Id,
+                GoalObjectivePlanner.BuildCapabilityWarnings(retryMessage));
             ConsoleViews.PrintTask(context.CurrentGoal!, retryTask);
             return true;
 
