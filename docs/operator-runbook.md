@@ -97,19 +97,19 @@ For focused goal inspection, prefer the repo helpers over broad `.orchestrator` 
 ```powershell
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalDispatchInventory.ps1 <goal-prefix>
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalTaskSummary.ps1 <goal-prefix>
-.\scripts\Invoke-RepoScript.ps1 scripts\Get-WorkerResultTail.ps1 <goal-prefix> [task-prefix]
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-WorkerResultTail.ps1 <goal-prefix> [task-prefix] [-Chars 800]
 ```
 
-`Get-GoalDispatchInventory.ps1` is the ground truth for round status: it lists each dispatch generation with exit and heartbeat evidence. Use it when `status` says Running/Dispatched but the round may have died. `Get-GoalTaskSummary.ps1` shows each task's status, last failure, and blockers; use it before repair commands. `Get-WorkerResultTail.ps1` prints the newest `WORKER_RESULT`; add `[task-prefix]` when several tasks have recent results.
+`Get-GoalDispatchInventory.ps1` is the ground truth for round status: it lists each dispatch generation with exit and heartbeat evidence. Use it when `status` says Running/Dispatched but the round may have died. `Get-GoalTaskSummary.ps1` shows each task's status, last failure, and blockers; use it before repair commands. `Get-WorkerResultTail.ps1` prints the newest `WORKER_RESULT`; add `[task-prefix]` when several tasks have recent results, and `-Chars` when the default tail is too short.
 
 For persistent monitoring from a shell that can keep running:
 
 ```bash
-scripts/watch-goal-pulse.sh <goal-prefix>
-scripts/watch-loop-events.sh
+scripts/watch-goal-pulse.sh <goal-prefix> [goal-prefix...]
+scripts/watch-loop-events.sh <goal-prefix> [goal-prefix...]
 ```
 
-`watch-goal-pulse.sh` is the lightweight goal pulse while workers run. `watch-loop-events.sh` follows loop events and auto-selects the newest loop log, so use it after launching a conductor loop without hunting for the log path.
+`watch-goal-pulse.sh` is the lightweight goal pulse while workers run. `watch-loop-events.sh` follows terminal events for the named goals and auto-selects the newest loop log, so use it after launching a conductor loop without hunting for the log path.
 
 For long-running conductor/acceptance commands, keep the operator seat free by launching a bounded background command and polling:
 
