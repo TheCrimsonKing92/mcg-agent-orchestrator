@@ -40,6 +40,7 @@ public sealed class GoalWorktreeTests
             Xunit.Assert.Equal(1, worktrees.MergeCount);
             Xunit.Assert.Equal(1, worktrees.RemoveCount);
             Xunit.Assert.Contains("Stage workspace remove:", output);
+            AssertNoBuildArtifacts(root);
         }
         finally
         {
@@ -68,6 +69,7 @@ public sealed class GoalWorktreeTests
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(1, worktrees.MergeCount);
             Xunit.Assert.Equal(1, worktrees.RemoveCount);
+            AssertNoBuildArtifacts(root);
         }
         finally
         {
@@ -100,6 +102,7 @@ public sealed class GoalWorktreeTests
             Xunit.Assert.Equal(0, worktrees.MergeCount);
             Xunit.Assert.Equal(0, worktrees.RemoveCount);
             Xunit.Assert.Contains("merge blocked", output);
+            AssertNoBuildArtifacts(root);
         }
         finally
         {
@@ -128,6 +131,40 @@ public sealed class GoalWorktreeTests
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(0, worktrees.MergeCount);
             Xunit.Assert.Equal(0, worktrees.RemoveCount);
+            AssertNoBuildArtifacts(root);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_keeps_workspace_when_acceptance_times_out")]
+    public void CliLifecycleSimpleGoalKeepsWorkspaceWhenAcceptanceTimesOut()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var worktrees = new FakeGoalWorktreeService(root);
+            var verifier = FakeAcceptanceVerifier.Timeout();
+            var context = CreateLifecycleContext(root, worktrees, verifier);
+
+            var output = CaptureConsole(() =>
+            {
+                var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                    ["lifecycle-simple-goal", "Run but time out acceptance", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                    context));
+                Xunit.Assert.Contains("acceptance", ex.Message);
+            });
+
+            var goal = context.CurrentGoal!;
+            Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+            Xunit.Assert.NotNull(worktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.Equal(1, verifier.RunCount);
+            Xunit.Assert.Equal(0, worktrees.MergeCount);
+            Xunit.Assert.Equal(0, worktrees.RemoveCount);
+            Xunit.Assert.Contains("merge blocked", output);
+            AssertNoBuildArtifacts(root);
         }
         finally
         {
@@ -391,7 +428,35 @@ public sealed class GoalWorktreeTests
                 OutputTail: outputTail,
                 Checks: [new AcceptanceCheckResult("fake acceptance", false, 1, outputTail)]));
 
+        public static FakeAcceptanceVerifier Timeout() =>
+            new(new AcceptanceVerificationResult(
+                Passed: false,
+                Skipped: false,
+                ExitCode: -1,
+                OutputTail: "Verification command timed out after elapsed=25m budget=25m.\nCommand: fake acceptance\nLast output:\nstill running",
+                Checks:
+                [
+                    new AcceptanceCheckResult(
+                        "fake acceptance",
+                        false,
+                        -1,
+                        "Verification command timed out after elapsed=25m budget=25m.\nCommand: fake acceptance\nLast output:\nstill running")
+                ]));
+
         public static FakeAcceptanceVerifier Throws(Exception exception) => new(null, exception);
+    }
+
+    private static void AssertNoBuildArtifacts(string root)
+    {
+        var buildArtifactDirectories = Directory
+            .EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+            .Where(path =>
+                Path.GetFileName(path).Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(path).Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(path).Equals("TestResults", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        Xunit.Assert.Empty(buildArtifactDirectories);
     }
 
     private static string CreateTempDirectory()

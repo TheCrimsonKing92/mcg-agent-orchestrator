@@ -4,6 +4,33 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("EnvMutation")]
 public sealed class GoalAcceptanceVerifierTests
 {
+    [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
+    public async Task GoalAcceptanceVerifierRealRunnerSmokeIsOptIn()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "dotnet info smoke", "type": "command", "command": "dotnet", "arguments": ["--info"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier();
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed, result.OutputTail);
+            Assert.Contains(result.Checks!, check => check.Name == "dotnet info smoke" && check.Passed);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_classifies_transient_testhost_abort_vs_real_failure")]
     [Xunit.InlineData("The active Test Run was aborted because the host process exited unexpectedly.", true)]
     [Xunit.InlineData("Test Run Aborted.\r\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs", true)]
@@ -1723,5 +1750,18 @@ public sealed class GoalAcceptanceVerifierTests
             Path.Combine(orchestratorDir, "goal-acceptance-criteria.json"),
             criteriaJson);
         return root;
+    }
+}
+
+internal sealed class OptInRealAcceptanceVerifierFactAttribute : Xunit.FactAttribute
+{
+    private const string EnvironmentVariable = "MCG_RUN_REAL_ACCEPTANCE_VERIFIER_TESTS";
+
+    public OptInRealAcceptanceVerifierFactAttribute()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable(EnvironmentVariable), "1", StringComparison.OrdinalIgnoreCase))
+        {
+            Skip = $"Set {EnvironmentVariable}=1 to run the opt-in real acceptance verifier smoke.";
+        }
     }
 }
