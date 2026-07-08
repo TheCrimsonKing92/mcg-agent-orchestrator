@@ -7,6 +7,12 @@ public sealed class EnvMutationCollection : Xunit.ICollectionFixture<IsolatedDot
 {
 }
 
+// GoalWorktrees exposes cleanup hook seams for tests; keep those process-wide replacements serial.
+[Xunit.CollectionDefinition("GoalWorktreeCleanupHooks", DisableParallelization = true)]
+public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>
+{
+}
+
 // Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores.
 [Xunit.CollectionDefinition("ProcessSpawning", DisableParallelization = true)]
 public sealed class ProcessSpawningCollection;

@@ -167,7 +167,9 @@ public static class GoalWorktrees
         );
         """;
 
-    // Injectable for testing: called best-effort before directory deletion to release any
+    // Process-wide test seams; tests replacing these hooks must use the
+    // GoalWorktreeCleanupHooks collection so replacements cannot overlap.
+    // Called best-effort before directory deletion to release any
     // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
     internal static Action<string, int> BuildServerShutdown = DefaultBuildServerShutdown;
     internal static ISandboxAclHelper SandboxAclHelper { get; set; } =
