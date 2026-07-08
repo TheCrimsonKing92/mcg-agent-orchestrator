@@ -105,3 +105,20 @@ Expected end state after Wave 2/3 is not linear with CPU count because process-s
 - Full suite on one slot: about 6-8 minutes if Core and pure Infrastructure classes overlap behind the architectural lanes.
 
 The first measured success criterion should be not just lower wall time, but zero rotating failures across repeated full-slot runs with the assembly-wide disable removed and named serial collections still active.
+
+## Wave 3 Measurement Addendum - 2026-07-08
+
+Change applied: removed the Infrastructure.Tests assembly-wide `[assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]`. Core.Tests already had default xUnit parallelism enabled. Named non-parallel Infrastructure collections stayed in place: `EnvMutation`, `DotnetBuildSlots`, `GoalWorktreeCleanupHooks`, `ProcessSpawning`, and `ProviderEnvironment`.
+
+Full-suite one-slot command:
+
+- Run 1: `dotnet test .\Mcg.AgentOrchestrator.sln --nologo --verbosity minimal -m:1`
+- Runs 2-3: `dotnet test .\Mcg.AgentOrchestrator.sln --nologo --verbosity minimal --no-build --no-restore -m:1`
+
+| Run | Result | Wall time | Test summary |
+| --- | --- | --- | --- |
+| 1 | Green | 00:12:22.2973429 | Solution exit 0; Infrastructure.Tests: 1627 passed, 1 skipped, 0 failed, duration 11 m 52 s. |
+| 2 | Green | 00:14:25.5183943 | Core.Tests: 450 passed, 0 failed, duration 182 ms. Infrastructure.Tests: 1627 passed, 1 skipped, 0 failed, duration 14 m 22 s. |
+| 3 | Green | 00:16:16.8261419 | Core.Tests: 450 passed, 0 failed, duration 190 ms. Infrastructure.Tests: 1627 passed, 1 skipped, 0 failed, duration 16 m 13 s. |
+
+Outcome: no rotating failure appeared across three consecutive full-suite runs, so the assembly-wide rollback switch was not re-added. The projected 6-8 minute target did not materialize on this one-slot measurement; Infrastructure.Tests still dominates the suite despite collection-level parallelism.
