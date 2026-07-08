@@ -5242,6 +5242,57 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Resolved attention items: 0", applyOutput);
     }
 
+    [Xunit.Fact(DisplayName = "Persistent_runner_park_goal_uses_real_sqlite_without_transaction_self_conflict")]
+    public async Task PersistentRunnerParkGoalUsesRealSqliteWithoutTransactionSelfConflict()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Park from persistent runner", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        _ = kernel.RequestHumanInput(goal.Id, null, "Need operator decision.", HumanWaitKind.RiskReview);
+        await repository.SaveAsync(kernel);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand($"park-goal {goal.Id.Value[..8]} Operator froze churn. --confirm-goal-park"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        var restored = await repository.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        Xunit.Assert.Equal(GoalStatus.Parked, restoredGoal.Status);
+        Xunit.Assert.All(
+            restored.HumanInputRequests.Where(request => request.GoalId == goal.Id),
+            request => Xunit.Assert.True(request.IsCompleted));
+        Xunit.Assert.Contains("Goal parked", output);
+        Xunit.Assert.Contains("Resolved human waits: 1", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Persistent_runner_lifecycle_disposition_audit_routes_side_effect_verbs_outside_generic_transaction")]
+    public void PersistentRunnerLifecycleDispositionAuditRoutesSideEffectVerbsOutsideGenericTransaction()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["park-goal", "abcdef12", "reason"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["abandon-goal", "abcdef12", "reason"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalMarkLandedCommand(["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed"]));
+        Xunit.Assert.DoesNotContain(
+            CliArgumentParser.RecognizedCommands,
+            command => command.Equals("resume-goal", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_rollback_goal_creates_revert_branch_from_acceptance_metadata")]
     public void CliRollbackGoalCreatesRevertBranchFromAcceptanceMetadata()
     {
