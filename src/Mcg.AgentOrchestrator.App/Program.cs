@@ -157,6 +157,11 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     {
         return ExitCompletedStartupCommand(ex.ExitCode);
     }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return ExitCompletedStartupCommand(1);
+    }
     catch (Exception ex)
     {
         Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
@@ -189,6 +194,11 @@ if (startupArgs.Count > 0)
     catch (CliExitException ex)
     {
         return ExitCompletedStartupCommand(ex.ExitCode);
+    }
+    catch (ArgumentException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return ExitCompletedStartupCommand(1);
     }
     catch (Exception ex)
     {
