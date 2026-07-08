@@ -5137,8 +5137,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "dotnet test --filter OrchestratorHealthInspector\r\nPassed! - Failed: 0, Passed: 16, Skipped: 0, Total: 16.\r\nFull suite Core 172/172 + Infrastructure 326/326.\r\n" +
-            WorkerResultBlock("none", "dotnet test --filter OrchestratorHealthInspector", "Passed: 16", "none"),
+        "dotnet test --logger trx\r\nTRX 5/5 passed.\r\n" +
+            WorkerResultBlock("none", "dotnet test --logger trx", "TRX 5/5 passed", "none"),
         string.Empty,
         clock,
         taskDescription: "Verify behavior with automated and manual checks",
@@ -5150,6 +5150,40 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.False(task.LastVerification.StandardError.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_with_test_commit_and_green_trx_completes")]
+    public void BackgroundDispatchRunnerTesterWithTestCommitAndGreenTrxCompletes()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "Added a focused regression test and ran it.\r\n" +
+            WorkerResultBlock("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs", "dotnet test --logger trx", "TRX 5/5 passed", blockers: "none"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            var testsDirectory = Path.Combine(worktree, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+            Directory.CreateDirectory(testsDirectory);
+            File.WriteAllText(Path.Combine(testsDirectory, "WorkerDispatchTests.cs"), "test-only regression");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Add tester regression"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        },
+        taskDescription: "Add focused regression tests for the dispatch guard",
+        verificationPlan: "Update tests and run the focused dispatch guard coverage.");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.HasCommittedChanges);
+    Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.False(task.LastVerification.StandardError.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5200,15 +5234,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_without_evidence_fails")]
-    public void BackgroundDispatchRunnerTesterExpectedFileChangeWithoutEvidenceFails()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_with_green_tests_completes")]
+    public void BackgroundDispatchRunnerTesterExpectedFileChangeWithGreenTestsCompletes()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "Added focused regression tests and ran dotnet test --filter BackgroundDispatchRunner.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        "Added focused regression tests and ran dotnet test --logger trx.\r\nTRX 5/5 passed.",
         string.Empty,
         clock,
         taskDescription: "Add focused regression tests for the dispatch guard",
@@ -5216,10 +5250,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.Contains("worktree=clean", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
+    Assert.False(task.LastVerification.StandardError.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
@@ -5577,8 +5611,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.False(task.LastVerification.StandardError.Contains("Orchestrator committed", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_verification_only_tester_nonzero_exit_with_evidence_passes")]
-    public void BackgroundDispatchRunnerVerificationOnlyTesterNonZeroExitWithEvidencePasses()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_verification_only_tester_nonzero_exit_with_evidence_fails")]
+    public void BackgroundDispatchRunnerVerificationOnlyTesterNonZeroExitWithEvidenceFails()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -5591,20 +5625,16 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         taskDescription: "Verify behavior with automated and manual checks",
         verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
 
-    // A verification-only Tester (no file changes requested) that verified successfully on a clean
-    // worktree but exited non-zero due to Low-IL shutdown friction. The deliverable is the verification,
-    // the worktree is clean, and the acceptance gate re-verifies — so accept rather than fail on the
-    // unreliable exit code.
+    // Green-looking verification text does not override a non-zero worker exit; the round must surface
+    // for retry/escalation instead of being converted to success.
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
-    Assert.Contains(
-        "Accepted on verification evidence despite a non-zero worker exit",
-        task.LastVerification.StandardError,
-        StringComparison.Ordinal);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.False(
+        task.LastVerification.StandardError.Contains("Accepted on verification evidence despite a non-zero worker exit", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_clean_worktree_nonzero_exit_without_evidence_stays_failed")]
