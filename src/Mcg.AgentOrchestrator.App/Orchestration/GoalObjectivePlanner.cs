@@ -139,7 +139,7 @@ internal static class GoalObjectivePlanner
         var workflow = pipelineDecision.Workflow;
         var requiredTools = BuildRequiredTools(fileScopes, tokens);
         var requiredVerification = BuildRequiredVerification(fileScopes, tokens, estimated);
-        var ambiguous = IsAmbiguous(normalized, tokens, fileScopes);
+        var ambiguous = pipelineOverride is null && IsAmbiguous(normalized, tokens, fileScopes);
 
         return new GoalObjectivePlan(
             normalized,
