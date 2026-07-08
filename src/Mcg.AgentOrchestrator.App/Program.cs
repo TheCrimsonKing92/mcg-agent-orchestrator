@@ -100,6 +100,24 @@ catch (ArgumentException ex)
     return 1;
 }
 
+if (IsGoalEventsFollowCommand(startupArgs))
+{
+    try
+    {
+        await GoalEventsCommand.RunAsync(
+            workspace.GoalLifecycleEventsDirectory,
+            startupArgs[1],
+            follow: true,
+            Console.Out);
+        return ExitCompletedStartupCommand(0);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return ExitCompletedStartupCommand(1);
+    }
+}
+
 if (RunsStartupCleanup(startupArgs))
 {
     WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
@@ -345,4 +363,11 @@ static int ExitCompletedStartupCommand(int exitCode)
     Console.Error.Flush();
     Environment.Exit(exitCode);
     return exitCode;
+}
+
+static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
+{
+    return startupArgs.Count >= 3 &&
+        startupArgs[0].Equals("goal-events", StringComparison.OrdinalIgnoreCase) &&
+        startupArgs.Any(arg => arg.Equals("--follow", StringComparison.OrdinalIgnoreCase));
 }

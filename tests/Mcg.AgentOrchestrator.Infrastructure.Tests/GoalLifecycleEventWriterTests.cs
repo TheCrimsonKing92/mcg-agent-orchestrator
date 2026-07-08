@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -186,6 +187,48 @@ public sealed class GoalLifecycleEventWriterTests
         }
     }
 
+    [Xunit.Fact]
+    public async Task GoalEventsFollowStartupBypassesPersistentStateRunnerAndAllowsConcurrentWriter()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            Directory.CreateDirectory(workspace.GoalLifecycleEventsDirectory);
+            var goalId = GoalId.New();
+            var path = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goalId.Value}.jsonl");
+            await File.WriteAllTextAsync(path, "{\"cursor\":0,\"eventType\":\"GoalCreated\"}" + Environment.NewLine);
+
+            using var process = StartAppCliProcess(root, ["goal-events", goalId.Value[..8], "--follow"]);
+            try
+            {
+                await ReadLineContainingAsync(process.StandardOutput, "GoalCreated", TimeSpan.FromSeconds(5));
+                Xunit.Assert.False(File.Exists(workspace.SqliteStatePath));
+
+                await WriteStateAsync(workspace.SqliteStatePath, "Concurrent writer while follow is replaying")
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+
+                await File.AppendAllTextAsync(path, "{\"cursor\":1,\"eventType\":\"TaskCompleted\"}" + Environment.NewLine);
+                await ReadLineContainingAsync(process.StandardOutput, "TaskCompleted", TimeSpan.FromSeconds(5));
+
+                await WriteStateAsync(workspace.SqliteStatePath, "Concurrent writer while follow is tailing")
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+            }
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
     private static string EventType(string line)
     {
         using var document = JsonDocument.Parse(line);
@@ -211,6 +254,61 @@ public sealed class GoalLifecycleEventWriterTests
         var path = Path.Combine(Path.GetTempPath(), "mcg-goal-events-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static Process StartAppCliProcess(string workingDirectory, IReadOnlyList<string> args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start app CLI.");
+    }
+
+    private static async Task<string> ReadLineContainingAsync(
+        StreamReader reader,
+        string expected,
+        TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(cts.Token);
+            if (line is null)
+            {
+                throw new InvalidOperationException($"CLI exited before writing '{expected}'.");
+            }
+
+            if (line.Contains(expected, StringComparison.Ordinal))
+            {
+                return line;
+            }
+        }
+    }
+
+    private static async Task WriteStateAsync(string statePath, string objective)
+    {
+        var repository = new SqliteOrchestratorStateRepository(statePath);
+        await repository.TransactAsync((kernel, _) =>
+        {
+            kernel.CreateGoal(objective);
+            return Task.FromResult((true, true));
+        });
     }
 
     private static string CaptureConsole(Action action)
