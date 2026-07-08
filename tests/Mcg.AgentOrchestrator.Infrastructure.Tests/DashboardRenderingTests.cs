@@ -1470,7 +1470,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains("Goal JSON", opsHtml, StringComparison.Ordinal);
     Assert.Contains("<label for=\"new-goal\">Goal</label>", opsHtml, StringComparison.Ordinal);
     Assert.Contains("name=\"workflow\"", opsHtml, StringComparison.Ordinal);
-    Assert.Contains("<option value=\"simple\">Simple task</option>", opsHtml, StringComparison.Ordinal);
+    Assert.Contains("<option value=\"sdlc\">Automatic intake</option>", opsHtml, StringComparison.Ordinal);
+    Assert.Contains("<option value=\"simple\">Developer-only override</option>", opsHtml, StringComparison.Ordinal);
     Assert.Contains("name=\"autoHandoff\" value=\"false\"", opsHtml, StringComparison.Ordinal);
     Assert.Contains("name=\"confirmAutoHandoff\" value=\"true\"", opsHtml, StringComparison.Ordinal);
     Assert.Contains("id=\"new-goal-auto-handoff\" type=\"checkbox\" name=\"autoHandoff\" value=\"true\"", opsHtml, StringComparison.Ordinal);

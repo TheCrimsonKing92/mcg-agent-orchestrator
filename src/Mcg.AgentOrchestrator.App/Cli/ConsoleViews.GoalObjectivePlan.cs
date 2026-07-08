@@ -22,6 +22,13 @@ internal static partial class ConsoleViews
             estimatedComplexity = plan.EstimatedComplexity.ToString(),
             historicalTimeEstimate = plan.HistoricalTimeEstimate,
             riskLabels = plan.RiskLabels,
+            pipelineDecision = new
+            {
+                pipeline = plan.PipelineDecision.Pipeline.ToString(),
+                workflow = plan.PipelineDecision.Workflow,
+                isOverride = plan.PipelineDecision.IsOverride,
+                reasons = plan.PipelineDecision.Reasons
+            },
             fileScopes = plan.FileScopes,
             requiredTools = plan.RequiredTools,
             requiredVerification = plan.RequiredVerification,

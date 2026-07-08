@@ -953,7 +953,24 @@ public sealed class CliCommandTests
         Xunit.Assert.True(high.CanCreateGoal);
         Xunit.Assert.Contains("high-risk", high.RiskLabels);
         Xunit.Assert.Contains("multi-scope", high.RiskLabels);
-        Xunit.Assert.Equal(5, high.TaskBoundaries.Count);
+        Xunit.Assert.Contains("security-risk", high.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, docs.PipelineDecision.Pipeline);
+        Xunit.Assert.False(docs.PipelineDecision.IsOverride);
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, code.PipelineDecision.Pipeline);
+        Xunit.Assert.True(code.PipelineDecision.IsOverride);
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, high.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], high.TaskBoundaries.Select(boundary => boundary.Role));
+        Xunit.Assert.Contains(high.PipelineDecision.Reasons, reason => reason.Contains("security-risk", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalObjectivePlanner_routes_open_ended_objectives_to_five_role_pipeline")]
+    public void GoalObjectivePlannerRoutesOpenEndedObjectivesToFiveRolePipeline()
+    {
+        var plan = GoalObjectivePlanner.Build("Build a dashboard supervision workflow for unattended goals", simple: false);
+
+        Xunit.Assert.Contains("scope-implicit", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal([AgentRole.Planner, AgentRole.Researcher, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer], plan.TaskBoundaries.Select(boundary => boundary.Role));
     }
 
     [Xunit.Fact(DisplayName = "Cli_intent_template_prints_feature_objective_without_mutating_state")]
@@ -6080,6 +6097,9 @@ public sealed class CliCommandTests
         Xunit.Assert.Single(kernel.Goals);
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Null(currentGoal!.Tasks.Single().LastDispatch);
+        Xunit.Assert.Contains(currentGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Intake pipeline decision (override): developer-only", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "Cli_simple_goal_brief_file_creates_goal_with_file_content")]
