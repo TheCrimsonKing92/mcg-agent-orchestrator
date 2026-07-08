@@ -10,7 +10,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeIntegrationTests
 {
     private static AgentDefinition EchoDeveloper() => new(

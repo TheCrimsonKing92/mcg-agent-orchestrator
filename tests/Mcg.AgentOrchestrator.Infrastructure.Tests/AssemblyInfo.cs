@@ -2,21 +2,21 @@
 [assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]
 
 // Process-wide environment/current-directory mutation tests share this collection.
-[Xunit.CollectionDefinition("EnvMutation", DisableParallelization = true)]
-public sealed class EnvMutationCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>
-{
-}
+[Xunit.CollectionDefinition(TestCollections.EnvMutation, DisableParallelization = true)]
+public sealed class EnvMutationCollection;
+
+// Dotnet build-slot tests share a run-scoped isolated root so they never touch the host slot lanes.
+[Xunit.CollectionDefinition(TestCollections.DotnetBuildSlots, DisableParallelization = true)]
+public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
 // GoalWorktrees exposes cleanup hook seams for tests; keep those process-wide replacements serial.
-[Xunit.CollectionDefinition("GoalWorktreeCleanupHooks", DisableParallelization = true)]
-public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>
-{
-}
+[Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
+public sealed class GoalWorktreeCleanupHooksCollection;
 
 // Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores.
-[Xunit.CollectionDefinition("ProcessSpawning", DisableParallelization = true)]
+[Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]
 public sealed class ProcessSpawningCollection;
 
 // Provider discovery tests temporarily replace provider env vars such as OLLAMA_* and OPENAI_*.
-[Xunit.CollectionDefinition("ProviderEnvironment", DisableParallelization = true)]
+[Xunit.CollectionDefinition(TestCollections.ProviderEnvironment, DisableParallelization = true)]
 public sealed class ProviderEnvironmentCollection;

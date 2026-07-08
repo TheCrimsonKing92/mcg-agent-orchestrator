@@ -1,8 +1,8 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("EnvMutation")]
-public sealed class LocalProcessVerifierTests
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerifierTestBase
 {
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_wraps_goal_dotnet_verification_with_isolated_artifacts")]
     public void LocalProcessVerifierWrapsGoalDotnetVerificationWithIsolatedArtifacts()
@@ -209,7 +209,10 @@ public sealed class LocalProcessVerifierTests
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
         }
     }
+}
 
+public sealed class LocalProcessVerifierTests : LocalProcessVerifierTestBase
+{
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_reports_configured_timeout_as_structured_evidence")]
     public async Task LocalProcessVerifierReportsConfiguredTimeoutAsStructuredEvidence()
     {
@@ -246,18 +249,21 @@ public sealed class LocalProcessVerifierTests
         }
     }
 
-    private static void DeleteDirectory(string path)
-    {
-        if (Directory.Exists(path))
-        {
-            Directory.Delete(path, recursive: true);
-        }
-    }
-
     private static string? SetAcceptanceTimeoutEnvironment(string? value)
     {
         var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);
         Environment.SetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable, value);
         return previous;
+    }
+}
+
+public abstract class LocalProcessVerifierTestBase
+{
+    protected static void DeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
     }
 }
