@@ -454,6 +454,35 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_reprep_succeeds_when_existing_worktree_is_already_labeled")]
+    public void WorkerSandboxPreparerReprepSucceedsWhenExistingWorktreeIsAlreadyLabeled()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-existing-labeled-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        Directory.CreateDirectory(sandboxRoot);
+        var labeler = new RecordingIntegrityLabeler(
+            new IntegrityLabelState(Exists: true, Low: true, Inheritable: true),
+            setResult: false);
+        try
+        {
+            var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+            Assert.False(result.RequiresRecovery);
+            Assert.False(result.PrepReceiptHit);
+            Assert.False(result.WorktreeRecursiveRelabel);
+            Assert.False(result.SandboxRecursiveRelabel);
+            Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+            Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive);
+            Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_reused_worktree_acl_failure_returns_typed_recovery_action")]
     public void WorkerSandboxPreparerReusedWorktreeAclFailureReturnsTypedRecoveryAction()
     {

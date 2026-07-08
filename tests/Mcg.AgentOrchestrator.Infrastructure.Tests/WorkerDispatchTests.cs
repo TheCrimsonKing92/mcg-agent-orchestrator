@@ -5649,6 +5649,29 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Empty(labeler.SetCalls);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_existing_labeled_worktree_repreps_without_receipt")]
+    public void WorkerSandboxPreparerExistingLabeledWorktreeReprepsWithoutReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    Directory.CreateDirectory(sandboxRoot);
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(
+        new IntegrityLabelState(Exists: true, Low: true, Inheritable: true),
+        setResult: false);
+
+    var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+    Assert.False(result.RequiresRecovery);
+    Assert.False(result.PrepReceiptHit);
+    Assert.False(result.WorktreeRecursiveRelabel);
+    Assert.False(result.SandboxRecursiveRelabel);
+    Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+    Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive);
+    Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+    Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+}
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_recreated_worktree_repreps_receipt")]
     public void WorkerSandboxPreparerRecreatedWorktreeReprepsReceipt()
 {
