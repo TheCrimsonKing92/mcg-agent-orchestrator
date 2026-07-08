@@ -281,7 +281,7 @@ public static class WorkerProfileDispatcher
             findings.Add($"profile: {profile.Name}");
             findings.Add($"model-selection: {roleSelection.Reason}");
             var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-            AddClaudeLowIntegrityAuthFinding(findings, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
+            AddClaudeLowIntegrityAuthFinding(findings, task.RequiredRole, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
                 : ResolveEffectiveSubscriptionModelName(agent, roleSelection);
@@ -360,6 +360,7 @@ public static class WorkerProfileDispatcher
 
     private static void AddClaudeLowIntegrityAuthFinding(
         List<string> findings,
+        AgentRole role,
         IWorkerProvider provider,
         WorkerSandboxOptions sandbox,
         Func<ClaudeCliAuthState>? claudeAuthProbe)
@@ -373,6 +374,12 @@ public static class WorkerProfileDispatcher
         if (!sandbox.Enabled)
         {
             findings.Add("auth: Claude CLI Low-IL auth preflight not required because worker sandbox is disabled");
+            return;
+        }
+
+        if (role is not (AgentRole.Developer or AgentRole.Tester))
+        {
+            findings.Add($"auth: Claude CLI Low-IL auth preflight not required for {role} role");
             return;
         }
 
@@ -935,7 +942,21 @@ public static class WorkerProfileDispatcher
             return true;
         }
 
+        if (task.RequiredRole == AgentRole.Reviewer && !HasPresentField(fields, "blockers"))
+        {
+            reason = "prior Reviewer WORKER_RESULT missing blockers";
+            return true;
+        }
+
         return false;
+    }
+
+    private static bool HasPresentField(IReadOnlyDictionary<string, string> fields, string fieldName)
+    {
+        return fields.TryGetValue(fieldName, out var value) &&
+            !string.IsNullOrWhiteSpace(value) &&
+            !value.StartsWith('<') &&
+            !value.EndsWith('>');
     }
 
     private static bool HasSubstantiveField(IReadOnlyDictionary<string, string> fields, string fieldName)

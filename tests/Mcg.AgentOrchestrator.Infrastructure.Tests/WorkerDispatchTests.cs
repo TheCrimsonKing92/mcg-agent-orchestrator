@@ -558,7 +558,8 @@ public sealed class WorkerDispatchTests
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt));
+        dispatchedAt,
+        new DispatchModelOverride("qwen-code-cli", "qwen3:8b", null)));
 
     Assert.Equal(task.Id, ex.TaskId);
     Assert.False(Directory.Exists(promptRoot));
@@ -2319,8 +2320,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing citations", preflight, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_reviewer_guardrail_requires_verdict_before_light_retry")]
-    public void WorkerProfileDispatcherReviewerGuardrailRequiresVerdictBeforeLightRetry()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_reviewer_guardrail_requires_verdict_and_blockers_before_light_retry")]
+    public void WorkerProfileDispatcherReviewerGuardrailRequiresVerdictAndBlockersBeforeLightRetry()
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
@@ -2340,9 +2341,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WORKER_RESULT:
         files: none
         commands: none
-        tests: fail - missing review verdict
-        blockers: none
-        model_fit: Anthropic/claude-haiku-4-5 - underpowered - review shape - omitted verdict
+        tests: fail - missing review blockers
+        verdict: fail
+        model_fit: Anthropic/claude-haiku-4-5 - underpowered - review shape - omitted blockers
         skills: none
         confidence: low
         END_WORKER_RESULT
@@ -2365,7 +2366,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Contains("model-selection: fallback-full-profile: prior Reviewer WORKER_RESULT missing verdict", preflight, StringComparison.Ordinal);
+    Assert.Contains("model-selection: fallback-full-profile: prior Reviewer WORKER_RESULT invalid (missing field(s): blockers.)", preflight, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_model_unchanged")]
@@ -2854,15 +2855,17 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
         "Dispatch Anthropic subscription model",
-        [new TaskSpec(TaskId.New(), "Review the implementation notes.", AgentRole.Reviewer)]);
+        [new TaskSpec(TaskId.New(), "Implement the requested change.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("anthropic-reviewer"),
-        "Anthropic reviewer",
-        AgentRole.Reviewer,
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
         new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
@@ -2882,7 +2885,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         sandboxOptions: sandbox);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains("claude --model 'claude-sonnet' --permission-mode 'plan'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("claude --model 'claude-sonnet' --permission-mode 'bypassPermissions'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
 }
@@ -2891,16 +2894,16 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Reject unpinned subscription reasoning");
+    var goal = kernel.CreateGoal("Reject unpinned subscription reasoning", [new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("openai-reviewer"),
-        "OpenAI reviewer",
-        AgentRole.Reviewer,
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex", "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli --model {subscriptionModelName} {promptPath}")]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -2924,15 +2927,17 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var workingDirectory = Path.Combine(root, "repo");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Dispatch default OpenAI subscription profile");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var goal = kernel.CreateGoal("Dispatch default OpenAI subscription profile", [new TaskSpec(TaskId.New(), "Implement default OpenAI subscription profile.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("openai-researcher"),
-        "OpenAI researcher",
-        AgentRole.Researcher,
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
         ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -2983,16 +2988,16 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Reject unpinned subscription model");
+    var goal = kernel.CreateGoal("Reject unpinned subscription model", [new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("openai-reviewer"),
-        "OpenAI reviewer",
-        AgentRole.Reviewer,
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli {promptPath}")]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -6741,8 +6746,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("status is Completed", ex.Message, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_read_only_codex_sandbox")]
-    public void WorkerProfileDispatcherResearcherDispatchUsesReadOnlyCodexSandbox()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_plan_mode")]
+    public void WorkerProfileDispatcherResearcherDispatchUsesClaudePlanMode()
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
@@ -6764,7 +6769,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         workingDirectory,
         dispatchedAt);
 
-    Assert.Contains("--sandbox 'read-only'", researcher.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
+    Assert.Contains("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_uses_workspace_write_codex_sandbox")]
