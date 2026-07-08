@@ -303,6 +303,45 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_records_job_resource_receipt")]
+    public async Task GoalAcceptanceVerifierSlotGateRecordsJobResourceReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "missing project gate", "type": "dotnet-test", "project": "MissingProject.csproj", "arguments": ["--verbosity", "minimal"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier();
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("24682468246824682468246824682468"),
+                stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            var check = Assert.Single(result.Checks!);
+            Assert.Equal("missing project gate", check.Name);
+            Assert.True(check.ResultSummary?.Contains("RESOURCE phase=gate", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("cpu_ms=", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("peak_mem_bytes=", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("io_bytes=", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_checked_in_infrastructure_manifest_check")]
     public async Task GoalAcceptanceVerifierPartitionsCheckedInInfrastructureManifestCheck()
     {

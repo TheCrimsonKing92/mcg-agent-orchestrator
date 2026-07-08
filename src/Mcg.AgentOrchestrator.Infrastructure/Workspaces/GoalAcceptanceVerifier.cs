@@ -49,7 +49,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? StdoutPath = null,
         string? StderrPath = null,
         TimeSpan? Timeout = null,
-        TimeSpan? Elapsed = null);
+        TimeSpan? Elapsed = null,
+        TaskProcessResourceAccounting? ResourceAccounting = null);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -1258,7 +1259,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried)
     {
-        var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
+        var summary = AppendResourceReceipt(
+            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output),
+            result.ResourceAccounting);
         if (!transientCompilerLockRetried)
         {
             return summary;
@@ -1268,6 +1271,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return string.IsNullOrWhiteSpace(summary)
             ? remediation
             : $"{remediation}; {summary}";
+    }
+
+    private static string? AppendResourceReceipt(string? summary, TaskProcessResourceAccounting? accounting)
+    {
+        if (accounting is null)
+        {
+            return summary;
+        }
+
+        var receipt = $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes}";
+        return string.IsNullOrWhiteSpace(summary)
+            ? receipt
+            : $"{summary}; {receipt}";
     }
 
     // A testhost that crashes MID-run ("host process exited unexpectedly" / "Test Run Aborted") with no
@@ -1683,6 +1699,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
+            WorkerProcessJobs.Release(process.Id, out var accounting);
+            startedProcessId = null;
             return new CommandResult(
                 exitCode,
                 (stdout + stderr).Trim(),
@@ -1691,7 +1709,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stdoutPath,
                 stderrPath,
                 commandTimeout,
-                elapsed.Elapsed);
+                elapsed.Elapsed,
+                accounting is null
+                    ? null
+                    : new TaskProcessResourceAccounting(
+                        accounting.CpuMilliseconds,
+                        accounting.PeakMemoryBytes,
+                        accounting.IoBytes));
         }
         finally
         {
