@@ -1,8 +1,197 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
+{
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_auto_runs_policy_required_browser_smoke")]
+    public async Task GoalAcceptanceVerifierAutoRunsPolicyRequiredBrowserSmoke()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed."));
+        });
+
+        var result = await verifier.RunAsync(root, changedFiles: ["wwwroot/css/app.css"]);
+
+        Assert.True(result.Passed);
+        var browserCall = calls.Single(call => call.Contains(@".\scripts\Run-DashboardBrowserScript.ps1", StringComparer.OrdinalIgnoreCase));
+        Assert.Equal("powershell", browserCall[0]);
+        Assert.Contains(@".\scripts\dashboard-smoke.js", browserCall, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(result.Checks!, check => check.Name == "dashboard browser smoke" && check.Passed);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_forbidden_changed_paths_from_manifest")]
+    public async Task GoalAcceptanceVerifierBlocksForbiddenChangedPathsFromManifest()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": [ "bin/**", ".scratch/**" ]
+            }
+            """);
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "src/ok.cs\nbin/Debug/generated.dll\n")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync(root);
+
+        Assert.False(result.Passed);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, calls.Count);
+        Assert.True(calls[1].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
+        Assert.Equal(1, result.Checks!.Count);
+        Assert.Equal("forbidden changed paths", result.Checks![0].Name);
+        Assert.Contains("bin/Debug/generated.dll", result.OutputTail!, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_classifies_transient_testhost_abort_vs_real_failure")]
+    [Xunit.InlineData("The active Test Run was aborted because the host process exited unexpectedly.", true)]
+    [Xunit.InlineData("Test Run Aborted.\r\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs", true)]
+    [Xunit.InlineData("Failed!  - Failed:     1, Passed:  1012, Skipped:     0, Total:  1013", false)]
+    [Xunit.InlineData("Failed:     1, Passed:  1012. The active Test Run was aborted because the host process exited unexpectedly.", false)]
+    [Xunit.InlineData("Build FAILED.\r\nerror CS1002: ; expected", false)]
+    [Xunit.InlineData("Passed!  - Failed:     0, Passed:  1013, Skipped:     0, Total:  1013", false)]
+    public void ClassifiesTransientTesthostAbortVsRealFailure(string output, bool expected)
+    {
+        Assert.Equal(expected, GoalAcceptanceVerifier.IsTransientTesthostAbort(output));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_skips_dotnet_tests_for_docs_only_default_plan")]
+    public async Task GoalAcceptanceVerifierSkipsDotnetTestsForDocsOnlyDefaultPlan()
+    {
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, "")
+        ]);
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(responses.Dequeue());
+        });
+
+        var result = await verifier.RunAsync("C:\\fake\\worktree", changedFiles: ["README.md"]);
+
+        Assert.True(result.Passed);
+        Assert.Equal(1, calls.Count);
+        Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+        var check = Xunit.Assert.Single(result.Checks!);
+        Assert.Equal("test impact: no build required", check.Name);
+        Xunit.Assert.Null(check.ExitCode);
+        Xunit.Assert.Null(result.ArtifactsPath);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_uses_25_minute_default_timeout_when_unconfigured")]
+    public async Task GoalAcceptanceVerifierUses25MinuteDefaultTimeoutWhenUnconfigured()
+    {
+        var previous = SetAcceptanceTimeoutEnvironment(null);
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<(string[] Args, TimeSpan Timeout)>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            {
+                calls.Add((args, timeout));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal(TimeSpan.FromMinutes(25), calls[0].Timeout);
+            Assert.Equal(TimeSpan.FromMinutes(25), calls[1].Timeout);
+        }
+        finally
+        {
+            SetAcceptanceTimeoutEnvironment(previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_manifest_timeout_override_wins_over_global_default")]
+    public async Task GoalAcceptanceVerifierManifestTimeoutOverrideWinsOverGlobalDefault()
+    {
+        var previous = SetAcceptanceTimeoutEnvironment("7");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "slow custom check", "type": "command", "command": "custom-check", "arguments": ["--slow"], "timeoutMinutes": 2 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<(string[] Args, TimeSpan Timeout)>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            {
+                calls.Add((args, timeout));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal(TimeSpan.FromMinutes(7), calls[0].Timeout);
+            Assert.Equal(TimeSpan.FromMinutes(2), calls[1].Timeout);
+            Assert.Equal("custom-check", calls[1].Args[0]);
+        }
+        finally
+        {
+            SetAcceptanceTimeoutEnvironment(previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+}
+
+public abstract class GoalAcceptanceVerifierTestBase
+{
+    protected static string CreateManifestWorkspace(string manifest)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
+        var manifestDirectory = Path.Combine(root, "config");
+        Directory.CreateDirectory(manifestDirectory);
+        File.WriteAllText(Path.Combine(manifestDirectory, "acceptance-manifest.json"), manifest);
+        return root;
+    }
+
+    protected static string? SetAcceptanceTimeoutEnvironment(string? value)
+    {
+        var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable, value);
+        return previous;
+    }
+}
+
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class GoalAcceptanceVerifierTests
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
     public async Task GoalAcceptanceVerifierRealRunnerSmokeIsOptIn()
@@ -29,18 +218,6 @@ public sealed class GoalAcceptanceVerifierTests
         {
             Directory.Delete(root, recursive: true);
         }
-    }
-
-    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_classifies_transient_testhost_abort_vs_real_failure")]
-    [Xunit.InlineData("The active Test Run was aborted because the host process exited unexpectedly.", true)]
-    [Xunit.InlineData("Test Run Aborted.\r\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs", true)]
-    [Xunit.InlineData("Failed!  - Failed:     1, Passed:  1012, Skipped:     0, Total:  1013", false)]
-    [Xunit.InlineData("Failed:     1, Passed:  1012. The active Test Run was aborted because the host process exited unexpectedly.", false)]
-    [Xunit.InlineData("Build FAILED.\r\nerror CS1002: ; expected", false)]
-    [Xunit.InlineData("Passed!  - Failed:     0, Passed:  1013, Skipped:     0, Total:  1013", false)]
-    public void ClassifiesTransientTesthostAbortVsRealFailure(string output, bool expected)
-    {
-        Assert.Equal(expected, GoalAcceptanceVerifier.IsTransientTesthostAbort(output));
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_invokes_dotnet_test_with_isolated_script_arguments")]
@@ -288,79 +465,6 @@ public sealed class GoalAcceptanceVerifierTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_uses_25_minute_default_timeout_when_unconfigured")]
-    public async Task GoalAcceptanceVerifierUses25MinuteDefaultTimeoutWhenUnconfigured()
-    {
-        var previous = SetAcceptanceTimeoutEnvironment(null);
-        var root = CreateManifestWorkspace("""
-            {
-              "version": 1,
-              "checks": [
-                { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] }
-              ],
-              "forbiddenChangedPathGlobs": []
-            }
-            """);
-        var calls = new List<(string[] Args, TimeSpan Timeout)>();
-        try
-        {
-            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
-            {
-                calls.Add((args, timeout));
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
-            });
-
-            var result = await verifier.RunAsync(root);
-
-            Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(25), calls[0].Timeout);
-            Assert.Equal(TimeSpan.FromMinutes(25), calls[1].Timeout);
-        }
-        finally
-        {
-            SetAcceptanceTimeoutEnvironment(previous);
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_manifest_timeout_override_wins_over_global_default")]
-    public async Task GoalAcceptanceVerifierManifestTimeoutOverrideWinsOverGlobalDefault()
-    {
-        var previous = SetAcceptanceTimeoutEnvironment("7");
-        var root = CreateManifestWorkspace("""
-            {
-              "version": 1,
-              "checks": [
-                { "name": "slow custom check", "type": "command", "command": "custom-check", "arguments": ["--slow"], "timeoutMinutes": 2 }
-              ],
-              "forbiddenChangedPathGlobs": []
-            }
-            """);
-        var calls = new List<(string[] Args, TimeSpan Timeout)>();
-        try
-        {
-            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
-            {
-                calls.Add((args, timeout));
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
-            });
-
-            var result = await verifier.RunAsync(root);
-
-            Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(7), calls[0].Timeout);
-            Assert.Equal(TimeSpan.FromMinutes(2), calls[1].Timeout);
-            Assert.Equal("custom-check", calls[1].Args[0]);
-        }
-        finally
-        {
-            SetAcceptanceTimeoutEnvironment(previous);
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_passed_without_retry_on_first_time_pass")]
     public async Task GoalAcceptanceVerifierReturnsPassedWithoutRetryOnFirstTimePass()
     {
@@ -386,30 +490,6 @@ public sealed class GoalAcceptanceVerifierTests
         AssertIsolatedTestCommand(calls[1]);
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("dotnet test", result.Checks![0].Name);
-    }
-
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_skips_dotnet_tests_for_docs_only_default_plan")]
-    public async Task GoalAcceptanceVerifierSkipsDotnetTestsForDocsOnlyDefaultPlan()
-    {
-        var calls = new List<string[]>();
-        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, "")
-        ]);
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
-        {
-            calls.Add(args);
-            return Task.FromResult(responses.Dequeue());
-        });
-
-        var result = await verifier.RunAsync("C:\\fake\\worktree", changedFiles: ["README.md"]);
-
-        Assert.True(result.Passed);
-        Assert.Equal(1, calls.Count);
-        Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-        var check = Xunit.Assert.Single(result.Checks!);
-        Assert.Equal("test impact: no build required", check.Name);
-        Xunit.Assert.Null(check.ExitCode);
-        Xunit.Assert.Null(result.ArtifactsPath);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_selects_infrastructure_tests_from_default_plan")]
@@ -718,38 +798,6 @@ public sealed class GoalAcceptanceVerifierTests
         Assert.Equal("goal-13572468", check.LeaseId);
         Assert.Equal("goal-acceptance-verifier", check.BrokerName);
         Assert.True(check.ResultSummary?.Contains("Failed: 0", StringComparison.Ordinal) == true);
-    }
-
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_forbidden_changed_paths_from_manifest")]
-    public async Task GoalAcceptanceVerifierBlocksForbiddenChangedPathsFromManifest()
-    {
-        var root = CreateManifestWorkspace("""
-            {
-              "version": 1,
-              "checks": [],
-              "forbiddenChangedPathGlobs": [ "bin/**", ".scratch/**" ]
-            }
-            """);
-        var calls = new List<string[]>();
-        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
-            new(0, "src/ok.cs\nbin/Debug/generated.dll\n")
-        ]);
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
-        {
-            calls.Add(args);
-            return Task.FromResult(responses.Dequeue());
-        });
-
-        var result = await verifier.RunAsync(root);
-
-        Assert.False(result.Passed);
-        Assert.Equal(1, result.ExitCode);
-        Assert.Equal(2, calls.Count);
-        Assert.True(calls[1].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
-        Assert.Equal(1, result.Checks!.Count);
-        Assert.Equal("forbidden changed paths", result.Checks![0].Name);
-        Assert.Contains("bin/Debug/generated.dll", result.OutputTail!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_defers_granular_csproj_checks_to_solution_wide_run")]
@@ -1222,32 +1270,6 @@ public sealed class GoalAcceptanceVerifierTests
         var policyAlias = result.Checks.Single(c => c.Name == "core tests");
         Assert.True(policyAlias.Passed);
         Assert.Equal("covered by: renamed core coverage", policyAlias.ResultSummary);
-    }
-
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_auto_runs_policy_required_browser_smoke")]
-    public async Task GoalAcceptanceVerifierAutoRunsPolicyRequiredBrowserSmoke()
-    {
-        var root = CreateManifestWorkspace("""
-            {
-              "version": 1,
-              "checks": [],
-              "forbiddenChangedPathGlobs": []
-            }
-            """);
-        var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
-        {
-            calls.Add(args);
-            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed."));
-        });
-
-        var result = await verifier.RunAsync(root, changedFiles: ["wwwroot/css/app.css"]);
-
-        Assert.True(result.Passed);
-        var browserCall = calls.Single(call => call.Contains(@".\scripts\Run-DashboardBrowserScript.ps1", StringComparer.OrdinalIgnoreCase));
-        Assert.Equal("powershell", browserCall[0]);
-        Assert.Contains(@".\scripts\dashboard-smoke.js", browserCall, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains(result.Checks!, check => check.Name == "dashboard browser smoke" && check.Passed);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_injected_policy_check_blocks_merge")]
