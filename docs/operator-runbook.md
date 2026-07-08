@@ -85,8 +85,31 @@ acceptance suite output → git diff / commits in the worktree → verification 
 | `status <goal-prefix>` | objective + the task list with each task's status (`[Assigned]`/`[Completed]`/`[Failed]`/...) |
 | `task <goal-prefix> <n>` | one task's detail: assigned agent, dispatch command, exit code, verification history, failure reason |
 | `readiness <goal-prefix>` | **start blockers** — high-risk objective terms and ownership approval (run this first when a goal won't dispatch) |
+| `durations` | role/complexity runtime medians plus attempts-per-task; use it to spot slow lanes and retry redundancy before changing worker mix or loop policy |
+| `durations --by-model` | the same duration report sliced by model/provider; use it when a role looks slow but provider choice may be the real variable |
 
-Read the loop's own output too — `TICK`, `held`, `escalated`, `LOOP_STOP` lines tell you exactly what each goal did. Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
+Read the loop's own output too — `TICK`, `held`, `escalated`, `LOOP_STOP` lines tell you exactly what each goal did. `PHASE_TIMING` receipts in loop logs are the tick latency profile: `sweep`, `prewalk`, `per-goal-walk`, and `dispatch-prep` show where the conductor spent the tick. Use them when ticks feel slow before blaming a worker.
+
+Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
+
+For focused goal inspection, prefer the repo helpers over broad `.orchestrator` reads:
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalDispatchInventory.ps1 <goal-prefix>
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalTaskSummary.ps1 <goal-prefix>
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-WorkerResultTail.ps1 <goal-prefix> [task-prefix] [-Chars 800]
+```
+
+`Get-GoalDispatchInventory.ps1` is the ground truth for round status: it lists each dispatch generation with exit and heartbeat evidence. Use it when `status` says Running/Dispatched but the round may have died. `Get-GoalTaskSummary.ps1` shows each task's status, last failure, and blockers; use it before repair commands. `Get-WorkerResultTail.ps1` prints the newest `WORKER_RESULT`; add `[task-prefix]` when several tasks have recent results, and `-Chars` when the default tail is too short.
+
+For persistent monitoring from a shell that can keep running:
+
+```bash
+scripts/watch-goal-pulse.sh <goal-prefix> [goal-prefix...]
+scripts/watch-loop-events.sh <goal-prefix> [goal-prefix...]
+```
+
+`watch-goal-pulse.sh` is the lightweight goal pulse while workers run. `watch-loop-events.sh` follows terminal events for the named goals and auto-selects the newest loop log, so use it after launching a conductor loop without hunting for the log path.
 
 For long-running conductor/acceptance commands, keep the operator seat free by launching a bounded background command and polling:
 
@@ -116,6 +139,8 @@ This is the most important section. Match the **observable symptom** to its caus
 | `escalated at Verified - Acceptance verification failed` | The acceptance build/test suite failed against the worktree (a real defect, a worker-written test bug, or a gate defect). | Inspect the worktree, run the suite there (`scripts/Invoke-TestSummary.ps1 -Target <worktree project>`), fix + commit in the worktree, then `acceptance <goal>`. If a gate defect blocks an otherwise green goal, file and fix the gate bug, then re-run acceptance; do not bypass the gate. |
 | `acceptance <goal>` prints **"not accepted"** with `Tasks passed: N/5` | A task isn't verified yet (often a verification-role task). | `status <goal>` → if a Tester/Reviewer is `Failed`, `recover` it and re-run; the goal reconciles `Failed → Active`. |
 | `status <goal>` shows goal `Completed` while one or more tasks are still `[Assigned]` after a retry | Lifecycle/task desync from a retry or failed conductor pass. The conductor may refuse to start the assigned task because the persisted goal status is terminal. | First try `recover <goal> "<note>"`. If it remains `Completed`, use the repo-bounded repair helper: `.\scripts\Invoke-RepoScript.ps1 scripts\Set-OrchestratorGoalStatus.ps1 --status Active <goal>`; then re-run `conduct <goal> --policy Permissive`. |
+| A task stays `[Failed]` / `[Running]` after the real dispatch round is dead, or a retry is blocked by stale task state | The task row is pinned even though the worker round has no useful forward path. | Confirm with `scripts\Get-GoalDispatchInventory.ps1 <goal>` and `scripts\Get-GoalTaskSummary.ps1 <goal>`, then requeue only that task: `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 requeue-task --task-number <n> --note "<why>" <goal>`. |
+| `Get-GoalDispatchInventory.ps1` shows a `dispatch.json` generation with **no heartbeat and no exit** | Dispatch prep failed before the worker process started; the worker never ran, so waiting will not produce output. | Stop the loop cleanly, retire the dead dispatch artifacts, requeue the task with `requeue-task`, then relaunch the conductor. |
 | Goal in `Failed` lifecycle but the work is committed in the worktree | A stage process was orphaned (e.g. a loop crash). The commit is safe. | `recover <goal> "<note>"` then re-run the loop, or `acceptance <goal>` to reconcile + land. |
 | Worker exits 0, worktree has uncommitted changes, and logs say `index.lock: Permission denied` under `.git\worktrees\<goal>` | Low-integrity worker could edit files but could not write git metadata, so conductor commit-on-behalf did not complete. | Inspect the diff, run focused tests, then from a normal-integrity operator shell run the `git -C .orchestrator-worktrees/<goal> add ...` and `git -C .orchestrator-worktrees/<goal> commit -m "<message>"` steps as separate commands; use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 ...` if direct git prompts. Record `progress <goal> <task> completed "<evidence>"` + `verify-manual <goal> <task> passed "<tests; Model fit: ...>"`, then `acceptance <goal>`. |
 | Codex task fails with `exec error: Access is denied. (os error 5)` and stderr names `C:\Program Files\WindowsApps\...\pwsh.exe`, or fails immediately with `unexpected argument '<word>' found` after falling back to Windows PowerShell | Codex can run under same-user Low IL, but WindowsApps/package PowerShell activation can fail; Windows PowerShell 5.1 can also split `(Get-Content -Raw prompt)` into multiple native arguments. | Treat this as a launcher regression, not proof that Low IL is unusable. Verify `WorkerShell` pins a real PowerShell 7 host, preferring `%LOCALAPPDATA%\Programs\PowerShell\7\pwsh.exe`; extract/install a real filesystem `pwsh.exe` there if only the Store alias exists. Verify `DispatchProcessHost` removes WindowsApps from Low-IL `PATH`, then rerun focused `WorkerShellTests` / `DispatchProcessHostTests` before falling back to another Developer provider. |
@@ -125,6 +150,21 @@ This is the most important section. Match the **observable symptom** to its caus
 | Acceptance build fails with `MSB3491` / "file is being used by another process" after the repo-wide build-server disablement | A non-build-server process such as a running dashboard/test host may still hold an output DLL. Transient; not a code defect. | Stop the exact owning process when known; otherwise `dotnet build-server shutdown` is harmless, then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
 | `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> <text>` for each; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
 | You want two or more goals to advance concurrently | Goals with overlapping file scopes contend for the same worktree paths — running them together produces merge conflicts. | Verify non-overlapping file scopes first. Then intake all goals **before** starting a single `conduct --loop --watch --policy Permissive` — one loop tick advances every eligible goal; the slot cap (5 under Permissive) limits concurrent workers. |
+
+### State-repair quiet window
+
+State-repair writes must happen only while no conductor loop is mid-tick. A running tick can clobber concurrent state writes by saving its older in-memory snapshot after your repair (backlog `c7344bf2`). Use this sequence for SQLite repair commands and artifact retirement:
+
+```powershell
+New-Item -ItemType File .conduct-stop
+# wait for LOOP_STOP in the loop log
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 requeue-task --task-number <n> --note "<why>" <goal>
+.\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalTaskSummary.ps1 <goal>
+# let one next tick prove the goal is still stuck or now dispatchable, then relaunch the loop
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
+```
+
+For lifecycle repairs, use `set-goal-status` only with Core-valid `GoalStatus` values: `Draft`, `Active`, `WaitingForHuman`, `Parked`, `Verified`, `Completed`, `Failed`, `Cancelled`, `Superseded`. Invalid values poison snapshot loads; malformed goal rows are quarantined on load (landed in `1d2223c2`), which preserves the rest of the store but hides the damaged goal until repaired.
 
 ### WorkspaceReady + no ready batch after Developer
 
@@ -201,6 +241,19 @@ The first commit is made on `goal/<prefix>` inside the worktree. The second merg
 
 If the worker ran at low integrity and git metadata under `.git\worktrees\<prefix>` rejects `index.lock`, the worker may exit 0 with a correct dirty worktree and no commit. Treat that as operator recovery, not an implementation failure: inspect the diff, run focused tests, commit the worker changes from a normal-integrity shell, then record manual verification and run acceptance.
 
+### 6.2.1 Manual landing for escalated risk
+
+Security-risk and build-system goals may intentionally stop at the landing gate even after acceptance passes. When the escalation is only "review before landing", land out-of-band from the repository root on the main checkout and record it:
+
+```powershell
+git -C .orchestrator-worktrees/<goal-prefix> diff --stat main...HEAD
+git -C .orchestrator-worktrees/<goal-prefix> diff main...HEAD
+git merge --no-ff goal/<goal-prefix>
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 goal-mark-landed <goal-prefix> --confirm-goal-mark-landed
+```
+
+Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. `goal-mark-landed` records the out-of-band merge and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
+
 ### 6.3 Concurrency caps
 
 Two independent constraints bound useful parallelism:
@@ -238,7 +291,7 @@ mcg-orchestrator.cmd record-goal <goal-prefix>   # compatibility alias for add +
 
 `DOGFOOD_LOG.md` remains only as a pointer for operators and should not receive new durable entries.
 
-For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` updates both the indexed `goals.status` column and the serialized snapshot in `.orchestrator/state.db`. It is an operator recovery tool, not a normal workflow command; prefer `recover`, `retry`, and `conduct` first.
+For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` / `Invoke-OrchestratorSqliteTool.ps1 set-goal-status` update both the indexed `goals.status` column and the serialized snapshot in `.orchestrator/state.db`. They are operator recovery tools, not normal workflow commands; prefer `recover`, `retry`, and `conduct` first. Use only Core-valid statuses, and make the write during a quiet window after `LOOP_STOP`.
 
 ---
 
