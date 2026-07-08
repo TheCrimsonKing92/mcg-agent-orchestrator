@@ -218,11 +218,16 @@ public sealed partial class AgentOrchestratorKernel
         return ModelOutcomeScorecard.Build(allTasks, windowSize);
     }
 
-    public IReadOnlyList<TaskDurationStatsRecord> BuildTaskDurationStats(bool includeModel = false)
+    public IReadOnlyList<TaskDurationStatsRecord> BuildTaskDurationStats(bool includeModel = false, DateTimeOffset? since = null)
     {
         return includeModel
-            ? TaskDurationReport.BuildByRoleComplexityAndModel(Goals)
-            : TaskDurationReport.BuildByRoleAndComplexity(Goals);
+            ? TaskDurationReport.BuildByRoleComplexityAndModel(Goals, since)
+            : TaskDurationReport.BuildByRoleAndComplexity(Goals, since);
+    }
+
+    public IReadOnlyList<TaskDurationTrendRecord> BuildTaskDurationTrend(DateTimeOffset? since = null)
+    {
+        return TaskDurationReport.BuildDailyTrend(Goals, since);
     }
 
     public LoopHealthSnapshot BuildLoopHealthReport(int? lastN = null)

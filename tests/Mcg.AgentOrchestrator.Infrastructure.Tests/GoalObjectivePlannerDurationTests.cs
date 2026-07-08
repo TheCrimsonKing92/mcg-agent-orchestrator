@@ -87,9 +87,23 @@ public sealed class GoalObjectivePlannerDurationTests
 
         Xunit.Assert.Contains("Task duration stats", output);
         Xunit.Assert.Contains("Developer/Complex", output);
+        Xunit.Assert.Contains("attemptsPerTask=2.0", output);
         Xunit.Assert.Contains("legit median=11m", output);
         Xunit.Assert.Contains("overhead median=20m", output);
         Xunit.Assert.Contains("failureRate=", output);
+        Xunit.Assert.Contains("Daily trend:", output);
+
+        var windowedOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["durations", "--since", "2026-06-19T12:20:00Z"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("since 2026-06-19T12:20:00.0000000+00:00", windowedOutput);
+        Xunit.Assert.Contains("attempts=5 attemptsPerTask=1.7", windowedOutput);
     }
 
     [Xunit.Fact(DisplayName = "SimpleGoal_preflight_uses_history_estimate_without_starting_paid_worker")]

@@ -25,6 +25,8 @@ public sealed record TaskDurationStatsRecord(
     TimeSpan? MedianFailureInterventionOverhead,
     double FailureRate)
 {
+    public double AttemptsPerTask => TaskCount > 0 ? (double)AttemptCount / TaskCount : 0.0;
+
     public bool HasPublishedStats => TaskCount >= TaskDurationReport.MinSamplesForPublishedStats &&
         MedianLegitimateRuntime is not null;
 
@@ -33,28 +35,104 @@ public sealed record TaskDurationStatsRecord(
         : $"{Role}/{Complexity} {ProviderName}/{ModelName}";
 }
 
+public sealed record TaskDurationTrendRecord(
+    DateOnly Day,
+    int TaskCount,
+    int AttemptCount,
+    int FailedAttemptCount,
+    double AttemptsPerTask,
+    double FailureRate);
+
 public static class TaskDurationReport
 {
     public const int MinSamplesForPublishedStats = 3;
 
-    public static IReadOnlyList<TaskDurationStatsRecord> BuildByRoleAndComplexity(IEnumerable<Goal> goals) =>
-        Build(CollectObservations(goals), includeModel: false);
+    public static IReadOnlyList<TaskDurationStatsRecord> BuildByRoleAndComplexity(
+        IEnumerable<Goal> goals,
+        DateTimeOffset? since = null) =>
+        Build(CollectObservations(goals, since), includeModel: false);
 
-    public static IReadOnlyList<TaskDurationStatsRecord> BuildByRoleComplexityAndModel(IEnumerable<Goal> goals) =>
-        Build(CollectObservations(goals), includeModel: true);
+    public static IReadOnlyList<TaskDurationStatsRecord> BuildByRoleComplexityAndModel(
+        IEnumerable<Goal> goals,
+        DateTimeOffset? since = null) =>
+        Build(CollectObservations(goals, since), includeModel: true);
 
-    public static IReadOnlyList<TaskDurationObservation> CollectObservations(IEnumerable<Goal> goals)
+    public static IReadOnlyList<TaskDurationTrendRecord> BuildDailyTrend(IEnumerable<Goal> goals, DateTimeOffset? since = null)
     {
-        var observations = new List<TaskDurationObservation>();
+        return CollectAttemptObservations(goals, since)
+            .GroupBy(attempt => DateOnly.FromDateTime(attempt.DispatchAt.UtcDateTime))
+            .OrderBy(group => group.Key)
+            .Select(group =>
+            {
+                var attempts = group.ToList();
+                var taskCount = attempts
+                    .Select(attempt => (attempt.GoalId, attempt.TaskId))
+                    .Distinct()
+                    .Count();
+                var attemptCount = attempts.Count;
+                var failedAttemptCount = attempts.Count(attempt => !attempt.Succeeded);
+
+                return new TaskDurationTrendRecord(
+                    group.Key,
+                    taskCount,
+                    attemptCount,
+                    failedAttemptCount,
+                    taskCount > 0 ? (double)attemptCount / taskCount : 0.0,
+                    attemptCount > 0 ? (double)failedAttemptCount / attemptCount : 0.0);
+            })
+            .ToList();
+    }
+
+    public static IReadOnlyList<TaskDurationObservation> CollectObservations(
+        IEnumerable<Goal> goals,
+        DateTimeOffset? since = null)
+    {
+        return CollectAttemptObservations(goals, since)
+            .GroupBy(attempt => (
+                attempt.GoalId,
+                attempt.TaskId,
+                attempt.Role,
+                attempt.Complexity,
+                attempt.ProviderName,
+                attempt.ModelName))
+            .Select(group =>
+            {
+                var attempts = group
+                    .OrderBy(attempt => attempt.DispatchAt)
+                    .ThenBy(attempt => attempt.EndedAt)
+                    .ToList();
+                var finalSuccessfulAttempt = attempts
+                    .Where(attempt => attempt.Succeeded)
+                    .LastOrDefault();
+                var failedAttempts = attempts
+                    .Where(attempt => !attempt.Succeeded)
+                    .ToList();
+
+                return new TaskDurationObservation(
+                    group.Key.GoalId,
+                    group.Key.TaskId,
+                    group.Key.Role,
+                    group.Key.Complexity,
+                    group.Key.ProviderName,
+                    group.Key.ModelName,
+                    finalSuccessfulAttempt?.LegitimateRuntime,
+                    failedAttempts.Aggregate(TimeSpan.Zero, (sum, attempt) => sum + attempt.FailureInterventionOverhead),
+                    attempts.Count,
+                    failedAttempts.Count);
+            })
+            .ToList();
+    }
+
+    private static List<TaskDurationAttemptObservation> CollectAttemptObservations(
+        IEnumerable<Goal> goals,
+        DateTimeOffset? since)
+    {
+        var observations = new List<TaskDurationAttemptObservation>();
         foreach (var goal in goals)
         {
             foreach (var task in goal.Tasks)
             {
-                var observation = TryBuildObservation(goal, task);
-                if (observation is not null)
-                {
-                    observations.Add(observation);
-                }
+                observations.AddRange(BuildAttemptObservations(goal, task, since));
             }
         }
 
@@ -75,7 +153,7 @@ public static class TaskDurationReport
             .FirstOrDefault();
     }
 
-    private static IReadOnlyList<TaskDurationStatsRecord> Build(
+    private static List<TaskDurationStatsRecord> Build(
         IEnumerable<TaskDurationObservation> observations,
         bool includeModel)
     {
@@ -121,7 +199,10 @@ public static class TaskDurationReport
             .ToList();
     }
 
-    private static TaskDurationObservation? TryBuildObservation(Goal goal, TaskSpec task)
+    private static List<TaskDurationAttemptObservation> BuildAttemptObservations(
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset? since)
     {
         var dispatchTimes = goal.Timeline
             .Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskDispatchRecorded)
@@ -138,7 +219,7 @@ public static class TaskDurationReport
 
         if (dispatchTimes.Count == 0)
         {
-            return null;
+            return [];
         }
 
         var cancellationTimes = goal.Timeline
@@ -152,60 +233,66 @@ public static class TaskDurationReport
         var attempts = PairAttempts(dispatchTimes, verifications, cancellationTimes);
         if (attempts.Count == 0)
         {
-            return null;
-        }
-
-        var successfulAttempts = attempts
-            .Where(attempt => attempt.Verification?.Succeeded is true)
-            .ToList();
-        var finalSuccessfulAttempt = successfulAttempts.LastOrDefault();
-        var legitimateRuntime = finalSuccessfulAttempt is null
-            ? (TimeSpan?)null
-            : PositiveDuration(finalSuccessfulAttempt.End, ResolveAttemptStart(task, finalSuccessfulAttempt, dispatchTimes));
-
-        var overhead = TimeSpan.Zero;
-        var failedAttemptCount = 0;
-        foreach (var attempt in attempts)
-        {
-            if (attempt.Verification?.Succeeded is true)
-            {
-                continue;
-            }
-
-            failedAttemptCount++;
-            overhead += PositiveDuration(attempt.End, ResolveAttemptStart(task, attempt, dispatchTimes));
-            if (attempt.NextDispatchAt is not null)
-            {
-                overhead += PositiveDuration(attempt.NextDispatchAt.Value, attempt.End);
-            }
-        }
-
-        if (task.LastProcess is { WasCancelled: true, CompletedAt: { } cancelledAt } process &&
-            !attempts.Any(attempt => attempt.End == cancelledAt))
-        {
-            failedAttemptCount++;
-            overhead += PositiveDuration(cancelledAt, process.StartedAt);
+            return [];
         }
 
         var complexity = task.LastDispatch?.TaskComplexity is { } recorded and not TaskComplexity.Auto
             ? recorded
             : TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
 
-        return new TaskDurationObservation(
-            goal.Id.Value,
-            task.Id.Value,
-            task.RequiredRole,
-            complexity,
-            task.LastDispatch?.ProviderName,
-            task.LastDispatch?.ModelName,
-            legitimateRuntime,
-            overhead,
-            attempts.Count,
-            failedAttemptCount);
+        var observations = new List<TaskDurationAttemptObservation>();
+        foreach (var attempt in attempts.Where(attempt => since is null || attempt.DispatchAt >= since.Value))
+        {
+            var start = ResolveAttemptStart(task, attempt, dispatchTimes);
+            var succeeded = attempt.Verification?.Succeeded is true;
+            var legitimateRuntime = succeeded ? PositiveDuration(attempt.End, start) : (TimeSpan?)null;
+            var overhead = TimeSpan.Zero;
+            if (!succeeded)
+            {
+                overhead += PositiveDuration(attempt.End, start);
+                if (attempt.NextDispatchAt is not null)
+                {
+                    overhead += PositiveDuration(attempt.NextDispatchAt.Value, attempt.End);
+                }
+            }
+
+            observations.Add(new TaskDurationAttemptObservation(
+                goal.Id.Value,
+                task.Id.Value,
+                task.RequiredRole,
+                complexity,
+                task.LastDispatch?.ProviderName,
+                task.LastDispatch?.ModelName,
+                attempt.DispatchAt,
+                attempt.End,
+                succeeded,
+                legitimateRuntime,
+                overhead));
+        }
+
+        if (task.LastProcess is { WasCancelled: true, CompletedAt: { } cancelledAt } process &&
+            !attempts.Any(attempt => attempt.End == cancelledAt) &&
+            (since is null || process.StartedAt >= since.Value))
+        {
+            observations.Add(new TaskDurationAttemptObservation(
+                goal.Id.Value,
+                task.Id.Value,
+                task.RequiredRole,
+                complexity,
+                task.LastDispatch?.ProviderName,
+                task.LastDispatch?.ModelName,
+                process.StartedAt,
+                cancelledAt,
+                Succeeded: false,
+                LegitimateRuntime: null,
+                PositiveDuration(cancelledAt, process.StartedAt)));
+        }
+
+        return observations;
     }
 
     private static List<AttemptTiming> PairAttempts(
-        IReadOnlyList<DateTimeOffset> dispatchTimes,
+        List<DateTimeOffset> dispatchTimes,
         IReadOnlyList<TaskVerificationRecord> verifications,
         IReadOnlyList<DateTimeOffset> cancellationTimes)
     {
@@ -254,7 +341,7 @@ public static class TaskDurationReport
     private static DateTimeOffset ResolveAttemptStart(
         TaskSpec task,
         AttemptTiming attempt,
-        IReadOnlyList<DateTimeOffset> dispatchTimes)
+        List<DateTimeOffset> dispatchTimes)
     {
         if (task.LastProcess is { } process &&
             attempt.DispatchAt == dispatchTimes[^1] &&
@@ -273,7 +360,7 @@ public static class TaskDurationReport
         return duration > TimeSpan.Zero ? duration : TimeSpan.Zero;
     }
 
-    private static TimeSpan? Percentile(IReadOnlyList<TimeSpan> sorted, double percentile)
+    private static TimeSpan? Percentile(List<TimeSpan> sorted, double percentile)
     {
         if (sorted.Count == 0)
         {
@@ -289,4 +376,17 @@ public static class TaskDurationReport
         DateTimeOffset? NextDispatchAt,
         TaskVerificationRecord? Verification,
         DateTimeOffset End);
+
+    private sealed record TaskDurationAttemptObservation(
+        string GoalId,
+        string TaskId,
+        AgentRole Role,
+        TaskComplexity Complexity,
+        string? ProviderName,
+        string? ModelName,
+        DateTimeOffset DispatchAt,
+        DateTimeOffset EndedAt,
+        bool Succeeded,
+        TimeSpan? LegitimateRuntime,
+        TimeSpan FailureInterventionOverhead);
 }

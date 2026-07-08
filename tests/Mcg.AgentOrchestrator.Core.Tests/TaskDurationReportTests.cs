@@ -111,6 +111,88 @@ public sealed class TaskDurationReportTests
         Xunit.Assert.Same(record, TaskDurationReport.FindEstimate([record], AgentRole.Developer, TaskComplexity.Complex));
     }
 
+    [Xunit.Fact(DisplayName = "TaskDurationReport_since_excludes_out_of_window_attempts")]
+    public void TaskDurationReportSinceExcludesOutOfWindowAttempts()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Implement a complex CLI report", [new TaskSpec(TaskId.New(), "Implement src/App.cs with tests", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 1, clock.UtcNow));
+
+        clock.Advance(TimeSpan.FromDays(2));
+        var since = clock.UtcNow;
+        kernel.RetryTask(goal.Id, task.Id, "retry after old failed attempt");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(10));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
+
+        var record = TaskDurationReport.BuildByRoleAndComplexity(kernel.Goals, since).Single();
+
+        Xunit.Assert.Equal(1, record.TaskCount);
+        Xunit.Assert.Equal(1, record.AttemptCount);
+        Xunit.Assert.Equal(0, record.FailedAttemptCount);
+        Xunit.Assert.Equal(1.0, record.AttemptsPerTask);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(10), record.MedianLegitimateRuntime);
+        Xunit.Assert.Equal(TimeSpan.Zero, record.MedianFailureInterventionOverhead);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskDurationReport_attempts_per_task_counts_redundancy")]
+    public void TaskDurationReportAttemptsPerTaskCountsRedundancy()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Implement a complex CLI report", [new TaskSpec(TaskId.New(), "Implement src/App.cs with tests", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 1, clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RetryTask(goal.Id, task.Id, "retry");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
+
+        var record = TaskDurationReport.BuildByRoleAndComplexity(kernel.Goals).Single();
+
+        Xunit.Assert.Equal(2, record.AttemptCount);
+        Xunit.Assert.Equal(1, record.TaskCount);
+        Xunit.Assert.Equal(2.0, record.AttemptsPerTask);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskDurationReport_daily_trend_rows_are_ordered")]
+    public void TaskDurationReportDailyTrendRowsAreOrdered()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        AddSuccessfulTask(kernel, clock, "Implement day one report");
+        clock.Advance(TimeSpan.FromDays(1));
+        AddSuccessfulTask(kernel, clock, "Implement day two report");
+
+        var trend = TaskDurationReport.BuildDailyTrend(kernel.Goals);
+
+        Xunit.Assert.Collection(
+            trend,
+            first =>
+            {
+                Xunit.Assert.Equal(new DateOnly(2026, 06, 01), first.Day);
+                Xunit.Assert.Equal(1, first.TaskCount);
+                Xunit.Assert.Equal(1, first.AttemptCount);
+            },
+            second =>
+            {
+                Xunit.Assert.Equal(new DateOnly(2026, 06, 02), second.Day);
+                Xunit.Assert.Equal(1, second.TaskCount);
+                Xunit.Assert.Equal(1, second.AttemptCount);
+            });
+    }
+
     private static TaskDispatchRecord Dispatch(DateTimeOffset at) =>
         new(
             "codex-cli",
@@ -142,4 +224,14 @@ public sealed class TaskDurationReportTests
             completedAt,
             wasCancelled ? null : 1,
             wasCancelled);
+
+    private static void AddSuccessfulTask(AgentOrchestratorKernel kernel, FakeClock clock, string objective)
+    {
+        var goal = kernel.CreateGoal(objective, [new TaskSpec(TaskId.New(), "Implement src/App.cs with tests", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
+    }
 }

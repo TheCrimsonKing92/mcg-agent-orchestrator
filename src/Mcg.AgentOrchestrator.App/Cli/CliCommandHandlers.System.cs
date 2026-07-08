@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -437,8 +438,14 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "durations":
-                ConsoleViews.PrintTaskDurationStats(context.Kernel.BuildTaskDurationStats(HasCliConfirmation(parts, "--by-model")));
+            {
+                var since = ParseDurationsSince(GetFlagValue(parts, "--since"));
+                ConsoleViews.PrintTaskDurationStats(
+                    context.Kernel.BuildTaskDurationStats(HasCliConfirmation(parts, "--by-model"), since),
+                    since,
+                    context.Kernel.BuildTaskDurationTrend(since));
                 return false;
+            }
 
             case "loop-health":
             {
@@ -837,6 +844,32 @@ internal static partial class CliCommandHandlers
 
     private static bool GitCommitShaExists(string executionDirectory, string sha) =>
         GitCli.Run(executionDirectory, 5_000, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
+
+    private static DateTimeOffset? ParseDurationsSince(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (value.EndsWith("d", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(value[..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var days) &&
+            days > 0)
+        {
+            return DateTimeOffset.UtcNow.AddDays(-days);
+        }
+
+        if (DateTimeOffset.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new ArgumentException("Invalid --since value. Use an ISO date/time or a positive Nd value such as 14d.");
+    }
 
     private static void RunStableSlotDotnet(IReadOnlyList<string> parts, CliExecutionContext context)
     {

@@ -4,10 +4,14 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-    public static void PrintTaskDurationStats(IReadOnlyList<TaskDurationStatsRecord> records)
+    public static void PrintTaskDurationStats(
+        IReadOnlyList<TaskDurationStatsRecord> records,
+        DateTimeOffset? since = null,
+        IReadOnlyList<TaskDurationTrendRecord>? trend = null)
     {
         Console.WriteLine();
-        Console.WriteLine($"Task duration stats ({records.Count} group(s)):");
+        var window = since is null ? "all time" : $"since {since.Value:O}";
+        Console.WriteLine($"Task duration stats ({window}, {records.Count} group(s)):");
         if (records.Count == 0)
         {
             Console.WriteLine("  No dispatch timing history found.");
@@ -28,9 +32,22 @@ internal static partial class ConsoleViews
                 : FormatInsufficient(record.TaskCount);
             Console.WriteLine(
                 $"  {record.Scope}: tasks={record.TaskCount} attempts={record.AttemptCount} " +
+                $"attemptsPerTask={record.AttemptsPerTask:0.0} " +
                 $"legit median={medianRuntime} p90={p90Runtime} " +
                 $"overhead median={medianOverhead} " +
                 $"failureRate={record.FailureRate:P0}");
+        }
+
+        if (trend is { Count: > 0 })
+        {
+            Console.WriteLine();
+            Console.WriteLine("Daily trend:");
+            foreach (var row in trend)
+            {
+                Console.WriteLine(
+                    $"  {row.Day:yyyy-MM-dd}: tasks={row.TaskCount} attempts={row.AttemptCount} " +
+                    $"attemptsPerTask={row.AttemptsPerTask:0.0} failureRate={row.FailureRate:P0}");
+            }
         }
 
         Console.WriteLine();
