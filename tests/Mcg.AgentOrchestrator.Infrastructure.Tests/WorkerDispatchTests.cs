@@ -5587,6 +5587,30 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.MarkerFileName]));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_receipt_only_dirty_worktree_is_clean_for_commit")]
+    public void BackgroundDispatchRunnerReceiptOnlyDirtyWorktreeIsCleanForCommit()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "NO_CHANGE: Existing implementation already satisfies the request.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName), "{}"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.DoesNotContain("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.DoesNotContain("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal($"?? {WorkerSandboxPreparer.ReceiptFileName}", ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.ReceiptFileName]));
+}
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_first_round_preps_and_writes_receipt")]
     public void WorkerSandboxPreparerFirstRoundPrepsAndWritesReceipt()
 {
