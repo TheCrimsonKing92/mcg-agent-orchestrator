@@ -1,6 +1,3 @@
-// backlog ad7c8268: keep Infrastructure.Tests serial until the rotating full-suite failures are fixed.
-[assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]
-
 // Process-wide environment/current-directory mutation tests share this collection.
 [Xunit.CollectionDefinition(TestCollections.EnvMutation, DisableParallelization = true)]
 public sealed class EnvMutationCollection;
