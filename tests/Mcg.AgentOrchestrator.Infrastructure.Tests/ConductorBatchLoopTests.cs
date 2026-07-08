@@ -2231,6 +2231,28 @@ public sealed class ConductorBatchLoopTests
         Assert.True(lines.Any(l => l.StartsWith("GOAL ", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact(DisplayName = "ProgressEmission_TickSummaryContainsPhaseTimingLines")]
+    public void ProgressEmission_TickSummaryContainsPhaseTimingLines()
+    {
+        var (kernel, _) = SimpleGoal("phase timing dispatch");
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        BatchTickSummary? capturedTick = null;
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: tick => capturedTick = tick);
+
+        var lines = capturedTick!.ProgressLines!;
+        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal) && line.Contains(" ts=", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=prewalk ", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=dispatch-prep ", StringComparison.Ordinal) && line.Contains(" task=", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=per-goal-walk ", StringComparison.Ordinal) && line.Contains("slowest=", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ProgressEmission_WatchHeldRunningEmitsOnlyChangedDisposition")]
     public void ProgressEmission_WatchHeldRunningEmitsOnlyChangedDisposition()
     {
@@ -2259,7 +2281,9 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(lines.Where(l => l.StartsWith("GOAL goal=", StringComparison.Ordinal)));
         Assert.Single(lines.Where(l => l.StartsWith("TICK_END tick=", StringComparison.Ordinal)));
         Assert.DoesNotContain(lines, l => l.StartsWith("TICK_END tick=2 ", StringComparison.Ordinal));
-        Assert.True(ticks.Skip(1).All(t => t.ProgressLines is not null && t.ProgressLines.Count == 0));
+        Assert.True(ticks.Skip(1).All(t =>
+            t.ProgressLines is not null &&
+            t.ProgressLines.All(line => line.StartsWith("PHASE_TIMING ", StringComparison.Ordinal))));
     }
 
     [Xunit.Fact(DisplayName = "ConductorTick_includes_operator_disposition_snapshot")]
@@ -2669,6 +2693,90 @@ public sealed class ConductorBatchLoopTests
         Assert.DoesNotContain(staleGoal.Id, advancedGoalIds);
         Assert.Equal(status, kernel.GetGoal(staleGoal.Id).Status);
         Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(staleGoal.Id, staleTask.Id).Status);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_pre_walk_exclusion_avoids_lifecycle_fact_reads_for_inert_goals")]
+    public void BatchLoopPreWalkExclusionAvoidsLifecycleFactReadsForInertGoals()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cancelled");
+        var superseded = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "superseded");
+        var parked = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "parked");
+        var staleTask = new TaskSpec(TaskId.New(), "stale assigned", AgentRole.Developer);
+        var staleCompleted = kernel.CreateGoal("stale completed", [staleTask]);
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active");
+        kernel.ActivateGoal(staleCompleted.Id, DefaultAgents());
+        kernel.CancelGoal(cancelled.Id, "cancelled");
+        kernel.SupersedeGoal(superseded.Id, "superseded");
+        kernel.ParkGoal(parked.Id, "parked");
+        kernel = WithGoalStatus(kernel, staleCompleted.Id, GoalStatus.Completed);
+
+        var inertGoalIds = new HashSet<GoalId> { cancelled.Id, superseded.Id, parked.Id, staleCompleted.Id };
+        var factReads = new List<GoalId>();
+        var advancedGoalIds = new List<GoalId>();
+        var driver = MakeDriver(
+            getFacts: goal =>
+            {
+                factReads.Add(goal.Id);
+                if (inertGoalIds.Contains(goal.Id))
+                {
+                    throw new InvalidOperationException("Inert goal should have been excluded before lifecycle facts.");
+                }
+
+                return GoalLifecycleFacts.None;
+            },
+            createWorkspace: goal =>
+            {
+                advancedGoalIds.Add(goal.Id);
+                return "/tmp/workspace";
+            });
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Contains(active.Id, advancedGoalIds);
+        Assert.DoesNotContain(factReads, inertGoalIds.Contains);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_reuses_unchanged_cleaned_up_projection_between_watch_ticks")]
+    public void BatchLoopReusesUnchangedCleanedUpProjectionBetweenWatchTicks()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var cleanedUp = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "cleaned up");
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active held");
+        PassVerification(kernel, cleanedUp, cleanedUp.Tasks.Single());
+        kernel.CompleteGoal(cleanedUp.Id, "completed");
+
+        var cleanedFactReads = 0;
+        var driver = MakeDriver(
+            getFacts: goal =>
+            {
+                if (goal.Id == cleanedUp.Id)
+                {
+                    cleanedFactReads++;
+                    return new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true);
+                }
+
+                return new GoalLifecycleFacts(WorkspaceExists: true);
+            },
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(1, cleanedFactReads);
+        Assert.Equal(GoalStatus.Completed, kernel.GetGoal(cleanedUp.Id).Status);
+        Assert.Equal(GoalStatus.Active, kernel.GetGoal(active.Id).Status);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_parked_goal_is_counted_in_summary_without_escalation_and_resumes_when_active")]
