@@ -188,6 +188,32 @@ public sealed class GoalLifecycleEventWriterTests
     }
 
     [Xunit.Fact]
+    public async Task GoalEventsCommandFollowsJsonlCreatedAfterStartup()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var eventsDirectory = Path.Combine(root, ".orchestrator", "goal-events");
+            var goalId = GoalId.New();
+            var path = Path.Combine(eventsDirectory, $"{goalId.Value}.jsonl");
+            using var output = new StringWriter();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            var followTask = GoalEventsCommand.RunAsync(eventsDirectory, goalId.Value[..8], follow: true, output, cancellationToken: cts.Token);
+            Directory.CreateDirectory(eventsDirectory);
+            await File.WriteAllTextAsync(path, "{\"cursor\":0,\"eventType\":\"GoalCreated\"}" + Environment.NewLine, cts.Token);
+            await WaitUntilAsync(() => output.ToString().Contains("GoalCreated", StringComparison.Ordinal), cts.Token);
+            cts.Cancel();
+
+            await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => followTask);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task GoalEventsFollowStartupBypassesPersistentStateRunnerAndAllowsConcurrentWriter()
     {
         var root = CreateTempDirectory();

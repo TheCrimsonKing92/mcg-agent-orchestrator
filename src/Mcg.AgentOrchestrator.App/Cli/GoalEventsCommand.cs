@@ -33,6 +33,11 @@ internal static class GoalEventsCommand
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (!File.Exists(path))
+            {
+                path = ResolveEventFilePath(eventsDirectory, goalPrefix, knownGoalIds);
+            }
+
             if (File.Exists(path))
             {
                 position = await WriteAvailableLinesAsync(path, position, output, cancellationToken);
