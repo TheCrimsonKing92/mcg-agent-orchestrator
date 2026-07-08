@@ -106,6 +106,11 @@ internal static class CliPersistentStateRunner
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalLifecycleDispositionCommand(args))
+        {
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -257,6 +262,17 @@ internal static class CliPersistentStateRunner
     internal static bool IsGoalMarkLandedCommand(IReadOnlyList<string> args)
     {
         return args.Count > 0 && args[0].Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsGoalLifecycleDispositionCommand(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+        {
+            return false;
+        }
+
+        return args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ExecuteGoalMarkLandedWithPromptBudget(
