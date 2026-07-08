@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -848,24 +847,22 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
     private static (int ExitCode, string Output) RunSqliteTool(params string[] arguments)
     {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var originalOutput = Console.Out;
+        var originalError = Console.Error;
+        Console.SetOut(output);
+        Console.SetError(error);
+        try
         {
-            FileName = "dotnet",
-            WorkingDirectory = AppContext.BaseDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
-        process.StartInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "OrchestratorSqliteTools.dll"));
-        foreach (var argument in arguments)
-            process.StartInfo.ArgumentList.Add(argument);
-
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(30)), "sqlite tool process did not exit within 30 seconds.");
-        return (process.ExitCode, stdout + stderr);
+            var exitCode = OrchestratorSqliteTools.RunAsync(arguments).GetAwaiter().GetResult();
+            return (exitCode, output.ToString() + error.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOutput);
+            Console.SetError(originalError);
+        }
     }
 
     private static bool IsWriteCategoryStartupStatement(string sql)
