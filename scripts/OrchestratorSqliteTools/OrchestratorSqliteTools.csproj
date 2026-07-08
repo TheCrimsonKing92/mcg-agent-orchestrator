@@ -9,5 +9,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.6" />
+    <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 public sealed class SqliteOrchestratorStateRepositoryTests
@@ -271,6 +273,104 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.DoesNotContain(nonTerminal.Goals, goal => goal.Id == completed.Id);
         Assert.Contains(nonTerminal.Goals, goal => goal.Id == active.Id);
         Assert.Contains(nonTerminal.Goals, goal => goal.Id == failed.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadAsync_quarantines_malformed_goal_row_and_loads_remaining_state")]
+    public async Task LoadAsyncQuarantinesMalformedGoalRowAndLoadsRemainingState()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var good = kernel.CreateGoal("Good goal survives");
+        var bad = kernel.CreateGoal("Bad goal is quarantined");
+        await repo.SaveAsync(kernel);
+
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var read = conn.CreateCommand();
+            read.CommandText = "SELECT snapshot_json FROM goals WHERE id = $id";
+            read.Parameters.AddWithValue("$id", bad.Id.Value);
+            var json = (string)read.ExecuteScalar()!;
+            var snapshot = JsonNode.Parse(json)!;
+            snapshot["Status"] = "Blocked";
+
+            using var update = conn.CreateCommand();
+            update.CommandText = "UPDATE goals SET status = 'Blocked', snapshot_json = $json WHERE id = $id";
+            update.Parameters.AddWithValue("$json", snapshot.ToJsonString());
+            update.Parameters.AddWithValue("$id", bad.Id.Value);
+            update.ExecuteNonQuery();
+        }
+
+        using var error = new StringWriter();
+        var originalError = Console.Error;
+        Console.SetError(error);
+        AgentOrchestratorKernel restored;
+        try
+        {
+            restored = await repo.LoadAsync();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.Contains(restored.Goals, goal => goal.Id == good.Id);
+        Assert.DoesNotContain(restored.Goals, goal => goal.Id == bad.Id);
+        var quarantined = await repo.ListQuarantinedGoalRowsAsync();
+        var row = Assert.Single(quarantined);
+        Assert.Equal(bad.Id.Value, row.Id);
+        Assert.Contains("JsonException", row.Error);
+        Assert.Contains($"QUARANTINED goal {bad.Id.Value[..8]}: JsonException", error.ToString());
+
+        var diagnostics = RunDotnet(
+            "run",
+            "--project",
+            Path.Combine(FindRepoRoot(), "scripts", "OrchestratorSqliteTools"),
+            "--",
+            "diagnostics",
+            "--db",
+            db);
+        Assert.Equal(0, diagnostics.ExitCode);
+        Assert.Contains($"QUARANTINED {bad.Id.Value[..8]}", diagnostics.Output);
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTools_status_help_matches_Core_GoalStatus")]
+    public void OrchestratorSqliteToolsStatusHelpMatchesCoreGoalStatus()
+    {
+        var result = RunDotnet(
+            "run",
+            "--project",
+            Path.Combine(FindRepoRoot(), "scripts", "OrchestratorSqliteTools"),
+            "--",
+            "set-goal-status",
+            "--help");
+
+        Assert.Equal(0, result.ExitCode);
+        foreach (var status in Enum.GetNames<GoalStatus>())
+            Assert.Contains(status, result.Output);
+        Assert.DoesNotContain("Blocked", result.Output);
+        Assert.DoesNotContain("Proposed", result.Output);
+
+        var rejected = RunDotnet(
+            "run",
+            "--project",
+            Path.Combine(FindRepoRoot(), "scripts", "OrchestratorSqliteTools"),
+            "--",
+            "set-goal-status",
+            "--status",
+            "Blocked",
+            "abc12345");
+        Assert.NotEqual(0, rejected.ExitCode);
+        Assert.Contains("Unsupported goal status 'Blocked'", rejected.Output);
+    }
+
+    [Xunit.Fact(DisplayName = "Program_startup_error_formatter_prints_exception_type_first")]
+    public void ProgramStartupErrorFormatterPrintsExceptionTypeFirst()
+    {
+        var formatted = ProgramStartupErrorFormatter.Format(new InvalidOperationException("outer wrapper"));
+
+        Assert.StartsWith("InvalidOperationException: outer wrapper", formatted, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_requests_roundtrip")]
@@ -756,6 +856,40 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     {
         var dir = CreateTempDirectory();
         return Path.Combine(dir, "state.db");
+    }
+
+    private static string FindRepoRoot()
+    {
+        var directory = new DirectoryInfo(Environment.CurrentDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not find repository root.");
+    }
+
+    private static (int ExitCode, string Output) RunDotnet(params string[] arguments)
+    {
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = FindRepoRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        foreach (var argument in arguments)
+            process.StartInfo.ArgumentList.Add(argument);
+
+        process.Start();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(90)), "dotnet process did not exit within 90 seconds.");
+        return (process.ExitCode, stdout + stderr);
     }
 
     private static bool IsWriteCategoryStartupStatement(string sql)

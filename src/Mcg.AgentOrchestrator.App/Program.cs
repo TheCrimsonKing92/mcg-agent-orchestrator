@@ -25,7 +25,7 @@ try
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"Error: {ex.Message}");
+    Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
     return 1;
 }
 
@@ -60,7 +60,7 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.O
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
         return 1;
     }
 }
@@ -72,7 +72,7 @@ try
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"Error: {ex.Message}");
+    Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
     return 1;
 }
 
@@ -159,14 +159,25 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
         return ExitCompletedStartupCommand(1);
     }
 }
 
-ITransactionalOrchestratorStateRepository stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-var kernel = await stateRepository.LoadAsync();
-var currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
+ITransactionalOrchestratorStateRepository stateRepository;
+AgentOrchestratorKernel kernel;
+Goal? currentGoal;
+try
+{
+    stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    kernel = await stateRepository.LoadAsync();
+    currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+    return 1;
+}
 
 if (startupArgs.Count > 0)
 {
@@ -181,7 +192,7 @@ if (startupArgs.Count > 0)
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"Error: {ex.Message}");
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
         return ExitCompletedStartupCommand(1);
     }
 }
