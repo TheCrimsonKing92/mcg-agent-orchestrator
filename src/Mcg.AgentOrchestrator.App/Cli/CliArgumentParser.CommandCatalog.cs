@@ -18,6 +18,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "transcript",
     "monitor",
     "monitor-goal",
+    "goal-events",
     "readiness",
     "goal-recovery",
     "dogfood-eval",

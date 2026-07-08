@@ -7,7 +7,6 @@ public sealed partial class AgentOrchestratorKernel
         var goal = new Goal(GoalId.New(), objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
         _goals.Add(goal.Id, goal);
         Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
-        _eventWriter.AppendGoalCreated(goal.Id, objective);
         return goal;
     }
 
@@ -16,7 +15,6 @@ public sealed partial class AgentOrchestratorKernel
         var goal = new Goal(id, objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
         _goals.Add(goal.Id, goal);
         Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
-        _eventWriter.AppendGoalCreated(goal.Id, objective);
         return goal;
     }
 

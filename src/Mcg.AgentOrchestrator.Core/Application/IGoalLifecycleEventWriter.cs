@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public interface IGoalLifecycleEventWriter
 {
+    void AppendTimelineEvent(ProgressEvent progressEvent);
     void AppendGoalCreated(GoalId goalId, string objective);
     void AppendClarificationNeeded(GoalId goalId, string clarificationId);
     void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName);
@@ -14,6 +15,7 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
 {
     public static NullGoalLifecycleEventWriter Instance { get; } = new();
 
+    public void AppendTimelineEvent(ProgressEvent progressEvent) { }
     public void AppendGoalCreated(GoalId goalId, string objective) { }
     public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
     public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
