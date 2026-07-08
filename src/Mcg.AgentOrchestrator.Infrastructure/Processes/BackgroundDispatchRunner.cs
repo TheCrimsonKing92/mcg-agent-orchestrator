@@ -1303,7 +1303,7 @@ public sealed class BackgroundDispatchRunner
                 .ToArray()
             : [];
 
-        var filteredStatusOutput = FilterCommitWorthyStatus(status.Output);
+        var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(status.Output);
         evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
             head.ExitCode == 0 ? head.Output.Trim() : "unknown",
@@ -1312,93 +1312,8 @@ public sealed class BackgroundDispatchRunner
             FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
             commitsAfterDispatch,
             pathsChangedAfterDispatch,
-            ParseStatusPaths(filteredStatusOutput));
+            GitCli.ParseCommitWorthyStatusPaths(filteredStatusOutput));
         return true;
-    }
-
-    private static bool IsRelevantSourcePath(string path)
-    {
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            return false;
-        }
-
-        return !normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith(".scratch/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith(".orchestrator-prototype/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("TestResults/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("/TestResults/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string FilterCommitWorthyStatus(string statusOutput)
-    {
-        if (string.IsNullOrWhiteSpace(statusOutput))
-        {
-            return statusOutput;
-        }
-
-        var lines = statusOutput
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(IsCommitWorthyStatusLine);
-        return string.Join("\n", lines);
-    }
-
-    private static bool IsCommitWorthyStatusLine(string line)
-    {
-        var paths = ParseStatusLinePaths(line);
-        return paths.Length > 0 && paths.Any(IsRelevantSourcePath);
-    }
-
-    private static string[] ParseStatusPaths(string statusOutput)
-    {
-        if (string.IsNullOrWhiteSpace(statusOutput))
-        {
-            return [];
-        }
-
-        return statusOutput
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .SelectMany(ParseStatusLinePaths)
-            .Where(IsRelevantSourcePath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private static string[] ParseStatusLinePaths(string line)
-    {
-        if (line.Length < 4)
-        {
-            return [];
-        }
-
-        var path = line[3..].Trim();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return [];
-        }
-
-        var renameSeparator = path.IndexOf(" -> ", StringComparison.Ordinal);
-        if (renameSeparator >= 0)
-        {
-            var source = path[..renameSeparator].Trim();
-            var destination = path[(renameSeparator + 4)..].Trim();
-            return [source, destination];
-        }
-
-        return [path];
     }
 
     private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
@@ -2283,7 +2198,7 @@ public sealed class BackgroundDispatchRunner
         IReadOnlyList<string> DirtyPaths)
     {
         public bool HasCommitAfterDispatch => CommitsAfterDispatch > 0;
-        public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(IsRelevantSourcePath);
+        public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(path => !GitCli.IsOrchestratorInternalArtifactPath(path));
         public string ChangedPathsSummary => FormatChangedPaths(ChangedPaths);
 
         public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);

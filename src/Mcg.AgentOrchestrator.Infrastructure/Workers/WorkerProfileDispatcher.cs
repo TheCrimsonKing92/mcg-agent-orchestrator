@@ -499,13 +499,14 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(statusResult.Output))
+        var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(statusResult.Output);
+        if (string.IsNullOrWhiteSpace(filteredStatusOutput))
         {
             findings.Add("ok: worktree clean before dispatch");
             return;
         }
 
-        var changedLineCount = statusResult.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
+        var changedLineCount = filteredStatusOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
         findings.Add($"blocked: worktree has {changedLineCount} uncommitted change(s) before dispatch; commit, stash, or clean the goal workspace first");
     }
 

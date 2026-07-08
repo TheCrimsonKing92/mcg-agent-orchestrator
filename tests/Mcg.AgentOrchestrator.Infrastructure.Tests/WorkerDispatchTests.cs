@@ -4042,6 +4042,33 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(task.LastDispatch is null);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_receipt_only_worktree")]
+    public void WorkerProfileDispatcherPreflightAllowsReceiptOnlyWorktree()
+{
+    var root = CreateSeededDispatchRepository();
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement the feature with a prepped workspace");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName), "{}");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        worktree,
+        dispatchedAt);
+
+    Assert.True(preflight.Allowed);
+    Assert.Contains("ok: worktree clean before dispatch", preflight.Findings);
+    Assert.DoesNotContain(preflight.Findings, finding => finding.Contains("uncommitted change", StringComparison.Ordinal));
+    Assert.Equal($"?? {WorkerSandboxPreparer.ReceiptFileName}", ReadGit(worktree, ["status", "--short"]));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_rejects_duplicate_process_start")]
     public void BackgroundDispatchRunnerRejectsDuplicateProcessStart()
 {

@@ -89,11 +89,97 @@ internal static class GitCli
         catch { /* best-effort: process may have already exited */ }
     }
 
-    // Returns true when the worktree has uncommitted changes, or when the status check
-    // fails (treating errors as dirty to prevent accidental acceptance of unverified state).
+    // Returns true when the worktree has commit-worthy uncommitted changes, or when the
+    // status check fails (treating errors as dirty to prevent accidental acceptance of
+    // unverified state).
     public static bool IsWorktreeDirty(string workingDirectory)
     {
         var result = Run(workingDirectory, "status", "--porcelain");
-        return result.ExitCode != 0 || !string.IsNullOrWhiteSpace(result.Output);
+        return result.ExitCode != 0 || !string.IsNullOrWhiteSpace(FilterCommitWorthyStatus(result.Output));
+    }
+
+    internal static string FilterCommitWorthyStatus(string statusOutput)
+    {
+        if (string.IsNullOrWhiteSpace(statusOutput))
+        {
+            return statusOutput;
+        }
+
+        var lines = statusOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(IsCommitWorthyStatusLine);
+        return string.Join("\n", lines);
+    }
+
+    internal static string[] ParseCommitWorthyStatusPaths(string statusOutput)
+    {
+        if (string.IsNullOrWhiteSpace(statusOutput))
+        {
+            return [];
+        }
+
+        return statusOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(ParseStatusLinePaths)
+            .Where(path => !IsOrchestratorInternalArtifactPath(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    internal static bool IsCommitWorthyStatusLine(string line)
+    {
+        var paths = ParseStatusLinePaths(line);
+        return paths.Length > 0 && paths.Any(path => !IsOrchestratorInternalArtifactPath(path));
+    }
+
+    internal static string[] ParseStatusLinePaths(string line)
+    {
+        if (line.Length < 4)
+        {
+            return [];
+        }
+
+        var path = line[3..].Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return [];
+        }
+
+        var renameSeparator = path.IndexOf(" -> ", StringComparison.Ordinal);
+        if (renameSeparator >= 0)
+        {
+            var source = path[..renameSeparator].Trim();
+            var destination = path[(renameSeparator + 4)..].Trim();
+            return [source, destination];
+        }
+
+        return [path];
+    }
+
+    internal static bool IsOrchestratorInternalArtifactPath(string path)
+    {
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith(".scratch/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith(".orchestrator-prototype/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("TestResults/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("/TestResults/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
     }
 }
