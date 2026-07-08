@@ -22,7 +22,8 @@ internal static class LandingExecutor
         Goal goal,
         OrchestratorWorkspace workspace,
         IOperatorChannel? channel = null,
-        ConductorAutonomyPolicy? policy = null)
+        ConductorAutonomyPolicy? policy = null,
+        IGoalLifecycleEventWriter? eventWriter = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -87,6 +88,7 @@ internal static class LandingExecutor
                     false, $"Parked on {IntegrationBranchName}: {unexpectedReason}");
             }
 
+            eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch);
             return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
                 true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.");
         }

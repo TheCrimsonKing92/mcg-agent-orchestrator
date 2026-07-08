@@ -40,7 +40,7 @@ public sealed class GoalLifecycleEventWriterTests
                     "",
                     DateTimeOffset.UtcNow));
             kernel.CompleteGoal(goal.Id, "verified");
-            kernel.RecordGoalPolicyDecision(goal.Id, "landed");
+            writer.AppendGoalLanded(goal.Id, LandingExecutor.IntegrationBranchName, GoalWorktrees.BranchName(goal.Id));
             kernel.RequestHumanInput(goal.Id, task.Id, "Need operator decision.");
 
             var path = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
@@ -53,7 +53,7 @@ public sealed class GoalLifecycleEventWriterTests
                 "TaskVerified",
                 "TaskCompleted",
                 "GoalLifecycleDecision",
-                "GoalLifecycleDecision",
+                "GoalLanded",
                 "GoalEscalated"
             ], lines.Select(EventType).ToArray());
             Xunit.Assert.Equal(Enumerable.Range(0, lines.Length), lines.Select(Cursor));

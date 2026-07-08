@@ -8,6 +8,7 @@ public interface IGoalLifecycleEventWriter
     void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName);
     void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt);
     void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures);
+    void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendCleanedUp(GoalId goalId);
 }
 
@@ -21,5 +22,6 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
     public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
     public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
+    public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
     public void AppendCleanedUp(GoalId goalId) { }
 }

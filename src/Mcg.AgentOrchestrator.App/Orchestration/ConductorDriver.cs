@@ -287,7 +287,13 @@ internal sealed class ConductorDriver
         _land = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:land", "Landing goal via integration branch.");
-            var result = LandingExecutor.Execute(kernel, goal, workspace, channel, policy);
+            var result = LandingExecutor.Execute(
+                kernel,
+                goal,
+                workspace,
+                channel,
+                policy,
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
             if (result.MainAdvanced)
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else

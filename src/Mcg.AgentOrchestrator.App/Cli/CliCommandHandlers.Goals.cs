@@ -832,7 +832,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "land":
             CliArgumentParser.RequirePartCount(parts, 2, "land <goal-id-prefix>");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var landResult = LandingExecutor.Execute(context.Kernel, context.CurrentGoal, context.Workspace, context.Channel);
+            var landResult = LandingExecutor.Execute(
+                context.Kernel,
+                context.CurrentGoal,
+                context.Workspace,
+                context.Channel,
+                eventWriter: context.EventWriter);
             Console.WriteLine($"Land {landResult.GoalPrefix}: {landResult.Message}");
             Console.WriteLine($"  decision: {(landResult.Decision is LandingDecision.Promote ? "Promote" : $"Escalate({((LandingDecision.Escalate)landResult.Decision).Reason})")}");
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");

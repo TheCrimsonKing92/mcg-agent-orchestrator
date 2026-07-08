@@ -60,6 +60,13 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["failures"] = new JsonArray(failures.Select(f => JsonValue.Create(f)).ToArray<JsonNode?>());
         });
 
+    public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) =>
+        Append(goalId, "GoalLanded", obj =>
+        {
+            obj["integrationBranch"] = integrationBranch;
+            obj["goalBranch"] = goalBranch;
+        });
+
     public void AppendCleanedUp(GoalId goalId) =>
         Append(goalId, "CleanedUp", _ => { });
 

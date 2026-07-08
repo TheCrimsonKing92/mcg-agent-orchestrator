@@ -5663,6 +5663,8 @@ public sealed class GoalWorktreeIntegrationTests
             }
         }
 
+        public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
+
         public void AppendCleanedUp(GoalId goalId) => order.Add("remove-worktree");
     }
 
