@@ -356,6 +356,28 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return results;
     }
 
+    public async Task<IReadOnlyList<QuarantinedGoalSummary>> ListQuarantinedGoalRowsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        var results = new List<QuarantinedGoalSummary>();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, snapshot_json FROM goals ORDER BY updated_at DESC";
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            TryReadGoalSnapshot(
+                reader.GetString(0),
+                reader.GetString(1),
+                results,
+                logQuarantine: false,
+                out _);
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
@@ -419,12 +441,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             await using var cmd = conn.CreateCommand();
             if (goalIds is null)
             {
-                cmd.CommandText = "SELECT snapshot_json FROM goals";
+                cmd.CommandText = "SELECT id, snapshot_json FROM goals";
             }
             else
             {
                 var parameterNames = goalIds.Select((_, index) => $"$id{index}").ToArray();
-                cmd.CommandText = $"SELECT snapshot_json FROM goals WHERE id IN ({string.Join(", ", parameterNames)})";
+                cmd.CommandText = $"SELECT id, snapshot_json FROM goals WHERE id IN ({string.Join(", ", parameterNames)})";
                 var index = 0;
                 foreach (var goalId in goalIds)
                 {
@@ -436,8 +458,15 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                var snap = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions);
-                if (snap != null) goalSnapshots.Add(snap);
+                if (TryReadGoalSnapshot(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    null,
+                    logQuarantine: true,
+                    out var snap))
+                {
+                    goalSnapshots.Add(snap);
+                }
             }
         }
 
@@ -455,6 +484,42 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return AgentOrchestratorKernel.FromSnapshot(
             new OrchestratorSnapshot(goalSnapshots, humanInputSnapshots));
     }
+
+    private static bool TryReadGoalSnapshot(
+        string goalId,
+        string json,
+        List<QuarantinedGoalSummary>? quarantined,
+        bool logQuarantine,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out GoalSnapshot? snapshot)
+    {
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
+            if (snapshot is not null)
+                return true;
+
+            var error = "JsonException: deserialized goal snapshot was null";
+            quarantined?.Add(new QuarantinedGoalSummary(goalId, error));
+            if (logQuarantine)
+                Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(goalId)}: {error}");
+            return false;
+        }
+        catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+        {
+            var error = $"{ex.GetType().Name}: {ex.Message}";
+            quarantined?.Add(new QuarantinedGoalSummary(goalId, error));
+            if (logQuarantine)
+                Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(goalId)}: {error}");
+            snapshot = null;
+            return false;
+        }
+    }
+
+    private static bool IsSnapshotDeserializeException(Exception exception) =>
+        exception is JsonException or NotSupportedException or ArgumentException;
+
+    private static string ShortGoalId(string goalId) =>
+        goalId.Length <= 8 ? goalId : goalId[..8];
 
     private static async Task WriteSnapshotAsync(
         SqliteConnection conn,
@@ -718,3 +783,5 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 }
 
 public sealed record GoalSummary(string Id, string Status, string Objective, string UpdatedAt);
+
+public sealed record QuarantinedGoalSummary(string Id, string Error);

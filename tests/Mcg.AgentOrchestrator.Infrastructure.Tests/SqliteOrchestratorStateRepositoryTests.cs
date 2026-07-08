@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 public sealed class SqliteOrchestratorStateRepositoryTests
@@ -271,6 +272,92 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.DoesNotContain(nonTerminal.Goals, goal => goal.Id == completed.Id);
         Assert.Contains(nonTerminal.Goals, goal => goal.Id == active.Id);
         Assert.Contains(nonTerminal.Goals, goal => goal.Id == failed.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadAsync_quarantines_malformed_goal_row_and_loads_remaining_state")]
+    public async Task LoadAsyncQuarantinesMalformedGoalRowAndLoadsRemainingState()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var good = kernel.CreateGoal("Good goal survives");
+        var bad = kernel.CreateGoal("Bad goal is quarantined");
+        await repo.SaveAsync(kernel);
+
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var read = conn.CreateCommand();
+            read.CommandText = "SELECT snapshot_json FROM goals WHERE id = $id";
+            read.Parameters.AddWithValue("$id", bad.Id.Value);
+            var json = (string)read.ExecuteScalar()!;
+            var snapshot = JsonNode.Parse(json)!;
+            snapshot["Status"] = "Blocked";
+
+            using var update = conn.CreateCommand();
+            update.CommandText = "UPDATE goals SET status = 'Blocked', snapshot_json = $json WHERE id = $id";
+            update.Parameters.AddWithValue("$json", snapshot.ToJsonString());
+            update.Parameters.AddWithValue("$id", bad.Id.Value);
+            update.ExecuteNonQuery();
+        }
+
+        using var error = new StringWriter();
+        var originalError = Console.Error;
+        Console.SetError(error);
+        AgentOrchestratorKernel restored;
+        try
+        {
+            restored = await repo.LoadAsync();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.Contains(restored.Goals, goal => goal.Id == good.Id);
+        Assert.DoesNotContain(restored.Goals, goal => goal.Id == bad.Id);
+        var quarantined = await repo.ListQuarantinedGoalRowsAsync();
+        var row = Assert.Single(quarantined);
+        Assert.Equal(bad.Id.Value, row.Id);
+        Assert.Contains("JsonException", row.Error);
+        Assert.Contains($"QUARANTINED goal {bad.Id.Value[..8]}: JsonException", error.ToString());
+
+        var diagnostics = RunSqliteTool(
+            "diagnostics",
+            "--db",
+            db);
+        Assert.Equal(0, diagnostics.ExitCode);
+        Assert.Contains($"QUARANTINED {bad.Id.Value[..8]}", diagnostics.Output);
+    }
+
+    [Xunit.Fact(DisplayName = "OrchestratorSqliteTools_status_help_matches_Core_GoalStatus")]
+    public void OrchestratorSqliteToolsStatusHelpMatchesCoreGoalStatus()
+    {
+        var result = RunSqliteTool(
+            "set-goal-status",
+            "--help");
+
+        Assert.Equal(0, result.ExitCode);
+        foreach (var status in Enum.GetNames<GoalStatus>())
+            Assert.Contains(status, result.Output);
+        Assert.DoesNotContain("Blocked", result.Output);
+        Assert.DoesNotContain("Proposed", result.Output);
+
+        var rejected = RunSqliteTool(
+            "set-goal-status",
+            "--status",
+            "Blocked",
+            "abc12345");
+        Assert.NotEqual(0, rejected.ExitCode);
+        Assert.Contains("Unsupported goal status 'Blocked'", rejected.Output);
+    }
+
+    [Xunit.Fact(DisplayName = "Program_startup_error_formatter_prints_exception_type_first")]
+    public void ProgramStartupErrorFormatterPrintsExceptionTypeFirst()
+    {
+        var formatted = ProgramStartupErrorFormatter.Format(new InvalidOperationException("outer wrapper"));
+
+        Assert.StartsWith("InvalidOperationException: outer wrapper", formatted, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_requests_roundtrip")]
@@ -756,6 +843,26 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     {
         var dir = CreateTempDirectory();
         return Path.Combine(dir, "state.db");
+    }
+
+    private static (int ExitCode, string Output) RunSqliteTool(params string[] arguments)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var originalOutput = Console.Out;
+        var originalError = Console.Error;
+        Console.SetOut(output);
+        Console.SetError(error);
+        try
+        {
+            var exitCode = OrchestratorSqliteTools.RunAsync(arguments).GetAwaiter().GetResult();
+            return (exitCode, output.ToString() + error.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOutput);
+            Console.SetError(originalError);
+        }
     }
 
     private static bool IsWriteCategoryStartupStatement(string sql)
