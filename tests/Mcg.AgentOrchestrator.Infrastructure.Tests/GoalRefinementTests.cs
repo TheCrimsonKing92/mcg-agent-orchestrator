@@ -51,6 +51,40 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains(goal.RefinedSpec.BehavioralContract, brief);
     }
 
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
+    public void GoalLifecycleCommandsRecordsAutoPipelineDecisionAndCreatesReviewerLane()
+    {
+        var kernel = new AgentOrchestratorKernel();
+
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Update security token rollback behavior in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs and tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AuthPolicyTests.cs");
+
+        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], goal.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Intake pipeline decision (auto): developer-reviewer", StringComparison.Ordinal) &&
+            evt.Message.Contains("security-risk", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_simple_goal_overrides_pipeline_to_developer_only")]
+    public void GoalLifecycleCommandsSimpleGoalOverridesPipelineToDeveloperOnly()
+    {
+        var kernel = new AgentOrchestratorKernel();
+
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Update security token rollback behavior in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs and tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AuthPolicyTests.cs");
+
+        var task = Xunit.Assert.Single(goal.Tasks);
+        Xunit.Assert.Equal(AgentRole.Developer, task.RequiredRole);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Intake pipeline decision (override): developer-only", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementService_selects_named_refiner_binding_when_not_first")]
     public async Task SelectsNamedRefinerBindingWhenNotFirst()
     {

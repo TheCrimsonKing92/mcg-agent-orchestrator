@@ -16,6 +16,27 @@ internal sealed record GoalObjectiveTaskBoundary(
     string Capability,
     string Verification);
 
+internal enum GoalIntakePipeline
+{
+    DeveloperOnly,
+    DeveloperReviewer,
+    FiveRole
+}
+
+internal sealed record GoalIntakePipelineDecision(
+    GoalIntakePipeline Pipeline,
+    bool IsOverride,
+    IReadOnlyList<string> Reasons)
+{
+    public string Workflow => Pipeline switch
+    {
+        GoalIntakePipeline.DeveloperOnly => "developer-only",
+        GoalIntakePipeline.DeveloperReviewer => "developer-reviewer",
+        GoalIntakePipeline.FiveRole => "five-role",
+        _ => Pipeline.ToString()
+    };
+}
+
 internal sealed record GoalObjectivePlan(
     string Objective,
     string Workflow,
@@ -23,6 +44,7 @@ internal sealed record GoalObjectivePlan(
     TaskComplexity EstimatedComplexity,
     string? HistoricalTimeEstimate,
     IReadOnlyList<string> RiskLabels,
+    GoalIntakePipelineDecision PipelineDecision,
     IReadOnlyList<string> FileScopes,
     IReadOnlyList<string> RequiredTools,
     IReadOnlyList<string> RequiredVerification,
@@ -54,6 +76,21 @@ internal static class GoalObjectivePlanner
         "rollback",
         "secret",
         "secrets",
+        "token"
+    ];
+
+    private static readonly string[] SecurityRiskSignals =
+    [
+        "auth",
+        "authentication",
+        "authorization",
+        "credential",
+        "credentials",
+        "permission",
+        "permissions",
+        "secret",
+        "secrets",
+        "security",
         "token"
     ];
 
@@ -89,7 +126,7 @@ internal static class GoalObjectivePlanner
 
     public static GoalObjectivePlan Build(
         string objective,
-        bool simple,
+        GoalIntakePipeline? pipelineOverride = null,
         IEnumerable<TaskDurationStatsRecord>? durationStats = null)
     {
         var normalized = objective.Trim();
@@ -98,7 +135,8 @@ internal static class GoalObjectivePlanner
         var estimated = TaskComplexityEstimator.Estimate(normalized, normalized, AgentRole.Developer);
         var historicalEstimate = BuildHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
         var riskLabels = BuildRiskLabels(tokens, fileScopes, estimated);
-        var workflow = simple ? "simple-goal" : "goal";
+        var pipelineDecision = SelectPipeline(riskLabels, fileScopes, pipelineOverride);
+        var workflow = pipelineDecision.Workflow;
         var requiredTools = BuildRequiredTools(fileScopes, tokens);
         var requiredVerification = BuildRequiredVerification(fileScopes, tokens, estimated);
         var ambiguous = IsAmbiguous(normalized, tokens, fileScopes);
@@ -110,14 +148,24 @@ internal static class GoalObjectivePlanner
             estimated,
             historicalEstimate,
             riskLabels,
+            pipelineDecision,
             fileScopes,
             requiredTools,
             requiredVerification,
-            BuildTaskBoundaries(simple, estimated, requiredVerification),
+            BuildTaskBoundaries(pipelineDecision.Pipeline, estimated, requiredVerification),
             ambiguous
                 ? "Add the target subsystem, expected behavior, and at least one file scope or concrete artifact before creating tasks."
-                : BuildRecommendation(simple, estimated, riskLabels, fileScopes, historicalEstimate));
+                : BuildRecommendation(pipelineDecision, estimated, riskLabels, fileScopes, historicalEstimate));
     }
+
+    public static GoalObjectivePlan Build(
+        string objective,
+        bool simple,
+        IEnumerable<TaskDurationStatsRecord>? durationStats = null) =>
+        Build(
+            objective,
+            simple ? GoalIntakePipeline.DeveloperOnly : null,
+            durationStats);
 
     public static void ThrowIfBlocked(GoalObjectivePlan plan)
     {
@@ -171,6 +219,11 @@ internal static class GoalObjectivePlanner
             labels.Add("high-risk");
         }
 
+        if (SecurityRiskSignals.Any(tokens.Contains))
+        {
+            labels.Add("security-risk");
+        }
+
         if (ExternalSignals.Any(tokens.Contains))
         {
             labels.Add("external-dependency");
@@ -186,6 +239,58 @@ internal static class GoalObjectivePlanner
         }
 
         return labels.Count == 0 ? ["low-risk"] : labels.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static GoalIntakePipelineDecision SelectPipeline(
+        string[] riskLabels,
+        string[] fileScopes,
+        GoalIntakePipeline? pipelineOverride)
+    {
+        if (pipelineOverride is { } forced)
+        {
+            return new GoalIntakePipelineDecision(
+                forced,
+                IsOverride: true,
+                [$"operator override selected {FormatPipeline(forced)}"]);
+        }
+
+        if (riskLabels.Contains("scope-implicit", StringComparer.OrdinalIgnoreCase))
+        {
+            return new GoalIntakePipelineDecision(
+                GoalIntakePipeline.FiveRole,
+                IsOverride: false,
+                ["scope-implicit objective needs Planner and Researcher to define the work before implementation"]);
+        }
+
+        var reviewReasons = new List<string>();
+        AddReason("high-risk", "high-risk objective needs pre-acceptance review");
+        AddReason("security-risk", "security-risk objective needs pre-acceptance review");
+        AddReason("multi-scope", "multi-scope objective needs reviewer coverage across touched areas");
+        AddReason("external-dependency", "external-dependency objective needs integration-risk review");
+        AddReason("complex", "complex objective needs reviewer coverage before acceptance");
+
+        if (reviewReasons.Count > 0)
+        {
+            return new GoalIntakePipelineDecision(
+                GoalIntakePipeline.DeveloperReviewer,
+                IsOverride: false,
+                reviewReasons);
+        }
+
+        return new GoalIntakePipelineDecision(
+            GoalIntakePipeline.DeveloperOnly,
+            IsOverride: false,
+            fileScopes.Length == 0
+                ? ["no routed risk labels found"]
+                : ["scoped low-risk objective can be implemented by Developer only"]);
+
+        void AddReason(string label, string reason)
+        {
+            if (riskLabels.Contains(label, StringComparer.OrdinalIgnoreCase))
+            {
+                reviewReasons.Add(reason);
+            }
+        }
     }
 
     private static string[] BuildRequiredTools(string[] fileScopes, HashSet<string> tokens)
@@ -280,15 +385,24 @@ internal static class GoalObjectivePlanner
     }
 
     private static GoalObjectiveTaskBoundary[] BuildTaskBoundaries(
-        bool simple,
+        GoalIntakePipeline pipeline,
         TaskComplexity complexity,
         string[] verification)
     {
-        if (simple)
+        if (pipeline == GoalIntakePipeline.DeveloperOnly)
         {
             return
             [
                 new GoalObjectiveTaskBoundary(1, AgentRole.Developer, "Implement the requested change and record evidence.", "workspace-write", verification[0])
+            ];
+        }
+
+        if (pipeline == GoalIntakePipeline.DeveloperReviewer)
+        {
+            return
+            [
+                new GoalObjectiveTaskBoundary(1, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
+                new GoalObjectiveTaskBoundary(2, AgentRole.Reviewer, "Review diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
             ];
         }
 
@@ -303,7 +417,7 @@ internal static class GoalObjectivePlanner
     }
 
     private static string BuildRecommendation(
-        bool simple,
+        GoalIntakePipelineDecision pipelineDecision,
         TaskComplexity complexity,
         string[] riskLabels,
         string[] fileScopes,
@@ -312,23 +426,32 @@ internal static class GoalObjectivePlanner
         var suffix = string.IsNullOrWhiteSpace(historicalEstimate)
             ? string.Empty
             : $" Historical estimate: {historicalEstimate}";
-        if (simple && complexity == TaskComplexity.Complex)
+        if (pipelineDecision.IsOverride && pipelineDecision.Pipeline == GoalIntakePipeline.DeveloperOnly && complexity == TaskComplexity.Complex)
         {
-            return "Prefer a five-role goal or split into smaller simple-goals before subscription dispatch." + suffix;
+            return "Operator override selected Developer-only; split complex work if the scope is not mechanical." + suffix;
         }
 
-        if (riskLabels.Contains("high-risk"))
+        if (pipelineDecision.Pipeline == GoalIntakePipeline.DeveloperReviewer)
         {
-            return "Create an isolated workspace and require readiness confirmation before unattended dispatch." + suffix;
+            return "Route through Developer+Reviewer before acceptance." + suffix;
         }
 
-        if (fileScopes.Length == 0)
+        if (pipelineDecision.Pipeline == GoalIntakePipeline.FiveRole)
         {
-            return "Proceed only after Planner/Researcher confirm concrete file scopes." + suffix;
+            return "Route through the five-role pipeline so planning and research define the open scope." + suffix;
         }
 
         return "Proceed with the selected workflow and focused verification." + suffix;
     }
+
+    private static string FormatPipeline(GoalIntakePipeline pipeline) =>
+        pipeline switch
+        {
+            GoalIntakePipeline.DeveloperOnly => "Developer-only",
+            GoalIntakePipeline.DeveloperReviewer => "Developer+Reviewer",
+            GoalIntakePipeline.FiveRole => "five-role",
+            _ => pipeline.ToString()
+        };
 
     private static string? BuildHistoricalEstimate(
         IEnumerable<TaskDurationStatsRecord>? durationStats,

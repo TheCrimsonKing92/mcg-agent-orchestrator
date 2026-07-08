@@ -8,7 +8,9 @@ internal static class GoalLifecycleCommands
 {
     public static Goal CreateAndActivateGoal(AgentOrchestratorKernel kernel, IReadOnlyList<AgentDefinition> agents, string objective)
     {
-        var goal = kernel.CreateGoal(objective);
+        var plan = GoalObjectivePlanner.Build(objective, pipelineOverride: null, durationStats: kernel.BuildTaskDurationStats());
+        GoalObjectivePlanner.ThrowIfBlocked(plan);
+        var goal = CreateGoalFromPlan(kernel, plan);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -21,7 +23,9 @@ internal static class GoalLifecycleCommands
         IModelProviderRegistry providers,
         IGoalLifecycleEventWriter? eventWriter = null)
     {
-        var goal = kernel.CreateGoal(objective);
+        var plan = GoalObjectivePlanner.Build(objective, pipelineOverride: null, durationStats: kernel.BuildTaskDurationStats());
+        GoalObjectivePlanner.ThrowIfBlocked(plan);
+        var goal = CreateGoalFromPlan(kernel, plan);
         GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
@@ -29,15 +33,9 @@ internal static class GoalLifecycleCommands
 
     public static Goal CreateAndActivateSimpleGoal(AgentOrchestratorKernel kernel, IReadOnlyList<AgentDefinition> agents, string objective)
     {
-        var goal = kernel.CreateGoal(
-            objective,
-            [
-                new TaskSpec(
-                    TaskId.New(),
-                    objective,
-                    AgentRole.Developer,
-                    "Record concrete evidence that the objective is complete. Use an automated command when practical, or record manual verification evidence.")
-            ]);
+        var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
+        GoalObjectivePlanner.ThrowIfBlocked(plan);
+        var goal = CreateGoalFromPlan(kernel, plan);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -50,15 +48,9 @@ internal static class GoalLifecycleCommands
         IModelProviderRegistry providers,
         IGoalLifecycleEventWriter? eventWriter = null)
     {
-        var goal = kernel.CreateGoal(
-            objective,
-            [
-                new TaskSpec(
-                    TaskId.New(),
-                    objective,
-                    AgentRole.Developer,
-                    "Record concrete evidence that the objective is complete. Use an automated command when practical, or record manual verification evidence.")
-            ]);
+        var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
+        GoalObjectivePlanner.ThrowIfBlocked(plan);
+        var goal = CreateGoalFromPlan(kernel, plan);
         GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
@@ -96,6 +88,27 @@ internal static class GoalLifecycleCommands
             providers: providers);
 
         return goal;
+    }
+
+    private static Goal CreateGoalFromPlan(AgentOrchestratorKernel kernel, GoalObjectivePlan plan)
+    {
+        var goal = kernel.CreateGoal(
+            plan.Objective,
+            plan.TaskBoundaries
+                .Select(boundary => new TaskSpec(
+                    TaskId.New(),
+                    boundary.Purpose,
+                    boundary.Role,
+                    boundary.Verification))
+                .ToList());
+        kernel.RecordGoalPolicyDecision(goal.Id, BuildPipelineDecisionMessage(plan));
+        return goal;
+    }
+
+    private static string BuildPipelineDecisionMessage(GoalObjectivePlan plan)
+    {
+        var source = plan.PipelineDecision.IsOverride ? "override" : "auto";
+        return $"Intake pipeline decision ({source}): {plan.PipelineDecision.Workflow}; reasons: {string.Join("; ", plan.PipelineDecision.Reasons)}; risk labels: {string.Join(", ", plan.RiskLabels)}.";
     }
 }
 

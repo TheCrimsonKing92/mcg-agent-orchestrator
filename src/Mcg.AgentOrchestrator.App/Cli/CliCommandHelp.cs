@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start]";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] (--simple forces Developer-only)";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
