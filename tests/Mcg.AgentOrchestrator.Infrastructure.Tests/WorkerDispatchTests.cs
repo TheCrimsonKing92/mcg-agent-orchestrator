@@ -2251,6 +2251,17 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(
+        agents.Single(agent => agent.Id == task.AssignedAgentId),
+        goal,
+        task);
+    var plan = SubscriptionPlanBuilder.Build(
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        _ => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents));
+    var planItem = plan.Items.Single();
+    var planSummary = plan.ReadyModelUsage.Single();
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -2264,9 +2275,16 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         sandboxOptions: sandbox);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
     Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+    Assert.Equal(task.LastDispatch.ProviderName, templateVariables["providerName"]);
+    Assert.Equal(task.LastDispatch.ModelName, templateVariables["subscriptionModelName"]);
+    Assert.Equal(task.LastDispatch.ProviderName, planItem.ProviderName);
+    Assert.Equal(task.LastDispatch.ModelName, planItem.SubscriptionModelName);
+    Assert.Equal(task.LastDispatch.ProviderName, planSummary.ProviderName);
+    Assert.Equal(task.LastDispatch.ModelName, planSummary.ModelName);
     Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
 }
 

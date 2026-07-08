@@ -208,8 +208,7 @@ public static class WorkerProfileDispatcher
         EnsureTaskNeedsExecution(task);
 
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
-        var selection = ResolveSubscriptionModel(agent, goal, task);
-        var roleSelection = ResolveRoleModelSelection(agent, task, selection);
+        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
             : ResolveSubscriptionProfile(agent, roleSelection.Model, profiles);
@@ -249,8 +248,8 @@ public static class WorkerProfileDispatcher
             dispatchProviderName,
             resolvedModelName,
             resolvedReasoning,
-            selection.Complexity,
-            selection.UsesComplexModel,
+            roleSelection.Complexity,
+            roleSelection.UsesComplexModel,
             preflight.Findings);
     }
 
@@ -272,8 +271,7 @@ public static class WorkerProfileDispatcher
         {
             EnsureTaskNeedsExecution(task);
             var agent = ResolveAssignedAgent(null, goal, task, agents);
-            var selection = ResolveSubscriptionModel(agent, goal, task);
-            var roleSelection = ResolveRoleModelSelection(agent, task, selection);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
                 : ResolveSubscriptionProfileName(agent, roleSelection.Model);
@@ -544,7 +542,7 @@ public static class WorkerProfileDispatcher
         IReadOnlyList<AgentDefinition> agents)
     {
         var agent = ResolveAssignedAgent(null, null, task, agents);
-        var selection = ResolveSubscriptionModel(agent, goal, task);
+        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
         var modelName = ResolveEffectiveSubscriptionModelName(agent, selection);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
@@ -605,8 +603,7 @@ public static class WorkerProfileDispatcher
         var blocked = new List<ReadyBlockedDiagnostic>();
         foreach (var selection in selections)
         {
-            var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
-            var roleSelection = ResolveRoleModelSelection(selection.Agent, selection.Task, subscriptionModel);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task);
             var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection.Model, profiles);
             var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection);
             var preflight = PreflightSubscriptionTask(
@@ -753,8 +750,7 @@ public static class WorkerProfileDispatcher
 
     public static string ResolveSubscriptionProfileName(AgentDefinition agent, Goal goal, TaskSpec task)
     {
-        var selection = ResolveSubscriptionModel(agent, goal, task);
-        return ResolveSubscriptionProfileName(agent, ResolveRoleModelSelection(agent, task, selection).Model);
+        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task).Model);
     }
 
     private static string ResolveSubscriptionProfileName(AgentDefinition agent, ModelProfile model)
@@ -800,7 +796,7 @@ public static class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task)
     {
-        return BuildSubscriptionTemplateVariables(agent, ResolveSubscriptionModel(agent, goal, task));
+        return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task));
     }
 
     private static Dictionary<string, string?> BuildSubscriptionTemplateVariables(
@@ -880,6 +876,14 @@ public static class WorkerProfileDispatcher
             goal.Objective,
             ModelFitEvidence.BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes)));
         return new SubscriptionModelSelection(complexity, model, UsesComplexModel(agent, model));
+    }
+
+    private static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task)
+    {
+        return ResolveRoleModelSelection(agent, task, ResolveSubscriptionModel(agent, goal, task));
     }
 
     private static SubscriptionModelSelection ResolveRoleModelSelection(
