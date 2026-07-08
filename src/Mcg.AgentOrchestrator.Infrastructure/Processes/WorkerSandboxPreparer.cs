@@ -91,6 +91,12 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         var recursive = allowRecursiveMigration;
         if (!labeler.SetIntegrity(path, LowInheritableLevel, recursive))
         {
+            if (IsAlreadyLowInheritable(path))
+            {
+                WritePreparationFiles(path, path == sandboxRoot ? Path.GetDirectoryName(sandboxRoot) ?? sandboxRoot : path, sandboxRoot);
+                return new WorkerSandboxPreparationResult(false, false);
+            }
+
             var reason = $"Failed to apply inheritable Low integrity label to '{path}'.";
             if (!reusedWorktree)
             {
@@ -112,6 +118,12 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             : new WorkerSandboxPreparationResult(recursive, false);
     }
 
+    private bool IsAlreadyLowInheritable(string path)
+    {
+        var state = labeler.Query(path);
+        return state.Exists && state.Low && state.Inheritable;
+    }
+
     private bool IsPrepared(string path)
     {
         if (!File.Exists(MarkerPath(path)))
@@ -119,8 +131,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             return false;
         }
 
-        var state = labeler.Query(path);
-        return state.Exists && state.Low && state.Inheritable;
+        return IsAlreadyLowInheritable(path);
     }
 
     private static string MarkerPath(string path) => Path.Combine(path, MarkerFileName);
