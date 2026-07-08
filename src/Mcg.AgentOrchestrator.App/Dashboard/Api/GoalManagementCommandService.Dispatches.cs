@@ -282,6 +282,11 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         safeBatch.TaskIds);
+    if (checkpointBeforeWorkerStart is not null && batch.Dispatches.Count > 0)
+    {
+        checkpointBeforeWorkerStart(kernel, goal.Id, batch.Dispatches[0].Task.Id);
+    }
+
     var processes = StartDispatches(
         kernel,
         workspace,

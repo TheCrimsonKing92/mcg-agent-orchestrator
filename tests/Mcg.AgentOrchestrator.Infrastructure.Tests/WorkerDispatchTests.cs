@@ -348,6 +348,61 @@ public sealed class WorkerDispatchTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_checkpoints_dispatch_record_before_process_start")]
+    public void StartSubscriptionReadyTasksCheckpointsDispatchRecordBeforeProcessStart()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-07-07T12:00:00Z")));
+    var planner = new TaskSpec(TaskId.New(), "Plan the dispatch checkpoint.", AgentRole.Planner);
+    var goal = kernel.CreateGoal("Checkpoint dispatch record before start", [planner]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Checkpoint dispatch record before start",
+        ["The dispatch record is persisted before worker start is attempted."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = SubscriptionPlannerAgent("planner", "Planner");
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+    var checkpointCalls = 0;
+
+    try
+    {
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                [agent],
+                DispatchTestProfiles(),
+                checkpointBeforeWorkerStart: (_, checkpointGoalId, checkpointTaskId) =>
+                {
+                    checkpointCalls++;
+                    Assert.Equal(goal.Id, checkpointGoalId);
+                    Assert.Equal(planner.Id, checkpointTaskId);
+                    throw new InvalidOperationException("dispatch checkpoint failed");
+                }));
+
+        Assert.Contains("dispatch checkpoint failed", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, checkpointCalls);
+        Assert.True(planner.LastDispatch is not null);
+        Assert.True(planner.LastProcess is null);
+        var dispatchJsonFiles = Directory.Exists(workspace.LogDirectory)
+            ? Directory.EnumerateFiles(workspace.LogDirectory, "*.dispatch.json", SearchOption.TopDirectoryOnly)
+            : Array.Empty<string>();
+        Assert.Empty(dispatchJsonFiles);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
+    }
+}
+
     [Xunit.Fact(DisplayName = "StartDispatches_fails_closed_when_recorded_worker_profile_is_missing")]
     public void StartDispatchesFailsClosedWhenRecordedWorkerProfileIsMissing()
 {
