@@ -43,6 +43,8 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
 
+    internal Action<string>? PhaseTimingSink { get; set; }
+
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
@@ -686,13 +688,17 @@ internal sealed class ConductorDriver
         var running = _getRunningPaidWorkerCount();
         if (running >= policy.MaxConcurrentPaidWorkers)
         {
+            EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(fromState,
                     $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
+        var startClock = Stopwatch.StartNew();
         var outcome = start(goal, policy);
+        startClock.Stop();
+        EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category}");
         if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
         {
             if (!TryRecoverSandboxPrep(outcome, goalPrefix, out var recoveryFailure))
@@ -703,7 +709,10 @@ internal sealed class ConductorDriver
             var retryStart = fromState == GoalLifecycleState.WorkspaceReady
                 ? _startRecordedDispatches
                 : start;
+            startClock.Restart();
             outcome = retryStart(goal, policy);
+            startClock.Stop();
+            EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category} retry=sandbox-prep");
         }
 
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
@@ -718,7 +727,10 @@ internal sealed class ConductorDriver
             var retryStart = fromState == GoalLifecycleState.WorkspaceReady
                 ? _startRecordedDispatches
                 : start;
+            startClock.Restart();
             outcome = retryStart(goal, policy);
+            startClock.Stop();
+            EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category} retry=spawn-failed");
             if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
             {
                 outcome = firstFailure;
@@ -780,6 +792,18 @@ internal sealed class ConductorDriver
         failureReason = $"Low-IL sandbox prep recovery failed for goal {goalPrefix}: {action.Reason}";
         return false;
     }
+
+    private void EmitPhaseTiming(string phase, Goal goal, TimeSpan elapsed, string detail)
+    {
+        foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
+        {
+            PhaseTimingSink?.Invoke(
+                $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
+        }
+    }
+
+    private static int CountAssignedTasks(Goal goal) =>
+        goal.Tasks.Count(task => task.Status == WorkTaskStatus.Assigned);
 
     private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)
     {
