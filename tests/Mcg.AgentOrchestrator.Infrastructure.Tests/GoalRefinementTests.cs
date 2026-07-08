@@ -85,6 +85,71 @@ public sealed class GoalRefinementTests
             evt.Message.Contains("Intake pipeline decision (override): developer-only", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "GoalObjectivePlanner_classifies_meta_commentary_by_actionable_work")]
+    public void GoalObjectivePlannerClassifiesMetaCommentaryByActionableWork()
+    {
+        var objective =
+            "Update docs/operator-runbook.md with one short clarification about stuck-goal timing. " +
+            "Note: this validates the router/classifier regression where a trivial docs goal was labeled complex.";
+
+        var plan = GoalObjectivePlanner.Build(objective, simple: false);
+
+        Xunit.Assert.Equal(TaskComplexity.Simple, plan.EstimatedComplexity);
+        Xunit.Assert.DoesNotContain("complex", plan.RiskLabels);
+        Xunit.Assert.Contains("docs/operator-runbook.md", plan.FileScopes);
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, plan.PipelineDecision.Pipeline);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_capability_warning_for_remote_git_instructions")]
+    public void GoalLifecycleCommandsRecordsCapabilityWarningForRemoteGitInstructions()
+    {
+        var kernel = new AgentOrchestratorKernel();
+
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Update docs/operator-runbook.md after git fetch and git rebase onto origin/main.");
+
+        var warnings = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("Brief capability warning", StringComparison.Ordinal))
+            .Select(evt => evt.Message)
+            .ToArray();
+        Xunit.Assert.Contains(warnings, warning => warning.Contains("git fetch", StringComparison.Ordinal));
+        Xunit.Assert.Contains(warnings, warning => warning.Contains("git rebase", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Dashboard_retry_records_capability_warning_for_gh_cli_instruction")]
+    public async Task DashboardRetryRecordsCapabilityWarningForGhCliInstruction()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Retry lint",
+            [new TaskSpec(TaskId.New(), "Do retryable work", AgentRole.Developer)]);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "needs retry");
+
+        await GoalManagementCommandService.ApplyTaskActionAsync(
+            kernel,
+            AgentCatalog.Default().Agents,
+            new InMemoryModelProviderRegistry([]),
+            workspace,
+            goal,
+            task,
+            "retry",
+            """{"message":"Retry after running gh pr checkout and git push."}""");
+
+        var warnings = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("Brief capability warning", StringComparison.Ordinal))
+            .Select(evt => evt.Message)
+            .ToArray();
+        Xunit.Assert.Contains(warnings, warning => warning.Contains("gh CLI", StringComparison.Ordinal));
+        Xunit.Assert.Contains(warnings, warning => warning.Contains("git push", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementService_selects_named_refiner_binding_when_not_first")]
     public async Task SelectsNamedRefinerBindingWhenNotFirst()
     {

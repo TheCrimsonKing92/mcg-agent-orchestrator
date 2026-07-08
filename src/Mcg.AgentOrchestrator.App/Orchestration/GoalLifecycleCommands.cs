@@ -102,6 +102,7 @@ internal static class GoalLifecycleCommands
                     boundary.Verification))
                 .ToList());
         kernel.RecordGoalPolicyDecision(goal.Id, BuildPipelineDecisionMessage(plan));
+        RecordCapabilityWarnings(kernel, goal.Id, plan.CapabilityWarnings);
         return goal;
     }
 
@@ -109,6 +110,17 @@ internal static class GoalLifecycleCommands
     {
         var source = plan.PipelineDecision.IsOverride ? "override" : "auto";
         return $"Intake pipeline decision ({source}): {plan.PipelineDecision.Workflow}; reasons: {string.Join("; ", plan.PipelineDecision.Reasons)}; risk labels: {string.Join(", ", plan.RiskLabels)}.";
+    }
+
+    internal static void RecordCapabilityWarnings(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        IReadOnlyList<string> warnings)
+    {
+        foreach (var warning in warnings)
+        {
+            kernel.RecordGoalPolicyDecision(goalId, warning);
+        }
     }
 }
 
