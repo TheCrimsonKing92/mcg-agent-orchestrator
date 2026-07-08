@@ -52,6 +52,60 @@ public sealed class LandingExecutorTests
         Assert.True(escalation.Reason.Contains("repeated failures", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact(DisplayName = "LandingExecutor_applies_landed_backlog_add_proposal_once")]
+    public void LandingExecutorAppliesLandedBacklogAddProposalOnce()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            RunGit(repo, "checkout", "-b", goalBranch);
+            Directory.CreateDirectory(Path.Combine(repo, ".orchestrator-proposals"));
+            File.WriteAllText(Path.Combine(repo, ".orchestrator-proposals", "backlog-add-proposed-follow-up.md"), """
+                ---
+                kind: backlog-add
+                title: Proposed follow-up
+                ---
+                Body from a landed proposal.
+                """);
+            RunGit(repo, "add", ".orchestrator-proposals/backlog-add-proposed-follow-up.md");
+            RunGit(repo, "commit", "-m", "Add state-effect proposal");
+            RunGit(repo, "checkout", "main");
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced);
+            var items = new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult();
+            var item = Assert.Single(items);
+            Assert.Equal("proposed-follow-up", item.Id);
+            Assert.Equal("Proposed follow-up", item.Title);
+            Assert.Equal(goal.Id.Value, item.SourceGoalId);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation.StartsWith("conductor:state-effect:", StringComparison.Ordinal) &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.Contains(kernel.GetTimeline(goal.Id), evt =>
+                evt.Message.Contains("State-effect proposal applied", StringComparison.Ordinal));
+
+            var reapplied = StateEffectProposalApplier.ApplyLandedProposals(
+                kernel,
+                goal,
+                workspace,
+                [".orchestrator-proposals/backlog-add-proposed-follow-up.md"]);
+
+            Assert.Single(reapplied);
+            Assert.False(reapplied[0].Applied);
+            var afterReapply = new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult();
+            Assert.Single(afterReapply);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateGoal(params AgentRole[] roles)
     {
         var kernel = new AgentOrchestratorKernel();
@@ -110,5 +164,53 @@ public sealed class LandingExecutorTests
             command,
             "C:\\repo",
             DateTimeOffset.UtcNow));
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateVerifiedGoal(string repo)
+    {
+        var (kernel, goal) = CreateGoal(AgentRole.Developer);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        return (kernel, goal);
+    }
+
+    private static string CreateGitRepository()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-landing-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial" + Environment.NewLine);
+        RunGit(root, "add", "README.md");
+        RunGit(root, "commit", "-m", "Initial");
+        return root;
+    }
+
+    private static void RunGit(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {result.Error}");
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+        }
     }
 }

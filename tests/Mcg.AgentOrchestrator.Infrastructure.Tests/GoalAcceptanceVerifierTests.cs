@@ -169,6 +169,46 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_validates_state_effect_proposal_schema")]
+    public async Task GoalAcceptanceVerifierValidatesStateEffectProposalSchema()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "fast no-op", "type": "no-op" }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var proposalDirectory = Path.Combine(root, ".orchestrator-proposals");
+            Directory.CreateDirectory(proposalDirectory);
+            File.WriteAllText(Path.Combine(proposalDirectory, "backlog-add-missing-title.md"), """
+                ---
+                kind: backlog-add
+                ---
+                Body only is not enough.
+                """);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+                Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty)));
+
+            var result = await verifier.RunAsync(
+                root,
+                changedFiles: [".orchestrator-proposals/backlog-add-missing-title.md"]);
+
+            Assert.False(result.Passed);
+            var check = Assert.Single(result.Checks!.Where(check => check.Name == "state-effect proposal schema"));
+            Assert.False(check.Passed);
+            Assert.Contains("missing required field 'title'", check.OutputTail);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 public abstract class GoalAcceptanceVerifierTestBase

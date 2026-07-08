@@ -91,6 +91,7 @@ internal static class LandingExecutor
             }
 
             eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch);
+            StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
             return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
                 true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.");
         }
