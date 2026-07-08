@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("EnvMutation")]
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class LocalProcessVerifierTests
 {
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_wraps_goal_dotnet_verification_with_isolated_artifacts")]

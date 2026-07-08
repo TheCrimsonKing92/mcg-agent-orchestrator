@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("EnvMutation")]
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class GoalAcceptanceVerifierTests
 {
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
