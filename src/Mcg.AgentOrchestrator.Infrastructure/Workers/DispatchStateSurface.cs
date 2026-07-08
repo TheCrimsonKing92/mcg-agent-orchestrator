@@ -233,8 +233,9 @@ public sealed class DispatchStateSurface
                 : null;
         }
 
+        var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(status.Output);
         var statusEntries = status.ExitCode == 0
-            ? status.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            ? filteredStatusOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : [];
         var error = status.ExitCode == 0 && head.ExitCode == 0
             ? null
