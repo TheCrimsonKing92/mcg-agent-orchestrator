@@ -816,6 +816,115 @@ public sealed class ConductorBatchLoopTests
         Assert.True(task.LastProcess is not null);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_retries_and_persists_dispatch_records_before_slot_release")]
+    public async Task CriticalDispatchStartRetriesAndPersistsDispatchRecordsBeforeSlotRelease()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-{Guid.NewGuid():N}.db");
+        var repo = new SqliteOrchestratorStateRepository(db);
+
+        GoalId goalId = default;
+        TaskId taskId = default;
+        await repo.TransactAsync((k, _) =>
+        {
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(k, DefaultAgents(), "Critical dispatch start goal");
+            goalId = goal.Id;
+            taskId = goal.Tasks.Single().Id;
+            return Task.FromResult((true, true));
+        });
+
+        var kernel = await repo.LoadAsync();
+        var attempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                var task = g.Tasks.Single();
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("claude-cli", "claude -p plan", "C:\\wt", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, task.Id,
+                    new TaskProcessRecord(4242, "claude -p plan", "C:\\wt", "out.log", "err.log", "exit.txt",
+                        DateTimeOffset.UtcNow, null, null));
+                ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                    (checkpoint, changedGoalIds) =>
+                    {
+                        attempts++;
+                        if (attempts < 3)
+                            throw SqliteBusy();
+                        var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+                        var snaps = checkpoint.ExportSnapshot().Goals
+                            .Where(goal => changed.Contains(goal.Id))
+                            .ToArray();
+                        repo.SaveGoalSnapshotsAsync(snaps, CancellationToken.None).GetAwaiter().GetResult();
+                    },
+                    kernel,
+                    g.Id,
+                    task.Id);
+                return DispatchStartOutcome.Started();
+            });
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            persistGoalTick: (_, _) => { });
+
+        var reloaded = await repo.LoadAsync();
+        var task = reloaded.GetTask(goalId, taskId);
+        Assert.Equal(3, attempts);
+        Assert.True(task.LastDispatch is not null);
+        Assert.True(task.LastProcess is not null);
+        Assert.Equal(1, reloaded.Goals.Single(g => g.Id == goalId).Timeline.Count(evt =>
+            evt.TaskId == taskId && evt.Kind == ProgressKind.TaskDispatchRecorded));
+        Assert.Equal(1, reloaded.Goals.Single(g => g.Id == goalId).Timeline.Count(evt =>
+            evt.TaskId == taskId && evt.Kind == ProgressKind.TaskProcessStarted));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_exhaustion_persists_neither_record")]
+    public async Task CriticalDispatchStartExhaustionPersistsNeitherRecord()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-fail-{Guid.NewGuid():N}.db");
+        var repo = new SqliteOrchestratorStateRepository(db);
+
+        GoalId goalId = default;
+        TaskId taskId = default;
+        await repo.TransactAsync((k, _) =>
+        {
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(k, DefaultAgents(), "Critical dispatch start failure goal");
+            goalId = goal.Id;
+            taskId = goal.Tasks.Single().Id;
+            return Task.FromResult((true, true));
+        });
+
+        var kernel = await repo.LoadAsync();
+        var task = kernel.GetTask(goalId, taskId);
+        kernel.RecordTaskDispatch(goalId, taskId,
+            new TaskDispatchRecord("claude-cli", "claude -p plan", "C:\\wt", DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(goalId, taskId,
+            new TaskProcessRecord(4242, "claude -p plan", "C:\\wt", "out.log", "err.log", "exit.txt",
+                DateTimeOffset.UtcNow, null, null));
+
+        var attempts = 0;
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                (_, _) =>
+                {
+                    attempts++;
+                    throw SqliteBusy();
+                },
+                kernel,
+                goalId,
+                task.Id));
+
+        var reloaded = await repo.LoadAsync();
+        var reloadedTask = reloaded.GetTask(goalId, taskId);
+        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(ConductorBatchLoop.DefaultMaxBusyWriteAttempts, attempts);
+        Assert.True(reloadedTask.LastDispatch is null);
+        Assert.True(reloadedTask.LastProcess is null);
+    }
+
     // ── Auto-retry: transient acceptance flake recovers on retry ─────────
 
     [Xunit.Fact(DisplayName = "BatchLoop_AutoRetry_flakeOnFirstAttempt_recoverOnRetry")]
@@ -2761,15 +2870,15 @@ public sealed class ConductorBatchLoopTests
 
     // ── Per-tick write scope: persistGoalTick fires once with exactly the goals that changed ──
 
-    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_exhausted_warns_and_loop_continues")]
-    public void PersistGoalTickBusyExhaustedWarnsAndLoopContinues()
+    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_exhausted_aborts_changed_goal_tick")]
+    public void PersistGoalTickBusyExhaustedAbortsChangedGoalTick()
     {
         var (kernel, goal) = SimpleGoal("busy persistence survives");
         var driver = MakeDriver();
         var ticks = new List<BatchTickSummary>();
         var attempts = 0;
 
-        var summary = new ConductorBatchLoop().Run(
+        var ex = Assert.Throws<InvalidOperationException>(() => new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
             maxIterations: 2,
             onTick: ticks.Add,
@@ -2778,21 +2887,12 @@ public sealed class ConductorBatchLoopTests
                 attempts++;
                 throw SqliteBusy();
             },
-            busyWriteDelay: _ => { });
+            busyWriteDelay: _ => { }));
 
-        Assert.Equal(2, summary.Ticks);
-        Assert.True(ticks.Count >= 2);
+        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(ticks);
         Assert.True(attempts >= ConductorBatchLoop.DefaultMaxBusyWriteAttempts);
-        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
-        Assert.Contains(lines, line =>
-            line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)
-            && line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal)
-            && line.Contains("attempt=1", StringComparison.Ordinal)
-            && line.Contains("likelyHolder=concurrent-per-command-host", StringComparison.Ordinal));
-        Assert.Contains(lines, line =>
-            line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal)
-            && line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal)
-            && line.Contains($"attempt={ConductorBatchLoop.DefaultMaxBusyWriteAttempts}", StringComparison.Ordinal));
+        Assert.Contains(goal.Id.Value[..8], ex.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "PersistGoalTick_busy_retries_and_succeeds_before_budget")]

@@ -263,7 +263,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
     IModelProviderRegistry? providers = null,
-    bool approveHighRiskOwnership = false)
+    bool approveHighRiskOwnership = false,
+    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -289,7 +290,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         refreshBeforeStart: false,
         agents,
         profiles,
-        providers);
+        providers,
+        checkpointBeforeWorkerStart);
     return new SubscriptionStartResult(batch.Dispatches, processes, safeBatch.Plan, batch.Blocked);
 }
 
@@ -411,7 +413,8 @@ public static ProcessBatchExecutionResult StartDispatches(
     IReadOnlyList<AgentDefinition>? agents = null,
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
-    bool refreshBeforeStart = true)
+    bool refreshBeforeStart = true,
+    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
 {
     return StartDispatches(
         kernel,
@@ -421,7 +424,8 @@ public static ProcessBatchExecutionResult StartDispatches(
         refreshBeforeStart,
         agents,
         profiles,
-        providers);
+        providers,
+        checkpointBeforeWorkerStart);
 }
 
 private static ProcessBatchExecutionResult StartDispatches(
@@ -432,7 +436,8 @@ private static ProcessBatchExecutionResult StartDispatches(
     bool refreshBeforeStart,
     IReadOnlyList<AgentDefinition>? agents = null,
     WorkerProfileCatalog? profiles = null,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
 {
     var runner = new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
@@ -461,7 +466,7 @@ private static ProcessBatchExecutionResult StartDispatches(
                 providers);
         }
 
-        var startResult = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot);
+        var startResult = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot, checkpointBeforeWorkerStart);
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);

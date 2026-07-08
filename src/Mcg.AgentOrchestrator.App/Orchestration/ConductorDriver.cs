@@ -50,7 +50,8 @@ internal sealed class ConductorDriver
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
         IOperatorChannel? channel = null,
-        IModelProviderRegistry? providers = null)
+        IModelProviderRegistry? providers = null,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null)
     {
         var dir = workspace.ExecutionDirectory;
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
@@ -114,10 +115,21 @@ internal sealed class ConductorDriver
                     agents,
                     profiles,
                     providers ?? new InMemoryModelProviderRegistry([]),
-                    approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership);
+                    approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership,
+                    checkpointBeforeWorkerStart: persistCriticalDispatchStart is null
+                        ? null
+                        : (checkpointKernel, goalId, taskId) =>
+                            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                                persistCriticalDispatchStart,
+                                checkpointKernel,
+                                goalId,
+                                taskId));
             }
             catch (Exception ex)
             {
+                if (IsCriticalDispatchRecordWriteFailure(ex))
+                    throw;
+
                 var exceptionReason = $"Subscription dispatch start failed: {ex.Message}";
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
@@ -145,10 +157,24 @@ internal sealed class ConductorDriver
             ProcessBatchExecutionResult result;
             try
             {
-                result = GoalManagementCommandService.StartDispatches(kernel, workspace, goal);
+                result = GoalManagementCommandService.StartDispatches(
+                    kernel,
+                    workspace,
+                    goal,
+                    checkpointBeforeWorkerStart: persistCriticalDispatchStart is null
+                        ? null
+                        : (checkpointKernel, goalId, taskId) =>
+                            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                                persistCriticalDispatchStart,
+                                checkpointKernel,
+                                goalId,
+                                taskId));
             }
             catch (Exception ex)
             {
+                if (IsCriticalDispatchRecordWriteFailure(ex))
+                    throw;
+
                 var exceptionReason = $"Recorded dispatch start failed: {ex.Message}";
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", exceptionReason);
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
@@ -444,6 +470,9 @@ internal sealed class ConductorDriver
             : DispatchStartOutcome.SpawnFailed(reason);
     }
 
+    internal static bool IsCriticalDispatchRecordWriteFailure(Exception ex) =>
+        ex.Message.Contains("DISPATCH_RECORD_WRITE_FAILED", StringComparison.Ordinal);
+
     internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
     {
         if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
@@ -679,6 +708,11 @@ internal sealed class ConductorDriver
 
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
+            if (outcome.Reason?.Contains("DISPATCH_RECORD_WRITE_FAILED", StringComparison.Ordinal) == true)
+            {
+                return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason);
+            }
+
             var firstFailure = outcome;
             _buildServerShutdown();
             var retryStart = fromState == GoalLifecycleState.WorkspaceReady
