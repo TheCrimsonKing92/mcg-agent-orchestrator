@@ -91,9 +91,14 @@ public sealed class BackgroundDispatchRunner
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
-    public TaskProcessRecord StartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
+    public TaskProcessRecord StartLatestDispatch(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        string logRoot,
+        Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
     {
-        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot);
+        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart);
         if (result.RecoveryAction is { } action)
         {
             throw new InvalidOperationException(action.Reason);
@@ -103,7 +108,12 @@ public sealed class BackgroundDispatchRunner
             ?? throw new InvalidOperationException("Dispatch start did not produce a process record.");
     }
 
-    public DispatchProcessStartResult TryStartLatestDispatch(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string logRoot)
+    public DispatchProcessStartResult TryStartLatestDispatch(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        string logRoot,
+        Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
@@ -184,8 +194,9 @@ public sealed class BackgroundDispatchRunner
         if (OperatingSystem.IsWindows())
         {
             startInfo.CreateNewProcessGroup = true;
-            startInfo.Environment[DispatchProcessHost.StartGatePathVariable] = startGatePath;
         }
+
+        startInfo.Environment[DispatchProcessHost.StartGatePathVariable] = startGatePath;
 
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(ResolveDispatchHostAssembly());
@@ -201,7 +212,6 @@ public sealed class BackgroundDispatchRunner
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
         WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}");
-        ReleaseDispatchHostStartGate(startGatePath);
 
         var record = new TaskProcessRecord(
             process.Id,
@@ -216,7 +226,33 @@ public sealed class BackgroundDispatchRunner
             OwnedProcessIds: [process.Id]);
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
+        try
+        {
+            checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
+        }
+        catch
+        {
+            TerminateUnreleasedDispatchHost(process);
+            throw;
+        }
+
+        ReleaseDispatchHostStartGate(startGatePath);
         return DispatchProcessStartResult.Started(record);
+    }
+
+    private static void TerminateUnreleasedDispatchHost(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // The checkpoint failure is the actionable fault; process cleanup is best-effort.
+        }
     }
 
     private static void ReleaseDispatchHostStartGate(string startGatePath)

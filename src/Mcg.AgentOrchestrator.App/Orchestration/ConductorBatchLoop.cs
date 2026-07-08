@@ -241,6 +241,9 @@ internal sealed class ConductorBatchLoop
                     }
                     catch (Exception ex)
                     {
+                        if (ConductorDriver.IsCriticalDispatchRecordWriteFailure(ex))
+                            throw;
+
                         var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
                         changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
                         lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
@@ -342,7 +345,7 @@ internal sealed class ConductorBatchLoop
             if (persistGoalTick is not null)
             {
                 if (changedGoalIds.Count > 0)
-                    TryPersistGoalTick(persistGoalTick, kernel, changedGoalIds.ToArray(), totalTicks, tickLines, busyWriteDelay);
+                    PersistGoalTickOrThrow(persistGoalTick, kernel, changedGoalIds.ToArray(), totalTicks, tickLines, busyWriteDelay);
             }
             else
             {
@@ -414,7 +417,26 @@ internal sealed class ConductorBatchLoop
         accumulator?.Add(line);
     }
 
-    private static bool TryPersistGoalTick(
+    internal static void PersistCriticalDispatchStartOrThrow(
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>> persistGoalTick,
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId)
+    {
+        var tickLines = new List<string>();
+        if (!TryPersistWithBusyContainment(
+            () => persistGoalTick(kernel, [goalId]),
+            tick: 0,
+            goals: ShortGoalId(goalId.Value),
+            kind: "dispatch-start",
+            tickLines,
+            busyWriteDelay: null))
+        {
+            ThrowCriticalPersistFailure("dispatch-start", ShortGoalId(goalId.Value), taskId);
+        }
+    }
+
+    private static void PersistGoalTickOrThrow(
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>> persistGoalTick,
         AgentOrchestratorKernel kernel,
         IReadOnlyCollection<GoalId> changedGoalIds,
@@ -423,13 +445,24 @@ internal sealed class ConductorBatchLoop
         Action<TimeSpan>? busyWriteDelay)
     {
         var goals = ResolveGoalContext(changedGoalIds, onlyGoalId: null);
-        return TryPersistWithBusyContainment(
+        if (!TryPersistWithBusyContainment(
             () => persistGoalTick(kernel, changedGoalIds),
             tick,
             goals,
             "goal",
             tickLines,
-            busyWriteDelay);
+            busyWriteDelay))
+        {
+            ThrowCriticalPersistFailure("goal", goals, taskId: null);
+        }
+    }
+
+    private static void ThrowCriticalPersistFailure(string kind, string goals, TaskId? taskId)
+    {
+        var task = taskId is null ? "" : $" task={ShortGoalId(taskId.Value)}";
+        var message = $"DISPATCH_RECORD_WRITE_FAILED kind={kind} goal={goals}{task} error=sqlite-busy-retry-exhausted";
+        EmitProgress(message);
+        throw new InvalidOperationException(message);
     }
 
     private static bool TryPersistTick(

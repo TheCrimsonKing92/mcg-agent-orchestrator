@@ -913,7 +913,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Agents,
                     context.WorkerProfiles,
                     context.Channel,
-                    context.Providers);
+                    context.Providers,
+                    context.PersistGoalCheckpoint);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
 
                 // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
@@ -984,7 +985,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Agents,
                 context.WorkerProfiles,
                 context.Channel,
-                context.Providers);
+                context.Providers,
+                context.PersistGoalCheckpoint);
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other
