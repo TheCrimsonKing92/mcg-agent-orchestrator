@@ -5587,6 +5587,65 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.MarkerFileName]));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_first_round_preps_and_writes_receipt")]
+    public void WorkerSandboxPreparerFirstRoundPrepsAndWritesReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+
+    var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+    Assert.False(result.PrepReceiptHit);
+    Assert.True(result.WorktreeRecursiveRelabel);
+    Assert.False(result.SandboxRecursiveRelabel);
+    Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+    Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive);
+    Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+    Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_second_round_reuses_prep_receipt")]
+    public void WorkerSandboxPreparerSecondRoundReusesPrepReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+    var preparer = new WorkerSandboxPreparer(labeler);
+    _ = preparer.Prepare(worktree, sandboxRoot);
+    labeler.SetCalls.Clear();
+
+    var result = preparer.Prepare(worktree, sandboxRoot);
+
+    Assert.True(result.PrepReceiptHit);
+    Assert.False(result.WorktreeRecursiveRelabel);
+    Assert.False(result.SandboxRecursiveRelabel);
+    Assert.Empty(labeler.SetCalls);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_recreated_worktree_repreps_receipt")]
+    public void WorkerSandboxPreparerRecreatedWorktreeReprepsReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+    var preparer = new WorkerSandboxPreparer(labeler);
+    _ = preparer.Prepare(worktree, sandboxRoot);
+    Directory.Delete(worktree, recursive: true);
+    labeler.SetCalls.Clear();
+
+    var result = preparer.Prepare(worktree, sandboxRoot);
+
+    Assert.False(result.PrepReceiptHit);
+    Assert.True(result.WorktreeRecursiveRelabel);
+    Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+    Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+    Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyUnverifiedStaysFailed()
 {
@@ -8004,6 +8063,19 @@ private static void WriteSkill(string workingDirectory, string skillName)
     {
         public List<DispatchDiagnosticRecord> Records { get; } = [];
         public void WriteRecord(DispatchDiagnosticRecord record) => Records.Add(record);
+    }
+
+    private sealed class WorkerDispatchRecordingIntegrityLabeler(IntegrityLabelState queryState, bool setResult = true) : IWorkerIntegrityLabeler
+    {
+        public List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
+
+        public IntegrityLabelState Query(string path) => queryState;
+
+        public bool SetIntegrity(string path, string level, bool recursive)
+        {
+            SetCalls.Add((path, level, recursive));
+            return setResult;
+        }
     }
 
     private sealed class ThrowingDiagnosticWriter : IDispatchDiagnosticWriter
