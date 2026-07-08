@@ -99,7 +99,8 @@ public sealed record TaskProcessRecord(
 public sealed record TaskProcessResourceAccounting(
     long CpuMilliseconds,
     long PeakMemoryBytes,
-    long IoBytes);
+    long IoBytes,
+    bool Reaped = false);
 
 public interface IModelProvider
 {

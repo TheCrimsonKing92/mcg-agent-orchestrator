@@ -115,7 +115,8 @@ public sealed record TaskProcessSnapshot(
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,
     long PeakMemoryBytes,
-    long IoBytes);
+    long IoBytes,
+    bool Reaped = false);
 
 public sealed record ProgressEventSnapshot(
     string GoalId,

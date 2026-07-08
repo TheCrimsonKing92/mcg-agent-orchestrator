@@ -403,7 +403,7 @@ public sealed class BackgroundDispatchRunner
 
             if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
             {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
+                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 if (RequiresFileChangeEvidence(task) &&
                     TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
                     wt.IsClean && wt.HasRelevantCommitAfterDispatch)
@@ -413,16 +413,16 @@ public sealed class BackgroundDispatchRunner
                         $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote));
+                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote), resourceAccounting);
                 }
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, diagnostic));
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, diagnostic), resourceAccounting);
             }
 
             if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
             {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
+                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 if (RequiresFileChangeEvidence(task) &&
                     TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
                     wt.IsClean && wt.HasRelevantCommitAfterDispatch)
@@ -432,25 +432,25 @@ public sealed class BackgroundDispatchRunner
                         $"Wrapper process reaped; task completed based on relevant file-change evidence " +
                         $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
                     TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote));
+                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote), resourceAccounting);
                 }
 
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, wrapperDiagnostic));
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, wrapperDiagnostic), resourceAccounting);
             }
 
             if (TryDetectStartupHang(processRecord, out var startupHangDiagnostic))
             {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
+                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, startupHangDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, startupHangDiagnostic));
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, startupHangDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, startupHangDiagnostic), resourceAccounting);
             }
 
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
             {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
+                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, stallDiagnostic, WithAction(DispatchRecoveryAction.ClassifyBlocker, recoveryDecision, stallDiagnostic));
+                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, stallDiagnostic, WithAction(DispatchRecoveryAction.ClassifyBlocker, recoveryDecision, stallDiagnostic), resourceAccounting);
             }
 
             return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
@@ -461,9 +461,9 @@ public sealed class BackgroundDispatchRunner
             return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
         }
 
-        TryKillTrackedProcesses(processRecord, waitForExit: false);
+        var staleResourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: false);
         var staleDiagnostic = BuildRecoveryDiagnostic(recoveryDecision);
-        return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, staleDiagnostic, recoveryDecision);
+        return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, staleDiagnostic, recoveryDecision, staleResourceAccounting);
     }
 
     private bool TryCompleteFromExitFile(
@@ -513,7 +513,17 @@ public sealed class BackgroundDispatchRunner
 
         if (AnyTrackedProcessStillRunning(processRecord))
         {
-            TryKillTrackedProcesses(processRecord, waitForExit: true);
+            var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+            outcome = BuildCompletedProcessOutcome(
+                kernel,
+                goalId,
+                taskId,
+                processRecord,
+                exitCode,
+                BuildRecoveryDiagnostic(recoveryDecision),
+                recoveryDecision,
+                resourceAccounting);
+            return true;
         }
 
         outcome = BuildCompletedProcessOutcome(
@@ -596,12 +606,19 @@ public sealed class BackgroundDispatchRunner
         TaskProcessRecord processRecord,
         int exitCode,
         string? standardErrorDiagnostic = null,
-        DispatchRecoveryDecision? recoveryDecision = null)
+        DispatchRecoveryDecision? recoveryDecision = null,
+        TaskProcessResourceAccounting? capturedResourceAccounting = null)
     {
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
-        var resourceAccounting = ReleaseTrackedProcessJobs(processRecord);
+        var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
+        if (resourceAccounting is not null &&
+            !resourceAccounting.Reaped &&
+            IsDispatchHostReapCompletion(standardError))
+        {
+            resourceAccounting = resourceAccounting with { Reaped = true };
+        }
         var task = kernel.GetTask(goalId, taskId);
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
@@ -2080,6 +2097,15 @@ public sealed class BackgroundDispatchRunner
             : null;
     }
 
+    private TaskProcessResourceAccounting? ReapTrackedProcessJobs(TaskProcessRecord processRecord, bool waitForExit)
+    {
+        var accounting = ReleaseTrackedProcessJobs(processRecord);
+        TryKillTrackedProcesses(processRecord, waitForExit);
+        return accounting is null
+            ? null
+            : accounting with { Reaped = true };
+    }
+
     private static bool TryKillProcess(int processId)
     {
         return WorkerProcessJobs.TryKillOrFallback(processId);
@@ -2089,7 +2115,10 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         TaskProcessResourceAccounting accounting) =>
-        $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes}";
+        $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
+
+    private static bool IsDispatchHostReapCompletion(string standardError) =>
+        standardError.Contains("[dispatch-host] terminating worker tree:", StringComparison.Ordinal);
 
     private static long SaturatingAdd(long left, long right)
     {

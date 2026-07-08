@@ -4765,6 +4765,78 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("ownedCpuMs=0", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reaped_startup_hang_records_job_accounting")]
+    public void BackgroundDispatchRunnerReapedStartupHangRecordsJobAccounting()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        return;
+    }
+
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Startup hang accounting");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
+
+    Process? wrapper = null;
+    try
+    {
+        wrapper = Process.Start(new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }.WithArguments(
+            WorkerShell.BaseArguments().Concat([
+                "$bytes = New-Object byte[] 1048576; Start-Sleep -Seconds 30; [GC]::KeepAlive($bytes)"
+            ])))
+            ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+        Assert.True(WorkerProcessJobs.TryRegister(wrapper));
+        var process = new TaskProcessRecord(wrapper.Id, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
+
+        var completed = new BackgroundDispatchRunner(
+                clock,
+                isStillRunning: processId => processId == wrapper.Id && !wrapper.HasExited,
+                startupHangTimeout: TimeSpan.FromMinutes(4))
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(1, completed.ExitCode);
+        Assert.NotNull(completed.ResourceAccounting);
+        Assert.True(completed.ResourceAccounting.Reaped);
+        Assert.True(completed.ResourceAccounting.CpuMilliseconds >= 0);
+        Assert.True(completed.ResourceAccounting.PeakMemoryBytes > 0);
+        Assert.True(completed.ResourceAccounting.IoBytes >= 0);
+        Assert.Contains("RESOURCE ", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Assert.Contains("reaped=true", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.Contains(kernel.GetTimeline(goal.Id), evt =>
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+            evt.Message.Contains("reaped=true", StringComparison.Ordinal));
+    }
+    finally
+    {
+        if (wrapper is not null)
+        {
+            try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
+            wrapper.Dispose();
+        }
+    }
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_child_alive_and_idle")]
     public void BackgroundDispatchRunnerStartupHangSuppressedWhenChildAliveAndIdle()
 {
