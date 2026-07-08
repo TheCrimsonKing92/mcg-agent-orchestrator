@@ -111,9 +111,12 @@ internal static class GoalObjectivePlanner
     private static readonly (Regex Pattern, string Label)[] CapabilityWarningSignals =
     [
         (new Regex(@"\bgit\s+fetch\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git fetch"),
-        (new Regex(@"\bgit\s+rebase\b|\brebase\s+(?:onto\s+)?(?:origin|upstream|remote)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git rebase"),
+        (new Regex(@"\bgit\s+pull\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git pull"),
         (new Regex(@"\bgit\s+push\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git push"),
-        (new Regex(@"(?<![\w.-])gh\s+(?:pr|issue|repo|api|auth|workflow|run)\b|\bGitHub CLI\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "gh CLI")
+        (new Regex(@"\bgit\s+rebase\b|\brebase\s+(?:onto\s+)?(?:origin|upstream|remote|[A-Za-z0-9_.-]+/[A-Za-z0-9_.\-/]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "git rebase"),
+        (new Regex(@"(?<![\w.-])gh\s+[A-Za-z0-9][A-Za-z0-9-]*\b|\bGitHub CLI\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "gh CLI"),
+        (new Regex(@"(?<![\w.-])(?:https://|http://)(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s]+|(?<![\w.-])git@(?:github\.com|gitlab\.com|bitbucket\.org):[^\s]+|(?<![\w.-])ssh://git@(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s]+", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "remote repository URL"),
+        (new Regex(@"\b(?:log\s+in|login|sign\s+in|authenticate)\s+(?:to|with)\s+(?:git|github|gitlab|bitbucket)\b|\b(?:use|provide)\s+(?:my|your|operator)\s+(?:git|github|gitlab|bitbucket)?\s*(?:credential|credentials|token|pat)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), "credential-required action")
     ];
 
     private static readonly HashSet<string> GenericWords = new(StringComparer.OrdinalIgnoreCase)
@@ -198,7 +201,7 @@ internal static class GoalObjectivePlanner
 
         return CapabilityWarningSignals
             .Where(signal => signal.Pattern.IsMatch(text))
-            .Select(signal => $"Brief capability warning: workers do not have git/GitHub credentials; operator-side action required for {signal.Label}.")
+            .Select(signal => $"Brief capability warning: workers cannot perform credential-required or operator-only actions; operator-side action required for {signal.Label}.")
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }

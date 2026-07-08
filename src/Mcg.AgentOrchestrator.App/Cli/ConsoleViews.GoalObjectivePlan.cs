@@ -22,6 +22,7 @@ internal static partial class ConsoleViews
             estimatedComplexity = plan.EstimatedComplexity.ToString(),
             historicalTimeEstimate = plan.HistoricalTimeEstimate,
             riskLabels = plan.RiskLabels,
+            capabilityWarnings = plan.CapabilityWarnings,
             pipelineDecision = new
             {
                 pipeline = plan.PipelineDecision.Pipeline.ToString(),

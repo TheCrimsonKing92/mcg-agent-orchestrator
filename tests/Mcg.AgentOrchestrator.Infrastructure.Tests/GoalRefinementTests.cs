@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -117,6 +118,40 @@ public sealed class GoalRefinementTests
             .ToArray();
         Xunit.Assert.Contains(warnings, warning => warning.Contains("git fetch", StringComparison.Ordinal));
         Xunit.Assert.Contains(warnings, warning => warning.Contains("git rebase", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalObjectivePlan_surfaces_fetch_warning_before_goal_creation")]
+    public void GoalObjectivePlanSurfacesFetchWarningBeforeGoalCreation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var plan = GoalObjectivePlanner.Build(
+            "Update docs/operator-runbook.md after git fetch and rebase onto origin/main.",
+            simple: false);
+
+        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(plan));
+
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.Contains("\"capabilityWarnings\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Brief capability warning", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("git fetch", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("git rebase", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalObjectivePlan_surfaces_gh_warning_before_goal_creation")]
+    public void GoalObjectivePlanSurfacesGhWarningBeforeGoalCreation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var plan = GoalObjectivePlanner.Build(
+            "Update docs/operator-runbook.md after gh pr checkout 123 and compare https://github.com/example/repo.",
+            simple: false);
+
+        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(plan));
+
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.Contains("\"capabilityWarnings\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Brief capability warning", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("gh CLI", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("remote repository URL", output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Dashboard_retry_records_capability_warning_for_gh_cli_instruction")]
