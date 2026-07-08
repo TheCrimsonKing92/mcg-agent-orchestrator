@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -18,7 +20,7 @@ public sealed record WorkerSandboxPrepRecoverableAction(
             return false;
         }
 
-        WorkerSandboxPreparer.WriteMarker(FailedRoot);
+        WorkerSandboxPreparer.WritePreparationFiles(FailedRoot, Worktree, SandboxRoot);
         return true;
     }
 }
@@ -26,7 +28,8 @@ public sealed record WorkerSandboxPrepRecoverableAction(
 internal sealed record WorkerSandboxPreparationResult(
     bool WorktreeRecursiveRelabel,
     bool SandboxRecursiveRelabel,
-    WorkerSandboxPrepRecoverableAction? RecoveryAction = null)
+    WorkerSandboxPrepRecoverableAction? RecoveryAction = null,
+    bool PrepReceiptHit = false)
 {
     public bool RequiresRecovery => RecoveryAction is not null;
 }
@@ -43,6 +46,7 @@ internal sealed record IntegrityLabelState(bool Exists, bool Low, bool Inheritab
 internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
     internal const string MarkerFileName = ".mcg-low-integrity-v1";
+    internal const string ReceiptFileName = ".mcg-sandbox-prep-receipt-v1.json";
     internal const string LowInheritableLevel = "(OI)(CI)L";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -66,7 +70,10 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         var sandboxResult = EnsureLowIntegrityRoot(sandboxRoot, sandboxRoot, allowRecursiveMigration: false, reusedWorktree);
         return sandboxResult.RecoveryAction is not null
             ? sandboxResult
-            : new WorkerSandboxPreparationResult(worktreeResult.WorktreeRecursiveRelabel, sandboxResult.SandboxRecursiveRelabel);
+            : new WorkerSandboxPreparationResult(
+                worktreeResult.WorktreeRecursiveRelabel,
+                sandboxResult.SandboxRecursiveRelabel,
+                PrepReceiptHit: worktreeResult.PrepReceiptHit && sandboxResult.PrepReceiptHit);
     }
 
     private WorkerSandboxPreparationResult EnsureLowIntegrityRoot(
@@ -75,9 +82,10 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         bool allowRecursiveMigration,
         bool reusedWorktree)
     {
-        if (IsPrepared(path))
+        var receiptHit = HasValidReceipt(path, sandboxRoot) && IsPrepared(path);
+        if (receiptHit)
         {
-            return new WorkerSandboxPreparationResult(false, false);
+            return new WorkerSandboxPreparationResult(false, false, PrepReceiptHit: true);
         }
 
         var recursive = allowRecursiveMigration;
@@ -98,7 +106,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             return new WorkerSandboxPreparationResult(false, false, action);
         }
 
-        WriteMarker(path);
+        WritePreparationFiles(path, path == sandboxRoot ? Path.GetDirectoryName(sandboxRoot) ?? sandboxRoot : path, sandboxRoot);
         return path == sandboxRoot
             ? new WorkerSandboxPreparationResult(false, recursive)
             : new WorkerSandboxPreparationResult(recursive, false);
@@ -117,6 +125,8 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 
     private static string MarkerPath(string path) => Path.Combine(path, MarkerFileName);
 
+    private static string ReceiptPath(string path) => Path.Combine(path, ReceiptFileName);
+
     internal static void WriteMarker(string path)
     {
         var marker = new
@@ -128,6 +138,106 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         };
         File.WriteAllText(MarkerPath(path), JsonSerializer.Serialize(marker, JsonOptions) + Environment.NewLine);
     }
+
+    internal static void WritePreparationFiles(string path, string worktree, string sandboxRoot)
+    {
+        WriteMarker(path);
+        WriteReceipt(path, worktree, sandboxRoot);
+    }
+
+    private bool HasValidReceipt(string path, string sandboxRoot)
+    {
+        var receiptPath = ReceiptPath(path);
+        if (!File.Exists(receiptPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(receiptPath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("version", out var version) ||
+                !version.TryGetInt32(out var versionValue) ||
+                versionValue != 1 ||
+                !TryGetString(root, "path", out var recordedPath) ||
+                !TryGetString(root, "worktree", out var recordedWorktree) ||
+                !TryGetString(root, "sandboxRoot", out var recordedSandboxRoot) ||
+                !TryGetString(root, "contentHash", out var recordedHash))
+            {
+                return false;
+            }
+
+            var worktree = path == sandboxRoot
+                ? Path.GetDirectoryName(sandboxRoot) ?? sandboxRoot
+                : path;
+            return PathsEqual(recordedPath, path) &&
+                PathsEqual(recordedWorktree, worktree) &&
+                PathsEqual(recordedSandboxRoot, sandboxRoot) &&
+                string.Equals(recordedHash, ComputeReceiptContentHash(path, worktree, sandboxRoot), StringComparison.Ordinal);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void WriteReceipt(string path, string worktree, string sandboxRoot)
+    {
+        var receipt = new
+        {
+            version = 1,
+            path = Path.GetFullPath(path),
+            worktree = Path.GetFullPath(worktree),
+            sandboxRoot = Path.GetFullPath(sandboxRoot),
+            contentHash = ComputeReceiptContentHash(path, worktree, sandboxRoot),
+            preparedAt = DateTimeOffset.UtcNow.ToString("o")
+        };
+        File.WriteAllText(ReceiptPath(path), JsonSerializer.Serialize(receipt, JsonOptions) + Environment.NewLine);
+    }
+
+    private static string ComputeReceiptContentHash(string path, string worktree, string sandboxRoot)
+    {
+        var payload = string.Join(
+            "\n",
+            "v1",
+            NormalizePath(path),
+            NormalizePath(worktree),
+            NormalizePath(sandboxRoot),
+            Directory.GetCreationTimeUtc(worktree).Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Directory.GetCreationTimeUtc(path).Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+    }
+
+    private static bool TryGetString(JsonElement root, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            NormalizePath(left),
+            NormalizePath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string NormalizePath(string path) =>
+        Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 }
 
 internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler

@@ -1308,6 +1308,7 @@ public sealed class BackgroundDispatchRunner
 
         return !normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) &&

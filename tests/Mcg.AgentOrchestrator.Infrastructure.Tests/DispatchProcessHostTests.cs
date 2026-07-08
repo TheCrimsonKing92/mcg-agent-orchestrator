@@ -407,8 +407,8 @@ public sealed class DispatchProcessHostTests
         var worktree = Path.Combine(root, "worktree");
         var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
         Directory.CreateDirectory(sandboxRoot);
-        File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
-        File.WriteAllText(Path.Combine(sandboxRoot, WorkerSandboxPreparer.MarkerFileName), "{}");
+        WorkerSandboxPreparer.WritePreparationFiles(worktree, worktree, sandboxRoot);
+        WorkerSandboxPreparer.WritePreparationFiles(sandboxRoot, worktree, sandboxRoot);
         var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
         try
         {
@@ -416,6 +416,7 @@ public sealed class DispatchProcessHostTests
 
             Assert.False(result.WorktreeRecursiveRelabel);
             Assert.False(result.SandboxRecursiveRelabel);
+            Assert.True(result.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
         }
         finally
@@ -443,6 +444,8 @@ public sealed class DispatchProcessHostTests
             Assert.False(first.SandboxRecursiveRelabel);
             Assert.False(second.WorktreeRecursiveRelabel);
             Assert.False(second.SandboxRecursiveRelabel);
+            Assert.False(first.PrepReceiptHit);
+            Assert.True(second.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
         }
         finally
@@ -509,7 +512,7 @@ public sealed class DispatchProcessHostTests
         var worktree = Path.Combine(root, "worktree");
         var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
         Directory.CreateDirectory(sandboxRoot);
-        File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        WorkerSandboxPreparer.WritePreparationFiles(worktree, worktree, sandboxRoot);
         var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
         try
         {
@@ -520,6 +523,34 @@ public sealed class DispatchProcessHostTests
             Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive && call.Level == "(OI)(CI)L");
             Assert.DoesNotContain(labeler.SetCalls, call => call.Path.Contains(".git", StringComparison.OrdinalIgnoreCase));
             Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.MarkerFileName)));
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_recreated_worktree_invalidates_prep_receipt")]
+    public void WorkerSandboxPreparerRecreatedWorktreeInvalidatesPrepReceipt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-preparer-recreate-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        try
+        {
+            var preparer = new WorkerSandboxPreparer(labeler);
+            _ = preparer.Prepare(worktree, sandboxRoot);
+            labeler.SetCalls.Clear();
+            Directory.Delete(worktree, recursive: true);
+
+            var second = preparer.Prepare(worktree, sandboxRoot);
+
+            Assert.False(second.PrepReceiptHit);
+            Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+            Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
         }
         finally
         {

@@ -568,6 +568,7 @@ public static void DropToLow() {
             strategy = "prepared-root-inherited-low-integrity",
             worktreeRecursiveRelabel = preparation.WorktreeRecursiveRelabel,
             sandboxRecursiveRelabel = preparation.SandboxRecursiveRelabel,
+            prepReceiptHit = preparation.PrepReceiptHit,
             sandboxRoot,
             worktree
         };
@@ -687,8 +688,12 @@ public static void DropToLow() {
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
-            ApplyWorkerSandbox(startInfo, parameters);
-            WriteSandboxPrepEvent(parameters, "complete", sandboxPrepStartedAt, DateTimeOffset.UtcNow - sandboxPrepStartedAt);
+            var sandboxPreparation = ApplyWorkerSandbox(startInfo, parameters);
+            WriteSandboxPrepEvent(
+                parameters,
+                sandboxPreparation.PrepReceiptHit ? "receipt-hit" : "complete",
+                sandboxPrepStartedAt,
+                DateTimeOffset.UtcNow - sandboxPrepStartedAt);
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             RunLowIntegrityLaunchPreflight(startInfo, parameters);
