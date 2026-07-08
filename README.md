@@ -54,6 +54,14 @@ The CLI centers on six alias verbs. All other verbs are covered in [ADVANCED](#a
 
 > **Operating the orchestrator? See [`docs/operator-runbook.md`](docs/operator-runbook.md).** The default path is the autonomous conductor (`conduct --loop`), which owns workspace creation, dispatch, acceptance, and landing. The "Core Loop" immediately below is the lower-level **manual** verb sequence — keep it for granular or fallback control, not as the primary workflow.
 
+## Autonomous execution
+
+Use `conduct --loop` as the main execution primitive. The conductor advances active goals through workspace creation, role dispatch, verification, acceptance, landing, dogfood logging, and cleanup until every goal is done or escalated.
+
+Full SDLC goals use the five-role pipeline: Planner -> Researcher -> Developer -> Tester -> Reviewer. Intake and policy gates route engagement by risk, so trivial slices can use a minimal path while broader or riskier work gets the roles and human attention it needs.
+
+The acceptance gate remains the safety boundary: a goal lands only after its task gates, configured build/test verification, and change-risk checks pass. For operating details, policies, stuck-goal recovery, and manual fallback commands, use [`docs/operator-runbook.md`](docs/operator-runbook.md).
+
 ## Core Loop (manual verbs — fallback; prefer `conduct --loop`)
 
 ```text
