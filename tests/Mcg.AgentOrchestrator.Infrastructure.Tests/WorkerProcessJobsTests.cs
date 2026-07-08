@@ -132,6 +132,50 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_release_returns_job_accounting_counters")]
+    public void WorkerProcessJobsReleaseReturnsJobAccountingCounters()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Process? wrapper = null;
+        try
+        {
+            wrapper = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(
+                WorkerShell.BaseArguments().Concat([
+                    "$bytes = New-Object byte[] 1048576; Start-Sleep -Milliseconds 250; [GC]::KeepAlive($bytes)"
+                ])))
+                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+            Assert.True(WorkerProcessJobs.TryRegister(wrapper));
+            wrapper.WaitForExit(5000);
+
+            WorkerProcessJobs.Release(wrapper.Id, out var accounting);
+
+            Assert.NotNull(accounting);
+            Assert.True(accounting.CpuMilliseconds >= 0);
+            Assert.True(accounting.PeakMemoryBytes > 0);
+            Assert.True(accounting.IoBytes >= 0);
+        }
+        finally
+        {
+            if (wrapper is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
+                wrapper.Dispose();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild")]
     public void WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild()
     {

@@ -568,6 +568,10 @@ public sealed class BackgroundDispatchRunner
         }
 
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
+        if (outcome.ProcessRecord.ResourceAccounting is { } accounting)
+        {
+            kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
+        }
     }
 
     private static TaskVerificationRecord? MarkCommittedChangesFromResultCommit(TaskSpec task, TaskVerificationRecord? verification)
@@ -597,7 +601,7 @@ public sealed class BackgroundDispatchRunner
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
         var standardError = ReadBestEffort(processRecord.StandardErrorPath);
-        ReleaseTrackedProcessJobs(processRecord);
+        var resourceAccounting = ReleaseTrackedProcessJobs(processRecord);
         var task = kernel.GetTask(goalId, taskId);
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
@@ -749,6 +753,13 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        if (resourceAccounting is not null)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                FormatResourceReceipt(goalId, taskId, resourceAccounting));
+        }
+
         standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {
@@ -757,7 +768,8 @@ public sealed class BackgroundDispatchRunner
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,
-            ExitCode = exitCode
+            ExitCode = exitCode,
+            ResourceAccounting = resourceAccounting
         };
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
@@ -2042,17 +2054,51 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static void ReleaseTrackedProcessJobs(TaskProcessRecord processRecord)
+    private static TaskProcessResourceAccounting? ReleaseTrackedProcessJobs(TaskProcessRecord processRecord)
     {
+        long cpuMilliseconds = 0;
+        long peakMemoryBytes = 0;
+        long ioBytes = 0;
+        var capturedAny = false;
+
         foreach (var processId in processRecord.TrackedProcessIds.Distinct())
         {
-            WorkerProcessJobs.Release(processId);
+            WorkerProcessJobs.Release(processId, out var accounting);
+            if (accounting is null)
+            {
+                continue;
+            }
+
+            capturedAny = true;
+            cpuMilliseconds = SaturatingAdd(cpuMilliseconds, accounting.CpuMilliseconds);
+            peakMemoryBytes = Math.Max(peakMemoryBytes, accounting.PeakMemoryBytes);
+            ioBytes = SaturatingAdd(ioBytes, accounting.IoBytes);
         }
+
+        return capturedAny
+            ? new TaskProcessResourceAccounting(cpuMilliseconds, peakMemoryBytes, ioBytes)
+            : null;
     }
 
     private static bool TryKillProcess(int processId)
     {
         return WorkerProcessJobs.TryKillOrFallback(processId);
+    }
+
+    internal static string FormatResourceReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessResourceAccounting accounting) =>
+        $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes}";
+
+    private static long SaturatingAdd(long left, long right)
+    {
+        if (left < 0 || right < 0)
+        {
+            return Math.Max(left, right);
+        }
+
+        return long.MaxValue - left < right ? long.MaxValue : left + right;
     }
 
     // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next

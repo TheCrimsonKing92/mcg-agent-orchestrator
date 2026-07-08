@@ -85,7 +85,8 @@ public sealed record TaskProcessRecord(
     DateTimeOffset? CompletedAt,
     int? ExitCode,
     bool WasCancelled = false,
-    IReadOnlyList<int>? OwnedProcessIds = null)
+    IReadOnlyList<int>? OwnedProcessIds = null,
+    TaskProcessResourceAccounting? ResourceAccounting = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 
@@ -94,6 +95,11 @@ public sealed record TaskProcessRecord(
             ? OwnedProcessIds
             : [ProcessId];
 }
+
+public sealed record TaskProcessResourceAccounting(
+    long CpuMilliseconds,
+    long PeakMemoryBytes,
+    long IoBytes);
 
 public interface IModelProvider
 {

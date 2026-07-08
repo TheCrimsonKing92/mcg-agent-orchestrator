@@ -4222,6 +4222,27 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Equal("0", output[0]);
     Assert.Equal("1", output[1]);
     Assert.Equal("false", output[2]);
+    if (OperatingSystem.IsWindows())
+    {
+        var refreshed = kernel.GetTask(goal.Id, task.Id).LastProcess!;
+        Assert.NotNull(refreshed.ResourceAccounting);
+        Assert.True(refreshed.ResourceAccounting.CpuMilliseconds >= 0);
+        Assert.True(refreshed.ResourceAccounting.PeakMemoryBytes > 0);
+        Assert.True(refreshed.ResourceAccounting.IoBytes >= 0);
+
+        var standardError = kernel.GetTask(goal.Id, task.Id).LastVerification!.StandardError;
+        Assert.Contains("RESOURCE ", standardError, StringComparison.Ordinal);
+        Assert.Contains("cpu_ms=", standardError, StringComparison.Ordinal);
+        Assert.Contains("peak_mem_bytes=", standardError, StringComparison.Ordinal);
+        Assert.Contains("io_bytes=", standardError, StringComparison.Ordinal);
+        Assert.Contains(
+            kernel.GetTimeline(goal.Id),
+            evt => evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+                evt.Message.Contains("cpu_ms=", StringComparison.Ordinal) &&
+                evt.Message.Contains("peak_mem_bytes=", StringComparison.Ordinal) &&
+                evt.Message.Contains("io_bytes=", StringComparison.Ordinal));
+    }
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_completes_when_exit_file_exists_even_if_wrapper_is_running")]

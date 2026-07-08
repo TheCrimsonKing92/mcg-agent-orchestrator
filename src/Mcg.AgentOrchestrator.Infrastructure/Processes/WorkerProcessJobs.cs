@@ -5,6 +5,14 @@ using System.Collections.Concurrent;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public sealed record WorkerProcessJobAccounting(
+    long CpuMilliseconds,
+    long PeakMemoryBytes,
+    long IoBytes)
+{
+    public static WorkerProcessJobAccounting Empty { get; } = new(0, 0, 0);
+}
+
 public static class WorkerProcessJobs
 {
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
@@ -122,10 +130,21 @@ public static class WorkerProcessJobs
 
     public static void Release(int processId)
     {
+        Release(processId, out _);
+    }
+
+    public static void Release(int processId, out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
         if (Jobs.TryRemove(processId, out var group))
         {
             try
             {
+                if (group.TryReadAccounting(out var capturedAccounting))
+                {
+                    accounting = capturedAccounting;
+                }
+
                 group.Kill();
             }
             catch
