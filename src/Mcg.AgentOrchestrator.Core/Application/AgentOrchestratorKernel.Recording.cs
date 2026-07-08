@@ -213,8 +213,18 @@ public sealed partial class AgentOrchestratorKernel
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
-        Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}: {dispatch.Command}");
+        Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
         _eventWriter.AppendTaskDispatched(goalId, taskId, task.RequiredRole, dispatch.WorkerName);
+    }
+
+    private static string FormatDispatchTimelineModelSelection(TaskDispatchRecord dispatch)
+    {
+        if (string.IsNullOrWhiteSpace(dispatch.ProviderName) || string.IsNullOrWhiteSpace(dispatch.ModelName))
+        {
+            return string.Empty;
+        }
+
+        return $" using {dispatch.ProviderName}/{dispatch.ModelName}";
     }
 
     public void RecordTaskProcessStarted(GoalId goalId, TaskId taskId, TaskProcessRecord process)

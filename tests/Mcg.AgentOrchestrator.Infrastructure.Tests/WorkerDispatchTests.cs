@@ -2487,7 +2487,13 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         dispatchedAt);
 
     Assert.Contains("--model 'gpt-5.5'", developer.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Equal("OpenAI", developer.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.5", developer.LastDispatch.ModelName);
     Assert.Contains("model_reasoning_effort='high'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    var dispatchEvent = goal.Timeline.Single(evt =>
+        evt.TaskId == developer.Id &&
+        evt.Kind == ProgressKind.TaskDispatchRecorded);
+    Assert.Contains("OpenAI/gpt-5.5", dispatchEvent.Message, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]
     public void SubscriptionDispatchOverrideModelBeatsComplexPath()
@@ -2522,8 +2528,26 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
 
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
     Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
+    var dispatchEvent = goal.Timeline.Single(evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskDispatchRecorded);
+    Assert.Contains("OpenAI/gpt-5.3-codex-spark", dispatchEvent.Message, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.3-codex-spark - adequate|overkill|underpowered", File.ReadAllText(task.LastDispatch.PromptPath!), StringComparison.Ordinal);
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        task.LastDispatch.Command,
+        workingDirectory,
+        0,
+        "WORKER_RESULT\nModel fit: OpenAI/gpt-5.3-codex-spark - adequate - override dispatch drill - effective label\nEND_WORKER_RESULT",
+        string.Empty,
+        dispatchedAt.AddMinutes(1)));
+    var outcome = kernel.BuildModelOutcomeScorecard().Single(record =>
+        record.ProviderName == "OpenAI" &&
+        record.ModelName == "gpt-5.3-codex-spark");
+    Assert.Equal(1, outcome.Completed);
 }
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_sets_dispatch_provider_label")]
     public void SubscriptionDispatchOverrideProfileSetsDispatchProviderLabel()
