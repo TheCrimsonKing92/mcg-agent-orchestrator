@@ -230,7 +230,7 @@ public abstract class GoalAcceptanceVerifierTestBase
     }
 }
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+[Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]

@@ -50,7 +50,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? StderrPath = null,
         TimeSpan? Timeout = null,
         TimeSpan? Elapsed = null,
-        TaskProcessResourceAccounting? ResourceAccounting = null);
+        TaskProcessResourceAccounting? ResourceAccounting = null,
+        bool ResourceAccountingExpected = false);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -1262,7 +1263,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var summary = AppendResourceReceipt(
             result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output),
-            result.ResourceAccounting);
+            result.ResourceAccounting,
+            result.ResourceAccountingExpected);
         if (!transientCompilerLockRetried)
         {
             return summary;
@@ -1277,17 +1279,22 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string? BuildGenericCommandResultSummary(CommandResult result)
     {
         var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
-        return AppendResourceReceipt(summary, result.ResourceAccounting);
+        return AppendResourceReceipt(summary, result.ResourceAccounting, result.ResourceAccountingExpected);
     }
 
-    private static string? AppendResourceReceipt(string? summary, TaskProcessResourceAccounting? accounting)
+    private static string? AppendResourceReceipt(
+        string? summary,
+        TaskProcessResourceAccounting? accounting,
+        bool accountingExpected)
     {
-        if (accounting is null)
+        var receipt = accounting is null
+            ? accountingExpected ? "RESOURCE phase=gate cpu_ms=0 peak_mem_bytes=0 io_bytes=0 accounting_source=accounting-unavailable" : null
+            : $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}";
+        if (receipt is null)
         {
             return summary;
         }
 
-        var receipt = $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}";
         return string.IsNullOrWhiteSpace(summary)
             ? receipt
             : $"{summary}; {receipt}";
@@ -1725,7 +1732,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         accounting.CpuMilliseconds,
                         accounting.PeakMemoryBytes,
                         accounting.IoBytes,
-                        AccountingSource: accounting.AccountingSource));
+                        AccountingSource: accounting.AccountingSource),
+                ResourceAccountingExpected: OperatingSystem.IsWindows());
         }
         finally
         {
