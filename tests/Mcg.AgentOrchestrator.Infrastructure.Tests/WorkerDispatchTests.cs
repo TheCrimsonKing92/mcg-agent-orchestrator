@@ -2290,7 +2290,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Equal(assignedAgent.Id, task.AssignedAgentId);
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -2320,7 +2321,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
 
@@ -2328,6 +2330,43 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
     Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
     Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_echo_stub_claude_profile_falls_back_from_light_role_with_reason")]
+    public void WorkerProfileDispatcherEchoStubClaudeProfileFallsBackFromLightRoleWithReason()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Fallback from fake Claude light role", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    var profiles = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output {promptPath}"));
+    kernel.ActivateGoal(goal.Id, agents);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox,
+        commandExists: _ => true);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: full-profile: light-role profile unavailable", preflight, StringComparison.Ordinal);
+    Assert.Contains("not the expected claude CLI", preflight, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_default_path_dispatch_is_identical_when_no_light_role_applies")]
@@ -2428,7 +2467,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -2537,7 +2577,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.IsType<DispatchReadinessReady>(readiness);
     Assert.True(planItem.CanPrepare);
@@ -2674,7 +2715,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -2790,7 +2832,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Equal(5, results.Count);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
@@ -2893,7 +2936,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         WorkerProfileCatalog.Default(),
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+        commandExists: RealClaudeLauncherExists);
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
 
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
@@ -2903,7 +2947,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Single(results);
     var developer = goal.Tasks.Single();
@@ -8534,6 +8579,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+
+    private static bool RealClaudeLauncherExists(string executable) =>
+        executable.Equals("claude", StringComparison.OrdinalIgnoreCase);
 
     private static WorkerProfileCatalog DispatchTestProfiles() => new(
     [
