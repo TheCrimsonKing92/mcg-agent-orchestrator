@@ -1043,6 +1043,90 @@ public sealed class ConductorBatchLoopTests
             evt.TaskId == taskId && evt.Kind == ProgressKind.TaskProcessStarted));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_final_checkpoint_preserves_cli_retry_written_after_last_tick")]
+    public async Task FinalCheckpointPreservesCliRetryWrittenAfterLastTick()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-final-checkpoint-merge-{Guid.NewGuid():N}.db");
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var developerTaskId = TaskId.New();
+        var testerTaskId = TaskId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect final checkpoint retry", [
+            new TaskSpec(developerTaskId, "Implement final checkpoint persistence", AgentRole.Developer),
+            new TaskSpec(testerTaskId, "Test final checkpoint persistence", AgentRole.Tester)
+        ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskVerification(
+            goal.Id,
+            testerTaskId,
+            new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+        await repo.SaveAsync(kernel);
+
+        kernel = await repo.LoadAsync();
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var persistCalls = 0;
+        var injectedRetry = false;
+        void PersistGoalTick(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            persistCalls++;
+            if (persistCalls == 2 && !injectedRetry)
+            {
+                injectedRetry = true;
+                repo.TransactGoalAsync(goal.Id, (storedSnapshot, _) =>
+                {
+                    var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([storedSnapshot!], []));
+                    storedKernel.RetryTask(goal.Id, testerTaskId, "operator retry between last tick and final checkpoint");
+                    return Task.FromResult((
+                        true,
+                        storedKernel.ExportSnapshot().Goals.Single(),
+                        true));
+                }).GetAwaiter().GetResult();
+            }
+
+            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            var requests = checkpoint.ExportSnapshot().Goals
+                .Where(snapshot => changed.Contains(snapshot.Id))
+                .Select(snapshot => new GoalSnapshotSaveRequest(baselines[snapshot.Id], snapshot))
+                .ToArray();
+            var results = repo.SaveGoalSnapshotsWithMergeAsync(requests).GetAwaiter().GetResult();
+            foreach (var result in results)
+            {
+                if (result.PersistedSnapshot is not null)
+                    baselines[result.GoalId] = result.PersistedSnapshot;
+            }
+        }
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                kernel.RecordTaskDispatch(g.Id, developerTaskId,
+                    new TaskDispatchRecord("claude-cli", "claude -p work", "C:\\wt", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, developerTaskId,
+                    new TaskProcessRecord(4242, "claude -p work", "C:\\wt", "out.log", "err.log", "exit.txt",
+                        DateTimeOffset.UtcNow, null, null));
+                return DispatchStartOutcome.Started();
+            });
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            persistGoalTick: PersistGoalTick);
+
+        var reloaded = await repo.LoadAsync();
+        var developerTask = reloaded.GetTask(goal.Id, developerTaskId);
+        var testerTask = reloaded.GetTask(goal.Id, testerTaskId);
+        Assert.True(injectedRetry);
+        Assert.True(persistCalls >= 2);
+        Assert.Equal(WorkTaskStatus.Running, developerTask.Status);
+        Assert.NotNull(developerTask.LastProcess);
+        Assert.Equal(WorkTaskStatus.Assigned, testerTask.Status);
+        Assert.Contains("operator retry between last tick and final checkpoint", testerTask.CriterionRetryFeedback);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_exhaustion_persists_neither_record")]
     public async Task CriticalDispatchStartExhaustionPersistsNeitherRecord()
     {
