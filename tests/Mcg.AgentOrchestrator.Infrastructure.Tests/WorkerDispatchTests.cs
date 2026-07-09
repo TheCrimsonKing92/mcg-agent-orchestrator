@@ -2577,6 +2577,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var callPattern = new Regex(
         @"WorkerProfileDispatcher\.(?:BuildSubscriptionTemplateVariables|ResolveSubscriptionProfileName)\((?<args>.*?)\)",
         RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    var advanceLoopDefaultCatalogPattern = new Regex(
+        @"Advance(?:Goal)?UntilBlockedAsync\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
 
     foreach (var path in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
     {
@@ -2600,6 +2603,12 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
                 var line = text[..match.Index].Count(ch => ch == '\n') + 1;
                 bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: {match.Value.ReplaceLineEndings(" ")}");
             }
+        }
+
+        foreach (Match match in advanceLoopDefaultCatalogPattern.Matches(text))
+        {
+            var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+            bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: advance-loop entry point defaults WorkerProfileCatalog");
         }
     }
 

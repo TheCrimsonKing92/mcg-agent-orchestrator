@@ -34,7 +34,7 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     object? result;
     try
     {
-        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false);
+        result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false, profiles: profiles);
     }
     catch (InvalidOperationException ex)
     {
@@ -55,12 +55,14 @@ public static async Task<AdvanceLoopResultDto> AdvanceGoalUntilBlockedAsync(
     OrchestratorWorkspace workspace,
     Goal goal)
 {
+    var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
     return await AdvanceUntilBlockedAsync(
         kernel,
         goal,
-        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false),
+        automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false, profiles: profiles),
         automation => automation.Message,
-        agents);
+        agents,
+        profiles);
 }
 
 private static async Task<object?> AdvanceRunAssignedTaskAsync(
@@ -70,8 +72,9 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     OrchestratorWorkspace workspace,
     Goal goal,
     TaskId taskId,
-    bool allowApiExecution = true,
-    bool allowApiFallback = false)
+    bool allowApiExecution,
+    bool allowApiFallback,
+    WorkerProfileCatalog profiles)
 {
     GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
@@ -81,7 +84,7 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     {
         return DashboardResponseMapper.ToProfileDispatchDto(
             goal,
-            SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers: providers));
+            SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles, providers: providers));
     }
 
     if (agent.ExecutionPolicy == AgentExecutionPolicy.AnyAvailable)
@@ -90,7 +93,7 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
         {
             return DashboardResponseMapper.ToProfileDispatchDto(
                 goal,
-                SubscriptionDispatchTask(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers: providers));
+                SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles, providers: providers));
         }
         catch (InvalidOperationException ex)
         {
@@ -242,8 +245,8 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
     Goal goal,
     Func<NextActionAutomationPlan, Task<object?>> execute,
     Func<NextActionAutomationPlan, string> messageFor,
-    IReadOnlyList<AgentDefinition>? agents = null,
-    WorkerProfileCatalog? profiles = null)
+    IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog profiles)
 {
     var steps = new List<AdvanceResultDto>();
     NextActionDto? blockingAction = null;
@@ -357,13 +360,14 @@ private static async Task<object?> ExecuteAutomationAsync(
     OrchestratorWorkspace workspace,
     Goal goal,
     NextActionAutomationPlan automation,
-    bool allowApiExecution = true,
-    bool allowProcessStart = true)
+    bool allowApiExecution,
+    bool allowProcessStart,
+    WorkerProfileCatalog profiles)
 {
     return automation.Kind switch
     {
         NextActionAutomationKind.RunAssignedTask =>
-            await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, automation.TaskId!, allowApiExecution),
+            await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, automation.TaskId!, allowApiExecution, allowApiFallback: false, profiles: profiles),
         NextActionAutomationKind.RefreshRunningProcess =>
             AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!),
         NextActionAutomationKind.StartRecordedDispatch =>
