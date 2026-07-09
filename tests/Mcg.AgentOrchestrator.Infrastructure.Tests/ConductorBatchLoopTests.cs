@@ -638,6 +638,60 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_pending_cleanup_blocker_is_not_cache_skipped")]
+    public void TerminalGoalSweepPendingCleanupBlockerIsNotCacheSkipped()
+    {
+        var root = CreateTempDirectory("mcg-terminal-sweep-cleanup-blocker");
+        var originalDeleteDirectoryForCleanup = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical cleanup blocker goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: terminal cleanup blocker remains pending.");
+            var contextPath = Path.Combine(root, ".orchestrator-context", cancelled.Id.Value);
+            Directory.CreateDirectory(contextPath);
+            File.WriteAllText(Path.Combine(contextPath, "digest.md"), "digest");
+            var attempts = 0;
+            var cache = new TerminalGoalSweepCache();
+
+            GoalWorktrees.DeleteDirectoryForCleanup = path =>
+            {
+                if (path.Equals(contextPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    attempts++;
+                    return GoalWorktreeDeleteResult.Failed(
+                        GoalWorktreeDeleteFailureKind.Unknown,
+                        "Directory deletion failed.");
+                }
+
+                return originalDeleteDirectoryForCleanup(path);
+            };
+            GoalWorktrees.CleanupWarningSink = _ => { };
+
+            var first = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var second = TerminalGoalSweep.Run(kernel, root, cache: cache);
+
+            Assert.Equal(1, first.CacheMissCount);
+            Assert.Equal(0, second.CacheHitCount);
+            Assert.Equal(1, second.CacheMissCount);
+            Assert.Equal(1, attempts);
+            Assert.Contains(first.Goals, goal =>
+                goal.GoalId == cancelled.Id &&
+                goal.Blockers.Any(blocker => blocker.Kind == "owned-ephemeral-cleanup-needed"));
+            Assert.Contains(second.Goals, goal =>
+                goal.GoalId == cancelled.Id &&
+                goal.Blockers.Any(blocker => blocker.Kind == "owned-ephemeral-cleanup-needed"));
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDeleteDirectoryForCleanup;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_preserves_verified_missing_branch_repair")]
     public void TerminalGoalSweepCachePreservesVerifiedMissingBranchRepair()
     {

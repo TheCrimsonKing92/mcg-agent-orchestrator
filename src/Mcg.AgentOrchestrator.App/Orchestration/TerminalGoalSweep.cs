@@ -38,9 +38,9 @@ internal sealed class TerminalGoalSweepCache
 
     internal int Count => _terminalFingerprints.Count;
 
-    internal bool TryMarkHit(AgentOrchestratorKernel kernel, Goal goal)
+    internal bool TryMarkHit(AgentOrchestratorKernel kernel, string executionDirectory, Goal goal)
     {
-        if (!CanCache(goal))
+        if (!CanCache(executionDirectory, goal))
         {
             _terminalFingerprints.Remove(goal.Id);
             return false;
@@ -51,9 +51,13 @@ internal sealed class TerminalGoalSweepCache
             string.Equals(cached, fingerprint, StringComparison.Ordinal);
     }
 
-    internal void Record(AgentOrchestratorKernel kernel, Goal goal)
+    internal void Record(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        IReadOnlyList<TerminalGoalSweepBlocker> blockers)
     {
-        if (!CanCache(goal))
+        if (!CanCache(executionDirectory, goal) || blockers.Any(IsCleanupBlocker))
         {
             _terminalFingerprints.Remove(goal.Id);
             return;
@@ -62,10 +66,49 @@ internal sealed class TerminalGoalSweepCache
         _terminalFingerprints[goal.Id] = BuildFingerprint(kernel, goal);
     }
 
-    private static bool CanCache(Goal goal) =>
+    private static bool CanCache(string executionDirectory, Goal goal) =>
         TerminalGoalSweep.IsTerminalSweepStatus(goal.Status) &&
         goal.Tasks.All(task => !TerminalGoalSweep.IsStaleTerminalAssignedTaskStatus(task.Status)) &&
-        goal.Tasks.All(task => task.LastProcess is not { IsRunning: true });
+        goal.Tasks.All(task => task.LastProcess is not { IsRunning: true }) &&
+        !HasPendingCleanupBackoff(executionDirectory, goal.Id);
+
+    private static bool IsCleanupBlocker(TerminalGoalSweepBlocker blocker) =>
+        blocker.Kind is "completed-worktree-cleanup-needed" or
+            "owned-ephemeral-cleanup-needed";
+
+    private static bool HasPendingCleanupBackoff(string executionDirectory, GoalId goalId) =>
+        EnumerateGoalCleanupPaths(executionDirectory, goalId)
+            .Any(path => GoalWorktrees.TryGetCleanupBackoff(path) is not null);
+
+    private static IEnumerable<string> EnumerateGoalCleanupPaths(string executionDirectory, GoalId goalId)
+    {
+        var root = Path.GetFullPath(executionDirectory);
+        var fullGoalId = goalId.Value;
+        var prefix = fullGoalId[..Math.Min(8, fullGoalId.Length)];
+        yield return GoalWorktrees.WorktreePath(root, goalId);
+        yield return Path.Combine(root, ".orchestrator-context", fullGoalId);
+
+        foreach (var rootName in new[] { ".t", ".scratch" })
+        {
+            var ephemeralRoot = Path.Combine(root, rootName);
+            if (!Directory.Exists(ephemeralRoot))
+            {
+                continue;
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(ephemeralRoot))
+            {
+                var name = Path.GetFileName(directory);
+                if (name.Equals(fullGoalId, StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return directory;
+                }
+            }
+        }
+    }
 
     private static string BuildFingerprint(AgentOrchestratorKernel kernel, Goal goal)
     {
@@ -134,7 +177,7 @@ internal static class TerminalGoalSweep
 
         foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {
-            if (cache is not null && cache.TryMarkHit(kernel, originalGoal))
+            if (cache is not null && cache.TryMarkHit(kernel, executionDirectory, originalGoal))
             {
                 cacheHits++;
                 continue;
@@ -324,7 +367,7 @@ internal static class TerminalGoalSweep
 
             if (cache is not null)
             {
-                cache.Record(kernel, kernel.GetGoal(originalGoal.Id));
+                cache.Record(kernel, executionDirectory, kernel.GetGoal(originalGoal.Id), blockers);
             }
         }
 
