@@ -2,6 +2,27 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class AgentOutputDirectivesTests
 {
+    [Xunit.Fact(DisplayName = "WorkerResultTemplate_for_researcher_requires_citations")]
+    public void WorkerResultTemplateForResearcherRequiresCitations()
+    {
+        var lines = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Researcher);
+
+        Assert.Contains("citations: <repo files, commands, URLs, or none when no external/source evidence was used>", lines);
+        Assert.Contains("citations", AgentOutputDirectives.WorkerResultRequiredFieldsForRole(AgentRole.Researcher));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerResultTemplate_for_reviewer_requires_verdict_and_blockers")]
+    public void WorkerResultTemplateForReviewerRequiresVerdictAndBlockers()
+    {
+        var lines = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer);
+        var required = AgentOutputDirectives.WorkerResultRequiredFieldsForRole(AgentRole.Reviewer);
+
+        Assert.Contains("verdict: <pass|fail|needs-work>", lines);
+        Assert.Contains("blockers: <none or exact blocker; put deferred-verification notes in tests>", lines);
+        Assert.Contains("verdict", required);
+        Assert.Contains("blockers", required);
+    }
+
     [Xunit.Theory(DisplayName = "TryParseHumanInputRequest_ignores_explicit_no_input_directives")]
     [Xunit.InlineData("Human input: none")]
     [Xunit.InlineData("Human input: no")]

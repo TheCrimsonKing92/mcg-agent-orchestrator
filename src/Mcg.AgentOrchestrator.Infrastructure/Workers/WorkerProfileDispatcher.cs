@@ -955,6 +955,15 @@ public static class WorkerProfileDispatcher
             return true;
         }
 
+        var missingFields = AgentOutputDirectives.WorkerResultRequiredFieldsForRole(task.RequiredRole)
+            .Where(field => !fields.ContainsKey(field))
+            .ToArray();
+        if (missingFields.Length > 0)
+        {
+            reason = $"prior {task.RequiredRole} WORKER_RESULT missing field(s): {string.Join(", ", missingFields)}";
+            return true;
+        }
+
         if (task.RequiredRole == AgentRole.Researcher && !HasSubstantiveField(fields, "citations"))
         {
             reason = "prior Researcher WORKER_RESULT missing citations";

@@ -871,6 +871,21 @@ public sealed class TaskBriefTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_light_role_worker_result_block_includes_guardrail_fields")]
+    public void BuildTaskBriefLightRoleWorkerResultBlockIncludesGuardrailFields()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var researcherGoal = kernel.CreateGoal("Verify researcher contract", [new TaskSpec(TaskId.New(), "Research the change.", AgentRole.Researcher)]);
+    var reviewerGoal = kernel.CreateGoal("Verify reviewer contract", [new TaskSpec(TaskId.New(), "Review the change.", AgentRole.Reviewer)]);
+
+    var researcherBrief = kernel.BuildTaskBrief(researcherGoal.Id, researcherGoal.Tasks.Single().Id).Content;
+    var reviewerBrief = kernel.BuildTaskBrief(reviewerGoal.Id, reviewerGoal.Tasks.Single().Id).Content;
+
+    Assert.Contains("citations: <repo files, commands, URLs, or none when no external/source evidence was used>", researcherBrief, StringComparison.Ordinal);
+    Assert.Contains("verdict: <pass|fail|needs-work>", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("blockers: <none or exact blocker; put deferred-verification notes in tests>", reviewerBrief, StringComparison.Ordinal);
+}
+
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)

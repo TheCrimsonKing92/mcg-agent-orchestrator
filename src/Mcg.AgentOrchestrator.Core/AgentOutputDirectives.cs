@@ -5,18 +5,59 @@ public static class AgentOutputDirectives
     private static readonly string[] NoHumanInputMarkers = ["none", "no", "not needed", "no input needed"];
 
     public static IReadOnlyList<string> WorkerResultTemplateLines =>
-    [
-        "WORKER_RESULT:",
-        "files: <comma-separated changed files or none>",
-        "commands: <commands run or none>",
-        "tests: <pass/fail/not-run evidence>",
-        "commit: <commit sha or none>",
-        "blockers: <none or exact blocker; put deferred-verification notes in tests>",
-        "model_fit: <provider/model - adequate|overkill|underpowered - task shape - reason>",
-        "skills: <selected skills used or none>",
-        "confidence: <high|medium|low>",
-        "END_WORKER_RESULT"
-    ];
+        WorkerResultTemplateLinesForRole(null);
+
+    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role)
+    {
+        var lines = new List<string>
+        {
+            "WORKER_RESULT:",
+            "files: <comma-separated changed files or none>",
+            "commands: <commands run or none>",
+            "tests: <pass/fail/not-run evidence>",
+            "commit: <commit sha or none>",
+            "blockers: <none or exact blocker; put deferred-verification notes in tests>"
+        };
+
+        if (role == AgentRole.Researcher)
+        {
+            lines.Add("citations: <repo files, commands, URLs, or none when no external/source evidence was used>");
+        }
+
+        if (role == AgentRole.Reviewer)
+        {
+            lines.Add("verdict: <pass|fail|needs-work>");
+        }
+
+        lines.AddRange(
+        [
+            "model_fit: <provider/model - adequate|overkill|underpowered - task shape - reason>",
+            "skills: <selected skills used or none>",
+            "confidence: <high|medium|low>",
+            "END_WORKER_RESULT"
+        ]);
+        return lines;
+    }
+
+    public static IReadOnlyList<string> WorkerResultRequiredFieldsForRole(AgentRole role)
+    {
+        var fields = new List<string>(WorkerResultRequiredFields);
+
+        if (role == AgentRole.Researcher)
+        {
+            fields.Add("citations");
+        }
+
+        if (role == AgentRole.Reviewer)
+        {
+            fields.Add("verdict");
+        }
+
+        return fields;
+    }
+
+    private static readonly string[] WorkerResultRequiredFields =
+        ["files", "commands", "tests", "blockers", "model_fit", "skills", "confidence"];
 
     public static string? TryParseHumanInputRequest(string output)
     {

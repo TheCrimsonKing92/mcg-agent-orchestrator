@@ -2344,6 +2344,59 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_light_role_result_keeps_haiku")]
+    public void WorkerProfileDispatcherTemplateConformingLightRoleResultKeepsHaiku()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Keep light model after contract-conforming research", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: rg -n WorkerProfileDispatcher src tests
+        tests: fail - retry requested for unrelated operator feedback
+        commit: none
+        blockers: none
+        citations: src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs; tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs
+        model_fit: Anthropic/claude-haiku-4-5 - adequate - research shape - cited repo evidence
+        skills: none
+        confidence: high
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
+    Assert.DoesNotContain("fallback-full-profile", preflight, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_guardrail_failure_falls_back_to_full_profile_with_recorded_reason")]
     public void WorkerProfileDispatcherGuardrailFailureFallsBackToFullProfileWithRecordedReason()
 {
@@ -2391,7 +2444,60 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
-    Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing citations", preflight, StringComparison.Ordinal);
+    Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing field(s): citations", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_reviewer_result_keeps_haiku")]
+    public void WorkerProfileDispatcherTemplateConformingReviewerResultKeepsHaiku()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Keep light model after contract-conforming review", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: git diff --stat
+        tests: fail - retry requested for unrelated operator feedback
+        commit: none
+        blockers: none
+        verdict: needs-work
+        model_fit: Anthropic/claude-haiku-4-5 - adequate - review shape - returned verdict and blocker status
+        skills: none
+        confidence: high
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: light-role: Reviewer uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
+    Assert.DoesNotContain("fallback-full-profile", preflight, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_reviewer_guardrail_requires_verdict_and_blockers_before_light_retry")]
