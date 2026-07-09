@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Runtime.InteropServices;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
@@ -164,7 +165,110 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
         using var selected = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(1));
 
-        Assert.Equal("slot-1", selected.Environment.SlotOwnerToken);
+        Assert.NotEqual("slot-0", selected.Environment.SlotOwnerToken);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reclaims_dead_pid_execution_lease_without_timeout")]
+    public void DotnetBuildEnvironmentManagerReclaimsDeadPidExecutionLeaseWithoutTimeout()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        Directory.CreateDirectory(Path.GetDirectoryName(slot0.ExecutionLockPath)!);
+        File.WriteAllText(slot0.ExecutionLockPath, "999999");
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromSeconds(1));
+        });
+
+        Assert.Contains("LEASE_RECLAIM", output);
+        Assert.Contains("reclaimedPid=999999", output);
+        Assert.Contains("LEASE_ACQUIRE", output);
+        Assert.Contains("LEASE_RELEASE", output);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_stable_slot_acquirers_get_different_slots")]
+    public async Task DotnetBuildEnvironmentManagerConcurrentStableSlotAcquirersGetDifferentSlots()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var tasks = new[]
+        {
+            Task.Run(() => DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2))),
+            Task.Run(() => DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2)))
+        };
+
+        var leases = await Task.WhenAll(tasks);
+        try
+        {
+            Assert.NotEqual(leases[0].Environment.SlotOwnerToken, leases[1].Environment.SlotOwnerToken);
+        }
+        finally
+        {
+            foreach (var lease in leases)
+            {
+                lease.Dispose();
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_killed_holder_releases_handle_backed_execution_lease")]
+    public void DotnetBuildEnvironmentManagerKilledHolderReleasesHandleBackedExecutionLease()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var readyPath = Path.Combine(Path.GetDirectoryName(slot0.ExecutionLockPath)!, $"holder-ready-{Guid.NewGuid():N}.txt");
+        var script = $$"""
+            $stream = [System.IO.File]::Open('{{slot0.ExecutionLockPath}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            Set-Content -LiteralPath '{{readyPath}}' -Value ([string]$PID)
+            try { Start-Sleep -Seconds 30 } finally { $stream.Dispose() }
+            """;
+        using var holder = Process.Start(new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                EncodePowerShell(script)
+            }
+        }) ?? throw new InvalidOperationException("Failed to start lease holder process.");
+
+        try
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (!File.Exists(readyPath) && DateTimeOffset.UtcNow < deadline)
+            {
+                Thread.Sleep(25);
+            }
+
+            Assert.True(File.Exists(readyPath), "Lease holder did not signal readiness.");
+            Assert.Throws<IOException>(() =>
+                DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromMilliseconds(100)));
+
+            holder.Kill(entireProcessTree: true);
+            Assert.True(holder.WaitForExit(5000), "Lease holder did not exit after kill.");
+
+            using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromSeconds(2));
+            Assert.Equal(slot0.ExecutionLockPath, reacquired.Name);
+        }
+        finally
+        {
+            if (!holder.HasExited)
+            {
+                holder.Kill(entireProcessTree: true);
+                holder.WaitForExit(5000);
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_all_stable_slots_leased_reports_wait_and_times_out")]
@@ -716,6 +820,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
             process.ExitCode == 0,
             $"{fileName} {string.Join(' ', arguments)} exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
         return stdout;
+    }
+
+    private static string EncodePowerShell(string script)
+    {
+        return Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
     }
 
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]
