@@ -100,7 +100,11 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             promptRoot,
             root,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: true,
+                HasCliCredentialArtifact: false,
+                CredentialArtifactPath: null));
 
         Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
         Assert.NotNull(prepared.PromptPath);
@@ -1144,6 +1148,58 @@ public sealed class WorkerDispatchTests
     Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
     Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
     Assert.Contains("Low-IL Claude subscription dispatch is refused before worker start", findings);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_light_role_claude_auth_under_low_integrity_before_dispatch")]
+    public void WorkerProfileDispatcherPreflightBlocksLightRoleClaudeAuthUnderLowIntegrityBeforeDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude light-role auth preflight", [new TaskSpec(TaskId.New(), "Review implementation output.", AgentRole.Reviewer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var credentialPath = Path.Combine(root, ".claude", ".credentials.json");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: credentialPath);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox));
+
+    var findings = string.Join("\n", preflight.Findings);
+    Assert.False(preflight.Allowed);
+    Assert.Equal("claude-cli", preflight.ProfileName);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
+    Assert.Contains("model-selection: light-role: Reviewer uses claude-cli/claude-haiku-4-5", findings, StringComparison.Ordinal);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
     Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
     Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
     Assert.False(Directory.Exists(promptRoot));

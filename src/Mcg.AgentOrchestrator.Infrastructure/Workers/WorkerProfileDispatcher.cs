@@ -375,12 +375,6 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        if (role is not (AgentRole.Developer or AgentRole.Tester))
-        {
-            findings.Add($"auth: Claude CLI Low-IL auth preflight not required for {role} role");
-            return;
-        }
-
         var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
         if (authState.HasAnthropicApiKey)
         {
