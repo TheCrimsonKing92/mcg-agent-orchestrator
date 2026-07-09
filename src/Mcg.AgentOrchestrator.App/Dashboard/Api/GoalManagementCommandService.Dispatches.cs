@@ -158,12 +158,11 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
         return null;
     }
 
+    var resolvedProfiles = profiles ?? new WorkerProfileCatalog([profile]);
     string profileName;
     try
     {
-        profileName = profiles is null
-            ? WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task)
-            : WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
+        profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, resolvedProfiles);
     }
     catch (InvalidOperationException)
     {
@@ -175,9 +174,7 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
         return null;
     }
 
-    var variables = profiles is null
-        ? WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task)
-        : WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
+    var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, resolvedProfiles);
     var providerName = variables.GetValueOrDefault("providerName");
     var modelName = variables.GetValueOrDefault("subscriptionModelName");
     var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");

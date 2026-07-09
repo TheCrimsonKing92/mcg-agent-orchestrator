@@ -64,8 +64,9 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
         var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(services.Workspace.RunEventStorePath, goal);
-        return Json(DashboardResponseMapper.ToNextActionsDto(goal, current.BuildNextActions(goal.Id), agents, conductorDisposition));
+        return Json(DashboardResponseMapper.ToNextActionsDto(goal, current.BuildNextActions(goal.Id), agents, conductorDisposition, workerProfiles));
     }
 
     private static async Task<IResult> GetOperatorInboxAsync(HttpContext context, DashboardEndpointServices services)

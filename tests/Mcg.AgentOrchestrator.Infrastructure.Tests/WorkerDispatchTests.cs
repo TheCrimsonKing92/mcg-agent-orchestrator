@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 
 [Xunit.Collection("EnvMutation")]
@@ -2503,6 +2504,106 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing field(s): citations", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_plan_readiness_and_dispatch_agree_for_light_role_fallback")]
+    public void WorkerProfileDispatcherPlanReadinessAndDispatchAgreeForLightRoleFallback()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Fallback route agreement", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    var profiles = WorkerProfileCatalog.Default();
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: none
+        tests: fail - missing required citations
+        blockers: none
+        model_fit: Anthropic/claude-haiku-4-5 - underpowered - research shape - omitted citations
+        skills: none
+        confidence: low
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var plan = SubscriptionPlanBuilder.Build(
+        goal,
+        agents,
+        profiles,
+        _ => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents));
+    var planItem = plan.Items.Single();
+    var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, dispatchedAt);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    Assert.IsType<DispatchReadinessReady>(readiness);
+    Assert.True(planItem.CanPrepare);
+    Assert.Equal("codex-cli", planItem.ProfileName);
+    Assert.Equal("OpenAI", planItem.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, planItem.SubscriptionModelName);
+    Assert.Equal(planItem.ProfileName, task.LastDispatch!.WorkerName);
+    Assert.Equal(planItem.ProviderName, task.LastDispatch.ProviderName);
+    Assert.Equal(planItem.SubscriptionModelName, task.LastDispatch.ModelName);
+    Assert.Contains(planItem.Route!.Reasons, reason => reason.Contains("fallback-full-profile", StringComparison.OrdinalIgnoreCase));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_source_call_sites_use_catalog_aware_model_resolution")]
+    public void WorkerProfileDispatcherSourceCallSitesUseCatalogAwareModelResolution()
+{
+    var repoRoot = InfrastructureTestSupport.FindRepositoryRoot();
+    var srcRoot = Path.Combine(repoRoot, "src");
+    var bypasses = new List<string>();
+    var callPattern = new Regex(
+        @"WorkerProfileDispatcher\.(?:BuildSubscriptionTemplateVariables|ResolveSubscriptionProfileName)\((?<args>.*?)\)",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
+
+    foreach (var path in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
+    {
+        if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(Path.Combine("Workers", "WorkerProfileDispatcher.cs"), StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        var text = File.ReadAllText(path);
+        foreach (Match match in callPattern.Matches(text))
+        {
+            var args = match.Groups["args"].Value;
+            if (args.Contains("goal", StringComparison.Ordinal) &&
+                args.Contains("task", StringComparison.Ordinal) &&
+                !args.Contains("profiles", StringComparison.Ordinal) &&
+                !args.Contains("WorkerProfileCatalog.Default()", StringComparison.Ordinal) &&
+                !args.Contains("resolvedProfiles", StringComparison.Ordinal))
+            {
+                var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+                bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: {match.Value.ReplaceLineEndings(" ")}");
+            }
+        }
+    }
+
+    Assert.Empty(bypasses);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_reviewer_result_keeps_haiku")]

@@ -545,7 +545,8 @@ public static NextActionsDto ToNextActionsDto(
     Goal goal,
     GoalNextActions actions,
     IReadOnlyList<AgentDefinition>? agents = null,
-    GoalOperatorDisposition? conductorDisposition = null)
+    GoalOperatorDisposition? conductorDisposition = null,
+    WorkerProfileCatalog? profiles = null)
 {
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
     var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied);
@@ -554,14 +555,15 @@ public static NextActionsDto ToNextActionsDto(
         SummaryText(actions.Objective),
         actions.Status,
         ToGoalOperatorDispositionDto(goal, disposition),
-        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, agents)).ToList());
+        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, agents, profiles)).ToList());
 }
 
 public static NextActionDto ToNextActionDto(
     Goal goal,
     NextActionItem item,
     int priority,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    WorkerProfileCatalog? profiles = null)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
     var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item));
@@ -573,7 +575,7 @@ public static NextActionDto ToNextActionDto(
         item.HumanInputRequestId?.Value,
         TimelineText(item.Message),
         ConsoleViews.BuildSuggestedCommand(goal, item, agents),
-        ToNextActionControlDto(goal, item, agents),
+        ToNextActionControlDto(goal, item, agents, profiles),
         dispatchState?.RecoveryDecision,
         dispatchState);
 }
@@ -674,9 +676,10 @@ private static OperatorEvidencePointerDto ToOperatorEvidencePointerDto(OperatorE
 public static NextActionControlDto? ToNextActionControlDto(
     Goal goal,
     NextActionItem item,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    WorkerProfileCatalog? profiles = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+    var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents, profiles: profiles);
     return control is null
         ? null
         : new NextActionControlDto(

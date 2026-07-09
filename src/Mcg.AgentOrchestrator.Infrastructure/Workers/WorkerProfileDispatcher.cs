@@ -819,6 +819,7 @@ public static class WorkerProfileDispatcher
             ["subscriptionModelName"] = ResolveEffectiveSubscriptionModelName(agent, selection),
             ["subscriptionReasoningEffort"] = ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
             ["taskComplexity"] = selection.Complexity.ToString(),
+            ["modelSelectionReason"] = selection.Reason,
             ["executionPolicy"] = agent.ExecutionPolicy.ToString()
         };
     }

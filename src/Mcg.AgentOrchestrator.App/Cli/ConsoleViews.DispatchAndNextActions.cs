@@ -66,7 +66,8 @@ public static void PrintNextActions(
     GoalNextActions actions,
     IReadOnlyList<AgentDefinition>? agents = null,
     GoalHealthReport? health = null,
-    GoalOperatorDisposition? conductorDisposition = null)
+    GoalOperatorDisposition? conductorDisposition = null,
+    WorkerProfileCatalog? profiles = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
@@ -94,7 +95,7 @@ public static void PrintNextActions(
         }
 
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
-        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents, profiles: profiles);
         if (!string.IsNullOrWhiteSpace(control?.CostRisk))
         {
             var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)

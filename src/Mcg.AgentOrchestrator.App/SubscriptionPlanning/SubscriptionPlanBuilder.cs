@@ -237,12 +237,13 @@ internal static class SubscriptionPlanBuilder
                     ["Run delegate or add the missing agent profile."]));
         }
 
-        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
+        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
         var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
         var effectiveModelName = GetTemplateValue(templateVariables, "apiModelName") ?? agent.Model.ModelName;
         var usesComplexModel = UsesComplexModel(agent, effectiveProviderName, effectiveModelName);
         var subscriptionModelName = GetTemplateValue(templateVariables, "subscriptionModelName");
         var subscriptionReasoningEffort = GetTemplateValue(templateVariables, "subscriptionReasoningEffort");
+        var modelSelectionReason = GetTemplateValue(templateVariables, "modelSelectionReason");
         var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
 
         var scorecardKey = $"{effectiveProviderName}/{subscriptionModelName ?? effectiveModelName}";
@@ -250,7 +251,7 @@ internal static class SubscriptionPlanBuilder
 
         try
         {
-            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task);
+            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
             var profile = profiles.Profiles.FirstOrDefault(candidate => candidate.Name.Equals(profileName, StringComparison.OrdinalIgnoreCase));
             validations.TryGetValue(profileName, out var validation);
             var hasProfile = profile is not null;
@@ -353,6 +354,7 @@ internal static class SubscriptionPlanBuilder
                 costGuardPromptCharacterCount,
                 taskBriefHeadroom,
                 detail,
+                modelSelectionReason,
                 scorecardRecord);
 
             return new SubscriptionPlanItem(
@@ -444,6 +446,7 @@ internal static class SubscriptionPlanBuilder
         int? costGuardPromptCharacterCount,
         int? taskBriefHeadroom,
         string detail,
+        string? modelSelectionReason,
         ModelOutcomeRecord? scorecardRecord = null)
     {
         var reasons = new List<string>
@@ -457,6 +460,10 @@ internal static class SubscriptionPlanBuilder
         if (usesComplexModel)
         {
             reasons.Add("selected complex model from complexity or model-fit evidence");
+        }
+        if (!string.IsNullOrWhiteSpace(modelSelectionReason))
+        {
+            reasons.Add($"model-selection: {modelSelectionReason}");
         }
 
         if (costGuardPromptCharacterCount is not null)
