@@ -67,6 +67,14 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["goalBranch"] = goalBranch;
         });
 
+    public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) =>
+        Append(goalId, "GoalEscalated", obj =>
+        {
+            obj["state"] = state.ToString();
+            obj["reason"] = reason;
+            obj["source"] = source;
+        });
+
     public void AppendCleanedUp(GoalId goalId) =>
         Append(goalId, "CleanedUp", _ => { });
 

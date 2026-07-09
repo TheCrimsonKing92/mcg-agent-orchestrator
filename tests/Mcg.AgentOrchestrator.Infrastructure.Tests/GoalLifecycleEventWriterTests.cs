@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
@@ -87,6 +88,67 @@ public sealed class GoalLifecycleEventWriterTests
             Xunit.Assert.Equal(0, Cursor(lines[0]));
             Xunit.Assert.Equal(1, Cursor(lines[1]));
             Xunit.Assert.Equal("CleanedUp", EventType(lines[1]));
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RealLandingAndConductorEscalationAppendLifecycleEvents()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            InitializeRepository(root);
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+            var kernel = new AgentOrchestratorKernel();
+            kernel.SetEventWriter(writer);
+            var landedGoal = kernel.CreateGoal(
+                "Land through real service",
+                [new TaskSpec(TaskId.New(), "Implement landing event", AgentRole.Developer)]);
+            kernel.ActivateGoal(landedGoal.Id, AgentCatalog.Default().Agents);
+            var landedTask = landedGoal.Tasks.Single();
+            kernel.RecordTaskDispatch(
+                landedGoal.Id,
+                landedTask.Id,
+                new TaskDispatchRecord("worker", "codex exec", root, DateTimeOffset.UtcNow));
+            kernel.RecordDispatchExecutionResult(
+                landedGoal.Id,
+                landedTask.Id,
+                new TaskVerificationRecord("codex exec", root, 0, "WORKER_RESULT: tests pass", "", DateTimeOffset.UtcNow));
+            kernel.CompleteGoal(landedGoal.Id, "verified for landing test");
+            var goalBranch = GoalWorktrees.BranchName(landedGoal.Id);
+            RunGit(root, "checkout", "-b", goalBranch);
+            File.WriteAllText(Path.Combine(root, "landed.txt"), "landed");
+            RunGit(root, "add", "landed.txt");
+            RunGit(root, "commit", "-m", "Goal work");
+            RunGit(root, "checkout", "main");
+
+            var landing = LandingExecutor.Execute(
+                kernel,
+                landedGoal,
+                workspace,
+                policy: ConductorAutonomyPolicy.Permissive,
+                eventWriter: writer);
+
+            Xunit.Assert.True(landing.MainAdvanced, landing.Message);
+            Xunit.Assert.Contains("GoalLanded", EventTypes(workspace, landedGoal.Id));
+
+            var escalatedGoal = kernel.CreateGoal("Escalate through real conductor");
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                new PassingAcceptanceVerifier(),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default());
+
+            var escalation = driver.AdvanceOnce(escalatedGoal, ConductorAutonomyPolicy.Manual);
+
+            Xunit.Assert.IsType<ConductorAdvanceOutcome.Escalated>(escalation.Outcome);
+            Xunit.Assert.Contains("GoalEscalated", EventTypes(workspace, escalatedGoal.Id));
         }
         finally
         {
@@ -267,6 +329,30 @@ public sealed class GoalLifecycleEventWriterTests
         return document.RootElement.GetProperty("cursor").GetInt32();
     }
 
+    private static string[] EventTypes(OrchestratorWorkspace workspace, GoalId goalId) =>
+        File.ReadAllLines(Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goalId.Value}.jsonl"))
+            .Select(EventType)
+            .ToArray();
+
+    private static void InitializeRepository(string root)
+    {
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", "README.md");
+        RunGit(root, "commit", "-m", "Initial");
+    }
+
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Error}");
+        }
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
     {
         while (!condition())
@@ -355,14 +441,35 @@ public sealed class GoalLifecycleEventWriterTests
 
     private static void DeleteDirectory(string path)
     {
-        if (Directory.Exists(path))
+        try
         {
-            Directory.Delete(path, recursive: true);
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class PassingAcceptanceVerifier : IGoalAcceptanceVerifier
+    {
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
     }
 }
