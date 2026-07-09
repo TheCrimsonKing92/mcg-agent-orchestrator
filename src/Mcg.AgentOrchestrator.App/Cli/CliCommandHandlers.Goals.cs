@@ -926,7 +926,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // start of every tick. Without this the loop holds a goal at Running forever — the worker
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
-                Action<AgentOrchestratorKernel> reconcileSweep = loopKernel =>
+                var terminalSweepCache = new TerminalGoalSweepCache();
+                TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
                 {
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
                     // submitted goals. This keeps role handoff decisions tied to durable task status
@@ -950,20 +951,21 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         catch { /* per-goal isolation */ }
                     }
 
-                    var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory);
+                    var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
-                };
+                    return terminalSweep;
+                }
                 var loopReaper = new BackgroundDispatchRunner();
                 using var loopWakeSignal = watchInterval is not null
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
                 var loopSummary = new ConductorBatchLoop(
-                    reconcileSweep,
-                    (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
-                    (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }).Run(
+                    measuredSweep: reconcileSweep,
+                    reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
+                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,

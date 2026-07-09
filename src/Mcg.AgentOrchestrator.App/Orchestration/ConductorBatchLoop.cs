@@ -14,7 +14,7 @@ internal sealed class ConductorBatchLoop
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 6;
 
-    private readonly Action<AgentOrchestratorKernel> _sweep;
+    private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
@@ -27,9 +27,14 @@ internal sealed class ConductorBatchLoop
         Action<AgentOrchestratorKernel, Goal>? detachGoalRunningDispatches = null,
         Action<AgentOrchestratorKernel>? recoverInterruptedDispatches = null,
         Action<AgentOrchestratorKernel, Goal>? refreshGoalDispatchesBeforeAdvance = null,
-        ConductorWatchProgressReporter? watchProgressReporter = null)
+        ConductorWatchProgressReporter? watchProgressReporter = null,
+        Func<AgentOrchestratorKernel, TerminalGoalSweepResult?>? measuredSweep = null)
     {
-        _sweep = sweep ?? (_ => { });
+        _sweep = measuredSweep ?? (kernel =>
+        {
+            sweep?.Invoke(kernel);
+            return null;
+        });
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
@@ -107,13 +112,13 @@ internal sealed class ConductorBatchLoop
             var nextTick = totalTicks + 1;
             var preTickTimingLines = new List<string>();
             var sweepClock = Stopwatch.StartNew();
-            _sweep(kernel);
+            var sweepResult = _sweep(kernel);
             _recoverInterruptedDispatches(kernel);
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, escalatedGoals, reapedGoals, goalProjectionCache);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
             sweepClock.Stop();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "sweep", sweepClock.Elapsed,
-                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count}"));
+                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count}{FormatSweepCacheDetail(sweepResult)}"));
 
             var preWalkClock = Stopwatch.StartNew();
             var scopedGoals = kernel.Goals
@@ -474,6 +479,11 @@ internal sealed class ConductorBatchLoop
 
     private static string FormatPhaseTiming(int tick, string phase, TimeSpan elapsed, string detail) =>
         $"PHASE_TIMING tick={tick} phase={phase} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}";
+
+    private static string FormatSweepCacheDetail(TerminalGoalSweepResult? result) =>
+        result is null
+            ? string.Empty
+            : $" sweep_cache_hits={result.CacheHitCount} sweep_cache_misses={result.CacheMissCount}";
 
     private static string FormatSlowestGoalWalks(IReadOnlyList<GoalWalkTiming> timings)
     {

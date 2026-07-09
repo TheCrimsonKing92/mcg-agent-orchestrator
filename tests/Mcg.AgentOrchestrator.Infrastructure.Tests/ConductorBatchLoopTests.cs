@@ -392,6 +392,13 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
+    private static string CreateTempDirectory(string prefix)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
     private static void RunGit(string workingDirectory, params string[] args)
     {
         var result = GitCli.Run(workingDirectory, args);
@@ -551,6 +558,107 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Advanced);
         Assert.Contains(active.Id, createdWorkspaces);
         Assert.DoesNotContain(createdWorkspaces, completedGoalIds.Contains);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_skips_unchanged_terminal_goals_and_reports_cache_hits")]
+    public void TerminalGoalSweepSkipsUnchangedTerminalGoalsAndReportsCacheHits()
+    {
+        var root = CreateTempDirectory("mcg-terminal-sweep-cache");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical cancelled goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
+            var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active conductor goal");
+            var cache = new TerminalGoalSweepCache();
+            BatchTickSummary? secondTick = null;
+
+            var driver = MakeDriver(
+                getFacts: goal => goal.Id == active.Id && goal.Tasks.Single().LastDispatch is not null
+                    ? new GoalLifecycleFacts(WorkspaceExists: true)
+                    : GoalLifecycleFacts.None,
+                createWorkspace: _ => "/tmp/workspace",
+                dispatchAndStart: goal =>
+                {
+                    var task = goal.Tasks.Single(task => task.Status == WorkTaskStatus.Assigned);
+                    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow));
+                    return DispatchStartOutcome.Started();
+                });
+
+            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, cache: cache)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                onTick: tick =>
+                {
+                    if (tick.Tick == 2)
+                    {
+                        secondTick = tick;
+                    }
+                });
+
+            Assert.Contains(secondTick!.ProgressLines!, line =>
+                line.StartsWith("PHASE_TIMING tick=2 phase=sweep ", StringComparison.Ordinal) &&
+                line.Contains("sweep_cache_hits=1", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_goal_write_invalidates_terminal_cache_entry")]
+    public void TerminalGoalSweepGoalWriteInvalidatesTerminalCacheEntry()
+    {
+        var root = CreateTempDirectory("mcg-terminal-sweep-invalidate");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical cancelled goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
+            var cache = new TerminalGoalSweepCache();
+
+            var first = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var second = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            kernel.RecordGoalPolicyDecision(cancelled.Id, "Test fixture: goal write invalidates terminal sweep cache.");
+            var third = TerminalGoalSweep.Run(kernel, root, cache: cache);
+
+            Assert.Equal(1, first.CacheMissCount);
+            Assert.Equal(1, second.CacheHitCount);
+            Assert.Equal(0, third.CacheHitCount);
+            Assert.Equal(1, third.CacheMissCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_preserves_verified_missing_branch_repair")]
+    public void TerminalGoalSweepCachePreservesVerifiedMissingBranchRepair()
+    {
+        var root = CreateSeededGitRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var verified = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Verified missing branch goal");
+            PassVerification(kernel, verified, verified.Tasks.Single());
+            var cache = new TerminalGoalSweepCache();
+
+            var sweep = TerminalGoalSweep.Run(kernel, root, cache: cache);
+
+            Assert.Contains(sweep.Goals, goal =>
+                goal.GoalId == verified.Id &&
+                goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_advances_when_completed_dependency_is_metadata_only")]

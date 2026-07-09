@@ -24,10 +24,99 @@ internal sealed record TerminalGoalSweepGoalResult(
 
 internal sealed record TerminalGoalSweepResult(
     IReadOnlyList<TerminalGoalSweepGoalResult> Goals,
-    int ExcludedGoalCount = 0)
+    int ExcludedGoalCount = 0,
+    int CacheHitCount = 0,
+    int CacheMissCount = 0)
 {
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
+}
+
+internal sealed class TerminalGoalSweepCache
+{
+    private readonly Dictionary<GoalId, string> _terminalFingerprints = [];
+
+    internal int Count => _terminalFingerprints.Count;
+
+    internal bool TryMarkHit(AgentOrchestratorKernel kernel, Goal goal)
+    {
+        if (!CanCache(goal))
+        {
+            _terminalFingerprints.Remove(goal.Id);
+            return false;
+        }
+
+        var fingerprint = BuildFingerprint(kernel, goal);
+        return _terminalFingerprints.TryGetValue(goal.Id, out var cached) &&
+            string.Equals(cached, fingerprint, StringComparison.Ordinal);
+    }
+
+    internal void Record(AgentOrchestratorKernel kernel, Goal goal)
+    {
+        if (!CanCache(goal))
+        {
+            _terminalFingerprints.Remove(goal.Id);
+            return;
+        }
+
+        _terminalFingerprints[goal.Id] = BuildFingerprint(kernel, goal);
+    }
+
+    private static bool CanCache(Goal goal) =>
+        TerminalGoalSweep.IsTerminalSweepStatus(goal.Status) &&
+        goal.Tasks.All(task => !TerminalGoalSweep.IsStaleTerminalAssignedTaskStatus(task.Status)) &&
+        goal.Tasks.All(task => task.LastProcess is not { IsRunning: true });
+
+    private static string BuildFingerprint(AgentOrchestratorKernel kernel, Goal goal)
+    {
+        var visited = new HashSet<GoalId>();
+        return BuildGoalFingerprint(kernel, goal, visited);
+    }
+
+    private static string BuildGoalFingerprint(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        HashSet<GoalId> visited)
+    {
+        if (!visited.Add(goal.Id))
+        {
+            return $"{goal.Id.Value}:cycle";
+        }
+
+        var taskParts = goal.Tasks
+            .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
+            .Select(task =>
+                string.Join(
+                    ":",
+                    task.Id.Value,
+                    task.Status.ToString(),
+                    task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}:{task.LastDispatch.ResultCommit}",
+                    task.LastProcess is null ? "process=none" : $"process={task.LastProcess.IsRunning}:{task.LastProcess.CompletedAt?.UtcTicks}:{task.LastProcess.ExitCode}:{task.LastProcess.WasCancelled}",
+                    task.LastVerification is null ? "verification=none" : $"verification={task.LastVerification.Succeeded}:{task.LastVerification.ExitCode}:{task.LastVerification.CompletedAt.UtcTicks}",
+                    task.LastExecution is null ? "execution=none" : $"execution={task.LastExecution.StopReason}:{task.LastExecution.CompletedAt.UtcTicks}"));
+
+        var dependencyParts = goal.DependsOn
+            .OrderBy(id => id.Value, StringComparer.Ordinal)
+            .Select(id =>
+            {
+                var dependency = kernel.Goals.FirstOrDefault(candidate => candidate.Id == id);
+                return dependency is null
+                    ? $"{id.Value}:missing"
+                    : BuildGoalFingerprint(kernel, dependency, visited);
+            });
+
+        return string.Join(
+            "|",
+            new[]
+            {
+                goal.Id.Value,
+                goal.Status.ToString(),
+                $"timeline={goal.Timeline.Count}",
+                $"deps={string.Join(",", goal.DependsOn.Select(id => id.Value).Order(StringComparer.Ordinal))}"
+            }
+            .Concat(taskParts)
+            .Concat(dependencyParts));
+    }
 }
 
 internal static class TerminalGoalSweep
@@ -35,13 +124,27 @@ internal static class TerminalGoalSweep
     public static TerminalGoalSweepResult Run(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
-        GoalId? onlyGoalId = null)
+        GoalId? onlyGoalId = null,
+        TerminalGoalSweepCache? cache = null)
     {
         var dispatchRunner = new BackgroundDispatchRunner();
         var results = new List<TerminalGoalSweepGoalResult>();
+        var cacheHits = 0;
+        var cacheMisses = 0;
 
         foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {
+            if (cache is not null && cache.TryMarkHit(kernel, originalGoal))
+            {
+                cacheHits++;
+                continue;
+            }
+
+            if (cache is not null && IsTerminalSweepStatus(originalGoal.Status))
+            {
+                cacheMisses++;
+            }
+
             var repairs = new List<TerminalGoalSweepRepair>();
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
@@ -218,9 +321,18 @@ internal static class TerminalGoalSweep
             {
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
             }
+
+            if (cache is not null)
+            {
+                cache.Record(kernel, kernel.GetGoal(originalGoal.Id));
+            }
         }
 
-        return new TerminalGoalSweepResult(results, CountGlobalStaleTerminalExclusions(results));
+        return new TerminalGoalSweepResult(
+            results,
+            CountGlobalStaleTerminalExclusions(results),
+            cacheHits,
+            cacheMisses);
     }
 
     private sealed record GoalBranchFacts(
@@ -588,13 +700,13 @@ internal static class TerminalGoalSweep
         return true;
     }
 
-    private static bool IsTerminalSweepStatus(GoalStatus status) =>
+    internal static bool IsTerminalSweepStatus(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded;
 
     private static bool IsGlobalStaleTerminalStatus(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed;
 
-    private static bool IsStaleTerminalAssignedTaskStatus(WorkTaskStatus status) =>
+    internal static bool IsStaleTerminalAssignedTaskStatus(WorkTaskStatus status) =>
         status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman;
 
     private static bool IsTerminalCleanupBlockingBlocker(TerminalGoalSweepBlocker blocker) =>
