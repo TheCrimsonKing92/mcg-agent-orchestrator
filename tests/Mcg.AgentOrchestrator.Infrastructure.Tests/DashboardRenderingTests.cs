@@ -214,7 +214,7 @@ public sealed class DashboardRenderingTests
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
     var promptChars = task.LastExecution!.PromptCharacterCount!.Value;
 
     Assert.Contains("Model: OpenAI/gpt-test by API developer", html, StringComparison.Ordinal);
@@ -271,7 +271,7 @@ public sealed class DashboardRenderingTests
         DateTimeOffset.UtcNow));
 
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
     var taskEvidence = evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value);
     var modelFit = evidenceDto.ModelFit.Single();
@@ -356,7 +356,7 @@ public sealed class DashboardRenderingTests
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.Contains("max 2 out", html, StringComparison.Ordinal);
     Assert.Contains("possible output cap hit", html, StringComparison.Ordinal);
@@ -393,7 +393,7 @@ public sealed class DashboardRenderingTests
     var dto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var goalPrefix = goal.Id.Value[..8];
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.True(dto.LastExecution is not null);
     Assert.True(dto.LastExecution!.OutputTruncated);
@@ -444,7 +444,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains("[truncated", verification.StandardError, StringComparison.Ordinal);
     Assert.True(verification.StandardOutput.Length < stdout.Length);
     Assert.True(verification.StandardError.Length < stderr.Length);
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
     Assert.Contains("stdout-start", transcript, StringComparison.Ordinal);
     Assert.Contains("stdout-tail", transcript, StringComparison.Ordinal);
     Assert.Contains("stderr-start", transcript, StringComparison.Ordinal);
@@ -480,7 +480,7 @@ public sealed class DashboardRenderingTests
     var goalDetail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
     var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
     var evidence = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
-    var nextActions = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default());
+    var nextActions = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
     var humanInput = DashboardResponseMapper.ToHumanInputWorklistDto(goal, kernel.BuildHumanInputWorklist(goal.Id));
     var gate = DashboardResponseMapper.ToVerificationGateDto(goal, kernel.BuildVerificationGate(goal.Id));
 
@@ -516,7 +516,7 @@ public sealed class DashboardRenderingTests
 
     var monitor = DashboardResponseMapper.ToMonitorDto(kernel.BuildMonitor(goal.Id));
     var acceptance = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, kernel.BuildGoalAcceptanceSummary(goal.Id));
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
     var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal);
     var monitoringBatch = DashboardMonitoringEvents.BuildBatch(kernel, goal, sinceEventId: 0);
 
@@ -548,7 +548,6 @@ public sealed class DashboardRenderingTests
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
         goal,
-        WorkerProfileCatalog.Default(),
         executionDirectory: root);
     var summary = DashboardResponseMapper.ToGoalSummary(goal, root);
     var detail = DashboardResponseMapper.ToGoalDetailDto(kernel, goal, root);
@@ -592,7 +591,7 @@ public sealed class DashboardRenderingTests
             task.Id,
             new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
 
-        var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default());
+        var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id));
         var recovery = dto.Items.Single().Recovery;
         var dispatchState = dto.Items.Single().DispatchState;
 
@@ -636,7 +635,6 @@ public sealed class DashboardRenderingTests
         var dto = DashboardResponseMapper.ToNextActionsDto(
             goal,
             kernel.BuildNextActions(goal.Id),
-            WorkerProfileCatalog.Default(),
             conductorDisposition: conductorDisposition);
 
         Assert.Equal(OperatorDispositionState.Wait, dto.OperatorDisposition.State);
@@ -1941,7 +1939,7 @@ public sealed class DashboardRenderingTests
         "GET",
         $"/api/monitor?goal={goalPrefix}");
 
-    Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify"), WorkerProfileCatalog.Default()));
+    Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify")));
 }
 
     [Xunit.Fact(DisplayName = "Dashboard_action_recommendations_aggregate_next_triage_recovery_capacity_and_policy")]
@@ -2008,8 +2006,8 @@ public sealed class DashboardRenderingTests
         DateTimeOffset.UtcNow));
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
-    var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default(), agentDefinitions: [agent]);
-    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), [agent]).Items.Single();
+    var control = DashboardNextActionControls.Build(goal, action, agentDefinitions: [agent]);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), [agent]).Items.Single();
 
     Assert.Equal(NextActionKind.RunAssignedTask, action.Kind);
     Assert.Equal(nextTask.Id.Value, action.TaskId!.Value);
@@ -2042,19 +2040,18 @@ public sealed class DashboardRenderingTests
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
     var goalPrefix = goal.Id.Value[..8];
 
-    var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
-    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default()).Items.Single();
+    var control = DashboardNextActionControls.Build(goal, action);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id)).Items.Single();
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
         goal,
-        WorkerProfileCatalog.Default(),
         changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix,
         FocusGoalChangedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]));
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", control!.Url);
@@ -2120,7 +2117,6 @@ public sealed class DashboardRenderingTests
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
         goal,
-        WorkerProfileCatalog.Default(),
         executionDirectory: workspace.ExecutionDirectory);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
         EnableOperatorControls: true,
@@ -2156,9 +2152,9 @@ public sealed class DashboardRenderingTests
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
     var goalPrefix = goal.Id.Value[..8];
 
-    var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
-    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default()).Items.Single();
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var control = DashboardNextActionControls.Build(goal, action);
+    var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id)).Items.Single();
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
 
     Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
     Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", control!.Url);
@@ -2270,10 +2266,10 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents));
     var controls = ExtractTaskControls(html, 1);
     var nextDto = DashboardResponseMapper
-        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), agents)
+        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents)
         .Items
         .Single(item => item.TaskId == task.Id.Value);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default(), agents);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, agents);
     var stageDto = DashboardResponseMapper.ToGoalStageReadinessReportDto(goal, kernel.BuildStageReadinessReport(goal.Id), agents).Stages.Single();
 
     Assert.Equal(TaskComplexity.Complex, preview.TaskComplexity);
@@ -2329,7 +2325,7 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents));
     var controls = ExtractTaskControls(html, 2);
     var nextDto = DashboardResponseMapper
-        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), agents)
+        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents)
         .Items
         .Single(item => item.TaskId == nextTask.Id.Value);
 
@@ -2495,7 +2491,7 @@ public sealed class DashboardRenderingTests
         AgentDefinitions: agents));
     var controls = ExtractTaskControls(html, 2);
     var nextDto = DashboardResponseMapper
-        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), agents)
+        .ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), agents)
         .Items
         .Single(item => item.TaskId == nextTask.Id.Value);
 
@@ -2642,9 +2638,9 @@ public sealed class DashboardRenderingTests
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
     var taskNumber = goal.Tasks.Select((candidate, index) => (candidate, index))
         .Single(item => item.candidate.Id == task.Id)
         .index + 1;
@@ -2700,7 +2696,7 @@ public sealed class DashboardRenderingTests
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default(), [agent]);
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, [agent]);
 
     Assert.True(workSummary.ParallelPlan is not null);
     Assert.Equal(2, workSummary.ParallelPlan!.Batches.Count);
@@ -2893,9 +2889,9 @@ public sealed class DashboardRenderingTests
 
     var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
-    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
+    var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal);
     var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.True(detail.LastProcess!.Heartbeat.IsAvailable);
     Assert.Equal(heartbeatPath, detail.LastProcess.Heartbeat.Path);
@@ -2976,7 +2972,7 @@ static void AssertControl(
     IReadOnlyList<AgentConfigurationValidation>? agents = null,
     string? costRisk = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item, WorkerProfileCatalog.Default(), agents);
+    var control = DashboardNextActionControls.Build(goal, item, agents);
 
     Assert.True(control is not null);
     Assert.Equal(label, control!.Label);
@@ -3170,7 +3166,7 @@ static string ExtractTaskControls(string html, int taskNumber)
     var testerTask = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
     kernel.RecordTaskVerification(goal.Id, testerTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 1, "", "failed", DateTimeOffset.UtcNow));
 
-    var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
+    var transcript = GoalTranscriptRenderer.Render(kernel, goal);
 
     Assert.Contains("# Goal", transcript, StringComparison.Ordinal);
     Assert.Contains("Objective: Export transcript", transcript, StringComparison.Ordinal);
@@ -3197,10 +3193,10 @@ static string ExtractTaskControls(string html, int taskNumber)
     var readyGoal = readyKernel.CreateGoal("Ready transcript");
     var readyAgents = AgentCatalog.Default().Agents;
     readyKernel.ActivateGoal(readyGoal.Id, readyAgents);
-    var readyTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal, WorkerProfileCatalog.Default());
+    var readyTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal);
     Assert.Contains("Suggested command: run", readyTranscript, StringComparison.Ordinal);
     Assert.False(readyTranscript.Contains("subscription-dispatch 1 | api-run 1", StringComparison.Ordinal));
-    var costAwareTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal, WorkerProfileCatalog.Default(), readyAgents);
+    var costAwareTranscript = GoalTranscriptRenderer.Render(readyKernel, readyGoal, readyAgents);
     var nextSteps = costAwareTranscript[..costAwareTranscript.IndexOf("## Needs Attention", StringComparison.Ordinal)];
     Assert.Contains("Suggested command: subscription-dispatch 1", nextSteps, StringComparison.Ordinal);
     Assert.False(nextSteps.Contains("Suggested command: run 1", StringComparison.Ordinal));

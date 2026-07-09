@@ -1023,7 +1023,7 @@ public static class WorkerProfileDispatcher
             return true;
         }
 
-        var missingFields = AgentOutputDirectives.WorkerResultRequiredFieldsForRole(task.RequiredRole)
+        var missingFields = WorkerResultRequiredFieldsForLightRole(task.RequiredRole)
             .Where(field => !fields.ContainsKey(field))
             .ToArray();
         if (missingFields.Length > 0)
@@ -1051,6 +1051,16 @@ public static class WorkerProfileDispatcher
         }
 
         return false;
+    }
+
+    private static IReadOnlyList<string> WorkerResultRequiredFieldsForLightRole(AgentRole role)
+    {
+        return role switch
+        {
+            AgentRole.Researcher => [.. WorkerResultParser.RequiredFields, "citations"],
+            AgentRole.Reviewer => [.. WorkerResultParser.RequiredFields, "verdict"],
+            _ => WorkerResultParser.RequiredFields
+        };
     }
 
     private static bool HasPresentField(IReadOnlyDictionary<string, string> fields, string fieldName)

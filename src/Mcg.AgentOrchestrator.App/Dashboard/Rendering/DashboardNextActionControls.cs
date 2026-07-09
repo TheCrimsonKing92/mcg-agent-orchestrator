@@ -17,7 +17,6 @@ public static class DashboardNextActionControls
     public static DashboardNextActionControl? Build(
         Goal goal,
         NextActionItem item,
-        WorkerProfileCatalog profiles,
         IReadOnlyList<AgentConfigurationValidation>? agents = null,
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
@@ -31,8 +30,8 @@ public static class DashboardNextActionControls
                     GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
                     "POST",
                     BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions),
-                    BuildRunAssignedCostRiskLabel(goal, item.TaskId!, agents, agentDefinitions, profiles),
-                    BuildRunAssignedCostRecommendation(goal, item.TaskId!, agents, agentDefinitions, profiles)),
+                    BuildRunAssignedCostRiskLabel(goal, item.TaskId!, agents, agentDefinitions),
+                    BuildRunAssignedCostRecommendation(goal, item.TaskId!, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
                 new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
@@ -282,10 +281,9 @@ public static class DashboardNextActionControls
         Goal goal,
         TaskId taskId,
         IReadOnlyList<AgentConfigurationValidation>? agents,
-        IReadOnlyList<AgentDefinition>? agentDefinitions,
-        WorkerProfileCatalog? profiles)
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
     {
-        if (TryResolveSubscriptionCostContext(goal, taskId, agents, agentDefinitions, profiles) is { } context)
+        if (TryResolveSubscriptionCostContext(goal, taskId, agents, agentDefinitions) is { } context)
         {
             if (context.ModelFit?.UnderpoweredCount > 0)
             {
@@ -307,10 +305,9 @@ public static class DashboardNextActionControls
         Goal goal,
         TaskId taskId,
         IReadOnlyList<AgentConfigurationValidation>? agents,
-        IReadOnlyList<AgentDefinition>? agentDefinitions,
-        WorkerProfileCatalog? profiles)
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
     {
-        if (TryResolveSubscriptionCostContext(goal, taskId, agents, agentDefinitions, profiles) is { } context)
+        if (TryResolveSubscriptionCostContext(goal, taskId, agents, agentDefinitions) is { } context)
         {
             if (context.ModelFit?.UnderpoweredCount > 0)
             {
@@ -332,8 +329,7 @@ public static class DashboardNextActionControls
         Goal goal,
         TaskId taskId,
         IReadOnlyList<AgentConfigurationValidation>? agents,
-        IReadOnlyList<AgentDefinition>? agentDefinitions,
-        WorkerProfileCatalog? profiles)
+        IReadOnlyList<AgentDefinition>? agentDefinitions)
     {
         var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id == taskId);
         if (task is null)
@@ -348,11 +344,12 @@ public static class DashboardNextActionControls
                 return null;
             }
 
+            var profiles = WorkerProfileCatalog.Default();
             var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(
                 agentDefinition,
                 goal,
                 task,
-                profiles ?? WorkerProfileCatalog.Default());
+                profiles);
             var providerName = GetTemplateValue(templateVariables, "providerName") ?? agentDefinition.Model.ProviderName;
             var modelName = GetTemplateValue(templateVariables, "subscriptionModelName") ??
                 agentDefinition.Subscription?.ModelAlias ??

@@ -45,7 +45,7 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         providers ?? new InMemoryModelProviderRegistry([]),
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
-    var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents, new WorkerProfileCatalog([profile]));
+    var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
     return WorkerProfileDispatcher.PrepareTask(
         kernel,
         goal,
@@ -135,8 +135,7 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
     Goal goal,
     TaskSpec task,
     WorkerProfile profile,
-    IReadOnlyList<AgentDefinition>? agents,
-    WorkerProfileCatalog? profiles)
+    IReadOnlyList<AgentDefinition>? agents)
 {
     if (agents is null)
     {
@@ -158,11 +157,11 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
         return null;
     }
 
-    var resolvedProfiles = profiles ?? new WorkerProfileCatalog([profile]);
+    var profiles = new WorkerProfileCatalog([profile]);
     string profileName;
     try
     {
-        profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, resolvedProfiles);
+        profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
     }
     catch (InvalidOperationException)
     {
@@ -174,7 +173,7 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
         return null;
     }
 
-    var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, resolvedProfiles);
+    var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
     var providerName = variables.GetValueOrDefault("providerName");
     var modelName = variables.GetValueOrDefault("subscriptionModelName");
     var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");

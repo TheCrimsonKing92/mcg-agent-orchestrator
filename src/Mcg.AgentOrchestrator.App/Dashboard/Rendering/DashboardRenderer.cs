@@ -96,11 +96,6 @@ public static partial class DashboardRenderer
     public static string Render(AgentOrchestratorKernel kernel, DashboardRenderOptions? options = null)
     {
         options ??= new DashboardRenderOptions();
-        if (options.WorkerProfiles is null)
-        {
-            options = options with { WorkerProfiles = WorkerProfileCatalog.Default() };
-        }
-
         var goals = kernel.Goals
             .OrderByDescending(goal => goal.Timeline.LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
             .ToList();

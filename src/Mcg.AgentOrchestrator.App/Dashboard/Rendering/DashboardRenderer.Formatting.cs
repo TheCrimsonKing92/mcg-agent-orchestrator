@@ -272,7 +272,7 @@ public static partial class DashboardRenderer
 
     private static string RenderNextActionControl(Goal goal, NextActionItem item, DashboardRenderOptions options)
     {
-        var control = DashboardNextActionControls.Build(goal, item, options.WorkerProfiles!, options.HealthReport?.Agents, options.AgentDefinitions);
+        var control = DashboardNextActionControls.Build(goal, item, options.HealthReport?.Agents, options.AgentDefinitions);
         if (control is null)
         {
             if (item.Kind == NextActionKind.AnswerHumanInput && item.HumanInputRequestId is not null)

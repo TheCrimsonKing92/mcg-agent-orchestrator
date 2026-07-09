@@ -19,16 +19,7 @@ public static async Task<object?> ApplyTaskActionAsync(
     switch (operation.ToLowerInvariant())
     {
         case "run":
-            return await AdvanceRunAssignedTaskAsync(
-                kernel,
-                agents,
-                providers,
-                workspace,
-                goal,
-                task.Id,
-                allowApiExecution: true,
-                allowApiFallback: false,
-                profiles: WorkerProfileStore.Load(workspace.WorkerProfilePath));
+            return await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
 
         case "api-run":
             return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);

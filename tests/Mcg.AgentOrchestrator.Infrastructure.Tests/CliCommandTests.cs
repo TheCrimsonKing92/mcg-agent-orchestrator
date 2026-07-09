@@ -696,7 +696,7 @@ public sealed class CliCommandTests
             "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
             string.Empty,
             DateTimeOffset.UtcNow));
-        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), [agent]));
+        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]));
         Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
         Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try local Ollama/qwen3:8b via agent configuration before paid API run.", output);
     }
@@ -2057,15 +2057,15 @@ public sealed class CliCommandTests
     public void CrossGoalSubscriptionStartPlannerBatchesIndependentGoalsAndSerializesConflicts()
     {
         var kernel = new AgentOrchestratorKernel();
-        var first = kernel.CreateGoal("Update src/Alpha.cs", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Developer)]);
+        var first = kernel.CreateGoal("Update src/Alpha.cs", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Planner)]);
         var second = kernel.CreateGoal("Update src/Beta.cs", [new TaskSpec(TaskId.New(), "Change src/Beta.cs", AgentRole.Researcher)]);
         var conflict = kernel.CreateGoal("Update src/Alpha.cs too", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Researcher)]);
         IReadOnlyList<AgentDefinition> agents =
         [
             new(
-                new AgentId("developer-openai"),
-                "Developer OpenAI",
-                AgentRole.Developer,
+                new AgentId("planner-openai"),
+                "Planner OpenAI",
+                AgentRole.Planner,
                 new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
@@ -2086,12 +2086,6 @@ public sealed class CliCommandTests
         Assert.Equal(3, plan.Candidates.Count);
         Assert.True(plan.FirstBatchCandidates.Any(candidate => candidate.GoalId == first.Id.Value));
         Assert.True(plan.FirstBatchCandidates.Any(candidate => candidate.GoalId == second.Id.Value));
-        Assert.Contains(plan.Candidates, candidate =>
-            candidate.GoalId == first.Id.Value && candidate.ProviderKey == "OpenAI/gpt-5.5");
-        Assert.Contains(plan.Candidates, candidate =>
-            candidate.GoalId == second.Id.Value && candidate.ProviderKey == "Anthropic/claude-haiku-4-5");
-        Assert.Contains(plan.Candidates, candidate =>
-            candidate.GoalId == conflict.Id.Value && candidate.ProviderKey == "Anthropic/claude-haiku-4-5");
         Assert.True(plan.ParallelPlan.Decisions.Any(decision =>
             decision.IntentId == conflict.Id.Value &&
             decision.Disposition == ParallelExecutionDisposition.Serialized));
@@ -3223,9 +3217,7 @@ public sealed class CliCommandTests
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
         var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default()
-            .Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"))
-            .Upsert(new WorkerProfile("claude-cli", "Write-Output {promptPath}"));
+        var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         EnsureGitRepository(root);

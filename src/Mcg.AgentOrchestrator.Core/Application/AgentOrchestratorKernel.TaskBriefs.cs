@@ -99,7 +99,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(BuildTaskBriefInstructions(task.RequiredRole, complexity, modelFitTarget));
+        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
@@ -342,7 +342,7 @@ public sealed partial class AgentOrchestratorKernel
         return complexity == TaskComplexity.Complex ? 20 : 8;
     }
 
-    private static IReadOnlyList<string> BuildTaskBriefInstructions(AgentRole role, TaskComplexity complexity, string? modelFitTarget)
+    private static IReadOnlyList<string> BuildTaskBriefInstructions(TaskComplexity complexity, string? modelFitTarget)
     {
         var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
@@ -354,7 +354,7 @@ public sealed partial class AgentOrchestratorKernel
                 "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.",
                 "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
             };
-            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
             simpleLines.Add(modelFitInstruction);
             return simpleLines;
         }
@@ -369,7 +369,7 @@ public sealed partial class AgentOrchestratorKernel
             "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads.",
             "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
         };
-        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
         complexLines.Add(modelFitInstruction);
         return complexLines;
     }

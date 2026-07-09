@@ -249,7 +249,6 @@ public static TaskEvidenceSummaryDto ToTaskEvidenceSummaryDto(Goal goal, TaskEvi
 public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     AgentOrchestratorKernel kernel,
     Goal goal,
-    WorkerProfileCatalog profiles,
     IReadOnlyList<AgentDefinition>? agents = null,
     DashboardHostInfoDto? host = null,
     string? executionDirectory = null,
@@ -271,7 +270,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
         ToGoalOperatorDispositionDto(goal, disposition),
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, profiles, agents),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
         host,
         ToGoalBuildEnvironmentDto(goal),
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
@@ -353,7 +352,6 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
     Goal goal,
     TaskSpec task,
     DashboardHostInfoDto host,
-    WorkerProfileCatalog profiles,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
     var monitor = kernel.BuildMonitor(goal.Id);
@@ -367,7 +365,7 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, profiles, agents),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, agents),
         ToTaskWorkSummaryDto(goal, task),
         host);
 }
@@ -546,7 +544,6 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
 public static NextActionsDto ToNextActionsDto(
     Goal goal,
     GoalNextActions actions,
-    WorkerProfileCatalog profiles,
     IReadOnlyList<AgentDefinition>? agents = null,
     GoalOperatorDisposition? conductorDisposition = null)
 {
@@ -557,14 +554,13 @@ public static NextActionsDto ToNextActionsDto(
         SummaryText(actions.Objective),
         actions.Status,
         ToGoalOperatorDispositionDto(goal, disposition),
-        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, profiles, agents)).ToList());
+        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, agents)).ToList());
 }
 
 public static NextActionDto ToNextActionDto(
     Goal goal,
     NextActionItem item,
     int priority,
-    WorkerProfileCatalog profiles,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
@@ -577,7 +573,7 @@ public static NextActionDto ToNextActionDto(
         item.HumanInputRequestId?.Value,
         TimelineText(item.Message),
         ConsoleViews.BuildSuggestedCommand(goal, item, agents),
-        ToNextActionControlDto(goal, item, profiles, agents),
+        ToNextActionControlDto(goal, item, agents),
         dispatchState?.RecoveryDecision,
         dispatchState);
 }
@@ -678,10 +674,9 @@ private static OperatorEvidencePointerDto ToOperatorEvidencePointerDto(OperatorE
 public static NextActionControlDto? ToNextActionControlDto(
     Goal goal,
     NextActionItem item,
-    WorkerProfileCatalog profiles,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item, profiles, agentDefinitions: agents);
+    var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
     return control is null
         ? null
         : new NextActionControlDto(
