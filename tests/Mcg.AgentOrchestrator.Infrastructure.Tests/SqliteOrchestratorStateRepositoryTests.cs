@@ -714,6 +714,86 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(delegateCalls >= 2, $"Expected retry on version mismatch, got {delegateCalls} delegate calls");
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_mid_tick_retry_and_tick_task_state")]
+    public async Task TickMergePreservesMidTickRetryAndTickTaskState()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect mid-tick retry");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "codex exec", "C:\\work", DateTimeOffset.UtcNow));
+        tickKernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(1234, "codex exec", "C:\\work", "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
+        var tickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var transactionKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                transactionKernel.RetryTask(goal.Id, task.Id, "operator retry during conductor tick");
+                return Task.FromResult((true, transactionKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        var result = Assert.Single(results);
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
+        Assert.NotNull(restoredTask.LastDispatch);
+        Assert.NotNull(restoredTask.LastProcess);
+        Assert.Contains(restoredGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("operator retry during conductor tick", StringComparison.Ordinal));
+        Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskDispatchRecorded);
+        Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_skip_returns_receipt")]
+    public async Task TickMergeSkipReturnsReceipt()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var originalTask = new TaskSpec(TaskId.New(), "Original task", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Skip unmergeable tick", [originalTask]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordTaskDispatch(
+            goal.Id,
+            originalTask.Id,
+            new TaskDispatchRecord("codex-cli", "codex exec", "C:\\work", DateTimeOffset.UtcNow));
+        var tickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        var replacementKernel = new AgentOrchestratorKernel();
+        replacementKernel.CreateGoal(goal.Id, "Skip unmergeable tick", [new TaskSpec(TaskId.New(), "Replacement task", AgentRole.Developer)]);
+        await repo.SaveGoalSnapshotsAsync(replacementKernel.ExportSnapshot().Goals);
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        var result = Assert.Single(results);
+        Assert.Equal(GoalSnapshotSaveDisposition.Skipped, result.Disposition);
+        Assert.NotNull(result.PersistedSnapshot);
+        Assert.Contains("no longer contains task", result.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_version_incremented_atomically")]
     public async Task TransactGoalAsync_VersionIncrementedAtomically()
     {

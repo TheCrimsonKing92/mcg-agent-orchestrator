@@ -8043,6 +8043,20 @@ public sealed class CliCommandTests
             repository.LoadGoalBatches.Single().OrderBy(id => id, StringComparer.Ordinal).ToArray());
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_tick_merge_skip_formats_receipt")]
+    public void PersistentRunnerTickMergeSkipFormatsReceipt()
+    {
+        var receipt = CliPersistentStateRunner.FormatTickMergeReceipt(new GoalSnapshotSaveResult(
+            "abcdef123456",
+            GoalSnapshotSaveDisposition.Skipped,
+            null,
+            "stored goal no longer contains task 12345678 changed by tick"));
+
+        Xunit.Assert.Equal(
+            "TICK_MERGE goal=abcdef12 disposition=SKIPPED stored goal no longer contains task 12345678 changed by tick",
+            receipt);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_preserves_terminal_dependency_readiness_without_loading_dependency")]
     public void PersistentRunnerConductLoopPreservesTerminalDependencyReadinessWithoutLoadingDependency()
     {
@@ -8441,6 +8455,21 @@ public sealed class CliCommandTests
             merged.AddRange(replacements.Values.Where(goal => snapshot.Goals.All(existing => existing.Id != goal.Id)));
             _kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = merged });
             return Task.CompletedTask;
+        }
+
+        public async Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
+            IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+            CancellationToken cancellationToken = default)
+        {
+            var snapshots = goals.Select(goal => goal.Current).ToArray();
+            await SaveGoalSnapshotsAsync(snapshots, cancellationToken);
+            return snapshots
+                .Select(snapshot => new GoalSnapshotSaveResult(
+                    snapshot.Id,
+                    GoalSnapshotSaveDisposition.Saved,
+                    snapshot,
+                    "in-memory save"))
+                .ToArray();
         }
 
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>

@@ -405,6 +405,9 @@ internal static class CliPersistentStateRunner
         (entry.Detail?.Contains("Deferred cleanup after landing", StringComparison.OrdinalIgnoreCase) == true ||
          entry.Detail?.Contains("cleanup-needed", StringComparison.OrdinalIgnoreCase) == true);
 
+    internal static string FormatTickMergeReceipt(GoalSnapshotSaveResult result) =>
+        $"TICK_MERGE goal={result.GoalId[..Math.Min(8, result.GoalId.Length)]} disposition={result.Disposition.ToString().ToUpperInvariant()} {result.Message}";
+
     // Runs a conductor loop outside the single wrapping state transaction, committing each tick's
     // progress via an independent SaveAsync (passed to the loop as PersistCheckpoint). This makes a
     // started dispatch durable the moment its tick completes — so a stopped/killed/long-running loop
@@ -422,26 +425,46 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null)
     {
         var kernel = LoadConductLoopKernel(stateRepository);
+        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         var sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
         ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
-            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+            PersistGoals(checkpoint, checkpoint.Goals.Select(goal => goal.Id).ToArray());
 
         void PersistGoals(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
         {
             if (changedGoalIds.Count == 0) return;
 
             var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-            var snaps = checkpoint.ExportSnapshot().Goals
+            var requests = checkpoint.ExportSnapshot().Goals
                 .Where(goal => changed.Contains(goal.Id))
+                .Select(goal =>
+                {
+                    var baseline = tickBaselines.TryGetValue(goal.Id, out var known)
+                        ? known
+                        : goal;
+                    return new GoalSnapshotSaveRequest(baseline, goal);
+                })
                 .ToArray();
 
-            if (snaps.Length == 0) return;
+            if (requests.Length == 0) return;
 
-            stateRepository.SaveGoalSnapshotsAsync(snaps, CancellationToken.None).GetAwaiter().GetResult();
+            var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            foreach (var result in results)
+            {
+                if (result.PersistedSnapshot is not null)
+                {
+                    tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                }
+
+                if (result.Disposition is GoalSnapshotSaveDisposition.Merged or GoalSnapshotSaveDisposition.Skipped)
+                {
+                    Console.WriteLine(FormatTickMergeReceipt(result));
+                }
+            }
         }
 
         if (sweep.Changed)

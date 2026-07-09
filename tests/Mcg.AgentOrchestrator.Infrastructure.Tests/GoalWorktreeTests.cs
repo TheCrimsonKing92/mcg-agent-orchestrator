@@ -6142,6 +6142,11 @@ public sealed class GoalWorktreeIntegrationTests
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("repo-process command should not save goal snapshots");
 
+        public Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
+            IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not save goal snapshots");
+
         public Task<T> TransactGoalAsync<T>(
             GoalId goalId,
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
