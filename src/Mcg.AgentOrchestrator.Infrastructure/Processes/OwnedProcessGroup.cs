@@ -162,7 +162,7 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool QueryInformationJobObject(
-            SafeFileHandle hJob,
+            IntPtr hJob,
             int jobObjectInfoClass,
             IntPtr lpJobObjectInfo,
             uint cbJobObjectInfoLength,
@@ -200,6 +200,7 @@ internal sealed class OwnedProcessGroup : IDisposable
             where T : struct
         {
             value = default;
+            var addedRef = false;
             var length = Marshal.SizeOf<T>();
             var buffer = Marshal.AllocHGlobal(length);
             try
@@ -209,7 +210,16 @@ internal sealed class OwnedProcessGroup : IDisposable
                     return false;
                 }
 
-                if (!QueryInformationJobObject(job, infoClass, buffer, (uint)length, IntPtr.Zero))
+                try
+                {
+                    job.DangerousAddRef(ref addedRef);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return false;
+                }
+
+                if (!QueryInformationJobObject(job.DangerousGetHandle(), infoClass, buffer, (uint)length, IntPtr.Zero))
                 {
                     return false;
                 }
@@ -219,6 +229,11 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
             finally
             {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+
                 Marshal.FreeHGlobal(buffer);
             }
         }

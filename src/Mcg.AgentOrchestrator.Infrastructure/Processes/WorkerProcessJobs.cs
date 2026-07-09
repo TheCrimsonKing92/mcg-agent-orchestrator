@@ -82,7 +82,7 @@ public static class WorkerProcessJobs
                 return true;
             }
 
-            ReadAccountingAndDispose(group, kill: false, out _);
+            ReadAccountingAndDispose(group, kill: false, captureAccounting: false, out _);
         }
         catch (Win32Exception)
         {
@@ -114,7 +114,7 @@ public static class WorkerProcessJobs
 
         if (Jobs.TryRemove(processId, out var group))
         {
-            if (ReadAccountingAndDispose(group, kill: true, out accounting))
+            if (ReadAccountingAndDispose(group, kill: true, captureAccounting: true, out accounting))
             {
                 Registry?.MarkReleased(processId, $"spawn_registry: killed pid={processId}");
                 return true;
@@ -140,7 +140,17 @@ public static class WorkerProcessJobs
         accounting = null;
         if (Jobs.TryRemove(processId, out var group))
         {
-            ReadAccountingAndDispose(group, kill: true, out accounting);
+            ReadAccountingAndDispose(group, kill: true, captureAccounting: true, out accounting);
+        }
+
+        Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+    }
+
+    internal static void ReleaseWithoutAccounting(int processId)
+    {
+        if (Jobs.TryRemove(processId, out var group))
+        {
+            ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
@@ -149,6 +159,7 @@ public static class WorkerProcessJobs
     internal static bool ReadAccountingAndDispose(
         OwnedProcessGroup? group,
         bool kill,
+        bool captureAccounting,
         out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;
@@ -159,11 +170,11 @@ public static class WorkerProcessJobs
 
         try
         {
-            if (group.TryReadAccounting(out var capturedAccounting))
+            if (captureAccounting && group.TryReadAccounting(out var capturedAccounting))
             {
                 accounting = capturedAccounting;
             }
-            else if (OperatingSystem.IsWindows())
+            else if (captureAccounting && OperatingSystem.IsWindows())
             {
                 accounting = WorkerProcessJobAccounting.Empty;
             }
@@ -171,7 +182,7 @@ public static class WorkerProcessJobs
         catch
         {
             // Accounting is best-effort; disposal remains mandatory.
-            if (OperatingSystem.IsWindows())
+            if (captureAccounting && OperatingSystem.IsWindows())
             {
                 accounting = WorkerProcessJobAccounting.Empty;
             }

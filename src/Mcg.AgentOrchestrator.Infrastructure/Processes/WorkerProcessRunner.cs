@@ -93,7 +93,7 @@ public static class WorkerProcessRunner
         }
         finally
         {
-            WorkerProcessJobs.ReadAccountingAndDispose(processGroup, kill: false, out _);
+            WorkerProcessJobs.ReadAccountingAndDispose(processGroup, kill: false, captureAccounting: false, out _);
         }
     }
 
@@ -152,7 +152,7 @@ public static class WorkerProcessRunner
 
     private static void TryKillProcessTree(Process process, OwnedProcessGroup? processGroup)
     {
-        try { WorkerProcessJobs.ReadAccountingAndDispose(processGroup, kill: true, out _); } catch { }
+        try { WorkerProcessJobs.ReadAccountingAndDispose(processGroup, kill: true, captureAccounting: false, out _); } catch { }
         try
         {
             if (!process.HasExited)

@@ -2100,10 +2100,17 @@ public sealed class BackgroundDispatchRunner
     private TaskProcessResourceAccounting? ReapTrackedProcessJobs(TaskProcessRecord processRecord, bool waitForExit)
     {
         var preReapSnapshot = SnapshotTrackedProcessAccounting(processRecord);
-        var accounting = ReleaseTrackedProcessJobs(processRecord);
+        ReleaseTrackedProcessJobsWithoutAccounting(processRecord);
         TryKillTrackedProcesses(processRecord, waitForExit);
-        accounting = MergeResourceAccounting(accounting, preReapSnapshot);
-        return accounting is null ? null : accounting with { Reaped = true };
+        return preReapSnapshot is null ? null : preReapSnapshot with { Reaped = true };
+    }
+
+    private static void ReleaseTrackedProcessJobsWithoutAccounting(TaskProcessRecord processRecord)
+    {
+        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
+        {
+            WorkerProcessJobs.ReleaseWithoutAccounting(processId);
+        }
     }
 
     private static TaskProcessResourceAccounting? SnapshotTrackedProcessAccounting(TaskProcessRecord processRecord)
