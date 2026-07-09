@@ -344,7 +344,23 @@ internal sealed class ConductorDriver
         _cleanup = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Removing goal workspace.");
-            var result = GoalWorktrees.Remove(dir, goal.Id, kernel);
+            GoalWorktreeRemoveResult result;
+            try
+            {
+                result = GoalWorktrees.Remove(dir, goal.Id, kernel);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(dir, goal.Id, "remove:conductor-cleanup-failed");
+                var path = GoalWorktrees.WorktreePath(dir, goal.Id);
+                result = new GoalWorktreeRemoveResult(
+                    $"Workspace cleanup deferred after removal failure: {ex.Message}",
+                    path,
+                    GoalWorktrees.FindLockHoldersForCleanup(path),
+                    $"conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop",
+                    CleanupBackoff: cleanupBackoff);
+            }
+
             if (result.IsComplete)
                 GoalOperationJournal.Completed(dir, goal, "conductor:cleanup", result.Message);
             else
@@ -1125,7 +1141,19 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteCleanup(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var cleanup = _cleanup(goal);
+        GoalWorktreeRemoveResult cleanup;
+        try
+        {
+            cleanup = _cleanup(goal);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Recorded,
+                    $"Workspace cleanup deferred after removal failure; retry later. {ex.Message}"));
+        }
+
         if (!cleanup.IsComplete)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,

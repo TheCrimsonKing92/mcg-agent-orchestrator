@@ -1021,6 +1021,24 @@ public sealed class ConductorDriverTests
         Assert.True(held.Reason.Contains("conduct abc12345 --loop", StringComparison.Ordinal), held.Reason);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_cleanup_failure_returns_Held_without_throwing")]
+    public void ConductorDriverRecordedCleanupFailureReturnsHeldWithoutThrowing()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(IsMerged: true, IsRecorded: true),
+            cleanup: _ => throw new InvalidOperationException("git worktree remove refused dirty workspace"));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Recorded, held.State);
+        Assert.Contains("Workspace cleanup deferred after removal failure", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("git worktree remove refused dirty workspace", held.Reason, StringComparison.Ordinal);
+    }
+
     // ── CleanedUp state ───────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "ConductorDriver_CleanedUp_returns_Done")]
