@@ -563,6 +563,7 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         DispatchRefreshOutcome outcome)
     {
+        var previousProcess = kernel.GetTask(goalId, taskId).LastProcess;
         var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
         {
@@ -577,8 +578,15 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        if (previousProcess?.CompletedAt is not null &&
+            outcome.ProcessRecord.CompletedAt is not null &&
+            previousProcess.ProcessId == outcome.ProcessRecord.ProcessId)
+        {
+            verification = null;
+        }
+
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
-        if (outcome.ProcessRecord.ResourceAccounting is { } accounting)
+        if (verification is not null && outcome.ProcessRecord.ResourceAccounting is { } accounting)
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
         }

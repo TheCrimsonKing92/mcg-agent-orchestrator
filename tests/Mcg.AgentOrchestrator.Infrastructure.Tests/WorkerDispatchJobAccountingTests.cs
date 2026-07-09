@@ -5,6 +5,54 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class WorkerDispatchJobAccountingTests
 {
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_completed_refresh_does_not_reapply_stale_resource_verification")]
+    public void BackgroundDispatchRunnerCompletedRefreshDoesNotReapplyStaleResourceVerification()
+    {
+        var root = CreateTempDirectory();
+        var logs = Path.Combine(root, "logs");
+        var stdout = Path.Combine(logs, "out.log");
+        var stderr = Path.Combine(logs, "err.log");
+        var exit = Path.Combine(logs, "worker.exit.txt");
+        Directory.CreateDirectory(logs);
+        File.WriteAllText(stdout, "done");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+
+        var now = DateTimeOffset.Parse("2026-07-09T11:43:56Z");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Avoid stale resource verification");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        var dispatch = new TaskDispatchRecord("codex-cli", "Write-Output done", root, now);
+        var started = new TaskProcessRecord(12345, dispatch.Command, root, stdout, stderr, exit, now, null, null);
+        var completed = started with
+        {
+            CompletedAt = now.AddSeconds(1),
+            ExitCode = 0,
+            ResourceAccounting = new TaskProcessResourceAccounting(12, 4096, 128)
+        };
+        var verification = new TaskVerificationRecord(
+            dispatch.Command,
+            root,
+            0,
+            "done",
+            "RESOURCE goal=e93b30f6 task=64f76097 cpu_ms=12 peak_mem_bytes=4096 io_bytes=128",
+            completed.CompletedAt.Value);
+        var outcome = new DispatchRefreshOutcome(completed, verification);
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, started);
+
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+
+        Assert.Single(task.VerificationHistory);
+        Assert.Single(
+            kernel.GetTimeline(goal.Id),
+            evt => evt.Kind == ProgressKind.TaskNote &&
+                evt.Message.Contains("RESOURCE ", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_runs_with_shared_compilation_disabled")]
     public void BackgroundDispatchRunnerNonLocalDispatchRunsWithSharedCompilationDisabled()
     {
