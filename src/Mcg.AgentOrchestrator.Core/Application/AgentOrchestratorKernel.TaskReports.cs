@@ -230,6 +230,11 @@ public sealed partial class AgentOrchestratorKernel
         return TaskDurationReport.BuildDailyTrend(Goals, since);
     }
 
+    public GoalTimingReportSnapshot BuildGoalTimingReport(GoalId goalId)
+    {
+        return GoalTimingReport.Build(GetGoal(goalId));
+    }
+
     public LoopHealthSnapshot BuildLoopHealthReport(int? lastN = null)
     {
         return LoopHealthReport.Build(Goals, HumanInputRequests, lastN);

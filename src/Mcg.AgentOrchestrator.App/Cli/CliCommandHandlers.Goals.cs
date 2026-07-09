@@ -519,6 +519,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
             return false;
 
+        case "goal-timing":
+            CliArgumentParser.RequirePartCount(parts, 2, "goal-timing <goal-prefix>");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            ConsoleViews.PrintGoalTimingReport(context.Kernel.BuildGoalTimingReport(context.CurrentGoal.Id));
+            return false;
+
         case "readiness":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var readinessSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
