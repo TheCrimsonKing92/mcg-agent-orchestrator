@@ -25,7 +25,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal(first.RootPath, second.RootPath);
             Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
             Assert.True(second.ReusedGoalLease);
-            Assert.Equal(DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId), first.ArtifactsPath);
             Assert.True(first.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
             Assert.True(Directory.Exists(first.ArtifactsPath));
             Assert.True(Directory.Exists(second.ArtifactsPath));
@@ -166,6 +165,30 @@ public sealed class DotnetBuildEnvironmentManagerTests
         using var selected = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(1));
 
         Assert.NotEqual("slot-0", selected.Environment.SlotOwnerToken);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_goal_gate_skips_worker_held_slot_zero")]
+    public void DotnetBuildEnvironmentManagerGoalGateSkipsWorkerHeldSlotZero()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var workerSlot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using var workerLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(workerSlot0);
+        var gateGoalId = new GoalId("90000000900000009000000090000000");
+        DotnetBuildEnvironment? gateEnvironment = null;
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            gateEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
+            using var gateLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(gateEnvironment, TimeSpan.FromSeconds(1));
+        });
+
+        Assert.NotNull(gateEnvironment);
+        Assert.DoesNotContain(Path.Combine("slots", "slot-0"), gateEnvironment.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("slots", "slot-"), gateEnvironment.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LEASE_ACQUIRE", output);
+        Assert.Contains("slot=slot-", output);
+        Assert.Contains("lease=goal-90000000", output);
+        Assert.Equal(1, CountOccurrences(output, "LEASE_RELEASE"));
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reclaims_dead_pid_execution_lease_without_timeout")]
@@ -882,6 +905,19 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var argument = arguments.SingleOrDefault(argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
         Assert.False(string.IsNullOrWhiteSpace(argument));
         return argument!;
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static SafeFileHandle CreateInheritableFileHandle(string path)

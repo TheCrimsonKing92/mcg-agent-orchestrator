@@ -372,11 +372,12 @@ public static class DotnetBuildEnvironmentManager
         var root = GoalRoot(goalId);
         var leaseId = $"goal-{Prefix(goalId)}";
         var leaseDirectory = LeaseDirectory(goalId);
-        var artifactsPath = GoalArtifactsPath(goalId);
-        var executionLockPath = StableSlotExecutionLockPath(StableSlotName(goalId));
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
+        var slotName = SelectStableSlotNameForGoal(metadataPath, reused);
+        var artifactsPath = StableSlotArtifactsPath(slotName);
+        var executionLockPath = StableSlotExecutionLockPath(slotName);
         Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
@@ -442,6 +443,90 @@ public static class DotnetBuildEnvironmentManager
         }
 
         return $"slot-{Math.Abs(hash % StableSlotCount)}";
+    }
+
+    private static string SelectStableSlotNameForGoal(string metadataPath, bool reused)
+    {
+        if (reused && TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName)
+        {
+            return existingSlotName;
+        }
+
+        var scanStart = NextStableSlotScanStart();
+        for (var offset = 0; offset < StableSlotCount; offset++)
+        {
+            var slotName = $"slot-{(scanStart + offset) % StableSlotCount}";
+            if (IsStableSlotExecutionLockAvailable(slotName))
+            {
+                return slotName;
+            }
+        }
+
+        var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
+        return $"slot-{leastRecentlyLeased.SlotIndex}";
+    }
+
+    private static string? TryReadGoalLeaseSlotName(string metadataPath)
+    {
+        if (!File.Exists(metadataPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
+            if (!document.RootElement.TryGetProperty("artifactsPath", out var artifactsPath) ||
+                artifactsPath.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            return TryStableSlotNameFromArtifactsPath(artifactsPath.GetString());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryStableSlotNameFromArtifactsPath(string? artifactsPath)
+    {
+        if (string.IsNullOrWhiteSpace(artifactsPath))
+        {
+            return null;
+        }
+
+        var trimmed = artifactsPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var slotName = Path.GetFileName(Path.GetDirectoryName(trimmed));
+        return IsStableSlotName(slotName) ? slotName : null;
+    }
+
+    private static bool IsStableSlotExecutionLockAvailable(string slotName)
+    {
+        var executionLockPath = StableSlotExecutionLockPath(slotName);
+        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
+        try
+        {
+            using var stream = new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsStableSlotName(string? slotName)
+    {
+        if (slotName is null ||
+            !slotName.StartsWith("slot-", StringComparison.Ordinal) ||
+            !int.TryParse(slotName["slot-".Length..], out var slotIndex))
+        {
+            return false;
+        }
+
+        return slotIndex >= 0 && slotIndex < StableSlotCount;
     }
 
     private static DotnetBuildEnvironment CreateStableSlotEnvironment(int slotIndex)
@@ -679,7 +764,13 @@ public static class DotnetBuildEnvironmentManager
         var detail = reclaimedProcessId is null
             ? string.Empty
             : $" reclaimedPid={reclaimedProcessId}";
-        Console.WriteLine($"{receipt} pid={Environment.ProcessId} slot={environment.SlotOwnerToken} lease={environment.LeaseId}{detail} path={environment.ExecutionLockPath}");
+        Console.WriteLine($"{receipt} pid={Environment.ProcessId} slot={ReceiptSlotName(environment)} lease={environment.LeaseId}{detail} path={environment.ExecutionLockPath}");
+    }
+
+    private static string ReceiptSlotName(DotnetBuildEnvironment environment)
+    {
+        var slotName = Path.GetFileName(Path.GetDirectoryName(environment.ExecutionLockPath));
+        return string.IsNullOrWhiteSpace(slotName) ? environment.SlotOwnerToken : slotName;
     }
 
     private static bool TryClearStaleLock(string lockPath)
@@ -816,7 +907,7 @@ public static class DotnetBuildEnvironmentManager
     private sealed class LeaseFileStream : FileStream
     {
         private readonly DotnetBuildEnvironment _environment;
-        private bool _released;
+        private int _released;
 
         internal LeaseFileStream(DotnetBuildEnvironment environment)
             : base(environment.ExecutionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
@@ -826,9 +917,8 @@ public static class DotnetBuildEnvironmentManager
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && !_released)
+            if (disposing && Interlocked.Exchange(ref _released, 1) == 0)
             {
-                _released = true;
                 EmitLeaseReceipt("LEASE_RELEASE", _environment);
             }
 
