@@ -763,6 +763,56 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_store_owned_same_field_conflict_keeps_cli_value")]
+    public async Task TickMergeStoreOwnedSameFieldConflictKeepsCliValue()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect same-field operator retry");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var baselineTask = baseline.Tasks.Single(snapshot => snapshot.Id == task.Id.Value);
+        var tickSnapshot = baseline with
+        {
+            Tasks =
+            [
+                baselineTask with
+                {
+                    Status = WorkTaskStatus.Running,
+                    CriterionRetryCount = 99,
+                    CriterionRetryFeedback = ["tick-side stale retry feedback"]
+                }
+            ]
+        };
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var transactionKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                transactionKernel.RecordCriterionRetryFeedback(
+                    goal.Id,
+                    task.Id,
+                    ["operator-authored retry feedback"]);
+                return Task.FromResult((true, transactionKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        var result = Assert.Single(results);
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
+        Assert.Equal(1, restoredTask.CriterionRetryCount);
+        var feedback = Assert.Single(restoredTask.CriterionRetryFeedback);
+        Assert.Equal("operator-authored retry feedback", feedback);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_skip_returns_receipt")]
     public async Task TickMergeSkipReturnsReceipt()
     {

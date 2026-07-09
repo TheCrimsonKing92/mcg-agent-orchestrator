@@ -51,7 +51,8 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
 
     Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
         IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support conductor tick snapshot merge persistence.");
 
     /// <summary>
     /// Loads the goal's current snapshot outside a transaction, calls the delegate to produce

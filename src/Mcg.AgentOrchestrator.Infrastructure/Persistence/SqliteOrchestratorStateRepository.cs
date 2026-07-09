@@ -611,14 +611,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         merged = stored with
         {
-            Objective = PickChanged(baseline.Objective, stored.Objective, current.Objective),
-            Status = PickChanged(baseline.Status, stored.Status, current.Status),
+            Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
+            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
             Tasks = mergedTasks,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
-            DependsOn = PickChangedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
-            SourceBacklogItemId = PickChanged(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
-            RefinedSpec = PickChanged(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
-            LatestAcceptanceFailure = PickChanged(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure)
+            DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
+            SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
+            RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
+            LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure)
         };
         reason = "stored version advanced during tick; reapplied tick snapshot delta onto fresh goal row";
         return true;
@@ -686,23 +686,23 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private static TaskSnapshot MergeTaskSnapshot(TaskSnapshot baseline, TaskSnapshot stored, TaskSnapshot current) =>
         stored with
         {
-            Description = PickChanged(baseline.Description, stored.Description, current.Description),
-            RequiredRole = PickChanged(baseline.RequiredRole, stored.RequiredRole, current.RequiredRole),
-            Status = PickChanged(baseline.Status, stored.Status, current.Status),
-            AssignedAgentId = PickChanged(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId),
-            LastExecution = PickChanged(baseline.LastExecution, stored.LastExecution, current.LastExecution),
-            LastVerification = PickChanged(baseline.LastVerification, stored.LastVerification, current.LastVerification),
-            VerificationHistory = PickChangedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
-            LastDispatch = PickChanged(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch),
-            LastProcess = PickChanged(baseline.LastProcess, stored.LastProcess, current.LastProcess),
-            VerificationPlan = PickChanged(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
-            SubscriptionRetryAfter = PickChanged(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
-            SubscriptionLimitReviewNote = PickChanged(baseline.SubscriptionLimitReviewNote, stored.SubscriptionLimitReviewNote, current.SubscriptionLimitReviewNote),
-            SubscriptionLimitReviewedAt = PickChanged(baseline.SubscriptionLimitReviewedAt, stored.SubscriptionLimitReviewedAt, current.SubscriptionLimitReviewedAt),
-            SubscriptionLimitReviewedFailureCount = PickChanged(baseline.SubscriptionLimitReviewedFailureCount, stored.SubscriptionLimitReviewedFailureCount, current.SubscriptionLimitReviewedFailureCount),
-            CriterionRetryCount = PickChanged(baseline.CriterionRetryCount, stored.CriterionRetryCount, current.CriterionRetryCount),
-            CriterionRetryFeedback = PickChangedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
-            EmptyOutputRetryCount = PickChanged(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount)
+            Description = PickStoreOwned(baseline.Description, stored.Description, current.Description),
+            RequiredRole = PickStoreOwned(baseline.RequiredRole, stored.RequiredRole, current.RequiredRole),
+            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
+            AssignedAgentId = PickTickOwned(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId),
+            LastExecution = PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution),
+            LastVerification = PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification),
+            VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
+            LastDispatch = PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch),
+            LastProcess = PickTickOwned(baseline.LastProcess, stored.LastProcess, current.LastProcess),
+            VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
+            SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
+            SubscriptionLimitReviewNote = PickStoreOwned(baseline.SubscriptionLimitReviewNote, stored.SubscriptionLimitReviewNote, current.SubscriptionLimitReviewNote),
+            SubscriptionLimitReviewedAt = PickStoreOwned(baseline.SubscriptionLimitReviewedAt, stored.SubscriptionLimitReviewedAt, current.SubscriptionLimitReviewedAt),
+            SubscriptionLimitReviewedFailureCount = PickStoreOwned(baseline.SubscriptionLimitReviewedFailureCount, stored.SubscriptionLimitReviewedFailureCount, current.SubscriptionLimitReviewedFailureCount),
+            CriterionRetryCount = PickStoreOwned(baseline.CriterionRetryCount, stored.CriterionRetryCount, current.CriterionRetryCount),
+            CriterionRetryFeedback = PickStoreOwnedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
+            EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount)
         };
 
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
@@ -725,14 +725,31 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return merged.OrderBy(evt => evt.OccurredAt).ToList();
     }
 
-    private static T PickChanged<T>(T baseline, T stored, T current) =>
-        SnapshotEquals(baseline, current) ? stored : current;
+    private static T PickTickOwned<T>(T baseline, T stored, T current) =>
+        PickWithSameFieldPrecedence(baseline, stored, current, preferStoredOnConflict: false);
 
-    private static IReadOnlyList<T>? PickChangedList<T>(
+    private static T PickStoreOwned<T>(T baseline, T stored, T current) =>
+        PickWithSameFieldPrecedence(baseline, stored, current, preferStoredOnConflict: true);
+
+    private static T PickWithSameFieldPrecedence<T>(T baseline, T stored, T current, bool preferStoredOnConflict)
+    {
+        var storedChanged = !SnapshotEquals(baseline, stored);
+        var currentChanged = !SnapshotEquals(baseline, current);
+
+        return (storedChanged, currentChanged) switch
+        {
+            (true, true) => preferStoredOnConflict ? stored : current,
+            (true, false) => stored,
+            (false, true) => current,
+            _ => stored
+        };
+    }
+
+    private static IReadOnlyList<T>? PickStoreOwnedList<T>(
         IReadOnlyList<T>? baseline,
         IReadOnlyList<T>? stored,
         IReadOnlyList<T>? current) =>
-        SnapshotEquals(baseline, current) ? stored : current;
+        PickStoreOwned(baseline, stored, current);
 
     private static bool SnapshotEquals<T>(T? left, T? right) =>
         JsonSerializer.Serialize(left, SerializerOptions) == JsonSerializer.Serialize(right, SerializerOptions);
