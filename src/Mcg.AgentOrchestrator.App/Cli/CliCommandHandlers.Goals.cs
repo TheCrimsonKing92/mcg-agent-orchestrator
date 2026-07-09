@@ -227,6 +227,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
             context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
+            context.PersistCheckpoint(context.Kernel);
             RecordDeferredGoalCleanup(context, landedGoal, "remove:goal-mark-landed-deferred", "goal-mark-landed");
             PrintGoalMarkLandedSummary(hadWorktree, cleanupComplete: false);
             return true;
