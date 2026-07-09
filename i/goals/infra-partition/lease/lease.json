@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "goalPrefix": "infra-partition",
+  "leaseId": "goal-infra-partition",
+  "rootPath": "C:\\Users\\miles\\vcs\\mcg-agent-orchestrator\\.orchestrator-worktrees\\b4d408ed\\i\\goals\\infra-partition",
+  "artifactsPath": "C:\\Users\\miles\\vcs\\mcg-agent-orchestrator\\.orchestrator-worktrees\\b4d408ed\\i\\slots\\slot-0\\artifacts",
+  "ownerProcessId": 45656,
+  "machineName": "SEVENTHSON",
+  "lastUsedAt": "2026-07-09T16:51:20.3945812Z",
+  "lastAttemptName": "infra-workerdispatch-0",
+  "staleLockCleared": true
+}

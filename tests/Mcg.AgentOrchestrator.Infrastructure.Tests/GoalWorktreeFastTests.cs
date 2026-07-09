@@ -18,8 +18,8 @@ public sealed class GoalWorktreeTests
         new WorkerProfile("local", "Write-Output {subscriptionModelName}")
     ]);
 
-    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_runs_accepts_and_removes_workspace")]
-    public void CliLifecycleSimpleGoalRunsAcceptsAndRemovesWorkspace()
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_simple_goal_runs_accepts_and_defers_workspace_cleanup")]
+    public void CliLifecycleSimpleGoalRunsAcceptsAndDefersWorkspaceCleanup()
     {
         var root = CreateTempDirectory();
         try
@@ -34,12 +34,13 @@ public sealed class GoalWorktreeTests
 
             var goal = context.CurrentGoal!;
             Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
-            Xunit.Assert.Null(worktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.NotNull(worktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(1, worktrees.EnsureCount);
             Xunit.Assert.Equal(1, worktrees.MergeCount);
-            Xunit.Assert.Equal(1, worktrees.RemoveCount);
-            Xunit.Assert.Contains("Stage workspace remove:", output);
+            Xunit.Assert.Equal(0, worktrees.RemoveCount);
+            Xunit.Assert.Contains("Stage workspace cleanup:", output);
+            Xunit.Assert.Contains("Workspace cleanup deferred", output);
             AssertNoBuildArtifacts(root);
         }
         finally
@@ -48,8 +49,8 @@ public sealed class GoalWorktreeTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_five_role_goal_accepts_and_removes_workspace")]
-    public void CliLifecycleGoalRunsFiveRoleGoalAcceptsAndRemovesWorkspace()
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_five_role_goal_accepts_and_defers_workspace_cleanup")]
+    public void CliLifecycleGoalRunsFiveRoleGoalAcceptsAndDefersWorkspaceCleanup()
     {
         var root = CreateTempDirectory();
         try
@@ -65,10 +66,10 @@ public sealed class GoalWorktreeTests
             var goal = context.CurrentGoal!;
             Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
             Xunit.Assert.Equal(5, goal.Tasks.Count);
-            Xunit.Assert.Null(worktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.NotNull(worktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(1, worktrees.MergeCount);
-            Xunit.Assert.Equal(1, worktrees.RemoveCount);
+            Xunit.Assert.Equal(0, worktrees.RemoveCount);
             AssertNoBuildArtifacts(root);
         }
         finally

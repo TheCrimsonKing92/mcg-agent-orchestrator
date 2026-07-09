@@ -2229,13 +2229,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_goal_recovery_classifies_branch_diff_verification_breadth")]
     public void CliGoalRecoveryClassifiesBranchDiffVerificationBreadth()
     {
-        var root = CreateTempDirectory();
-        RunGit(root, "init", "-b", "main");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "CLI Tests");
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
+        var root = CreateShortAcceptanceRepository();
 
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
@@ -7704,7 +7698,7 @@ public sealed class CliCommandTests
                 ref currentGoal));
 
             Xunit.Assert.Contains("Acceptance repair: normalized raw Completed goal", output, StringComparison.Ordinal);
-            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Xunit.Assert.True(File.Exists(Path.Combine(root, "src", "raw-completed.txt")));
             Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
             Xunit.Assert.True(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
@@ -8729,10 +8723,10 @@ public sealed class CliCommandTests
 
             Xunit.Assert.True(observedCommitBudget);
             Xunit.Assert.Equal(1, repository.TransactionCount);
-            Xunit.Assert.Contains("cleanup: branch deleted", output);
-            Xunit.Assert.Contains("cleanup: goal marked CleanedUp", output);
-            Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
-            Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+            Xunit.Assert.Contains("Workspace cleanup deferred", output);
+            Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.Contains(GoalWorktrees.BranchName(goal.Id), RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)), StringComparison.Ordinal);
+            Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
         }
         finally
         {
@@ -8794,8 +8788,8 @@ public sealed class CliCommandTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_returns_success_when_cleanup_backoff_write_is_unavailable")]
-    public void PersistentRunnerGoalMarkLandedReturnsSuccessWhenCleanupBackoffWriteIsUnavailable()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_returns_success_with_deferred_cleanup_backoff")]
+    public void PersistentRunnerGoalMarkLandedReturnsSuccessWithDeferredCleanupBackoff()
     {
         var root = CreateShortAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -8822,7 +8816,7 @@ public sealed class CliCommandTests
                     GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
                     GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
                     GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
-                    Xunit.Assert.Null(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
+                    Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
                     throw new TimeoutException("state commit timed out");
                 }
             };
@@ -8930,12 +8924,14 @@ public sealed class CliCommandTests
             Xunit.Assert.True(changed);
         });
 
-        Xunit.Assert.Contains("CleanedUp", output);
+        Xunit.Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
+        Xunit.Assert.Contains("Workspace cleanup deferred", output);
         var journal = GoalOperationJournal.Read(root, goal.Id);
         var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
-            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
         Xunit.Assert.NotNull(cleanupEntry);
-        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
-        Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
+        Xunit.Assert.Contains("Deferred cleanup after goal-mark-landed", cleanupEntry.Detail, StringComparison.Ordinal);
+        var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
+        Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
     }
 }

@@ -195,31 +195,25 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "Active or InProgress goals self-heal via the conductor; only verified force-landed goals need this command.");
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
-            var cleanupDeadline = GoalMarkLandedCleanupDeadline.Start(
-                GoalMarkLandedPromptTimeoutMilliseconds,
-                context.GoalMarkLandedElapsedMilliseconds);
             var forceCleanup = HasCliConfirmation(parts, "--force");
             if (!forceCleanup)
             {
                 var localBranch = RunGoalMarkLandedStep(
-                    cleanupDeadline,
                     "branch-local-check",
-                    timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
+                    () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
                 var localExists = localBranch.ExitCode == 0;
                 var remoteExists = !localExists &&
                     RunGoalMarkLandedStep(
-                        cleanupDeadline,
                         "branch-remote-check",
-                        timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
+                        () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
                 if (!localExists && !remoteExists)
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' was not found locally or remotely; ancestry check cannot run. " +
                         "Use --force if you have manually confirmed the work is in main.");
                 var branchRef = localExists ? landedBranch : $"origin/{landedBranch}";
                 var ancestry = RunGoalMarkLandedStep(
-                    cleanupDeadline,
                     "branch-ancestry-check",
-                    timeout => GitCli.Run(landedDir, timeout, "merge-base", "--is-ancestor", branchRef, "HEAD"));
+                    () => GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD"));
                 if (ancestry.ExitCode != 0)
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' is not an ancestor of the current HEAD; " +
@@ -232,168 +226,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:record", context.Workspace.DogfoodLogStorePath);
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
-            var cleanupComplete = true;
-            var branchDeleted = true;
-            var appHostLockReleased = true;
-
-            if (!TryRunGoalMarkLandedBestEffortStep(
-                    cleanupDeadline,
-                    "worktree-and-branch-cleanup",
-                    timeout => context.Worktrees.Remove(
-                        landedDir,
-                        landedId,
-                        context.Kernel,
-                        timeout),
-                    out var removeResult,
-                    out var removeFailure))
-            {
-                cleanupComplete = false;
-                RecordDeferredGoalCleanup(landedDir, landedId, "remove:cleanup-budget-exhausted");
-                Console.WriteLine($"cleanup deferred: {removeFailure}");
-            }
-            if (removeResult is { IsComplete: false })
-            {
-                cleanupComplete = false;
-                PrintWorkspaceRemoveResult(removeResult);
-            }
-
-            if (!TryRunGoalMarkLandedBestEffortStep(
-                    cleanupDeadline,
-                    "branch-cleanup-check",
-                    timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"),
-                    out var branchAfterCleanup,
-                    out var branchCheckFailure))
-            {
-                cleanupComplete = false;
-                branchDeleted = false;
-                RecordDeferredGoalCleanup(landedDir, landedId, "remove:branch-delete-check-failed");
-                Console.WriteLine($"cleanup deferred: {branchCheckFailure}");
-            }
-            else if (branchAfterCleanup.ExitCode == 0)
-            {
-                branchDeleted = false;
-                GitCli.GitResult? forcedBranchRemoval = null;
-                string? branchDeleteFailure = null;
-                if (forceCleanup &&
-                    TryRunGoalMarkLandedBestEffortStep(
-                        cleanupDeadline,
-                        "branch-force-delete",
-                        timeout => GitCli.Run(landedDir, timeout, "branch", "-D", landedBranch),
-                        out forcedBranchRemoval,
-                        out branchDeleteFailure) &&
-                    forcedBranchRemoval is { ExitCode: 0 } &&
-                    TryRunGoalMarkLandedBestEffortStep(
-                        cleanupDeadline,
-                        "branch-force-delete-check",
-                        timeout => GitCli.Run(landedDir, timeout, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"),
-                        out branchAfterCleanup,
-                        out branchCheckFailure) &&
-                    branchAfterCleanup.ExitCode != 0)
-                {
-                    branchDeleted = true;
-                    if (removeResult is { IsComplete: false })
-                    {
-                        var reconciled = TryRunGoalMarkLandedBestEffortStep(
-                            cleanupDeadline,
-                            "post-branch-cleanup-reconcile",
-                            timeout => context.Worktrees.Remove(
-                                landedDir,
-                                landedId,
-                                context.Kernel,
-                                timeout),
-                            out var reconciledCleanup,
-                            out var reconcileFailure);
-                        cleanupComplete = reconciled && reconciledCleanup is { IsComplete: true };
-                        if (!cleanupComplete)
-                        {
-                            var detail = reconcileFailure ?? reconciledCleanup?.Message ?? "post-branch cleanup reconciliation failed";
-                            Console.WriteLine($"cleanup deferred: {detail}");
-                        }
-                    }
-                }
-                else
-                {
-                    cleanupComplete = false;
-                    RecordDeferredGoalCleanup(landedDir, landedId, "remove:branch-delete-failed");
-                    var detail = forceCleanup
-                        ? forcedBranchRemoval is null
-                            ? branchDeleteFailure ?? branchCheckFailure ?? "branch still exists"
-                            : forcedBranchRemoval.Value.Error
-                        : "retry with --force only after manually confirming ancestry";
-                    Console.WriteLine($"cleanup deferred: branch '{landedBranch}' still exists; {detail}");
-                }
-            }
-
-            if (!TryRunGoalMarkLandedBestEffortStep(
-                    cleanupDeadline,
-                    "app-host-lock-inspect",
-                    _ => DotnetBuildEnvironmentManager.InspectGoalLease(landedId),
-                    out var leaseStatus,
-                    out var leaseInspectFailure))
-            {
-                cleanupComplete = false;
-                appHostLockReleased = false;
-                RecordDeferredGoalCleanup(landedDir, landedId, "remove:app-host-lock-inspect-failed");
-                Console.WriteLine($"cleanup deferred: {leaseInspectFailure}");
-            }
-            else if (leaseStatus is null)
-            {
-                cleanupComplete = false;
-                appHostLockReleased = false;
-                RecordDeferredGoalCleanup(landedDir, landedId, "remove:app-host-lock-inspect-failed");
-                Console.WriteLine("cleanup deferred: app-host lock status was unavailable");
-            }
-            else if (leaseStatus.OwnerProcessAlive)
-            {
-                cleanupComplete = false;
-                appHostLockReleased = false;
-                RecordDeferredGoalCleanup(landedDir, landedId, "remove:app-host-lock-active");
-                Console.WriteLine($"cleanup deferred: app-host lock {leaseStatus.LeaseId} is active; owner pid={leaseStatus.OwnerProcessId}");
-            }
-            else if (leaseStatus.CanCleanup)
-            {
-                if (!TryRunGoalMarkLandedBestEffortStep(
-                        cleanupDeadline,
-                        "app-host-lock-release",
-                        _ => DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(
-                            landedId,
-                            out DotnetBuildLeaseStatus _,
-                            out string _),
-                        out var leaseCleaned,
-                        out var leaseReleaseFailure))
-                {
-                    cleanupComplete = false;
-                    appHostLockReleased = false;
-                    RecordDeferredGoalCleanup(landedDir, landedId, "remove:app-host-lock-release-failed");
-                    Console.WriteLine($"cleanup deferred: {leaseReleaseFailure}");
-                }
-                else if (!leaseCleaned)
-                {
-                    cleanupComplete = false;
-                    appHostLockReleased = false;
-                    RecordDeferredGoalCleanup(landedDir, landedId, "remove:app-host-lock-release-failed");
-                    Console.WriteLine($"cleanup deferred: app-host lock {leaseStatus.LeaseId} was not released");
-                }
-            }
-
-            GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:cleanup", "Removing goal workspace after out-of-band landing.");
-            if (cleanupComplete)
-            {
-                GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:cleanup", $"Goal {landedGp} marked as landed out-of-band; workspace removed.");
-                if (landedGoal.Status == GoalStatus.Verified)
-                    context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing, recording, and cleanup evidence.");
-                context.EventWriter.AppendCleanedUp(landedId);
-            }
-            else
-            {
-                var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(landedDir, landedId);
-                var detail = cleanupBackoff is null
-                    ? "cleanup-needed"
-                    : GoalWorktrees.FormatCleanupBackoff(cleanupBackoff);
-                GoalOperationJournal.Failed(landedDir, landedGoal, "conductor:cleanup", $"Deferred cleanup after landing: {detail}");
-            }
-
-            PrintGoalMarkLandedSummary(hadWorktree, branchDeleted, appHostLockReleased, cleanupComplete);
+            context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
+            RecordDeferredGoalCleanup(context, landedGoal, "remove:goal-mark-landed-deferred", "goal-mark-landed");
+            PrintGoalMarkLandedSummary(hadWorktree, cleanupComplete: false);
             return true;
         }
 
@@ -1311,46 +1146,9 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance passed and merge completed.");
     GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, context.Workspace.BacklogStorePath, Console.WriteLine);
-    if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, $"{commandName} workspace cleanup", out var cleanupPolicyError))
-    {
-        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", cleanupPolicyError);
-        var next = $"workspace remove {goalPrefix} --autonomy {AutonomyPolicy.SupervisedAuto.Name}";
-        Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
-        throw new InvalidOperationException($"{commandName} stopped before workspace cleanup. Next: {next}");
-    }
-
-    Console.WriteLine("Stage workspace remove:");
-    GoalWorktreeRemoveResult removeResult;
-    try
-    {
-        GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Removing goal workspace.");
-        removeResult = context.Worktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
-    }
-    catch (InvalidOperationException ex)
-    {
-        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
-        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
-        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-        var next = $"workspace remove {goalPrefix}";
-        Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
-        throw new InvalidOperationException($"{commandName} stopped during workspace cleanup. Next: {next}", ex);
-    }
-
-    PrintWorkspaceRemoveResult(removeResult);
-    if (!removeResult.IsComplete)
-    {
-        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
-        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-        var next = removeResult.ResumeCommand ?? $"workspace remove {goalPrefix}";
-        Console.WriteLine($"Stage workspace remove: stopped. Next: {next}");
-        throw new InvalidOperationException($"{commandName} stopped during workspace cleanup. Next: {next}");
-    }
-
-    GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-    context.Kernel.CompleteGoal(goal.Id, "Lifecycle command completed goal after acceptance merge and workspace cleanup evidence.");
-    ReconcileLandedCleanedAcceptance(context, goal, "workspace cleanup");
-    context.EventWriter.AppendCleanedUp(goal.Id);
+    Console.WriteLine("Stage workspace cleanup:");
+    context.Kernel.CompleteGoal(goal.Id, "Lifecycle command completed goal after acceptance merge; cleanup deferred to conductor sweep.");
+    RecordDeferredGoalCleanup(context, goal, "remove:lifecycle-deferred", commandName);
 }
 
 private static RunGoalService.RunGoalResult RunGoal(
@@ -1414,34 +1212,8 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
         }
 
         GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance queue merge completed.");
-        EnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "acceptance queue workspace cleanup");
-        GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Acceptance queue removing goal workspace.");
-        GoalWorktreeRemoveResult removeResult;
-        try
-        {
-            removeResult = context.Worktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
-        }
-        catch (InvalidOperationException ex)
-        {
-            GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
-            context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
-            context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-            throw new InvalidOperationException($"acceptance-queue stopped at {goalPrefix}: workspace cleanup failed.", ex);
-        }
-
-        PrintWorkspaceRemoveResult(removeResult);
-        if (!removeResult.IsComplete)
-        {
-            GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-            context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
-            context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-            throw new InvalidOperationException($"acceptance-queue stopped at {goalPrefix}: workspace cleanup incomplete. Next: {removeResult.ResumeCommand ?? $"workspace remove {goalPrefix}"}");
-        }
-
-        GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-        context.Kernel.CompleteGoal(goal.Id, "Acceptance queue completed goal after merge and workspace cleanup evidence.");
-        ReconcileLandedCleanedAcceptance(context, goal, "workspace cleanup");
-        context.EventWriter.AppendCleanedUp(goal.Id);
+        context.Kernel.CompleteGoal(goal.Id, "Acceptance queue completed goal after merge; cleanup deferred to conductor sweep.");
+        RecordDeferredGoalCleanup(context, goal, "remove:acceptance-queue-deferred", "acceptance-queue");
         context.PersistCheckpoint(context.Kernel);
     }
 }
@@ -2951,7 +2723,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 }
 
                 return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
-            }));
+            },
+            "Acceptance completed goal after merge; cleanup deferred to conductor sweep."));
     mergeStarted.Stop();
     context.PhaseTimings.Record(
         "workspace-merge",
@@ -3061,6 +2834,11 @@ private static void RecordAcceptanceCompleted(CliExecutionContext context, Goal 
         "acceptance",
         "Acceptance passed and merge completed.");
     context.Kernel.ClearAcceptanceFailure(goal.Id);
+    if (goal.Status == GoalStatus.Verified)
+    {
+        context.Kernel.CompleteGoal(goal.Id, "Acceptance completed goal after merge; cleanup deferred to conductor sweep.");
+    }
+
     context.EventWriter.AppendAcceptanceResult(goal.Id, true, []);
 }
 
@@ -3508,11 +3286,8 @@ private static void EnsureGoalWorkspaceForDispatch(CliExecutionContext context, 
     Console.WriteLine($"Workspace auto-created: {path} (branch {branch})");
 }
 
-// Deterministic post-merge chorekeeping: the acceptance path owns workspace cleanup so the
-// operator never hand-runs `workspace remove` after a successful merge. Gated by autonomy
-// policy and journaled. A policy block or --keep-workspace leaves the workspace in place and
-// is NOT treated as a failure (the merge already succeeded); an incomplete removal (e.g. a
-// lock holder) prints a resume hint rather than throwing.
+// Post-merge cleanup is durable debt, not an acceptance gate. The conduct loop's terminal
+// sweep consumes the cleanup-needed record with normal backoff.
 private static void CleanupGoalWorkspaceAfterMerge(
     CliExecutionContext context, Goal goal, AutonomyPolicy policy, bool keepWorkspace)
 {
@@ -3526,41 +3301,10 @@ private static void CleanupGoalWorkspaceAfterMerge(
     if (!TryEnsurePolicyAllows(context, goal, policy, AutonomyAction.WorkspaceCleanup, "workspace cleanup", out _))
     {
         Console.WriteLine(
-            $"Workspace cleanup skipped by policy. Remove with: workspace remove {goalPrefix} --autonomy {AutonomyPolicy.SupervisedAuto.Name}");
-        return;
+            $"Workspace cleanup deferred by policy. Retry with: conduct {goalPrefix} --loop");
     }
 
-    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:remove", "Acceptance removing goal workspace.");
-    GoalWorktreeRemoveResult removeResult;
-    try
-    {
-        removeResult = context.Worktrees.Remove(context.Workspace.ExecutionDirectory, goal.Id, context.Kernel);
-    }
-    catch (InvalidOperationException ex)
-    {
-        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", ex.Message);
-        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
-        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-        Console.WriteLine($"Workspace cleanup failed: {ex.Message}. Resume with: conduct {goalPrefix} --loop");
-        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{ex.Message}\" path={context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry conductor cleanup with conduct {goalPrefix} --loop.\"");
-        return;
-    }
-
-    PrintWorkspaceRemoveResult(removeResult);
-    if (removeResult.IsComplete)
-    {
-        GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-        context.Kernel.CompleteGoal(goal.Id, "Acceptance completed goal after merge and workspace cleanup evidence.");
-        ReconcileLandedCleanedAcceptance(context, goal, "workspace cleanup");
-        context.EventWriter.AppendCleanedUp(goal.Id);
-    }
-    else
-    {
-        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "workspace:remove", removeResult.Message);
-        context.Kernel.RecordAcceptanceFailure(goal.Id, ["remove-worktree"]);
-        context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["remove-worktree"]);
-        Console.WriteLine($"BLOCKER step=remove-worktree reason=\"{removeResult.Message}\" path={removeResult.LeftoverPath ?? context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) ?? "(unknown)"} action=\"Retry conductor cleanup with conduct {goalPrefix} --loop.\"");
-    }
+    RecordDeferredGoalCleanup(context, goal, "remove:acceptance-deferred", "acceptance");
 }
 
 private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
@@ -3594,79 +3338,46 @@ private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
     }
 }
 
-private static T RunGoalMarkLandedStep<T>(GoalMarkLandedCleanupDeadline deadline, string stepName, Func<int, T> step)
+private static T RunGoalMarkLandedStep<T>(string stepName, Func<T> step)
 {
-    var remainingBeforeStep = deadline.RemainingMilliseconds;
-    if (deadline.IsExpired)
-    {
-        Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
-        throw new TimeoutException($"goal-mark-landed cleanup exceeded {GoalMarkLandedPromptTimeoutMilliseconds}ms before substep '{stepName}'.");
-    }
-
-    var startedAt = System.Diagnostics.Stopwatch.StartNew();
-    var reportedSlowStep = false;
     try
     {
-        var result = step(remainingBeforeStep);
-        startedAt.Stop();
-        if (deadline.IsExpired)
-        {
-            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
-            reportedSlowStep = true;
-            throw new TimeoutException($"goal-mark-landed cleanup exceeded {deadline.TotalMilliseconds}ms during substep '{stepName}'.");
-        }
-
-        return result;
-    }
-    catch
-    {
-        startedAt.Stop();
-        if (!reportedSlowStep && deadline.IsExpired)
-            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
-        throw;
-    }
-}
-
-private static bool TryRunGoalMarkLandedBestEffortStep<T>(
-    GoalMarkLandedCleanupDeadline deadline,
-    string stepName,
-    Func<int, T> step,
-    out T? result,
-    out string? failure)
-{
-    result = default;
-    failure = null;
-    if (deadline.IsExpired)
-    {
-        Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
-        failure = $"goal-mark-landed cleanup exceeded {GoalMarkLandedPromptTimeoutMilliseconds}ms before substep '{stepName}'";
-        return false;
-    }
-
-    try
-    {
-        result = step(deadline.RemainingMilliseconds);
-        if (!deadline.IsExpired)
-        {
-            return true;
-        }
-
-        Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
-        failure = $"goal-mark-landed cleanup exceeded {deadline.TotalMilliseconds}ms during substep '{stepName}'";
-        return false;
+        return step();
     }
     catch (Exception ex)
     {
-        if (deadline.IsExpired)
-            Console.Error.WriteLine($"goal-mark-landed slow substep: {stepName} elapsedMs={deadline.ElapsedMilliseconds}");
-        failure = $"{stepName} failed: {ex.Message}";
-        return false;
+        throw new InvalidOperationException($"goal-mark-landed {stepName} failed: {ex.Message}", ex);
     }
 }
 
 private static void RecordDeferredGoalCleanup(string executionDirectory, GoalId goalId, string reason)
 {
     var backoff = GoalWorktrees.RecordGoalCleanupNeeded(executionDirectory, goalId, reason);
+    if (backoff is not null)
+    {
+        Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
+    }
+}
+
+private static void RecordDeferredGoalCleanup(CliExecutionContext context, Goal goal, string reason, string source)
+{
+    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "conductor:cleanup", $"Deferred cleanup after {source}.");
+    GoalWorktreeCleanupBackoff? backoff;
+    try
+    {
+        backoff = GoalWorktrees.RecordGoalCleanupNeeded(context.Workspace.ExecutionDirectory, goal.Id, reason);
+    }
+    catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+    {
+        GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "conductor:cleanup", $"Deferred cleanup after {source}: cleanup-needed unavailable: {ex.Message}");
+        Console.WriteLine($"Workspace cleanup deferred: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop");
+        Console.WriteLine($"Cleanup blocker: cleanup-needed unavailable: {ex.Message}");
+        return;
+    }
+
+    var detail = backoff is null ? "cleanup-needed" : GoalWorktrees.FormatCleanupBackoff(backoff);
+    GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "conductor:cleanup", $"Deferred cleanup after {source}: {detail}");
+    Console.WriteLine($"Workspace cleanup deferred: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop");
     if (backoff is not null)
     {
         Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
@@ -3683,41 +3394,16 @@ private static void PrintGoalCleanupBackoffStatus(string executionDirectory, Goa
     Console.WriteLine($"Cleanup retry: conduct {goalId.Value[..8].ToLowerInvariant()} --loop");
 }
 
-private sealed class GoalMarkLandedCleanupDeadline
-{
-    private readonly System.Diagnostics.Stopwatch stopwatch;
-    private readonly Func<long>? elapsedMilliseconds;
-
-    private GoalMarkLandedCleanupDeadline(int totalMilliseconds, Func<long>? elapsedMilliseconds)
-    {
-        TotalMilliseconds = totalMilliseconds;
-        this.elapsedMilliseconds = elapsedMilliseconds;
-        stopwatch = System.Diagnostics.Stopwatch.StartNew();
-    }
-
-    public int TotalMilliseconds { get; }
-
-    public long ElapsedMilliseconds => elapsedMilliseconds?.Invoke() ?? stopwatch.ElapsedMilliseconds;
-
-    public int RemainingMilliseconds => Math.Max(1, TotalMilliseconds - (int)Math.Min(int.MaxValue, ElapsedMilliseconds));
-    public bool IsExpired => ElapsedMilliseconds >= TotalMilliseconds;
-
-    public static GoalMarkLandedCleanupDeadline Start(int totalMilliseconds, Func<long>? elapsedMilliseconds) =>
-        new(totalMilliseconds, elapsedMilliseconds);
-}
-
 private static void PrintGoalMarkLandedSummary(
     bool hadWorktree,
-    bool branchDeleted,
-    bool appHostLockReleased,
     bool cleanupComplete)
 {
     Console.WriteLine("Goal landed cleanup:");
     Console.WriteLine(hadWorktree
         ? cleanupComplete ? "cleanup: worktree removed" : "cleanup: worktree cleanup deferred"
         : "cleanup: worktree already absent");
-    Console.WriteLine(branchDeleted ? "cleanup: branch deleted" : "cleanup: branch cleanup deferred");
-    Console.WriteLine(appHostLockReleased ? "cleanup: app-host lock released" : "cleanup: app-host lock cleanup deferred");
+    Console.WriteLine(cleanupComplete ? "cleanup: branch deleted" : "cleanup: branch cleanup deferred");
+    Console.WriteLine(cleanupComplete ? "cleanup: app-host lock released" : "cleanup: app-host lock cleanup deferred");
     Console.WriteLine(cleanupComplete ? "cleanup: goal marked CleanedUp" : "cleanup: goal marked landed; cleanup-needed recorded");
 }
 

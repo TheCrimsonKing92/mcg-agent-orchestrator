@@ -402,7 +402,7 @@ internal static class CliPersistentStateRunner
     private static bool IsDeferredGoalMarkLandedCleanupEvidence(GoalOperationJournalEntry entry) =>
         entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase) &&
         entry.Status == GoalOperationStatus.Failed &&
-        (entry.Detail?.Contains("Deferred cleanup after landing", StringComparison.OrdinalIgnoreCase) == true ||
+        (entry.Detail?.Contains("Deferred cleanup after", StringComparison.OrdinalIgnoreCase) == true ||
          entry.Detail?.Contains("cleanup-needed", StringComparison.OrdinalIgnoreCase) == true);
 
     internal static string FormatTickMergeReceipt(GoalSnapshotSaveResult result) =>
@@ -817,6 +817,7 @@ internal static class CliPersistentStateRunner
                         if (result.FastForwarded)
                         {
                             transactionKernel.ClearAcceptanceFailure(request.GoalId);
+                            transactionKernel.CompleteGoal(request.GoalId, request.CompletionReason);
                         }
                         else if (result.Message is not null)
                         {

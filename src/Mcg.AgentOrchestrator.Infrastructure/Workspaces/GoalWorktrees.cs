@@ -1625,7 +1625,8 @@ public static class GoalWorktrees
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = statePath,
-            Mode = SqliteOpenMode.ReadWriteCreate
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
         }.ToString());
         conn.Open();
         using var command = conn.CreateCommand();

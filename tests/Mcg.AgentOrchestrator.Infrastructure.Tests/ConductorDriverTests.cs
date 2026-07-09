@@ -99,6 +99,7 @@ public sealed class ConductorDriverTests
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
+        Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
         Func<bool>? hasGateReadyGoal = null)
@@ -128,6 +129,7 @@ public sealed class ConductorDriverTests
             classifyRisk ?? (_ => null),
             emptyOutputBackoffDelay,
             evaluateReadiness,
+            completeGoal: completeGoal,
             normalizeLifecycleState: normalizeLifecycleState,
             recoverSandboxPrep: recoverSandboxPrep,
             hasGateReadyGoal: hasGateReadyGoal);
@@ -1012,8 +1014,8 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Recorded, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_incomplete_cleanup_returns_Held_with_diagnostics")]
-    public void ConductorDriverRecordedIncompleteCleanupReturnsHeldWithDiagnostics()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_incomplete_cleanup_completes_with_deferred_diagnostics")]
+    public void ConductorDriverRecordedIncompleteCleanupCompletesWithDeferredDiagnostics()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -1033,36 +1035,36 @@ public sealed class ConductorDriverTests
                         "remove:cleanup-budget-exhausted",
                         DateTimeOffset.Parse("2026-07-02T05:01:00Z"),
                         TimeSpan.FromMinutes(1)));
-            });
+            },
+            completeGoal: g => kernel.CompleteGoal(g.Id, "test completed after deferred cleanup."));
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Equal(GoalLifecycleState.Recorded, held.State);
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Recorded, executed.FromState);
         Assert.Equal(1, cleanupCalls);
-        Assert.True(held.Reason.Contains("leftover=", StringComparison.Ordinal), held.Reason);
-        Assert.True(held.Reason.Contains("pid=1234", StringComparison.Ordinal), held.Reason);
-        Assert.True(held.Reason.Contains("skip_until_utc=2026-07-02T05:01:00.0000000+00:00", StringComparison.Ordinal), held.Reason);
-        Assert.True(held.Reason.Contains("remaining_wait=00:01:00", StringComparison.Ordinal), held.Reason);
-        Assert.True(held.Reason.Contains("conduct abc12345 --loop", StringComparison.Ordinal), held.Reason);
+        Assert.True(executed.Description.Contains("leftover", StringComparison.Ordinal), executed.Description);
+        Assert.Equal(GoalStatus.Completed, goal.Status);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_cleanup_failure_returns_Held_without_throwing")]
-    public void ConductorDriverRecordedCleanupFailureReturnsHeldWithoutThrowing()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_cleanup_failure_completes_without_throwing")]
+    public void ConductorDriverRecordedCleanupFailureCompletesWithoutThrowing()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
 
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(IsMerged: true, IsRecorded: true),
-            cleanup: _ => throw new InvalidOperationException("git worktree remove refused dirty workspace"));
+            cleanup: _ => throw new InvalidOperationException("git worktree remove refused dirty workspace"),
+            completeGoal: g => kernel.CompleteGoal(g.Id, "test completed after deferred cleanup."));
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Equal(GoalLifecycleState.Recorded, held.State);
-        Assert.Contains("Workspace cleanup deferred after removal failure", held.Reason, StringComparison.Ordinal);
-        Assert.Contains("git worktree remove refused dirty workspace", held.Reason, StringComparison.Ordinal);
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Recorded, executed.FromState);
+        Assert.Contains("Workspace cleanup deferred after removal failure", executed.Description, StringComparison.Ordinal);
+        Assert.Contains("git worktree remove refused dirty workspace", executed.Description, StringComparison.Ordinal);
+        Assert.Equal(GoalStatus.Completed, goal.Status);
     }
 
     // ── CleanedUp state ───────────────────────────────────────────────────

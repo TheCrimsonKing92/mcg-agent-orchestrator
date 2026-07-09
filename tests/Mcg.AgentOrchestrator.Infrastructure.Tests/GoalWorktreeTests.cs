@@ -1969,8 +1969,8 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_accepted_routes_stop_host_merge_mark_landed_remove_worktree")]
-    public void CliAcceptanceAcceptedRoutesStopHostMergeMarkLandedRemoveWorktree()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_accepted_routes_stop_host_merge_mark_landed_before_deferred_cleanup")]
+    public void CliAcceptanceAcceptedRoutesStopHostMergeMarkLandedBeforeDeferredCleanup()
     {
         var repo = CreateSeededRepository();
         try
@@ -2012,10 +2012,11 @@ public sealed class GoalWorktreeIntegrationTests
 
             Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal));
             Assert.True(output.Contains("Stop-host: test stopped host.", StringComparison.Ordinal));
-            Assert.Equal(["stop-host", "merge", "mark-landed", "remove-worktree"], order);
+            Assert.Equal(["stop-host", "merge", "mark-landed"], order);
+            Assert.True(output.Contains("Workspace cleanup deferred", StringComparison.Ordinal));
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
-            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
-            Assert.False(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
+            Assert.NotNull(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.True(BranchExists(repo, GoalWorktrees.BranchName(goal.Id)));
         }
         finally
         {
@@ -2380,8 +2381,8 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_removes_workspace_after_successful_merge")]
-    public void CliAcceptanceRemovesWorkspaceAfterSuccessfulMerge()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_defers_workspace_cleanup_after_successful_merge")]
+    public void CliAcceptanceDefersWorkspaceCleanupAfterSuccessfulMerge()
     {
         var repo = CreateSeededRepository();
         try
@@ -2413,9 +2414,12 @@ public sealed class GoalWorktreeIntegrationTests
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
-            // Acceptance now deterministically owns post-merge cleanup: no separate `workspace remove`.
             Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
-            Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is null);
+            Assert.True(output.Contains("Workspace cleanup deferred", StringComparison.Ordinal));
+            Assert.NotNull(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(kernel.BuildGoalAcceptanceSummary(goal.Id).IsAccepted);
+            Assert.True(HasCleanupNeededRecord(repo, GoalWorktrees.WorktreePath(repo, goal.Id), "remove:acceptance-deferred"));
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
         }
         finally
@@ -2424,10 +2428,11 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_reports_not_accepted_when_cleanup_leaves_resumable_leftover")]
-    public void CliAcceptanceReportsNotAcceptedWhenCleanupLeavesResumableLeftover()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_cleanup_failure_reports_cleanup_blocker_after_landing_stays_accepted")]
+    public void CliAcceptanceCleanupFailureReportsCleanupBlockerAfterLandingStaysAccepted()
     {
         var repo = CreateSeededRepository();
+        var originalDeleteDirectory = GoalWorktrees.DeleteDirectory;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -2444,14 +2449,6 @@ public sealed class GoalWorktreeIntegrationTests
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Goal work");
 
-            var worktrees = new CapturingGoalWorktreeService
-            {
-                RemoveOverride = (_, goalId, _, _) => new GoalWorktreeRemoveResult(
-                    "Removed workspace, but leftover directory cleanup is incomplete. Conductor retry: conduct " + goalId.Value[..8] + " --loop",
-                    worktreePath,
-                    [],
-                    $"conduct {goalId.Value[..8]} --loop")
-            };
             var context = new CliExecutionContext(
                 kernel,
                 OrchestratorWorkspace.ForDirectory(repo),
@@ -2460,23 +2457,33 @@ public sealed class GoalWorktreeIntegrationTests
                 WorkerProfileCatalog.Default(),
                 goal)
             {
-                AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
-                Worktrees = worktrees
+                AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
             };
 
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
 
             Assert.True(output.Contains("Fast-forwarded", StringComparison.Ordinal));
-            Assert.True(output.Contains("BLOCKER step=remove-worktree", StringComparison.Ordinal));
-            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", StringComparison.Ordinal));
+            Assert.True(output.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", StringComparison.Ordinal));
+            Assert.Equal(GoalStatus.Completed, goal.Status);
             var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
-            Assert.False(acceptance.IsAccepted);
-            Assert.Contains(acceptance.Blockers, blocker =>
-                blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
-                blocker.Message.Contains("remove-worktree", StringComparison.OrdinalIgnoreCase));
+            Assert.True(acceptance.IsAccepted);
+
+            GoalWorktrees.DeleteDirectory = cleanupPath =>
+                cleanupPath.Equals(worktreePath, StringComparison.OrdinalIgnoreCase)
+                    ? false
+                    : originalDeleteDirectory(cleanupPath);
+
+            var sweep = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            var blocker = Assert.Single(sweep.Blockers);
+            Assert.Equal("completed-worktree-cleanup-needed", blocker.Kind);
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.True(kernel.BuildGoalAcceptanceSummary(goal.Id).IsAccepted);
+            Assert.True(Directory.Exists(worktreePath));
         }
         finally
         {
+            GoalWorktrees.DeleteDirectory = originalDeleteDirectory;
             DeleteDirectory(repo);
         }
     }

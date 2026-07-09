@@ -114,7 +114,8 @@ internal sealed record AcceptanceMergeCommitRequest(
     GoalId GoalId,
     string ExpectedGoalFingerprint,
     string? TestedWorktreeHead,
-    Func<AcceptanceMergeCommitResult> Merge);
+    Func<AcceptanceMergeCommitResult> Merge,
+    string CompletionReason);
 
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,

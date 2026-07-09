@@ -861,7 +861,7 @@ public sealed class WorkerDispatchTests
 }
 
     [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_dirty_worktree_and_commit_state")]
-    public void DispatchStateSurfaceReportsDirtyWorktreeAndCommitState()
+public void DispatchStateSurfaceReportsDirtyWorktreeAndCommitState()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T06:30:00Z"));
@@ -5797,9 +5797,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_with_test_commit_and_green_trx_completes")]
-    public void BackgroundDispatchRunnerTesterWithTestCommitAndGreenTrxCompletes()
+public void BackgroundDispatchRunnerTesterWithTestCommitAndGreenTrxCompletes()
 {
-    var root = CreateSeededDispatchRepository();
+    var root = CreateSeededDispatchRepository(useShortPath: true);
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
         root,
@@ -8608,15 +8608,24 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         });
     }
 
-    private static string CreateSeededDispatchRepository()
+    private static string CreateSeededDispatchRepository(bool useShortPath = false)
 {
-    var root = CreateTempDirectory();
+    var root = useShortPath ? CreateShortTempDirectory() : CreateTempDirectory();
     RunGit(root, ["init"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
     RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["commit", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    return root;
+}
+
+    private static string CreateShortTempDirectory()
+{
+    var baseDirectory = Path.Combine(Path.GetTempPath(), "mcg-short-tests");
+    Directory.CreateDirectory(baseDirectory);
+    var root = Path.Combine(baseDirectory, Guid.NewGuid().ToString("N")[..12]);
+    Directory.CreateDirectory(root);
     return root;
 }
 
