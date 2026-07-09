@@ -2099,11 +2099,68 @@ public sealed class BackgroundDispatchRunner
 
     private TaskProcessResourceAccounting? ReapTrackedProcessJobs(TaskProcessRecord processRecord, bool waitForExit)
     {
+        var preReapSnapshot = SnapshotTrackedProcessAccounting(processRecord);
         var accounting = ReleaseTrackedProcessJobs(processRecord);
         TryKillTrackedProcesses(processRecord, waitForExit);
-        return accounting is null
-            ? null
-            : accounting with { Reaped = true };
+        accounting = MergeResourceAccounting(accounting, preReapSnapshot);
+        return accounting is null ? null : accounting with { Reaped = true };
+    }
+
+    private static TaskProcessResourceAccounting? SnapshotTrackedProcessAccounting(TaskProcessRecord processRecord)
+    {
+        if (!TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        {
+            return null;
+        }
+
+        var peakMemoryBytes = 0L;
+        foreach (var processId in processRecord.TrackedProcessIds.Distinct())
+        {
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                if (process.HasExited)
+                {
+                    continue;
+                }
+
+                peakMemoryBytes = Math.Max(peakMemoryBytes, Math.Max(process.WorkingSet64, process.PeakWorkingSet64));
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        if (heartbeat.OwnedCpuMs is null && peakMemoryBytes <= 0)
+        {
+            return null;
+        }
+
+        return new TaskProcessResourceAccounting(Math.Max(0L, heartbeat.OwnedCpuMs ?? 0L), peakMemoryBytes, 0L);
+    }
+
+    private static TaskProcessResourceAccounting? MergeResourceAccounting(
+        TaskProcessResourceAccounting? left,
+        TaskProcessResourceAccounting? right)
+    {
+        if (left is null)
+        {
+            return right;
+        }
+
+        if (right is null)
+        {
+            return left;
+        }
+
+        return new TaskProcessResourceAccounting(
+            Math.Max(left.CpuMilliseconds, right.CpuMilliseconds),
+            Math.Max(left.PeakMemoryBytes, right.PeakMemoryBytes),
+            Math.Max(left.IoBytes, right.IoBytes),
+            left.Reaped || right.Reaped);
     }
 
     private static bool TryKillProcess(int processId)
