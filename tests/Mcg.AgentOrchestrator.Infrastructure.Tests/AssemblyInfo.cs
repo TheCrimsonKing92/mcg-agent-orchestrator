@@ -10,6 +10,10 @@ public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<Isolat
 [Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
 public sealed class GoalWorktreeCleanupHooksCollection;
 
+// Job Object accounting tests use process-wide worker job registries and real fake worker processes.
+[Xunit.CollectionDefinition(TestCollections.JobAccounting, DisableParallelization = true)]
+public sealed class JobAccountingCollection;
+
 // Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores.
 [Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]
 public sealed class ProcessSpawningCollection;

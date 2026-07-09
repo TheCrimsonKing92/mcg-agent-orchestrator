@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("EnvMutation")]
+[Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class WorkerProcessJobsTests : IDisposable
 {
     private readonly string? _originalProtectedPid = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID");
