@@ -61,7 +61,7 @@ public sealed class WorkerDispatchJobAccountingTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Disable shared compilation for worker dispatch");
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli",
             "Write-Output $env:DOTNET_CLI_USE_MSBUILD_SERVER; Write-Output $env:MSBUILDDISABLENODEREUSE; Write-Output $env:UseSharedCompilation",

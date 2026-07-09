@@ -563,7 +563,8 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         DispatchRefreshOutcome outcome)
     {
-        var previousProcess = kernel.GetTask(goalId, taskId).LastProcess;
+        var task = kernel.GetTask(goalId, taskId);
+        var previousProcess = task.LastProcess;
         var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
         {
@@ -580,7 +581,8 @@ public sealed class BackgroundDispatchRunner
 
         if (previousProcess?.CompletedAt is not null &&
             outcome.ProcessRecord.CompletedAt is not null &&
-            previousProcess.ProcessId == outcome.ProcessRecord.ProcessId)
+            previousProcess.ProcessId == outcome.ProcessRecord.ProcessId &&
+            task.LastVerification is not null)
         {
             verification = null;
         }
