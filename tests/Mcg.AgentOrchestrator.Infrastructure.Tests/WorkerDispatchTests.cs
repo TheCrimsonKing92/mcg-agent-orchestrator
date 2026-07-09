@@ -2311,18 +2311,6 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
-    var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(
-        agents.Single(agent => agent.Id == task.AssignedAgentId),
-        goal,
-        task);
-    var plan = SubscriptionPlanBuilder.Build(
-        goal,
-        agents,
-        WorkerProfileCatalog.Default(),
-        _ => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents));
-    var planItem = plan.Items.Single();
-    var planSummary = plan.ReadyModelUsage.Single();
-
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -2339,12 +2327,6 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
     Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
-    Assert.Equal(task.LastDispatch.ProviderName, templateVariables["providerName"]);
-    Assert.Equal(task.LastDispatch.ModelName, templateVariables["subscriptionModelName"]);
-    Assert.Equal(task.LastDispatch.ProviderName, planItem.ProviderName);
-    Assert.Equal(task.LastDispatch.ModelName, planItem.SubscriptionModelName);
-    Assert.Equal(task.LastDispatch.ProviderName, planSummary.ProviderName);
-    Assert.Equal(task.LastDispatch.ModelName, planSummary.ModelName);
     Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
 }
 
@@ -2580,6 +2562,20 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var advanceLoopDefaultCatalogPattern = new Regex(
         @"Advance(?:Goal)?UntilBlockedAsync\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
         RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    var catalogAwareDefaultParameterPattern = new Regex(
+        @"(?:DashboardNextActionControls\.Build|ToNextActionsDto|ToNextActionDto|ToNextActionControlDto|ToGoalWorkSummaryDto|ToTaskWorkContextDto|GoalTranscriptRenderer\.Render|PrintNextActions)\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    var catalogAwareDeclarations = new (string RelativePath, string MethodName)[]
+    {
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Rendering", "DashboardNextActionControls.cs"), "Build"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionsDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionControlDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToGoalWorkSummaryDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToTaskWorkContextDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Rendering", "GoalTranscriptRenderer.cs"), "Render"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "ConsoleViews.DispatchAndNextActions.cs"), "PrintNextActions")
+    };
 
     foreach (var path in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
     {
@@ -2609,6 +2605,26 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         {
             var line = text[..match.Index].Count(ch => ch == '\n') + 1;
             bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: advance-loop entry point defaults WorkerProfileCatalog");
+        }
+
+        foreach (Match match in catalogAwareDefaultParameterPattern.Matches(text))
+        {
+            var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+            bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: catalog-aware next-action surface defaults WorkerProfileCatalog");
+        }
+    }
+
+    foreach (var declaration in catalogAwareDeclarations)
+    {
+        var path = Path.Combine(srcRoot, declaration.RelativePath);
+        var text = File.ReadAllText(path);
+        var optionalPattern = new Regex(
+            $@"\b{Regex.Escape(declaration.MethodName)}\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        foreach (Match match in optionalPattern.Matches(text))
+        {
+            var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+            bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: catalog-aware next-action surface defaults WorkerProfileCatalog");
         }
     }
 

@@ -64,10 +64,10 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
 public static void PrintNextActions(
     Goal goal,
     GoalNextActions actions,
+    WorkerProfileCatalog profiles,
     IReadOnlyList<AgentDefinition>? agents = null,
     GoalHealthReport? health = null,
-    GoalOperatorDisposition? conductorDisposition = null,
-    WorkerProfileCatalog? profiles = null)
+    GoalOperatorDisposition? conductorDisposition = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {actions.GoalId.Value[..8]} {actions.Status}: {OutputTextPreview.CreateSummary(actions.Objective).Text}");
@@ -95,7 +95,7 @@ public static void PrintNextActions(
         }
 
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
-        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents, profiles: profiles);
+        var control = DashboardNextActionControls.Build(goal, item, profiles, agentDefinitions: agents);
         if (!string.IsNullOrWhiteSpace(control?.CostRisk))
         {
             var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)

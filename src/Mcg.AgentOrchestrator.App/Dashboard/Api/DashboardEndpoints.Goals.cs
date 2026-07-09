@@ -99,7 +99,8 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
-        return Text(GoalTranscriptRenderer.Render(current, goal, agents), "text/markdown; charset=utf-8");
+        var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        return Text(GoalTranscriptRenderer.Render(current, goal, profiles, agents), "text/markdown; charset=utf-8");
     }
 
     private static async Task<IResult> GetGoalWorkSummaryAsync(string goalId, DashboardEndpointServices services)
@@ -107,10 +108,12 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
+        var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(services.Workspace.RunEventStorePath, goal);
         return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(
             current,
             goal,
+            profiles,
             agents,
             BuildHostInfo(services),
             services.Workspace.ExecutionDirectory,

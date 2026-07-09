@@ -27,6 +27,7 @@ public static partial class DashboardRenderer
         var testImpact = DashboardResponseMapper.ToGoalWorkSummaryDto(
             kernel,
             goal,
+            options.WorkerProfiles!,
             options.AgentDefinitions,
             executionDirectory: options.Workspace?.ExecutionDirectory,
             changedFiles: options.FocusGoalChangedFiles).TestImpact;

@@ -17,9 +17,9 @@ public static class DashboardNextActionControls
     public static DashboardNextActionControl? Build(
         Goal goal,
         NextActionItem item,
+        WorkerProfileCatalog profiles,
         IReadOnlyList<AgentConfigurationValidation>? agents = null,
-        IReadOnlyList<AgentDefinition>? agentDefinitions = null,
-        WorkerProfileCatalog? profiles = null)
+        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
         var goalPrefix = goal.Id.Value[..8];
         int? taskNumber = item.TaskId is null ? null : GetTaskDisplayNumber(goal, item.TaskId);

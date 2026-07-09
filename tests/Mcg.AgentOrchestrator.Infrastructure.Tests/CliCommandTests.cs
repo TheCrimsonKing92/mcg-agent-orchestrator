@@ -696,7 +696,7 @@ public sealed class CliCommandTests
             "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
             string.Empty,
             DateTimeOffset.UtcNow));
-        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]));
+        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), [agent]));
         Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
         Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try local Ollama/qwen3:8b via agent configuration before paid API run.", output);
     }

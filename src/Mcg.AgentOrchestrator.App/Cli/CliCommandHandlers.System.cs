@@ -633,7 +633,7 @@ internal static partial class CliCommandHandlers
                     ? parts[1]
                     : context.Workspace.TranscriptPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(transcriptPath))!);
-                File.WriteAllText(transcriptPath, GoalTranscriptRenderer.Render(context.Kernel, context.CurrentGoal, context.Agents));
+                File.WriteAllText(transcriptPath, GoalTranscriptRenderer.Render(context.Kernel, context.CurrentGoal, context.WorkerProfiles, context.Agents));
                 Console.WriteLine($"Transcript: {Path.GetFullPath(transcriptPath)}");
                 return false;
 

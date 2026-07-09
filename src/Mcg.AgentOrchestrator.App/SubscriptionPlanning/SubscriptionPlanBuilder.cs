@@ -268,14 +268,15 @@ internal static class SubscriptionPlanBuilder
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var now = DateTimeOffset.UtcNow;
             var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
+            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
+            var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);
             var providerCoolingDown = DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
-                effectiveProviderName,
+                dispatchProviderName,
                 now,
                 out var providerCooldown);
-            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
-            var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - now).TotalSeconds))
                 : providerCoolingDown
@@ -335,7 +336,7 @@ internal static class SubscriptionPlanBuilder
                 task,
                 agent,
                 profileName,
-                effectiveProviderName,
+                dispatchProviderName,
                 subscriptionModelName ?? agent.Subscription?.ModelAlias ?? effectiveModelName,
                 taskComplexity,
                 usesComplexModel,
@@ -365,7 +366,7 @@ internal static class SubscriptionPlanBuilder
                 OutputTextPreview.CreateSummary(task.Description).Text,
                 agent.Id.Value,
                 agent.Name,
-                effectiveProviderName,
+                dispatchProviderName,
                 effectiveModelName,
                 agent.ExecutionPolicy,
                 profileName,
@@ -607,6 +608,14 @@ internal static class SubscriptionPlanBuilder
         {
             return provider;
         }
+    }
+
+    private static string ResolveDispatchProviderName(string selectedProviderName, string profileName)
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
+        return provider.Identity.Kind == ProviderKind.Unknown
+            ? selectedProviderName
+            : provider.ProviderName;
     }
 
     private static string? GetTemplateValue(IReadOnlyDictionary<string, string?> variables, string name)

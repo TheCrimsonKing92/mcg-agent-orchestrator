@@ -56,7 +56,7 @@ internal static class DashboardActionRecommendationPlanner
         var nextAction = nextActions.Items.FirstOrDefault();
         if (nextAction is not null)
         {
-            recommendations.Add(BuildNextAction(goal, nextAction, agents, policy));
+            recommendations.Add(BuildNextAction(goal, nextAction, agents, workerProfiles, policy));
         }
 
         sourceSummaries.Add($"next actions: {nextActions.Items.Count}");
@@ -112,12 +112,13 @@ internal static class DashboardActionRecommendationPlanner
         Goal goal,
         NextActionItem item,
         IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog workerProfiles,
         AutonomyPolicy policy)
     {
         var automation = NextActionAutomationPolicy.Build(item);
         var policyAction = MapAutomationAction(automation.Kind);
         var policyAllows = policyAction is null || policy.Allows(policyAction.Value);
-        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+        var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
         var command = ConsoleViews.BuildSuggestedCommand(goal, item, agents);
         return new DashboardActionRecommendation(
             DashboardActionRecommendationSource.NextAction,

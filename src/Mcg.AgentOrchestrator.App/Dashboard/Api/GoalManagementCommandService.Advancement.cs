@@ -25,7 +25,7 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
 
     var automation = NextActionAutomationPolicy.Build(item);
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents, profiles);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, profiles, agents);
     if (!automation.CanExecute || automation.TaskId is null)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
@@ -192,7 +192,7 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
-    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents, profiles);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, profiles, agents);
     if (!automation.CanExecute || automation.TaskId is null)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
@@ -264,7 +264,7 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
         }
 
         var automation = NextActionAutomationPolicy.Build(item);
-        var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents, profiles);
+        var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, profiles, agents);
         if (!automation.CanExecute || automation.TaskId is null)
         {
             blockingAction = action;
@@ -320,7 +320,7 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
     {
         var actions = kernel.BuildNextActions(goal.Id);
         var item = actions.Items.FirstOrDefault();
-        blockingAction = item is null ? null : DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents, profiles);
+        blockingAction = item is null ? null : DashboardResponseMapper.ToNextActionDto(goal, item, 1, profiles, agents);
         stopReason = $"Stopped after {MaxAutomaticHandoffSteps} automated step(s); run continuation again if more safe actions remain.";
     }
 
