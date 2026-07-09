@@ -208,7 +208,7 @@ public static class WorkerProfileDispatcher
         EnsureTaskNeedsExecution(task);
 
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
-        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
+        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
             : ResolveSubscriptionProfile(agent, roleSelection.Model, profiles);
@@ -271,7 +271,7 @@ public static class WorkerProfileDispatcher
         {
             EnsureTaskNeedsExecution(task);
             var agent = ResolveAssignedAgent(null, goal, task, agents);
-            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
                 : ResolveSubscriptionProfileName(agent, roleSelection.Model);
@@ -875,9 +875,13 @@ public static class WorkerProfileDispatcher
     private static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
         AgentDefinition agent,
         Goal goal,
-        TaskSpec task)
+        TaskSpec task,
+        DispatchModelOverride? modelOverride = null)
     {
-        return ResolveRoleModelSelection(agent, task, ResolveSubscriptionModel(agent, goal, task));
+        var fullSelection = ResolveSubscriptionModel(agent, goal, task);
+        return modelOverride is not null
+            ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
+            : ResolveRoleModelSelection(agent, task, fullSelection);
     }
 
     private static SubscriptionModelSelection ResolveRoleModelSelection(
@@ -888,6 +892,11 @@ public static class WorkerProfileDispatcher
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
             return fullSelection with { Reason = "full-profile: role is write-capable or gate-heavy" };
+        }
+
+        if (HasCustomWorkerProfileOverride(agent))
+        {
+            return fullSelection with { Reason = "full-profile: role has custom subscription worker profile" };
         }
 
         if (TryFindRoleGuardrailFailure(task, out var guardrailFailure))
@@ -911,6 +920,24 @@ public static class WorkerProfileDispatcher
     private static bool IsLightReadOnlyRole(AgentRole role)
     {
         return role is AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer;
+    }
+
+    private static bool HasCustomWorkerProfileOverride(AgentDefinition agent)
+    {
+        if (agent.Subscription?.WorkerProfileName is not { Length: > 0 } profileName)
+        {
+            return false;
+        }
+
+        try
+        {
+            var defaultProfileName = DefaultProviders.ResolveModelProvider(agent.Model.ProviderName).ProfileName;
+            return !profileName.Equals(defaultProfileName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
     }
 
     private static bool TryFindRoleGuardrailFailure(TaskSpec task, out string reason)
