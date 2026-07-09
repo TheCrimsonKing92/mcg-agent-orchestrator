@@ -97,7 +97,7 @@ public sealed class DashboardRenderingTests
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", DateTimeOffset.UtcNow));
 
     var goalPrefix = goal.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
 
     Assert.Contains("Render dashboard", html, StringComparison.Ordinal);
     Assert.Contains("Running dispatch", html, StringComparison.Ordinal);
@@ -152,7 +152,7 @@ public sealed class DashboardRenderingTests
                 AcknowledgementNote: null)
         ]);
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         OperatorInbox: report));
 
@@ -188,7 +188,7 @@ public sealed class DashboardRenderingTests
         string.Empty,
         DateTimeOffset.UtcNow));
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
 
     Assert.Contains("Skills: dotnet-windows-build-hygiene, orchestrator-dogfood", html, StringComparison.Ordinal);
 }
@@ -211,7 +211,7 @@ public sealed class DashboardRenderingTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var goalPrefix = goal.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
@@ -272,7 +272,7 @@ public sealed class DashboardRenderingTests
 
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
     var taskEvidence = evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value);
     var modelFit = evidenceDto.ModelFit.Single();
 
@@ -316,7 +316,7 @@ public sealed class DashboardRenderingTests
 
     var html = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             View: DashboardView.Goal,
             FocusGoalPrefix: goal.Id.Value[..8],
@@ -353,7 +353,7 @@ public sealed class DashboardRenderingTests
     await runner.RunAsync(goal.Id, task.Id);
 
     var goalPrefix = goal.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
     var evidenceDto = DashboardResponseMapper.ToGoalEvidenceSummaryDto(goal, kernel.BuildGoalEvidenceSummary(goal.Id));
     var taskDto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
@@ -392,7 +392,7 @@ public sealed class DashboardRenderingTests
 
     var dto = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var goalPrefix = goal.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
 
     Assert.True(dto.LastExecution is not null);
@@ -669,7 +669,7 @@ public sealed class DashboardRenderingTests
         var worklist = DashboardResponseMapper.ToHumanInputWorklistDto(goal, kernel.BuildHumanInputWorklist(goal.Id));
         var html = DashboardRenderer.Render(
             kernel,
-            new DashboardRenderOptions(EnableOperatorControls: true, FocusGoalPrefix: goal.Id.Value[..8], View: DashboardView.Goal));
+            RenderOptions(EnableOperatorControls: true, FocusGoalPrefix: goal.Id.Value[..8], View: DashboardView.Goal));
 
         Assert.Equal(request.Id.Value, dto.WaitId);
         Assert.Equal(HumanWaitKind.ProviderAuth, dto.Kind);
@@ -993,9 +993,9 @@ public sealed class DashboardRenderingTests
     var goalPrefix = goal.Id.Value[..8];
 
     var staticHtml = DashboardRenderer.Render(kernel);
-    var refreshingHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15));
-    var operatorRefreshingHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true));
-    var focusedOperatorHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
+    var refreshingHtml = DashboardRenderer.Render(kernel, RenderOptions(AutoRefreshSeconds: 15));
+    var operatorRefreshingHtml = DashboardRenderer.Render(kernel, RenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true));
+    var focusedOperatorHtml = DashboardRenderer.Render(kernel, RenderOptions(AutoRefreshSeconds: 15, EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goalPrefix));
 
     Assert.False(staticHtml.Contains("http-equiv=\"refresh\"", StringComparison.Ordinal));
     Assert.Contains("<meta http-equiv=\"refresh\" content=\"15\">", refreshingHtml, StringComparison.Ordinal);
@@ -1291,7 +1291,7 @@ public sealed class DashboardRenderingTests
 
     var html = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             View: DashboardView.Goal,
             FocusGoalPrefix: goal.Id.Value[..8],
@@ -1425,7 +1425,7 @@ public sealed class DashboardRenderingTests
     // Ops view
     var opsHtml = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             HealthReport: health,
             Workspace: workspace,
@@ -1434,7 +1434,7 @@ public sealed class DashboardRenderingTests
     // Config view
     var configHtml = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             HealthReport: health,
             Workspace: workspace,
@@ -1444,7 +1444,7 @@ public sealed class DashboardRenderingTests
     // System view
     var systemHtml = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             HealthReport: health,
             Workspace: workspace,
@@ -1454,7 +1454,7 @@ public sealed class DashboardRenderingTests
     // Goal detail view
     var goalHtml = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             HealthReport: health,
             Workspace: workspace,
@@ -1700,7 +1700,7 @@ public sealed class DashboardRenderingTests
 {
     var html = DashboardRenderer.Render(
         new AgentOrchestratorKernel(),
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             View: DashboardView.System,
             Workspace: new DashboardWorkspaceContext(
@@ -1824,7 +1824,7 @@ public sealed class DashboardRenderingTests
     var goalPrefix = goal.Id.Value[..8];
 
     // Ops view shows completion banner in goal header
-    var opsHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var opsHtml = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true));
     Assert.Contains("completion-banner", opsHtml, StringComparison.Ordinal);
     Assert.Contains("Goal verified", opsHtml, StringComparison.Ordinal);
     Assert.Contains("manual-only verification", opsHtml, StringComparison.Ordinal);
@@ -1832,7 +1832,7 @@ public sealed class DashboardRenderingTests
     Assert.False(opsHtml.Contains("No operator action is required.", StringComparison.Ordinal));
 
     // Goal detail view shows task action status
-    var goalHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var goalHtml = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
@@ -1856,7 +1856,7 @@ public sealed class DashboardRenderingTests
         new TaskVerificationRecord("dotnet test", Environment.CurrentDirectory, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
 
     var gate = kernel.BuildVerificationGate(goal.Id);
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true));
 
     Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.True(gate.IsSatisfied, gate.Tasks.Single().Reason.ToString());
@@ -2049,7 +2049,7 @@ public sealed class DashboardRenderingTests
         goal,
         WorkerProfileCatalog.Default(),
         changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix,
@@ -2122,7 +2122,7 @@ public sealed class DashboardRenderingTests
         goal,
         WorkerProfileCatalog.Default(),
         executionDirectory: workspace.ExecutionDirectory);
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goal.Id.Value[..8],
@@ -2203,7 +2203,7 @@ public sealed class DashboardRenderingTests
             Validation(AgentRole.Researcher, AgentExecutionPolicy.AnyAvailable)
         ],
         []);
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Goal,
@@ -2262,7 +2262,7 @@ public sealed class DashboardRenderingTests
         [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
         []);
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Goal,
@@ -2321,7 +2321,7 @@ public sealed class DashboardRenderingTests
         [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
         []);
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Goal,
@@ -2414,7 +2414,7 @@ public sealed class DashboardRenderingTests
         [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
         []);
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Goal,
@@ -2487,7 +2487,7 @@ public sealed class DashboardRenderingTests
         [Validation(AgentRole.Developer, AgentExecutionPolicy.ApiOnly)],
         []);
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Goal,
@@ -2556,7 +2556,7 @@ public sealed class DashboardRenderingTests
         task);
     var goalPrefix = goal.Id.Value[..8];
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix,
@@ -2596,7 +2596,7 @@ public sealed class DashboardRenderingTests
     var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(kernel, goal, task);
     var goalPrefix = goal.Id.Value[..8];
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix,
@@ -2637,7 +2637,7 @@ public sealed class DashboardRenderingTests
         321));
 
     var goalPrefix = goal.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
@@ -2751,7 +2751,7 @@ public sealed class DashboardRenderingTests
             true,
             "ok")).ToList());
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Config));
@@ -2803,7 +2803,7 @@ public sealed class DashboardRenderingTests
             true,
             "ok")).ToList());
 
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         HealthReport: health,
         View: DashboardView.Config));
@@ -2838,7 +2838,7 @@ public sealed class DashboardRenderingTests
     kernel.ReportTaskProgress(goal.Id, noProcess.Id, WorkTaskStatus.Running, "No process yet.");
 
     var goalPrefix = goal.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));
@@ -2894,7 +2894,7 @@ public sealed class DashboardRenderingTests
     var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(kernel, goal, WorkerProfileCatalog.Default());
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
     var transcript = GoalTranscriptRenderer.Render(kernel, goal, WorkerProfileCatalog.Default());
 
     Assert.True(detail.LastProcess!.Heartbeat.IsAvailable);
@@ -2949,7 +2949,7 @@ public sealed class DashboardRenderingTests
 
     var detail = DashboardResponseMapper.ToTaskDetailDto(goal, task);
     var logs = DashboardResponseMapper.ToProcessLogDto(goal, task);
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true, View: DashboardView.Goal, FocusGoalPrefix: goal.Id.Value[..8]));
 
     Assert.False(detail.LastProcess!.Heartbeat.IsAvailable);
     Assert.Null(detail.LastProcess.HeartbeatAgeSeconds);
@@ -2995,6 +2995,33 @@ static AgentDefinition Agent(AgentRole role, AgentExecutionPolicy policy)
         ExecutionPolicy: policy);
 }
 
+static DashboardRenderOptions RenderOptions(
+    int? AutoRefreshSeconds = null,
+    bool EnableOperatorControls = false,
+    OrchestratorHealthReport? HealthReport = null,
+    DashboardWorkspaceContext? Workspace = null,
+    IReadOnlyList<DashboardContinuationStatusDto>? ContinuationWatches = null,
+    string? FocusGoalPrefix = null,
+    DashboardView View = DashboardView.Ops,
+    IReadOnlyList<AgentDefinition>? AgentDefinitions = null,
+    WorkerProfileCatalog? WorkerProfiles = null,
+    OperatorInboxReportDto? OperatorInbox = null,
+    IReadOnlyList<TaskDurationStatsDto>? TaskDurationStats = null,
+    IReadOnlyList<string>? FocusGoalChangedFiles = null) =>
+    new(
+        AutoRefreshSeconds,
+        EnableOperatorControls,
+        HealthReport,
+        Workspace,
+        ContinuationWatches,
+        FocusGoalPrefix,
+        View,
+        AgentDefinitions,
+        WorkerProfiles ?? WorkerProfileCatalog.Default(),
+        OperatorInbox,
+        TaskDurationStats,
+        FocusGoalChangedFiles);
+
 static AgentConfigurationValidation Validation(AgentRole role, AgentExecutionPolicy policy)
 {
     return new AgentConfigurationValidation(
@@ -3039,12 +3066,12 @@ static string ExtractTaskControls(string html, int taskNumber)
     }
 
     var focusedPrefix = focused.Id.Value[..8];
-    var defaultHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var defaultHtml = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true));
 
     // Goal detail view for focused goal shows task actions
     var goalDetailHtml = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             FocusGoalPrefix: focusedPrefix,
             View: DashboardView.Goal));
@@ -3052,7 +3079,7 @@ static string ExtractTaskControls(string html, int taskNumber)
     // Ops view with focus query param shows focused goal in ops list
     var focusedOpsHtml = DashboardRenderer.Render(
         kernel,
-        new DashboardRenderOptions(
+        RenderOptions(
             EnableOperatorControls: true,
             FocusGoalPrefix: focusedPrefix));
 
@@ -3094,7 +3121,7 @@ static string ExtractTaskControls(string html, int taskNumber)
     }
 
     var activePrefix = active.Id.Value[..8];
-    var html = DashboardRenderer.Render(kernel, new DashboardRenderOptions(EnableOperatorControls: true));
+    var html = DashboardRenderer.Render(kernel, RenderOptions(EnableOperatorControls: true));
 
     Assert.Contains($"<h2><a href=\"/goal/{activePrefix}\">Active older goal</a></h2>", html, StringComparison.Ordinal);
     Assert.False(html.Contains($"<h2><a href=\"/goal/{oldestCompletedPrefix}\">Completed recent goal 0</a></h2>", StringComparison.Ordinal));
@@ -3126,7 +3153,7 @@ static string ExtractTaskControls(string html, int taskNumber)
     var goalPrefix = goal.Id.Value[..8];
 
     // Goal detail view shows evidence and retry queue
-    var goalHtml = DashboardRenderer.Render(kernel, new DashboardRenderOptions(
+    var goalHtml = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
         View: DashboardView.Goal,
         FocusGoalPrefix: goalPrefix));

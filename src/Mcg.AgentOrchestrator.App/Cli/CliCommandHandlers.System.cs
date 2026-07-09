@@ -598,7 +598,12 @@ internal static partial class CliCommandHandlers
                 var dashboardArgs = DashboardHost.ParseDashboardArgs(parts);
                 var dashboardPath = dashboardArgs.Path;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dashboardPath))!);
-                File.WriteAllText(dashboardPath, DashboardRenderer.Render(context.Kernel, dashboardArgs.Options));
+                var dashboardOptions = dashboardArgs.Options with
+                {
+                    AgentDefinitions = context.Agents,
+                    WorkerProfiles = context.WorkerProfiles
+                };
+                File.WriteAllText(dashboardPath, DashboardRenderer.Render(context.Kernel, dashboardOptions));
                 Console.WriteLine($"Dashboard: {Path.GetFullPath(dashboardPath)}");
                 if (dashboardArgs.Options.AutoRefreshSeconds is > 0)
                 {

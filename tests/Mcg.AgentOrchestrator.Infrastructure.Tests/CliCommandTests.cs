@@ -758,6 +758,56 @@ public sealed class CliCommandTests
         Xunit.Assert.Equal("subscription-dispatch 1", command);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_static_dashboard_export_uses_workspace_worker_profiles_for_light_role_next_actions")]
+    public void CliStaticDashboardExportUsesWorkspaceWorkerProfilesForLightRoleNextActions()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan with a light role",
+            [new TaskSpec(TaskId.New(), "Summarize the implementation path.", AgentRole.Planner)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("planner"),
+                "Planner",
+                AgentRole.Planner,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var claudeLauncher = Path.Combine(root, "claude.cmd");
+        File.WriteAllText(claudeLauncher, "@echo off\r\n");
+        var profiles = new WorkerProfileCatalog(
+        [
+            new WorkerProfile("claude-cli", $"\"{claudeLauncher}\" --model {{subscriptionModelName}} --print {{promptPath}}")
+        ]);
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var dashboardPath = Path.Combine(root, "static-dashboard.html");
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["dashboard", dashboardPath],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+        var html = File.ReadAllText(dashboardPath);
+
+        Xunit.Assert.Contains($"Dashboard: {Path.GetFullPath(dashboardPath)}", output);
+        Xunit.Assert.Contains("subscription-dispatch 1", html, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("<code>run 1</code>", html, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("OpenAI/gpt-5.5", html, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_backlog_intake_prints_goal_slice_without_mutating_state")]
     public void CliBacklogIntakePrintsGoalSliceWithoutMutatingState()
     {
