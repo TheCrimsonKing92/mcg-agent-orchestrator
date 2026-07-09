@@ -143,7 +143,8 @@ public sealed class TaskSpec
                             LastProcess.ResourceAccounting.CpuMilliseconds,
                             LastProcess.ResourceAccounting.PeakMemoryBytes,
                             LastProcess.ResourceAccounting.IoBytes,
-                            LastProcess.ResourceAccounting.Reaped)),
+                            LastProcess.ResourceAccounting.Reaped,
+                            LastProcess.ResourceAccounting.AccountingSource)),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -260,7 +261,8 @@ public sealed class TaskSpec
                         snapshot.LastProcess.ResourceAccounting.CpuMilliseconds,
                         snapshot.LastProcess.ResourceAccounting.PeakMemoryBytes,
                         snapshot.LastProcess.ResourceAccounting.IoBytes,
-                        snapshot.LastProcess.ResourceAccounting.Reaped)));
+                        snapshot.LastProcess.ResourceAccounting.Reaped,
+                        snapshot.LastProcess.ResourceAccounting.AccountingSource)));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);

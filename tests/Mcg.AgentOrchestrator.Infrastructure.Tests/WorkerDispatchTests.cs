@@ -4783,6 +4783,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var goal = kernel.CreateGoal("Startup hang accounting");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+    var startMarker = Path.Combine(root, "start-work.marker");
+    var allocatedMarker = Path.Combine(root, "allocated.marker");
     File.WriteAllText(stdout, string.Empty);
     File.WriteAllText(stderr, string.Empty);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
@@ -4799,11 +4801,16 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             RedirectStandardError = true
         }.WithArguments(
             WorkerShell.BaseArguments().Concat([
-                "$bytes = New-Object byte[] 1048576; Start-Sleep -Seconds 30; [GC]::KeepAlive($bytes)"
+                $"while (!(Test-Path -LiteralPath '{startMarker}')) {{ Start-Sleep -Milliseconds 50 }}; " +
+                "$bytes = New-Object byte[] 8388608; " +
+                $"Set-Content -LiteralPath '{allocatedMarker}' -Value 'allocated'; " +
+                "Start-Sleep -Seconds 30; [GC]::KeepAlive($bytes)"
             ])))
             ?? throw new InvalidOperationException("Failed to start wrapper process.");
 
         Assert.True(WorkerProcessJobs.TryRegister(wrapper));
+        File.WriteAllText(startMarker, "go");
+        WaitUntil(() => File.Exists(allocatedMarker), TimeSpan.FromSeconds(5));
         var process = new TaskProcessRecord(wrapper.Id, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
         WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
@@ -4820,11 +4827,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.True(completed.ResourceAccounting.CpuMilliseconds >= 0);
         Assert.True(completed.ResourceAccounting.PeakMemoryBytes > 0);
         Assert.True(completed.ResourceAccounting.IoBytes >= 0);
+        Assert.Equal("duplicate", completed.ResourceAccounting.AccountingSource);
         Assert.Contains("RESOURCE ", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Assert.Contains("accounting_source=duplicate", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.Contains("reaped=true", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.Contains(kernel.GetTimeline(goal.Id), evt =>
             evt.Kind == ProgressKind.TaskNote &&
             evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+            evt.Message.Contains("accounting_source=duplicate", StringComparison.Ordinal) &&
             evt.Message.Contains("reaped=true", StringComparison.Ordinal));
     }
     finally
@@ -8257,6 +8267,20 @@ private static void WriteSkill(string workingDirectory, string skillName)
     if (!File.Exists(path))
     {
         throw new TimeoutException($"Timed out waiting for exit file '{path}'.");
+    }
+}
+
+    private static void WaitUntil(Func<bool> condition, TimeSpan timeout)
+{
+    var deadline = DateTimeOffset.UtcNow.Add(timeout);
+    while (!condition() && DateTimeOffset.UtcNow < deadline)
+    {
+        Thread.Sleep(50);
+    }
+
+    if (!condition())
+    {
+        throw new TimeoutException("Timed out waiting for test condition.");
     }
 }
 

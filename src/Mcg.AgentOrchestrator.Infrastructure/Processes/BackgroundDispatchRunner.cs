@@ -2077,6 +2077,7 @@ public sealed class BackgroundDispatchRunner
         long peakMemoryBytes = 0;
         long ioBytes = 0;
         var capturedAny = false;
+        var accountingSource = "live";
 
         foreach (var processId in processRecord.TrackedProcessIds.Distinct())
         {
@@ -2086,31 +2087,48 @@ public sealed class BackgroundDispatchRunner
                 continue;
             }
 
-            capturedAny = true;
             cpuMilliseconds = SaturatingAdd(cpuMilliseconds, accounting.CpuMilliseconds);
             peakMemoryBytes = Math.Max(peakMemoryBytes, accounting.PeakMemoryBytes);
             ioBytes = SaturatingAdd(ioBytes, accounting.IoBytes);
+            accountingSource = capturedAny
+                ? MergeAccountingSource(accountingSource, accounting.AccountingSource)
+                : accounting.AccountingSource;
+            capturedAny = true;
         }
 
         return capturedAny
-            ? new TaskProcessResourceAccounting(cpuMilliseconds, peakMemoryBytes, ioBytes)
+            ? new TaskProcessResourceAccounting(cpuMilliseconds, peakMemoryBytes, ioBytes, AccountingSource: accountingSource)
             : null;
     }
 
     private TaskProcessResourceAccounting? ReapTrackedProcessJobs(TaskProcessRecord processRecord, bool waitForExit)
     {
         var preReapSnapshot = SnapshotTrackedProcessAccounting(processRecord);
-        ReleaseTrackedProcessJobsWithoutAccounting(processRecord);
-        TryKillTrackedProcesses(processRecord, waitForExit);
-        return preReapSnapshot is null ? null : preReapSnapshot with { Reaped = true };
-    }
-
-    private static void ReleaseTrackedProcessJobsWithoutAccounting(TaskProcessRecord processRecord)
-    {
+        TaskProcessResourceAccounting? jobAccounting = null;
         foreach (var processId in processRecord.TrackedProcessIds.Distinct())
         {
-            WorkerProcessJobs.ReleaseWithoutAccounting(processId);
+            WorkerProcessJobs.Reap(processId, waitForExit ? WaitForTrackedProcessExit : null, out var accounting);
+            if (accounting is not null)
+            {
+                jobAccounting = MergeResourceAccounting(
+                    jobAccounting,
+                    new TaskProcessResourceAccounting(
+                        accounting.CpuMilliseconds,
+                        accounting.PeakMemoryBytes,
+                        accounting.IoBytes,
+                        Reaped: true,
+                        AccountingSource: accounting.AccountingSource));
+                continue;
+            }
+
+            _tryKillOwnedProcess(processId);
+            if (waitForExit)
+            {
+                WaitForTrackedProcessExit(processId);
+            }
         }
+
+        return jobAccounting ?? (preReapSnapshot is null ? null : preReapSnapshot with { Reaped = true });
     }
 
     private static TaskProcessResourceAccounting? SnapshotTrackedProcessAccounting(TaskProcessRecord processRecord)
@@ -2146,7 +2164,11 @@ public sealed class BackgroundDispatchRunner
             return null;
         }
 
-        return new TaskProcessResourceAccounting(Math.Max(0L, heartbeat.OwnedCpuMs ?? 0L), peakMemoryBytes, 0L);
+        return new TaskProcessResourceAccounting(
+            Math.Max(0L, heartbeat.OwnedCpuMs ?? 0L),
+            peakMemoryBytes,
+            0L,
+            AccountingSource: "snapshot");
     }
 
     private static TaskProcessResourceAccounting? MergeResourceAccounting(
@@ -2167,7 +2189,8 @@ public sealed class BackgroundDispatchRunner
             Math.Max(left.CpuMilliseconds, right.CpuMilliseconds),
             Math.Max(left.PeakMemoryBytes, right.PeakMemoryBytes),
             Math.Max(left.IoBytes, right.IoBytes),
-            left.Reaped || right.Reaped);
+            left.Reaped || right.Reaped,
+            MergeAccountingSource(left.AccountingSource, right.AccountingSource));
     }
 
     private static bool TryKillProcess(int processId)
@@ -2179,7 +2202,36 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         TaskProcessResourceAccounting accounting) =>
-        $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
+        $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
+
+    private void WaitForTrackedProcessExit(int processId)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (_isStillRunning(processId) && DateTimeOffset.UtcNow < deadline)
+        {
+            Thread.Sleep(100);
+        }
+    }
+
+    private static string MergeAccountingSource(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.Ordinal))
+        {
+            return left;
+        }
+
+        if (string.Equals(left, "snapshot", StringComparison.Ordinal))
+        {
+            return right;
+        }
+
+        if (string.Equals(right, "snapshot", StringComparison.Ordinal))
+        {
+            return left;
+        }
+
+        return "mixed";
+    }
 
     private static bool IsDispatchHostReapCompletion(string standardError) =>
         standardError.Contains("[dispatch-host] terminating worker tree:", StringComparison.Ordinal);

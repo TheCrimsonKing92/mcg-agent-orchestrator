@@ -66,6 +66,11 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         if (OperatingSystem.IsWindows())
         {
+            if (_jobHandle is not null && !_jobHandle.IsClosed && !_jobHandle.IsInvalid)
+            {
+                WindowsJob.TryTerminate(_jobHandle);
+            }
+
             Dispose();
             return;
         }
@@ -93,6 +98,27 @@ internal sealed class OwnedProcessGroup : IDisposable
         return WindowsJob.TryReadAccounting(_jobHandle, out accounting);
     }
 
+    public bool TryDuplicateAccountingHandle(out SafeFileHandle duplicate)
+    {
+        duplicate = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+        if (_disposed ||
+            !OperatingSystem.IsWindows() ||
+            _jobHandle is null ||
+            _jobHandle.IsClosed ||
+            _jobHandle.IsInvalid)
+        {
+            return false;
+        }
+
+        return WindowsJob.TryDuplicateCurrentProcessHandle(_jobHandle, out duplicate);
+    }
+
+    public static bool TryReadAccounting(SafeFileHandle jobHandle, out WorkerProcessJobAccounting accounting)
+    {
+        accounting = WorkerProcessJobAccounting.Empty;
+        return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -115,6 +141,7 @@ internal sealed class OwnedProcessGroup : IDisposable
         private const int JobObjectBasicAccountingInformation = 1;
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        private const uint DuplicateSameAccess = 0x00000002;
 
         public static SafeFileHandle CreateKillOnCloseJob()
         {
@@ -170,6 +197,61 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DuplicateHandle(
+            IntPtr hSourceProcessHandle,
+            IntPtr hSourceHandle,
+            IntPtr hTargetProcessHandle,
+            out SafeFileHandle lpTargetHandle,
+            uint dwDesiredAccess,
+            bool bInheritHandle,
+            uint dwOptions);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool TerminateJobObject(SafeFileHandle hJob, uint uExitCode);
+
+        public static bool TryDuplicateCurrentProcessHandle(SafeFileHandle job, out SafeFileHandle duplicate)
+        {
+            duplicate = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            if (job.IsClosed || job.IsInvalid)
+            {
+                return false;
+            }
+
+            var addedRef = false;
+            try
+            {
+                job.DangerousAddRef(ref addedRef);
+                var currentProcess = GetCurrentProcess();
+                return DuplicateHandle(
+                    currentProcess,
+                    job.DangerousGetHandle(),
+                    currentProcess,
+                    out duplicate,
+                    0,
+                    false,
+                    DuplicateSameAccess) &&
+                    !duplicate.IsInvalid;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+            }
+        }
+
+        public static bool TryTerminate(SafeFileHandle job) =>
+            !job.IsClosed && !job.IsInvalid && TerminateJobObject(job, 1);
 
         public static bool TryReadAccounting(SafeFileHandle job, out WorkerProcessJobAccounting accounting)
         {

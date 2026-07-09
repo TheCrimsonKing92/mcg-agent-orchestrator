@@ -100,7 +100,8 @@ public sealed record TaskProcessResourceAccounting(
     long CpuMilliseconds,
     long PeakMemoryBytes,
     long IoBytes,
-    bool Reaped = false);
+    bool Reaped = false,
+    string AccountingSource = "live");
 
 public interface IModelProvider
 {

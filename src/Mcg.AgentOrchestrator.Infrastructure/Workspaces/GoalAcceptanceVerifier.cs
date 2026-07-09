@@ -1280,7 +1280,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return summary;
         }
 
-        var receipt = $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes}";
+        var receipt = $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}";
         return string.IsNullOrWhiteSpace(summary)
             ? receipt
             : $"{summary}; {receipt}";
@@ -1717,7 +1717,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     : new TaskProcessResourceAccounting(
                         accounting.CpuMilliseconds,
                         accounting.PeakMemoryBytes,
-                        accounting.IoBytes));
+                        accounting.IoBytes,
+                        AccountingSource: accounting.AccountingSource));
         }
         finally
         {

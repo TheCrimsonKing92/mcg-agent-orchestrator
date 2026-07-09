@@ -8,7 +8,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed record WorkerProcessJobAccounting(
     long CpuMilliseconds,
     long PeakMemoryBytes,
-    long IoBytes)
+    long IoBytes,
+    string AccountingSource = "live")
 {
     public static WorkerProcessJobAccounting Empty { get; } = new(0, 0, 0);
 }
@@ -16,7 +17,7 @@ public sealed record WorkerProcessJobAccounting(
 public static class WorkerProcessJobs
 {
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
-    private static readonly ConcurrentDictionary<int, OwnedProcessGroup> Jobs = new();
+    private static readonly ConcurrentDictionary<int, RegisteredJob> Jobs = new();
     private static SpawnRegistry? Registry;
 
     internal static Func<int, bool> TryKillPidTree { get; set; } = DefaultTryKillPidTree;
@@ -76,13 +77,18 @@ public static class WorkerProcessJobs
         try
         {
             var group = OwnedProcessGroup.Attach(process);
-            if (Jobs.TryAdd(process.Id, group))
+            var duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
+            var snapshot = group.TryReadAccounting(out var registrationAccounting)
+                ? registrationAccounting with { AccountingSource = "snapshot" }
+                : null;
+            if (Jobs.TryAdd(process.Id, new RegisteredJob(group, duplicate, snapshot)))
             {
                 RegisterDurable(process, ownerId);
                 return true;
             }
 
             ReadAccountingAndDispose(group, kill: false, captureAccounting: false, out _);
+            duplicate?.Dispose();
         }
         catch (Win32Exception)
         {
@@ -112,9 +118,9 @@ public static class WorkerProcessJobs
             return false;
         }
 
-        if (Jobs.TryRemove(processId, out var group))
+        if (Jobs.TryRemove(processId, out var job))
         {
-            if (ReadAccountingAndDispose(group, kill: true, captureAccounting: true, out accounting))
+            if (ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting))
             {
                 Registry?.MarkReleased(processId, $"spawn_registry: killed pid={processId}");
                 return true;
@@ -138,9 +144,9 @@ public static class WorkerProcessJobs
     public static void Release(int processId, out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;
-        if (Jobs.TryRemove(processId, out var group))
+        if (Jobs.TryRemove(processId, out var job))
         {
-            ReadAccountingAndDispose(group, kill: true, captureAccounting: true, out accounting);
+            ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting);
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
@@ -148,9 +154,9 @@ public static class WorkerProcessJobs
 
     internal static void ReleaseWithoutAccounting(int processId)
     {
-        if (Jobs.TryRemove(processId, out var group))
+        if (Jobs.TryRemove(processId, out var job))
         {
-            ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+            ReadAccountingAndDispose(job, kill: true, captureAccounting: false, preferDuplicate: false, out _);
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
@@ -162,19 +168,89 @@ public static class WorkerProcessJobs
         bool captureAccounting,
         out WorkerProcessJobAccounting? accounting)
     {
+        return ReadAccountingAndDispose(
+            group is null ? null : new RegisteredJob(group, null, null),
+            kill,
+            captureAccounting,
+            preferDuplicate: false,
+            out accounting);
+    }
+
+    internal static void Reap(
+        int processId,
+        Action<int>? waitForExit,
+        out WorkerProcessJobAccounting? accounting)
+    {
         accounting = null;
-        if (group is null)
+        if (!Jobs.TryRemove(processId, out var job))
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+            return;
+        }
+
+        try
+        {
+            try
+            {
+                job.Group.Kill();
+            }
+            catch
+            {
+                // Reaping falls back to caller PID cleanup; duplicate accounting remains best-effort.
+            }
+
+            waitForExit?.Invoke(processId);
+
+            if (job.DuplicateAccountingHandle is not null &&
+                OwnedProcessGroup.TryReadAccounting(job.DuplicateAccountingHandle, out var duplicateAccounting))
+            {
+                accounting = duplicateAccounting with { AccountingSource = "duplicate" };
+            }
+            else
+            {
+                accounting = job.RegistrationSnapshot;
+            }
+        }
+        finally
+        {
+            try { job.Group.Dispose(); } catch { }
+            try { job.DuplicateAccountingHandle?.Dispose(); } catch { }
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+        }
+    }
+
+    private static bool ReadAccountingAndDispose(
+        RegisteredJob? job,
+        bool kill,
+        bool captureAccounting,
+        bool preferDuplicate,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        if (job is null)
         {
             return !kill;
         }
 
         try
         {
-            if (captureAccounting && group.TryReadAccounting(out var capturedAccounting))
+            if (captureAccounting &&
+                preferDuplicate &&
+                job.DuplicateAccountingHandle is not null &&
+                OwnedProcessGroup.TryReadAccounting(job.DuplicateAccountingHandle, out var duplicateAccounting))
             {
-                accounting = capturedAccounting;
+                accounting = duplicateAccounting with { AccountingSource = "duplicate" };
             }
-            else if (captureAccounting && OperatingSystem.IsWindows())
+            else if (captureAccounting && job.Group.TryReadAccounting(out var capturedAccounting))
+            {
+                accounting = capturedAccounting with { AccountingSource = "live" };
+            }
+            else if (captureAccounting)
+            {
+                accounting = job.RegistrationSnapshot;
+            }
+
+            if (captureAccounting && accounting is null && OperatingSystem.IsWindows())
             {
                 accounting = WorkerProcessJobAccounting.Empty;
             }
@@ -184,7 +260,7 @@ public static class WorkerProcessJobs
             // Accounting is best-effort; disposal remains mandatory.
             if (captureAccounting && OperatingSystem.IsWindows())
             {
-                accounting = WorkerProcessJobAccounting.Empty;
+                accounting = job.RegistrationSnapshot ?? WorkerProcessJobAccounting.Empty;
             }
         }
 
@@ -193,7 +269,7 @@ public static class WorkerProcessJobs
         {
             if (kill)
             {
-                group.Kill();
+                job.Group.Kill();
             }
 
             killed = true;
@@ -204,7 +280,8 @@ public static class WorkerProcessJobs
         }
         finally
         {
-            try { group.Dispose(); } catch { }
+            try { job.Group.Dispose(); } catch { }
+            try { job.DuplicateAccountingHandle?.Dispose(); } catch { }
         }
 
         return killed;
@@ -236,6 +313,11 @@ public static class WorkerProcessJobs
             // Registry durability is a lifecycle backstop; failed diagnostics must not prevent spawn.
         }
     }
+
+    private sealed record RegisteredJob(
+        OwnedProcessGroup Group,
+        Microsoft.Win32.SafeHandles.SafeFileHandle? DuplicateAccountingHandle,
+        WorkerProcessJobAccounting? RegistrationSnapshot);
 
     private static bool DefaultTryKillPidTree(int processId)
     {
