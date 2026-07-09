@@ -52,7 +52,6 @@ public sealed class GoalLifecycleEventWriterTests
                 "TaskDelegated",
                 "TaskDispatched",
                 "TaskVerified",
-                "TaskVerified",
                 "TaskCompleted",
                 "GoalLifecycleDecision",
                 "GoalLanded",
