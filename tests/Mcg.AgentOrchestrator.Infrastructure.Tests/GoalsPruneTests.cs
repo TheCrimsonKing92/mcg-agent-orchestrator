@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalsPruneTests
 {
     [Xunit.Fact(DisplayName = "GoalsPrune_classifies_merged_branchless_goal_as_reapable")]

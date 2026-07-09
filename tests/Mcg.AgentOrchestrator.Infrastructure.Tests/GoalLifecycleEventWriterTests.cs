@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
+[Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class GoalLifecycleEventWriterTests
 {
     [Xunit.Fact]

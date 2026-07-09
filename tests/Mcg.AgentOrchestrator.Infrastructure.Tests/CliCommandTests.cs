@@ -2058,7 +2058,7 @@ public sealed class CliCommandTests
     {
         var kernel = new AgentOrchestratorKernel();
         var first = kernel.CreateGoal("Update src/Alpha.cs", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Planner)]);
-        var second = kernel.CreateGoal("Update src/Beta.cs", [new TaskSpec(TaskId.New(), "Change src/Beta.cs", AgentRole.Researcher)]);
+        var second = kernel.CreateGoal("Update src/Beta.cs", [new TaskSpec(TaskId.New(), "Change src/Beta.cs", AgentRole.Developer)]);
         var conflict = kernel.CreateGoal("Update src/Alpha.cs too", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Researcher)]);
         IReadOnlyList<AgentDefinition> agents =
         [
@@ -2069,6 +2069,13 @@ public sealed class CliCommandTests
                 new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
+            new(
+                new AgentId("developer-ollama"),
+                "Developer Ollama",
+                AgentRole.Developer,
+                new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("qwen-code-cli")),
             new(
                 new AgentId("researcher-anthropic"),
                 "Researcher Anthropic",
