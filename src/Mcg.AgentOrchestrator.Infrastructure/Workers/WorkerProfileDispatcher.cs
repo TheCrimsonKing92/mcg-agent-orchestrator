@@ -1075,12 +1075,7 @@ public static class WorkerProfileDispatcher
 
     private static IReadOnlyList<string> WorkerResultRequiredFieldsForLightRole(AgentRole role)
     {
-        return role switch
-        {
-            AgentRole.Researcher => [.. WorkerResultParser.RequiredFields, "citations"],
-            AgentRole.Reviewer => [.. WorkerResultParser.RequiredFields, "verdict"],
-            _ => WorkerResultParser.RequiredFields
-        };
+        return AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(role);
     }
 
     private static bool HasPresentField(IReadOnlyDictionary<string, string> fields, string fieldName)

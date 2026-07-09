@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -13,7 +14,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class WorkerResultParser
 {
     internal static readonly string[] RequiredFields =
-        ["files", "commands", "tests", "blockers", "model_fit", "skills", "confidence"];
+        [.. AgentOutputDirectives.WorkerResultFieldNames];
 
     // Strips *, #, ` from strings for opener/end-marker matching.
     private static readonly Regex MarkdownCharsPattern =

@@ -293,7 +293,7 @@ internal sealed class WorkerArtifactWriter
         lines.Add(string.Empty);
         lines.Add("## Worker Result Contract");
         lines.Add("End final output with:");
-        lines.AddRange(AgentOutputDirectives.WorkerResultTemplateLines);
+        lines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(task.RequiredRole));
 
         return string.Join(Environment.NewLine, lines);
     }

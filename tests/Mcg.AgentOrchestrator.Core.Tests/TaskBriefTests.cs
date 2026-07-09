@@ -871,6 +871,23 @@ public sealed class TaskBriefTests
     }
 }
 
+    [Xunit.Theory(DisplayName = "BuildTaskBrief_role_worker_result_contract_contains_guardrail_fields")]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void BuildTaskBriefRoleWorkerResultContractContainsGuardrailFields(AgentRole role)
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Verify role output contract", [new TaskSpec(TaskId.New(), "Report role-specific evidence.", role)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+    foreach (var field in AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(role))
+    {
+        Assert.Contains($"{field}:", brief, StringComparison.Ordinal);
+    }
+}
+
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)
