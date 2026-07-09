@@ -1125,7 +1125,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 false,
                 result.ExitCode,
                 BuildTimeoutOutput(result),
-                ResultSummary: BuildTimeoutSummary(result),
+                ResultSummary: BuildGenericCommandResultSummary(result),
                 Advisory: check.Advisory), false);
         }
 
@@ -1134,6 +1134,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             result.ExitCode == 0,
             result.ExitCode,
             result.ExitCode == 0 ? null : TailOutput(result.Output),
+            ResultSummary: BuildGenericCommandResultSummary(result),
             Advisory: check.Advisory), false);
     }
 
@@ -1271,6 +1272,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return string.IsNullOrWhiteSpace(summary)
             ? remediation
             : $"{remediation}; {summary}";
+    }
+
+    private static string? BuildGenericCommandResultSummary(CommandResult result)
+    {
+        var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
+        return AppendResourceReceipt(summary, result.ResourceAccounting);
     }
 
     private static string? AppendResourceReceipt(string? summary, TaskProcessResourceAccounting? accounting)
