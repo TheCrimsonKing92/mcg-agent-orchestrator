@@ -3251,8 +3251,8 @@ public sealed class CliCommandTests
         Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
         var lines = ReadyBlockedLines(stderr);
         Xunit.Assert.Equal(2, lines.Length);
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=claude-cli reason=worker-profile", lines[0]);
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=2 provider=claude-cli reason=worker-profile", lines[1]);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=worker-profile", lines[0]);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=2 provider=codex-cli reason=worker-profile", lines[1]);
         Xunit.Assert.Null(first.LastDispatch);
         Xunit.Assert.Null(second.LastDispatch);
     }

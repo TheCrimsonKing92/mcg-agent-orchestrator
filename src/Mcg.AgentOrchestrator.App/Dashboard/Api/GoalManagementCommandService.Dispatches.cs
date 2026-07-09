@@ -45,7 +45,7 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         providers ?? new InMemoryModelProviderRegistry([]),
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
-    var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
+    var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents, new WorkerProfileCatalog([profile]));
     return WorkerProfileDispatcher.PrepareTask(
         kernel,
         goal,
@@ -135,7 +135,8 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
     Goal goal,
     TaskSpec task,
     WorkerProfile profile,
-    IReadOnlyList<AgentDefinition>? agents)
+    IReadOnlyList<AgentDefinition>? agents,
+    WorkerProfileCatalog? profiles)
 {
     if (agents is null)
     {
@@ -160,7 +161,9 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
     string profileName;
     try
     {
-        profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task);
+        profileName = profiles is null
+            ? WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task)
+            : WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
     }
     catch (InvalidOperationException)
     {
@@ -172,7 +175,9 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
         return null;
     }
 
-    var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
+    var variables = profiles is null
+        ? WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task)
+        : WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
     var providerName = variables.GetValueOrDefault("providerName");
     var modelName = variables.GetValueOrDefault("subscriptionModelName");
     var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");

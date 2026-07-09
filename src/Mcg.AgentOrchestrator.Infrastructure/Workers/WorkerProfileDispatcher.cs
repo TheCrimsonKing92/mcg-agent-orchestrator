@@ -208,7 +208,7 @@ public static class WorkerProfileDispatcher
         EnsureTaskNeedsExecution(task);
 
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
-        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride);
+        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
             : ResolveSubscriptionProfile(agent, roleSelection.Model, profiles);
@@ -271,7 +271,7 @@ public static class WorkerProfileDispatcher
         {
             EnsureTaskNeedsExecution(task);
             var agent = ResolveAssignedAgent(null, goal, task, agents);
-            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
                 : ResolveSubscriptionProfileName(agent, roleSelection.Model);
@@ -597,7 +597,7 @@ public static class WorkerProfileDispatcher
         var blocked = new List<ReadyBlockedDiagnostic>();
         foreach (var selection in selections)
         {
-            var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task, profiles: profiles);
             var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection.Model, profiles);
             var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection);
             var preflight = PreflightSubscriptionTask(
@@ -747,6 +747,11 @@ public static class WorkerProfileDispatcher
         return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task).Model);
     }
 
+    public static string ResolveSubscriptionProfileName(AgentDefinition agent, Goal goal, TaskSpec task, WorkerProfileCatalog profiles)
+    {
+        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles).Model);
+    }
+
     private static string ResolveSubscriptionProfileName(AgentDefinition agent, ModelProfile model)
     {
         if (model.ProviderName.Equals(agent.Model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
@@ -791,6 +796,15 @@ public static class WorkerProfileDispatcher
         TaskSpec task)
     {
         return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task));
+    }
+
+    public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task,
+        WorkerProfileCatalog profiles)
+    {
+        return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles));
     }
 
     private static Dictionary<string, string?> BuildSubscriptionTemplateVariables(
@@ -876,18 +890,24 @@ public static class WorkerProfileDispatcher
         AgentDefinition agent,
         Goal goal,
         TaskSpec task,
-        DispatchModelOverride? modelOverride = null)
+        DispatchModelOverride? modelOverride = null,
+        WorkerProfileCatalog? profiles = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, task, fullSelection);
+            : ResolveRoleModelSelection(agent, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions);
     }
 
     private static SubscriptionModelSelection ResolveRoleModelSelection(
         AgentDefinition agent,
         TaskSpec task,
-        SubscriptionModelSelection fullSelection)
+        SubscriptionModelSelection fullSelection,
+        WorkerProfileCatalog? profiles,
+        Func<ClaudeCliAuthState>? claudeAuthProbe,
+        WorkerSandboxOptions? sandboxOptions)
     {
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
@@ -904,6 +924,12 @@ public static class WorkerProfileDispatcher
             return fullSelection with { Reason = $"fallback-full-profile: {guardrailFailure}" };
         }
 
+        if (profiles is not null &&
+            !TryValidateLightRoleProfile(profiles, claudeAuthProbe, sandboxOptions, out var unavailableReason))
+        {
+            return fullSelection with { Reason = $"full-profile: light-role profile unavailable ({unavailableReason})" };
+        }
+
         return new SubscriptionModelSelection(
             fullSelection.Complexity,
             new ModelProfile(
@@ -915,6 +941,47 @@ public static class WorkerProfileDispatcher
             UsesComplexModel: false,
             UsesSubscriptionLaunchProfile: false,
             Reason: $"light-role: {task.RequiredRole} uses {AnthropicSubscriptionProfileName}/{LightRoleAnthropicModelName}");
+    }
+
+    private static bool TryValidateLightRoleProfile(
+        WorkerProfileCatalog profiles,
+        Func<ClaudeCliAuthState>? claudeAuthProbe,
+        WorkerSandboxOptions? sandboxOptions,
+        out string unavailableReason)
+    {
+        var profile = profiles.Profiles.FirstOrDefault(profile =>
+            profile.Name.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            unavailableReason = $"{AnthropicSubscriptionProfileName} not configured";
+            return false;
+        }
+
+        if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
+        {
+            unavailableReason = $"{AnthropicSubscriptionProfileName} is echo-only";
+            return false;
+        }
+
+        if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
+        {
+            unavailableReason = $"{AnthropicSubscriptionProfileName} does not pin selected model";
+            return false;
+        }
+
+        var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
+        if (sandbox.Enabled)
+        {
+            var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
+            if (!authState.HasAnthropicApiKey && authState.HasCliCredentialArtifact)
+            {
+                unavailableReason = "Claude CLI Low-IL auth unavailable";
+                return false;
+            }
+        }
+
+        unavailableReason = string.Empty;
+        return true;
     }
 
     private static bool IsLightReadOnlyRole(AgentRole role)

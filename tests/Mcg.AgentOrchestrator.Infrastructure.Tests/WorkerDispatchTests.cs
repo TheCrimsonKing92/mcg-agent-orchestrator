@@ -32,7 +32,8 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             Path.Combine(root, "prompts"),
             root,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget)));
 
         Assert.Equal(newAgent.Id, task.AssignedAgentId);
         Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -64,7 +65,8 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             Path.Combine(root, "prompts"),
             root,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget)));
 
         Assert.Equal(agent.Id, task.AssignedAgentId);
         Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -132,7 +134,8 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             Path.Combine(root, "prompts"),
             root,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
         Assert.Equal(newAgent.Id, task.AssignedAgentId);
         Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -1162,7 +1165,7 @@ public sealed class WorkerDispatchTests
     var promptRoot = Path.Combine(root, "prompts");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Verify Claude light-role auth preflight", [new TaskSpec(TaskId.New(), "Review implementation output.", AgentRole.Reviewer)]);
-    var agents = AgentCatalog.Default().Agents;
+    var agents = AgentCatalog.AnthropicDefault().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -1198,7 +1201,7 @@ public sealed class WorkerDispatchTests
     Assert.False(preflight.Allowed);
     Assert.Equal("claude-cli", preflight.ProfileName);
     Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
-    Assert.Contains("model-selection: light-role: Reviewer uses claude-cli/claude-haiku-4-5", findings, StringComparison.Ordinal);
+    Assert.Contains("model-selection: full-profile: light-role profile unavailable (Claude CLI Low-IL auth unavailable)", findings, StringComparison.Ordinal);
     Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
     Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
     Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
@@ -2344,6 +2347,61 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_default_path_dispatch_is_identical_when_no_light_role_applies")]
+    public void WorkerProfileDispatcherDefaultPathDispatchIsIdenticalWhenNoLightRoleApplies()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var codexProfile = new WorkerProfile(
+        "codex-cli",
+        "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}");
+    var codexOnlyProfiles = new WorkerProfileCatalog([codexProfile]);
+    var codexWithLightProfile = new WorkerProfileCatalog(
+    [
+        codexProfile,
+        new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode}")
+    ]);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var codexOnlyDispatch = PrepareDeveloperDispatch(codexOnlyProfiles);
+    var codexWithLightProfileDispatch = PrepareDeveloperDispatch(codexWithLightProfile);
+
+    Assert.Equal(codexOnlyDispatch.WorkerName, codexWithLightProfileDispatch.WorkerName);
+    Assert.Equal(codexOnlyDispatch.Command, codexWithLightProfileDispatch.Command);
+    Assert.Equal(codexOnlyDispatch.WorkingDirectory, codexWithLightProfileDispatch.WorkingDirectory);
+    Assert.Equal(codexOnlyDispatch.ProviderName, codexWithLightProfileDispatch.ProviderName);
+    Assert.Equal(codexOnlyDispatch.ModelName, codexWithLightProfileDispatch.ModelName);
+    Assert.Equal(codexOnlyDispatch.ReasoningEffort, codexWithLightProfileDispatch.ReasoningEffort);
+    Assert.Equal(codexOnlyDispatch.TaskComplexity, codexWithLightProfileDispatch.TaskComplexity);
+    Assert.Equal(codexOnlyDispatch.UsesComplexModel, codexWithLightProfileDispatch.UsesComplexModel);
+
+    TaskDispatchRecord PrepareDeveloperDispatch(WorkerProfileCatalog profiles)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement the requested source change.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve developer dispatch route", [task]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            agents,
+            profiles,
+            promptRoot,
+            workingDirectory,
+            dispatchedAt,
+            sandboxOptions: sandbox);
+
+        return task.LastDispatch!;
+    }
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_light_role_result_keeps_haiku")]
     public void WorkerProfileDispatcherTemplateConformingLightRoleResultKeepsHaiku()
 {
@@ -2355,7 +2413,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
     var goal = kernel.CreateGoal("Keep light model after contract-conforming research", [task]);
-    var agents = AgentCatalog.Default().Agents;
+    var agents = AgentCatalog.AnthropicDefault().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
         "worker refresh",
@@ -2458,7 +2516,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
     var goal = kernel.CreateGoal("Keep light model after contract-conforming review", [task]);
-    var agents = AgentCatalog.Default().Agents;
+    var agents = AgentCatalog.AnthropicDefault().Agents;
     kernel.ActivateGoal(goal.Id, agents);
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
         "worker refresh",
@@ -2708,7 +2766,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
 
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
@@ -6947,7 +7006,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
     Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
     Assert.Contains("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
