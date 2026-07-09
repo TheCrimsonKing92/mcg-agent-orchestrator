@@ -118,7 +118,7 @@ internal static class DashboardActionRecommendationPlanner
         var automation = NextActionAutomationPolicy.Build(item);
         var policyAction = MapAutomationAction(automation.Kind);
         var policyAllows = policyAction is null || policy.Allows(policyAction.Value);
-        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+        var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
         var command = ConsoleViews.BuildSuggestedCommand(goal, item, agents);
         return new DashboardActionRecommendation(
             DashboardActionRecommendationSource.NextAction,

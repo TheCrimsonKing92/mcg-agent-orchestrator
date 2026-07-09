@@ -563,6 +563,16 @@ public static NextActionDto ToNextActionDto(
     int priority,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
+    return ToNextActionDto(goal, item, priority, WorkerProfileCatalog.Default(), agents);
+}
+
+public static NextActionDto ToNextActionDto(
+    Goal goal,
+    NextActionItem item,
+    int priority,
+    WorkerProfileCatalog workerProfiles,
+    IReadOnlyList<AgentDefinition>? agents = null)
+{
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
     var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item));
     return new NextActionDto(
@@ -573,7 +583,7 @@ public static NextActionDto ToNextActionDto(
         item.HumanInputRequestId?.Value,
         TimelineText(item.Message),
         ConsoleViews.BuildSuggestedCommand(goal, item, agents),
-        ToNextActionControlDto(goal, item, agents),
+        ToNextActionControlDto(goal, item, workerProfiles, agents),
         dispatchState?.RecoveryDecision,
         dispatchState);
 }
@@ -676,7 +686,16 @@ public static NextActionControlDto? ToNextActionControlDto(
     NextActionItem item,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+    return ToNextActionControlDto(goal, item, WorkerProfileCatalog.Default(), agents);
+}
+
+public static NextActionControlDto? ToNextActionControlDto(
+    Goal goal,
+    NextActionItem item,
+    WorkerProfileCatalog workerProfiles,
+    IReadOnlyList<AgentDefinition>? agents = null)
+{
+    var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
     return control is null
         ? null
         : new NextActionControlDto(
