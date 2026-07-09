@@ -64,6 +64,7 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
 public static void PrintNextActions(
     Goal goal,
     GoalNextActions actions,
+    WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null,
     GoalHealthReport? health = null,
     GoalOperatorDisposition? conductorDisposition = null)
@@ -94,7 +95,7 @@ public static void PrintNextActions(
         }
 
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
-        var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+        var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
         if (!string.IsNullOrWhiteSpace(control?.CostRisk))
         {
             var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)

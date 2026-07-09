@@ -114,6 +114,7 @@ public sealed class AdvanceLoopTests
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([provider]),
         workspace,
         goal);
@@ -150,6 +151,7 @@ public sealed class AdvanceLoopTests
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([]),
         workspace,
         goal);
@@ -183,6 +185,7 @@ public sealed class AdvanceLoopTests
     var single = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([]),
         workspace,
         goal);
@@ -320,6 +323,7 @@ public sealed class AdvanceLoopTests
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([provider]),
         workspace,
         goal);

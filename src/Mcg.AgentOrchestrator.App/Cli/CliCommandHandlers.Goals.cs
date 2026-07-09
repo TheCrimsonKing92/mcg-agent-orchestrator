@@ -767,7 +767,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace.ExecutionDirectory,
                 nextPolicy);
             var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(context.Workspace.RunEventStorePath, context.CurrentGoal);
-            ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.Agents, nextHealth, conductorDisposition);
+            ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.WorkerProfiles, context.Agents, nextHealth, conductorDisposition);
             return nextSweep.Changed;
         }
 
@@ -782,7 +782,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "advance":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            var advance = GoalManagementCommandService.AdvanceGoalAsync(context.Kernel, context.Agents, context.Providers, context.Workspace, context.CurrentGoal)
+            var advance = GoalManagementCommandService.AdvanceGoalAsync(context.Kernel, context.Agents, context.WorkerProfiles, context.Providers, context.Workspace, context.CurrentGoal)
                 .GetAwaiter()
                 .GetResult();
             ConsoleViews.PrintAdvanceResult(advance);

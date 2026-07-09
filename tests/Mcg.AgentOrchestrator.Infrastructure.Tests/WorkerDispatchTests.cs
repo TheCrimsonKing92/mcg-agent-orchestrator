@@ -4797,6 +4797,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_records_resource_accounting")]
     public void BackgroundDispatchRunnerNonLocalDispatchRecordsResourceAccounting()
 {
+    using var _ = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var logs = Path.Combine(root, "logs");
     var kernel = new AgentOrchestratorKernel();

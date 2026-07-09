@@ -12,6 +12,7 @@ private const int MaxAutomaticHandoffSteps = 20;
 public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     AgentOrchestratorKernel kernel,
     IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog workerProfiles,
     IModelProviderRegistry providers,
     OrchestratorWorkspace workspace,
     Goal goal)
@@ -24,7 +25,7 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
-    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, workerProfiles, agents);
     if (!automation.CanExecute || automation.TaskId is null)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
@@ -190,7 +191,7 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
-    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, profiles, agents);
     if (!automation.CanExecute || automation.TaskId is null)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);

@@ -17,15 +17,6 @@ public static class DashboardNextActionControls
     public static DashboardNextActionControl? Build(
         Goal goal,
         NextActionItem item,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null,
-        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
-    {
-        return Build(goal, item, WorkerProfileCatalog.Default(), agents, agentDefinitions);
-    }
-
-    public static DashboardNextActionControl? Build(
-        Goal goal,
-        NextActionItem item,
         WorkerProfileCatalog workerProfiles,
         IReadOnlyList<AgentConfigurationValidation>? agents = null,
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
