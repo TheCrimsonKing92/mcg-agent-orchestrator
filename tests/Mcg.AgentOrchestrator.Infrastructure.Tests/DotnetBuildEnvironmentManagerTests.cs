@@ -191,6 +191,32 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Equal(1, CountOccurrences(output, "LEASE_RELEASE"));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_gate_rescans_when_previous_slot_is_held")]
+    public void DotnetBuildEnvironmentManagerReusedGoalGateRescansWhenPreviousSlotIsHeld()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var gateGoalId = new GoalId("91000000910000009100000091000000");
+        var first = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "first");
+        var previousSlot = SlotIndexFromPath(first.ExecutionLockPath);
+        var previousSlotEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(previousSlot);
+        using var previousSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(previousSlotEnvironment);
+        DotnetBuildEnvironment? reused = null;
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            reused = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
+            using var gateLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(reused, TimeSpan.FromSeconds(1));
+        });
+
+        Assert.NotNull(reused);
+        Assert.True(reused.ReusedGoalLease);
+        Assert.NotEqual(first.ExecutionLockPath, reused.ExecutionLockPath);
+        Assert.DoesNotContain(Path.Combine("slots", $"slot-{previousSlot}"), reused.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LEASE_ACQUIRE", output);
+        Assert.Contains("lease=goal-91000000", output);
+        Assert.Equal(1, CountOccurrences(output, "LEASE_RELEASE"));
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reclaims_dead_pid_execution_lease_without_timeout")]
     public void DotnetBuildEnvironmentManagerReclaimsDeadPidExecutionLeaseWithoutTimeout()
     {
@@ -918,6 +944,13 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
 
         return count;
+    }
+
+    private static int SlotIndexFromPath(string path)
+    {
+        var slotName = Path.GetFileName(Path.GetDirectoryName(path));
+        Assert.StartsWith("slot-", slotName, StringComparison.Ordinal);
+        return int.Parse(slotName["slot-".Length..], System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static SafeFileHandle CreateInheritableFileHandle(string path)

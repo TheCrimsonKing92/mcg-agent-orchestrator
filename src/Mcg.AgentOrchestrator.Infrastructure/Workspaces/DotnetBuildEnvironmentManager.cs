@@ -447,7 +447,9 @@ public static class DotnetBuildEnvironmentManager
 
     private static string SelectStableSlotNameForGoal(string metadataPath, bool reused)
     {
-        if (reused && TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName)
+        if (reused &&
+            TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName &&
+            IsStableSlotExecutionLockAvailable(existingSlotName))
         {
             return existingSlotName;
         }
