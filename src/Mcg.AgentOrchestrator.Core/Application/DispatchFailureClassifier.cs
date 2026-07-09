@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -33,7 +34,8 @@ public sealed record DispatchOutcome(
     TimeSpan? RetryAfter,
     TimeSpan? Cooldown,
     RecoveryRecommendation RecoveryRecommendation,
-    string EvidenceSummary);
+    string EvidenceSummary,
+    string ClassifierReceipt = "");
 
 public sealed record ProviderSubscriptionCooldown(
     string ProviderName,
@@ -59,7 +61,9 @@ public static class DispatchFailureClassifier
     {
         return failureKind switch
         {
-            ProviderFailureKind.RateLimit => new DispatchOutcome(
+            ProviderFailureKind.RateLimit => WithClassifierReceipt(
+                "provider-rate-limit",
+                new DispatchOutcome(
                 DispatchOutcomeKind.RecoverableSubscriptionLimit,
                 exitCode,
                 hasZeroByteOutput,
@@ -67,7 +71,10 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.AutoRetry,
                 evidenceSummary),
-            ProviderFailureKind.Connectivity => new DispatchOutcome(
+                exitCode),
+            ProviderFailureKind.Connectivity => WithClassifierReceipt(
+                "provider-connectivity",
+                new DispatchOutcome(
                 DispatchOutcomeKind.ProviderConnectivity,
                 exitCode,
                 hasZeroByteOutput,
@@ -75,7 +82,10 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.AutoRetry,
                 evidenceSummary),
-            ProviderFailureKind.Sandbox1312 => new DispatchOutcome(
+                exitCode),
+            ProviderFailureKind.Sandbox1312 => WithClassifierReceipt(
+                "provider-sandbox-1312",
+                new DispatchOutcome(
                 DispatchOutcomeKind.SandboxCommitBlocked,
                 exitCode,
                 hasZeroByteOutput,
@@ -83,14 +93,18 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.CommitAndVerify,
                 evidenceSummary),
-            _ => new DispatchOutcome(
+                exitCode),
+            _ => WithClassifierReceipt(
+                "provider-unknown",
+                new DispatchOutcome(
                 DispatchOutcomeKind.UnknownFailure,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                evidenceSummary)
+                evidenceSummary),
+                exitCode)
         };
     }
 
@@ -280,50 +294,96 @@ public static class DispatchFailureClassifier
         if (verification.Succeeded &&
             WorkerResultBlockers.TryFindFailingTests(verification, out _))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "succeeded-worker-result-failing-tests",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.UnknownFailure,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
-        if (verification.Succeeded &&
-            HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
+        if (HasGreenCommittedWorkerResultEvidence(verification, workerResultPresent, hasCommittedChanges))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "committed-worker-result-evidence",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.VerifiedSuccess,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.None,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
+        }
+
+        if (verification.Succeeded &&
+            HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
+        {
+            return BuildOutcome(
+                "succeeded-dispatch-completion-evidence",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.VerifiedSuccess,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.None,
+                BuildEvidenceSummary(verification)));
         }
 
         if (TryBuildDirtyDispatchRecovery(task, out _))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "dirty-dispatch-recovery",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.DirtyWorktreeRecoverable,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
         if (providerFailureKind != ProviderFailureKind.Unknown &&
             !(providerFailureKind == ProviderFailureKind.RateLimit &&
               HasWorkerEvidenceThatOutranksSubscriptionLimit(verification, workerResultPresent, hasCommittedChanges)))
         {
-            return ClassifyProviderFailure(
+            var providerOutcome = ClassifyProviderFailure(
                 providerFailureKind,
                 exitCode,
                 hasZeroByteOutput,
                 BuildEvidenceSummary(verification));
+            return providerOutcome with
+            {
+                ClassifierReceipt = BuildClassifierReceipt(
+                    $"provider-{providerFailureKind}",
+                    task,
+                    verification,
+                    workerResultPresent,
+                    hasCommittedChanges,
+                    providerOutcome.Kind)
+            };
         }
 
         if (IsSubscriptionProviderCliDispatch(task) &&
@@ -336,108 +396,327 @@ public static class DispatchFailureClassifier
                 if (retryAfterAbs > now)
                     retryAfter = retryAfterAbs - now;
             }
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "subscription-limit",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.RecoverableSubscriptionLimit,
                 exitCode,
                 hasZeroByteOutput,
                 retryAfter,
                 null,
                 retryAfter.HasValue ? RecoveryRecommendation.Deferred : RecoveryRecommendation.AutoRetry,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
         if (IsPreflightFailure(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "preflight-failure",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.PreflightFailure,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildPreflightFailureEvidenceSummary(verification));
+                BuildPreflightFailureEvidenceSummary(verification)));
         }
 
         if (IsRecoverableProviderAuthenticationFailure(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "provider-authentication",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.ProviderAuthentication,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
         if (IsTransientEmptyOutputDispatchFlake(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "empty-output-flake",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.EmptyOutputFlake,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.AutoRetry,
-                string.Empty);
+                string.Empty));
         }
 
         if (IsSandboxCommitBlockedFailure(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "sandbox-commit-blocked",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.SandboxCommitBlocked,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.CommitAndVerify,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
         if (IsProviderNeutralProgressStallFailure(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "provider-neutral-progress-stall",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.ProviderNeutralProgressStall,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.AutoRetry,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
         if (IsRecoverableProviderConnectivityFailure(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "provider-connectivity",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.ProviderConnectivity,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.AutoRetry,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
         if (IsRecoverableProviderModelRejectionFailure(verification))
         {
-            return new DispatchOutcome(
+            return BuildOutcome(
+                "provider-model-rejection",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
                 DispatchOutcomeKind.ProviderModelRejection,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification));
+                BuildEvidenceSummary(verification)));
         }
 
-        return new DispatchOutcome(
+        return BuildOutcome(
+            "unknown-failure",
+            task,
+            verification,
+            workerResultPresent,
+            hasCommittedChanges,
+            new DispatchOutcome(
             DispatchOutcomeKind.UnknownFailure,
             exitCode,
             hasZeroByteOutput,
             null,
             null,
             RecoveryRecommendation.OperatorNeeded,
-            BuildEvidenceSummary(verification));
+            BuildEvidenceSummary(verification)));
+    }
+
+    private static DispatchOutcome BuildOutcome(
+        string rule,
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges,
+        DispatchOutcome outcome) =>
+        outcome with
+        {
+            ClassifierReceipt = BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind)
+        };
+
+    private static DispatchOutcome WithClassifierReceipt(string rule, DispatchOutcome outcome, int exitCode) =>
+        outcome with
+        {
+            ClassifierReceipt = $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; verdict={outcome.Kind}"
+        };
+
+    private static string BuildClassifierReceipt(
+        string rule,
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges,
+        DispatchOutcomeKind verdict)
+    {
+        var stdoutBytes = GetOutputByteCount(verification.StandardOutputPath, verification.StandardOutput);
+        var stderrBytes = GetOutputByteCount(verification.StandardErrorPath, verification.StandardError);
+        var heartbeat = verification.HeartbeatStandardOutputBytes is { } heartbeatBytes
+            ? heartbeatBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "unknown";
+        var workerResult = DescribeWorkerResult(verification, workerResultPresent);
+        var commitProvenance = DescribeCommitProvenance(task, verification, hasCommittedChanges);
+
+        return $"CLASSIFIER rule={rule}; exit_code={verification.ExitCode}; exit_artifact=verification-record; " +
+            $"stdout_bytes={stdoutBytes}; stderr_bytes={stderrBytes}; heartbeat_stdout_bytes={heartbeat}; " +
+            $"worker_result={workerResult}; commit={commitProvenance}; verdict={verdict}";
+    }
+
+    private static long GetOutputByteCount(string? path, string output)
+    {
+        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+        {
+            return new FileInfo(path).Length;
+        }
+
+        return Encoding.UTF8.GetByteCount(output);
+    }
+
+    private static string DescribeWorkerResult(TaskVerificationRecord verification, bool workerResultPresent)
+    {
+        if (TryGetWorkerResultBlockersValue(verification, out var blockers))
+        {
+            return $"present(blockers={SanitizeReceiptValue(blockers)})";
+        }
+
+        if (workerResultPresent ||
+            verification.StandardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
+            verification.StandardError.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkerResultBlockers.TryFindBlocker(verification, out var blocker)
+                ? $"present(blockers={SanitizeReceiptValue(blocker)})"
+                : "present(blockers=absent)";
+        }
+
+        return "absent";
+    }
+
+    private static bool TryGetWorkerResultBlockersValue(TaskVerificationRecord verification, out string blockers)
+    {
+        blockers = string.Empty;
+        var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
+        var lines = combined.Replace("\r\n", "\n").Split('\n');
+        var inBlock = false;
+        string? latestBlockers = null;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (IsWorkerResultOpener(line))
+            {
+                inBlock = true;
+                latestBlockers = null;
+                continue;
+            }
+
+            if (IsWorkerResultEndMarker(line))
+            {
+                if (inBlock && latestBlockers is not null)
+                {
+                    blockers = latestBlockers;
+                    return true;
+                }
+
+                inBlock = false;
+                continue;
+            }
+
+            if (!inBlock)
+            {
+                continue;
+            }
+
+            var sep = line.IndexOf(':', StringComparison.Ordinal);
+            if (sep <= 0)
+            {
+                continue;
+            }
+
+            var key = NormalizeWorkerResultMarker(line[..sep]).TrimStart('-', ' ').Trim();
+            if (string.Equals(key, "blockers", StringComparison.OrdinalIgnoreCase))
+            {
+                latestBlockers = line[(sep + 1)..].Trim();
+            }
+        }
+
+        if (inBlock && latestBlockers is not null)
+        {
+            blockers = latestBlockers;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string DescribeCommitProvenance(TaskSpec task, TaskVerificationRecord verification, bool hasCommittedChanges)
+    {
+        if (HasDispatchResultCommitEvidence(task))
+        {
+            return "orchestrator";
+        }
+
+        return hasCommittedChanges || verification.HasCommittedChanges ? "worker" : "none";
+    }
+
+    private static bool IsNoWorkerResultBlockersValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        if (value.StartsWith('<') && value.EndsWith('>'))
+        {
+            return true;
+        }
+
+        return value.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("none ", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("none-", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("none.", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string SanitizeReceiptValue(string value)
+    {
+        var sanitized = value
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace(";", ",", StringComparison.Ordinal)
+            .Trim();
+
+        return sanitized.Length > 80 ? sanitized[..80] : sanitized;
     }
 
     private static bool HasDispatchResultCommitEvidence(TaskSpec task)
@@ -663,6 +942,18 @@ public static class DispatchFailureClassifier
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent && hasCommittedChanges;
+
+    private static bool HasGreenCommittedWorkerResultEvidence(
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges) =>
+        workerResultPresent &&
+        hasCommittedChanges &&
+        HasPopulatedStandardOutput(verification) &&
+        TryGetWorkerResultBlockersValue(verification, out var blockers) &&
+        IsNoWorkerResultBlockersValue(blockers) &&
+        !WorkerResultBlockers.TryFindBlocker(verification, out _) &&
+        !WorkerResultBlockers.TryFindFailingTests(verification, out _);
 
     private static bool HasWorkerEvidenceThatOutranksSubscriptionLimit(
         TaskVerificationRecord verification,

@@ -23,6 +23,48 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("codex", StringComparison.Ordinal) &&
         evt.Message.Contains("implement feature", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_records_classifier_receipt")]
+    public void RecordDispatchExecutionResultRecordsClassifierReceipt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Record classifier receipt");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec prompt";
+    var stdout = "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT";
+
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            command,
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskVerificationRecorded &&
+        evt.Message.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
+        evt.Message.Contains("worker_result=present(blockers=none)", StringComparison.Ordinal) &&
+        evt.Message.Contains("commit=orchestrator", StringComparison.Ordinal) &&
+        evt.Message.Contains("verdict=VerifiedSuccess", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "RecordTaskDispatch_rejects_unassigned_task")]
     public void RecordTaskDispatchRejectsUnassignedTask()
 {
