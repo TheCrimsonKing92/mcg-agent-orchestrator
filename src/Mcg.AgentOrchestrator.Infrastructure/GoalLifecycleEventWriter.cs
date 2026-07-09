@@ -19,6 +19,18 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         _clock = clock ?? new SystemClock();
     }
 
+    public void AppendTimelineEvent(ProgressEvent progressEvent) =>
+        Append(progressEvent.GoalId, ToLifecycleEventType(progressEvent.Kind), obj =>
+        {
+            obj["progressKind"] = progressEvent.Kind.ToString();
+            obj["message"] = progressEvent.Message;
+            obj["occurredAt"] = progressEvent.OccurredAt;
+            if (progressEvent.TaskId is not null)
+            {
+                obj["taskId"] = progressEvent.TaskId.Value;
+            }
+        });
+
     public void AppendGoalCreated(GoalId goalId, string objective) =>
         Append(goalId, "GoalCreated", obj => { obj["objective"] = objective; });
 
@@ -48,6 +60,21 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["failures"] = new JsonArray(failures.Select(f => JsonValue.Create(f)).ToArray<JsonNode?>());
         });
 
+    public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) =>
+        Append(goalId, "GoalLanded", obj =>
+        {
+            obj["integrationBranch"] = integrationBranch;
+            obj["goalBranch"] = goalBranch;
+        });
+
+    public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) =>
+        Append(goalId, "GoalEscalated", obj =>
+        {
+            obj["state"] = state.ToString();
+            obj["reason"] = reason;
+            obj["source"] = source;
+        });
+
     public void AppendCleanedUp(GoalId goalId) =>
         Append(goalId, "CleanedUp", _ => { });
 
@@ -58,7 +85,7 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
 
         lock (fileLock)
         {
-            var cursor = _nextCursors.GetOrAdd(key, _ => 0);
+            var cursor = _nextCursors.GetOrAdd(key, _ => CountExistingLines(EventFilePath(goalId)));
 
             var obj = new JsonObject
             {
@@ -81,4 +108,34 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
 
     public string EventFilePath(GoalId goalId) =>
         Path.Combine(_eventsDirectory, $"{goalId.Value}.jsonl");
+
+    private static int CountExistingLines(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return 0;
+        }
+
+        var count = 0;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is not null)
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private static string ToLifecycleEventType(ProgressKind kind) =>
+        kind switch
+        {
+            ProgressKind.TaskDelegated => "TaskDelegated",
+            ProgressKind.TaskDispatchRecorded => "TaskDispatched",
+            ProgressKind.TaskCompleted => "TaskCompleted",
+            ProgressKind.TaskVerificationRecorded => "TaskVerified",
+            ProgressKind.HumanInputRequested => "GoalEscalated",
+            ProgressKind.GoalPolicyDecision => "GoalLifecycleDecision",
+            _ => kind.ToString()
+        };
 }

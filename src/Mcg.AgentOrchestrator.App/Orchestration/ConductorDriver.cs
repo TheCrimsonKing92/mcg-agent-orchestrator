@@ -56,6 +56,8 @@ internal sealed class ConductorDriver
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null)
     {
         var dir = workspace.ExecutionDirectory;
+        var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+        kernel.SetEventWriter(eventWriter);
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
         var journalSnapshot = GoalOperationJournal.ReadAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -287,7 +289,13 @@ internal sealed class ConductorDriver
         _land = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:land", "Landing goal via integration branch.");
-            var result = LandingExecutor.Execute(kernel, goal, workspace, channel, policy);
+            var result = LandingExecutor.Execute(
+                kernel,
+                goal,
+                workspace,
+                channel,
+                policy,
+                eventWriter);
             if (result.MainAdvanced)
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else
@@ -349,7 +357,11 @@ internal sealed class ConductorDriver
         _completeGoal = goal => kernel.CompleteGoal(goal.Id, "Conductor completed goal after durable landing, recording, and cleanup evidence.");
 
         _writeEscalation = (goal, state, reason) =>
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, $"conductor:{state}", channel);
+        {
+            var source = $"conductor:{state}";
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source, channel);
+            eventWriter.AppendGoalEscalated(goal.Id, state, reason, source);
+        };
 
         _classifyChangeRisk = goal =>
         {

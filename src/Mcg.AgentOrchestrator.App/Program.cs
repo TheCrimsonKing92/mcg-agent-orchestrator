@@ -100,6 +100,24 @@ catch (ArgumentException ex)
     return 1;
 }
 
+if (IsGoalEventsFollowCommand(startupArgs))
+{
+    try
+    {
+        await GoalEventsCommand.RunAsync(
+            workspace.GoalLifecycleEventsDirectory,
+            startupArgs[1],
+            follow: true,
+            Console.Out);
+        return ExitCompletedStartupCommand(0);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return ExitCompletedStartupCommand(1);
+    }
+}
+
 if (RunsStartupCleanup(startupArgs))
 {
     WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
@@ -267,6 +285,7 @@ Console.WriteLine("  abandon-goal <goal-id> <reason> [--confirm-goal-abandon]");
 Console.WriteLine("  task <task-number|task-id-prefix>, tasks [status <status>] [role <role>] [id <id>] [evidence <kind>] [event <kind>]");
 Console.WriteLine("  add-task <role> <description>, verification-plan <task-number> [plan], brief <task-number>");
 Console.WriteLine("  timeline [goal-id], task-timeline <task-number>, pending");
+Console.WriteLine("  goal-events <goal-id-prefix> [--follow]");
 Console.WriteLine("  run <task-number> [--confirm-paid-api-run] [--autonomy <policy>]");
 Console.WriteLine("  api-run <task-number> [--confirm-paid-api-run] [--autonomy <policy>]");
 Console.WriteLine("  retry <task-number> <message> [--autonomy <policy>], note <task-number> <message>");
@@ -345,4 +364,11 @@ static int ExitCompletedStartupCommand(int exitCode)
     Console.Error.Flush();
     Environment.Exit(exitCode);
     return exitCode;
+}
+
+static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
+{
+    return startupArgs.Count >= 3 &&
+        startupArgs[0].Equals("goal-events", StringComparison.OrdinalIgnoreCase) &&
+        startupArgs.Any(arg => arg.Equals("--follow", StringComparison.OrdinalIgnoreCase));
 }

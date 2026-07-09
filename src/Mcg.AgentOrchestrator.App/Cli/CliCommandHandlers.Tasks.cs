@@ -57,6 +57,16 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintTaskTimeline(context.CurrentGoal!, timelineTarget.Task);
             return false;
 
+        case "goal-events":
+            CliArgumentParser.RequirePartCount(parts, 2, "goal-events <goal-prefix> [--follow]");
+            GoalEventsCommand.RunAsync(
+                context.Workspace.GoalLifecycleEventsDirectory,
+                parts[1],
+                HasCliConfirmation(parts, "--follow"),
+                Console.Out,
+                context.Kernel.Goals.Select(goal => goal.Id.Value)).GetAwaiter().GetResult();
+            return false;
+
         case "pending":
             ConsoleViews.PrintPendingHumanInput(context.Kernel);
             return false;

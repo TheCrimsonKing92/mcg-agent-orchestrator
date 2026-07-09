@@ -16,6 +16,8 @@ public sealed partial class AgentOrchestratorKernel
 
     private void Append(Goal goal, TaskId? taskId, ProgressKind kind, string message)
     {
-        goal.Append(new ProgressEvent(goal.Id, taskId, kind, message, _clock.UtcNow));
+        var progressEvent = new ProgressEvent(goal.Id, taskId, kind, message, _clock.UtcNow);
+        goal.Append(progressEvent);
+        _eventWriter.AppendTimelineEvent(progressEvent);
     }
 }

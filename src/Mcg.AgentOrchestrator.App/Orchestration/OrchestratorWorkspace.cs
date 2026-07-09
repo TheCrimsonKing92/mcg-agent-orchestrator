@@ -143,7 +143,7 @@ internal sealed record OrchestratorWorkspace(
             Path.Combine(orchestrator, "transcript.md"));
     }
 
-    public string GoalLifecycleEventsDirectory => Path.Combine(OrchestratorDirectory, "events");
+    public string GoalLifecycleEventsDirectory => Path.Combine(OrchestratorDirectory, "goal-events");
 
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 

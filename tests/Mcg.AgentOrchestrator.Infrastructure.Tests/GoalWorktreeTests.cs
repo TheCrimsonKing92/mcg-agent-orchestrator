@@ -5649,6 +5649,7 @@ public sealed class GoalWorktreeIntegrationTests
 
     private sealed class RecordingGoalLifecycleEventWriter(List<string> order) : IGoalLifecycleEventWriter
     {
+        public void AppendTimelineEvent(ProgressEvent progressEvent) { }
         public void AppendGoalCreated(GoalId goalId, string objective) { }
         public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
         public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
@@ -5661,6 +5662,10 @@ public sealed class GoalWorktreeIntegrationTests
                 order.Add("mark-landed");
             }
         }
+
+        public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
+
+        public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
 
         public void AppendCleanedUp(GoalId goalId) => order.Add("remove-worktree");
     }
