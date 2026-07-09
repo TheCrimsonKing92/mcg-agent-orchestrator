@@ -62,6 +62,7 @@ internal static class LandingExecutor
         {
             var conflictReason = $"merge conflict integrating {goalBranch} into {IntegrationBranchName}";
             OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName, channel);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, conflictReason, IntegrationBranchName);
             var conflictDecision = new LandingDecision.Escalate(conflictReason);
             return new LandingResult(goal.Id.Value, goalPrefix, conflictDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {conflictReason}");
@@ -83,6 +84,7 @@ internal static class LandingExecutor
             {
                 var unexpectedReason = $"integration->main fast-forward failed: {merge.Error}";
                 OperatorInbox.RecordLandingEscalation(workspace, goal, unexpectedReason, IntegrationBranchName, channel);
+                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, unexpectedReason, IntegrationBranchName);
                 var fallback = new LandingDecision.Escalate(unexpectedReason);
                 return new LandingResult(goal.Id.Value, goalPrefix, fallback, IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {unexpectedReason}");
@@ -95,6 +97,7 @@ internal static class LandingExecutor
 
         var escalate = (LandingDecision.Escalate)decision;
         OperatorInbox.RecordLandingEscalation(workspace, goal, escalate.Reason, IntegrationBranchName, channel);
+        eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, escalate.Reason, IntegrationBranchName);
         return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
             false, $"Parked on {IntegrationBranchName}: {escalate.Reason}");
     }

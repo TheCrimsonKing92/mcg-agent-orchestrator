@@ -137,6 +137,27 @@ public sealed class GoalLifecycleEventWriterTests
             Xunit.Assert.True(landing.MainAdvanced, landing.Message);
             Xunit.Assert.Contains("GoalLanded", EventTypes(workspace, landedGoal.Id));
 
+            var landingEscalatedGoal = kernel.CreateGoal(
+                "Escalate through real landing executor",
+                [new TaskSpec(TaskId.New(), "Leave acceptance incomplete", AgentRole.Developer)]);
+            kernel.ActivateGoal(landingEscalatedGoal.Id, AgentCatalog.Default().Agents);
+            var escalatedGoalBranch = GoalWorktrees.BranchName(landingEscalatedGoal.Id);
+            RunGit(root, "checkout", "-b", escalatedGoalBranch);
+            File.WriteAllText(Path.Combine(root, "landing-escalated.txt"), "landing escalation");
+            RunGit(root, "add", "landing-escalated.txt");
+            RunGit(root, "commit", "-m", "Goal work that needs acceptance");
+            RunGit(root, "checkout", "main");
+
+            var landingEscalation = LandingExecutor.Execute(
+                kernel,
+                landingEscalatedGoal,
+                workspace,
+                policy: ConductorAutonomyPolicy.Permissive,
+                eventWriter: writer);
+
+            Xunit.Assert.IsType<LandingDecision.Escalate>(landingEscalation.Decision);
+            Xunit.Assert.Contains("GoalEscalated", EventTypes(workspace, landingEscalatedGoal.Id));
+
             var escalatedGoal = kernel.CreateGoal("Escalate through real conductor");
             var driver = new ConductorDriver(
                 kernel,
