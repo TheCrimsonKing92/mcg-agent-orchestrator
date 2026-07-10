@@ -1,10 +1,23 @@
 using System.Diagnostics;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class WorkerDispatchJobAccountingTests
+public sealed class WorkerDispatchJobAccountingTests : IDisposable
 {
+    private readonly string? _originalProtectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+
+    public WorkerDispatchJobAccountingTests()
+    {
+        Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, null);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, _originalProtectedPid);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_completed_refresh_does_not_reapply_stale_resource_verification")]
     public void BackgroundDispatchRunnerCompletedRefreshDoesNotReapplyStaleResourceVerification()
     {
