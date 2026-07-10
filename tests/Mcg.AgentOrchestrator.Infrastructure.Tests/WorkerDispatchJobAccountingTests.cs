@@ -66,8 +66,8 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
                 evt.Message.Contains("RESOURCE ", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_runs_with_shared_compilation_disabled")]
-    public void BackgroundDispatchRunnerNonLocalDispatchRunsWithSharedCompilationDisabled()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_records_resource_accounting")]
+    public void BackgroundDispatchRunnerNonLocalDispatchRecordsResourceAccounting()
     {
         var root = CreateTempDirectory();
         var logs = Path.Combine(root, "logs");
