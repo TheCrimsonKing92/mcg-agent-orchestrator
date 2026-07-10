@@ -625,7 +625,7 @@ public static class DispatchFailureClassifier
     private static bool TryGetWorkerResultBlockersValue(TaskVerificationRecord verification, out string blockers)
     {
         blockers = string.Empty;
-        var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
+        var combined = CombineOutputWithArtifacts(verification);
         var lines = combined.Replace("\r\n", "\n").Split('\n');
         var inBlock = false;
         string? latestBlockers = null;
@@ -677,6 +677,40 @@ public static class DispatchFailureClassifier
         }
 
         return false;
+    }
+
+    private static string CombineOutputWithArtifacts(TaskVerificationRecord verification)
+    {
+        var builder = new StringBuilder()
+            .AppendLine(verification.StandardOutput)
+            .AppendLine(verification.StandardError);
+
+        AppendArtifactText(builder, verification.StandardOutputPath);
+        AppendArtifactText(builder, verification.StandardErrorPath);
+        return builder.ToString();
+    }
+
+    private static void AppendArtifactText(StringBuilder builder, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var text = File.ReadAllText(path);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                builder.AppendLine(text);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string DescribeCommitProvenance(TaskSpec task, TaskVerificationRecord verification, bool hasCommittedChanges)

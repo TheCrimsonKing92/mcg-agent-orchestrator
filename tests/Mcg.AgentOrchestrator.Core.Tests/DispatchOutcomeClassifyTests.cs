@@ -165,6 +165,43 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify reads WORKER_RESULT blockers from stdout artifact")]
+    public void ClassifyReadsWorkerResultBlockersFromStdoutArtifact()
+    {
+        var stdoutPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                stdoutPath,
+                WorkerResultStdout("dotnet test --filter DispatchOutcomeClassifyTests passed", "none"));
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                "C:\\repo",
+                0,
+                string.Empty,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath,
+                WorkerResultPresent: true,
+                HasCommittedChanges: false,
+                HeartbeatStandardOutputBytes: 0);
+
+            var outcome = DispatchFailureClassifier.Classify(
+                DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+                verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+            Xunit.Assert.Contains("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(stdoutPath);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "Classify completes historical committed worker result variants")]
     [Xunit.InlineData(-1, AgentRole.Developer, true, false, "manufactured-exit-minus-one")]
     [Xunit.InlineData(0, AgentRole.Tester, true, false, "tester-with-commit")]
