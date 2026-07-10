@@ -57,7 +57,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
-        evt.Kind == ProgressKind.TaskVerificationRecorded &&
+        evt.Kind == ProgressKind.TaskNote &&
         evt.Message.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
         evt.Message.Contains("worker_result=present(blockers=none)", StringComparison.Ordinal) &&
         evt.Message.Contains("commit=orchestrator", StringComparison.Ordinal) &&
@@ -101,7 +101,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
-        evt.Kind == ProgressKind.TaskVerificationRecorded &&
+        evt.Kind == ProgressKind.TaskNote &&
         evt.Message.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
         evt.Message.Contains("rule=committed-worker-result-evidence", StringComparison.Ordinal) &&
         evt.Message.Contains("commit=orchestrator", StringComparison.Ordinal) &&
