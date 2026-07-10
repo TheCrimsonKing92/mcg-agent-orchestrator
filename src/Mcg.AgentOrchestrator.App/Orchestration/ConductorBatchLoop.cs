@@ -753,7 +753,7 @@ internal sealed class ConductorBatchLoop
         int tick,
         List<string> changedGoalLines)
     {
-        var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount - 1);
+        var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount);
         if (slotCount < 2)
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
@@ -791,7 +791,7 @@ internal sealed class ConductorBatchLoop
         if (deferredByAdmission > 0)
         {
             EmitProgress(
-                $"ADMISSION tick={tick} result=deferred reason=reserved-gate-slot cap={slotCount} deferred={deferredByAdmission}",
+                $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-slot-cap cap={slotCount} deferred={deferredByAdmission}",
                 changedGoalLines);
         }
 

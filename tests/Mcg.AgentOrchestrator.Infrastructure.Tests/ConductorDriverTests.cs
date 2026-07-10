@@ -100,7 +100,8 @@ public sealed class ConductorDriverTests
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
-        Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null)
+        Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
+        Func<bool>? hasGateReadyGoal = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -128,7 +129,8 @@ public sealed class ConductorDriverTests
             emptyOutputBackoffDelay,
             evaluateReadiness,
             normalizeLifecycleState: normalizeLifecycleState,
-            recoverSandboxPrep: recoverSandboxPrep);
+            recoverSandboxPrep: recoverSandboxPrep,
+            hasGateReadyGoal: hasGateReadyGoal);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -315,6 +317,30 @@ public sealed class ConductorDriverTests
         Assert.True(dispatchCalled);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_reserves_gate_slot_when_gate_ready")]
+    public void ConductorDriverWorkspaceReadyReservesGateSlotWhenGateReady()
+    {
+        var (_, goal) = SimpleGoal();
+        var policy = ConductorAutonomyPolicy.Conservative;
+        var dispatchCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => DotnetBuildEnvironmentManager.StableSlotCount - 1,
+            dispatchAndStart: _ => { dispatchCalled = true; return DispatchStartOutcome.Started(); },
+            hasGateReadyGoal: () => true);
+
+        ConductorAdvanceResult? result = null;
+        var output = AsyncLocalConsoleRouter.Capture(() => result = driver.AdvanceOnce(goal, policy));
+
+        Assert.False(dispatchCalled);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result!.Outcome);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, held.State);
+        Assert.Contains("gate-ready goal reserving a stable slot", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("ADMISSION", output, StringComparison.Ordinal);
+        Assert.Contains("reason=reserved-gate-slot", output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_repairs_terminal_goal_with_assigned_task_before_acceptance")]

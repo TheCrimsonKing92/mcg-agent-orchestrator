@@ -310,13 +310,13 @@ public sealed class ConductorBatchLoopTests
     public void BatchLoopParallelAcceptanceSlotExhaustionQueuesExtraGoal()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(0, 4)
+        var goals = Enumerable.Range(0, DotnetBuildEnvironmentManager.StableSlotCount + 1)
             .Select(index => CreateVerifiedSimpleGoal(
                 kernel,
                 $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
             .ToArray();
         using var release = new ManualResetEventSlim(false);
-        using var firstWaveStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount - 1);
+        using var firstWaveStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount);
         var running = 0;
         var maxRunning = 0;
         var slots = new ConcurrentQueue<int?>();
@@ -366,12 +366,11 @@ public sealed class ConductorBatchLoopTests
             maxIterations: 1,
             onTick: t => tick = t);
 
-        Assert.Equal(4, summary.Advanced);
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount - 1, maxRunning);
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount - 1, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, summary.Advanced);
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, maxRunning);
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
         Assert.Single(slots.Where(slot => !slot.HasValue));
-        Assert.Contains(tick!.ProgressLines!, line =>
-            line.Contains("ADMISSION", StringComparison.Ordinal) &&
+        Assert.DoesNotContain(tick!.ProgressLines!, line =>
             line.Contains("reason=reserved-gate-slot", StringComparison.Ordinal));
     }
 

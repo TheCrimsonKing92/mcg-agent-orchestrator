@@ -42,6 +42,7 @@ internal sealed class ConductorDriver
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
+    private readonly Func<bool> _hasGateReadyGoal;
 
     internal Action<string>? PhaseTimingSink { get; set; }
 
@@ -95,6 +96,8 @@ internal sealed class ConductorDriver
 
         _getRunningPaidWorkerCount = () =>
             kernel.Goals.Sum(g => g.Tasks.Count(t => t.LastProcess is { IsRunning: true }));
+        _hasGateReadyGoal = () =>
+            kernel.Goals.Any(g => GoalLifecycle.ResolveState(g, _getFacts(g)) == GoalLifecycleState.Verified);
 
         _createWorkspace = goal =>
         {
@@ -444,7 +447,8 @@ internal sealed class ConductorDriver
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
-        Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null)
+        Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
+        Func<bool>? hasGateReadyGoal = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -478,6 +482,7 @@ internal sealed class ConductorDriver
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
+        _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
     }
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
@@ -714,12 +719,27 @@ internal sealed class ConductorDriver
         GoalLifecycleState fromState)
     {
         var running = _getRunningPaidWorkerCount();
-        if (running >= policy.MaxConcurrentPaidWorkers)
+        var workerCap = policy.MaxConcurrentPaidWorkers;
+        if (_hasGateReadyGoal())
         {
+            workerCap = Math.Min(workerCap, Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount - 1));
+        }
+
+        if (running >= workerCap)
+        {
+            var reservedGateSlot = workerCap < policy.MaxConcurrentPaidWorkers;
+            if (reservedGateSlot)
+            {
+                Console.WriteLine(
+                    $"ADMISSION goal={goalPrefix} result=deferred reason=reserved-gate-slot cap={workerCap} running={running}");
+            }
+
             EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(fromState,
-                    $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
+                    reservedGateSlot
+                        ? $"At worker cap ({running}/{workerCap}) with a gate-ready goal reserving a stable slot; will advance when a slot opens"
+                        : $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;

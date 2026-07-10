@@ -66,6 +66,7 @@ public static class DotnetBuildEnvironmentManager
     // runs use the default stable slots so their testhost.exe paths stay firewall-covered.
     public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
     public const int StableSlotCount = 4;
+    public static readonly TimeSpan DefaultSlotBusyPollTimeout = TimeSpan.FromSeconds(20);
     private const string LeaseDirectoryName = "lease";
     private const string LeaseMetadataFileName = "lease.json";
     private const string LeaseLockFileName = "lease.lock";
@@ -172,7 +173,7 @@ public static class DotnetBuildEnvironmentManager
         Action<DotnetBuildStableSlotWait>? onWait = null,
         CancellationToken cancellationToken = default)
     {
-        var waitTimeout = timeout ?? TimeSpan.FromMinutes(5);
+        var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
         var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
         var waitingReported = false;
         while (true)
@@ -359,7 +360,7 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
-        var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? TimeSpan.FromMinutes(5));
+        var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? DefaultSlotBusyPollTimeout);
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
