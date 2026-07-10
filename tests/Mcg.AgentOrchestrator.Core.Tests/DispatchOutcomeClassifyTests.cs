@@ -272,6 +272,28 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("Rate limit reached", outcome.EvidenceSummary);
     }
 
+    [Xunit.Fact(DisplayName = "ClassifyProviderFailure emits complete classifier receipt signal shape")]
+    public void ClassifyProviderFailureEmitsCompleteClassifierReceiptSignalShape()
+    {
+        var outcome = DispatchFailureClassifier.ClassifyProviderFailure(
+            ProviderFailureKind.Connectivity,
+            1,
+            hasZeroByteOutput: true,
+            "Unable to connect to API.");
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
+        Xunit.Assert.StartsWith("CLASSIFIER ", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=provider-connectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("exit_code=1", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("exit_artifact=direct-provider-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stdout_bytes=unknown", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stderr_bytes=unknown", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heartbeat_stdout_bytes=unknown", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worker_result=absent", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("commit=none", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verdict=ProviderConnectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider rate limit stdout")]
     public void ClassifyRecoverableSubscriptionLimitFromStdout()
     {

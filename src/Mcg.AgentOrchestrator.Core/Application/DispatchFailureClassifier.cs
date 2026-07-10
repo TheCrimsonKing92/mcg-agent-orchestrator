@@ -569,7 +569,9 @@ public static class DispatchFailureClassifier
     private static DispatchOutcome WithClassifierReceipt(string rule, DispatchOutcome outcome, int exitCode) =>
         outcome with
         {
-            ClassifierReceipt = $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; verdict={outcome.Kind}"
+            ClassifierReceipt = $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
+                "stdout_bytes=unknown; stderr_bytes=unknown; heartbeat_stdout_bytes=unknown; " +
+                $"worker_result=absent; commit=none; verdict={outcome.Kind}"
         };
 
     private static string BuildClassifierReceipt(
