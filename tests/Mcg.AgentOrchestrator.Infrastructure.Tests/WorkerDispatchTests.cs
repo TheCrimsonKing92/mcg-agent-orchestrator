@@ -4810,7 +4810,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         root,
         DateTimeOffset.UtcNow));
 
-    using var _ = ClearProtectedPidEnvironment();
+    using var protectedPidScope = ClearProtectedPidEnvironment();
     var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
     WaitForExitFile(process.ExitCodePath);
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
