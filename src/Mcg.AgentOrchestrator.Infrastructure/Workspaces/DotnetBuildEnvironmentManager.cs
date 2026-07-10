@@ -87,7 +87,8 @@ public static class DotnetBuildEnvironmentManager
 
     public static string GoalArtifactsPath(GoalId goalId)
     {
-        return StableSlotArtifactsPath(StableSlotName(goalId));
+        return TryReadArtifactsPath(Path.Combine(LeaseDirectory(goalId), LeaseMetadataFileName)) ??
+            StableSlotArtifactsPath(StableSlotName(goalId));
     }
 
     public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTesthostFirewallPaths()
@@ -508,10 +509,31 @@ public static class DotnetBuildEnvironmentManager
     {
         var executionLockPath = StableSlotExecutionLockPath(slotName);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
+        var createdByProbe = !File.Exists(executionLockPath);
         try
         {
-            using var stream = new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            using (new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+            }
+
+            if (createdByProbe && IsEmptyFile(executionLockPath))
+            {
+                File.Delete(executionLockPath);
+            }
+
             return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsEmptyFile(string path)
+    {
+        try
+        {
+            return new FileInfo(path).Length == 0;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

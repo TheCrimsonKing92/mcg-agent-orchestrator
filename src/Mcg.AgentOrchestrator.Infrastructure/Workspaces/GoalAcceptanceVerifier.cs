@@ -1194,10 +1194,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     cancellationToken).ConfigureAwait(false);
                 if (stableSlotLease is null)
                 {
+                    leaseLock?.Dispose();
+                    leaseLock = null;
                     environment = stableSlotIndex.HasValue
                         ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
                         : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
-                    leaseLock?.Dispose();
                     leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
                 }
 
