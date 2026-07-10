@@ -3274,7 +3274,7 @@ public sealed class CliCommandTests
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
         var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+        var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Write-Output {promptPath}")]);
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         EnsureGitRepository(root);
