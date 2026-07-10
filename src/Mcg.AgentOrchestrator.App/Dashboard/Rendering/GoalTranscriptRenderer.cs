@@ -2,6 +2,7 @@ using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 
@@ -10,6 +11,7 @@ public static partial class GoalTranscriptRenderer
     public static string Render(
         AgentOrchestratorKernel kernel,
         Goal goal,
+        WorkerProfileCatalog workerProfiles,
         IReadOnlyList<AgentDefinition>? agents = null)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
@@ -47,7 +49,7 @@ public static partial class GoalTranscriptRenderer
             var item = nextActions.Items[index];
             text.AppendLine($"{index + 1}. {Display(item.Kind)}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
             text.AppendLine($"   Suggested command: {BuildSuggestedCommand(goal, item, agents)}");
-            var control = DashboardNextActionControls.Build(goal, item, agentDefinitions: agents);
+            var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
             if (!string.IsNullOrWhiteSpace(control?.CostRisk))
             {
                 var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)

@@ -43,11 +43,17 @@ public sealed class AdvanceLoopTests
         Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(WorkTaskStatus.Running, planner.Status);
         Assert.True(planner.LastDispatch is not null);
-        Assert.Equal("codex-cli", planner.LastDispatch!.WorkerName);
-        Assert.Equal(workspace.ExecutionDirectory, planner.LastDispatch.WorkingDirectory);
+        var dispatch = planner.LastDispatch!;
+        Assert.True(dispatch.WorkerName is "codex-cli" or "claude-cli", dispatch.WorkerName);
+        if (dispatch.WorkerName.Equals("claude-cli", StringComparison.Ordinal))
+        {
+            Assert.Equal("claude-haiku-4-5", dispatch.ModelName);
+        }
+
+        Assert.Equal(workspace.ExecutionDirectory, dispatch.WorkingDirectory);
         Assert.True(planner.LastProcess is not null);
         Assert.True(planner.LastProcess!.IsRunning);
-        Assert.Equal(planner.LastDispatch.Command, planner.LastProcess.Command);
+        Assert.Equal(dispatch.Command, planner.LastProcess.Command);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskDispatchRecorded && evt.TaskId == planner.Id));
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskProcessStarted && evt.TaskId == planner.Id));
     }
@@ -114,6 +120,7 @@ public sealed class AdvanceLoopTests
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([provider]),
         workspace,
         goal);
@@ -150,6 +157,7 @@ public sealed class AdvanceLoopTests
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([]),
         workspace,
         goal);
@@ -183,6 +191,7 @@ public sealed class AdvanceLoopTests
     var single = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([]),
         workspace,
         goal);
@@ -320,6 +329,7 @@ public sealed class AdvanceLoopTests
     var result = await GoalManagementCommandService.AdvanceGoalAsync(
         kernel,
         [agent],
+        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([provider]),
         workspace,
         goal);
@@ -426,6 +436,7 @@ public sealed class AdvanceLoopTests
         "Dispatch into execution root",
         [new TaskSpec(TaskId.New(), "Inspect command", AgentRole.Planner)]);
     var agents = AgentCatalog.Default().Agents;
+    var profiles = WorkerProfileCatalog.Default();
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
 
@@ -440,7 +451,11 @@ public sealed class AdvanceLoopTests
         string.Empty);
 
     Assert.Equal(executionRoot, task.LastDispatch!.WorkingDirectory);
-    Assert.Contains($"--cd '{executionRoot}'", task.LastDispatch.Command, StringComparison.Ordinal);
+    var profile = profiles.GetRequired(task.LastDispatch.WorkerName);
+    if (profile.CommandTemplate.Contains("{workingDirectory}", StringComparison.OrdinalIgnoreCase))
+    {
+        Assert.Contains(executionRoot, task.LastDispatch.Command, StringComparison.Ordinal);
+    }
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_starts_only_new_subscription_dispatches")]

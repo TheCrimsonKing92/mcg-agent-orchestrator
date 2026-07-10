@@ -598,7 +598,12 @@ internal static partial class CliCommandHandlers
                 var dashboardArgs = DashboardHost.ParseDashboardArgs(parts);
                 var dashboardPath = dashboardArgs.Path;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dashboardPath))!);
-                File.WriteAllText(dashboardPath, DashboardRenderer.Render(context.Kernel, dashboardArgs.Options));
+                var dashboardOptions = dashboardArgs.Options with
+                {
+                    AgentDefinitions = context.Agents,
+                    WorkerProfiles = context.WorkerProfiles
+                };
+                File.WriteAllText(dashboardPath, DashboardRenderer.Render(context.Kernel, dashboardOptions));
                 Console.WriteLine($"Dashboard: {Path.GetFullPath(dashboardPath)}");
                 if (dashboardArgs.Options.AutoRefreshSeconds is > 0)
                 {
@@ -633,7 +638,7 @@ internal static partial class CliCommandHandlers
                     ? parts[1]
                     : context.Workspace.TranscriptPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(transcriptPath))!);
-                File.WriteAllText(transcriptPath, GoalTranscriptRenderer.Render(context.Kernel, context.CurrentGoal, context.Agents));
+                File.WriteAllText(transcriptPath, GoalTranscriptRenderer.Render(context.Kernel, context.CurrentGoal, context.WorkerProfiles, context.Agents));
                 Console.WriteLine($"Transcript: {Path.GetFullPath(transcriptPath)}");
                 return false;
 

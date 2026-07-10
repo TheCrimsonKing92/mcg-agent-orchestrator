@@ -114,6 +114,7 @@ public static class WorkerProfileDispatcher
 {
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
+    public const string LightRoleAnthropicModelName = "claude-haiku-4-5";
     public const string OllamaSubscriptionProfileName = "qwen-code-cli";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
 
@@ -202,23 +203,24 @@ public static class WorkerProfileDispatcher
         DispatchModelOverride? modelOverride = null,
         bool allowGitReference = false,
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
         EnsureTaskNeedsExecution(task);
 
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
-        var selection = ResolveSubscriptionModel(agent, goal, task);
+        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions, commandExists);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
-            : ResolveSubscriptionProfile(agent, selection.Model, profiles);
+            : ResolveSubscriptionProfile(agent, roleSelection.Model, profiles);
         var resolvedModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
             ? overrideModel
-            : ResolveEffectiveSubscriptionModelName(agent, selection);
+            : ResolveEffectiveSubscriptionModelName(agent, roleSelection);
         var resolvedReasoning = modelOverride?.ReasoningEffort is not null
             ? modelOverride.ReasoningEffort
-            : ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
-        var dispatchProviderName = ResolveDispatchProviderName(selection.Model.ProviderName, profile.Name, modelOverride);
-        var variables = BuildSubscriptionTemplateVariables(agent, selection);
+            : ResolveEffectiveSubscriptionReasoningEffort(agent, roleSelection);
+        var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
+        var variables = BuildSubscriptionTemplateVariables(agent, roleSelection);
         if (modelOverride?.ModelName is { Length: > 0 })
             variables["subscriptionModelName"] = resolvedModelName;
         if (modelOverride?.ReasoningEffort is not null)
@@ -233,7 +235,8 @@ public static class WorkerProfileDispatcher
             modelOverride,
             allowGitReference,
             claudeAuthProbe,
-            sandboxOptions);
+            sandboxOptions,
+            commandExists);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -247,8 +250,8 @@ public static class WorkerProfileDispatcher
             dispatchProviderName,
             resolvedModelName,
             resolvedReasoning,
-            selection.Complexity,
-            selection.UsesComplexModel,
+            roleSelection.Complexity,
+            roleSelection.UsesComplexModel,
             preflight.Findings);
     }
 
@@ -262,7 +265,8 @@ public static class WorkerProfileDispatcher
         DispatchModelOverride? modelOverride = null,
         bool allowGitReference = false,
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
         var findings = new List<string>();
         string profileName;
@@ -270,20 +274,21 @@ public static class WorkerProfileDispatcher
         {
             EnsureTaskNeedsExecution(task);
             var agent = ResolveAssignedAgent(null, goal, task, agents);
-            var selection = ResolveSubscriptionModel(agent, goal, task);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions, commandExists);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
-                : ResolveSubscriptionProfileName(agent, selection.Model);
+                : ResolveSubscriptionProfileName(agent, roleSelection.Model);
             var profile = profiles.GetRequired(profileName);
             findings.Add($"profile: {profile.Name}");
+            findings.Add($"model-selection: {roleSelection.Reason}");
             var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-            AddClaudeLowIntegrityAuthFinding(findings, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
+            AddClaudeLowIntegrityAuthFinding(findings, task.RequiredRole, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
-                : ResolveEffectiveSubscriptionModelName(agent, selection);
-            var dispatchProviderName = ResolveDispatchProviderName(selection.Model.ProviderName, profile.Name, modelOverride);
+                : ResolveEffectiveSubscriptionModelName(agent, roleSelection);
+            var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
             findings.Add($"model: {dispatchProviderName}/{effectiveModelName}");
-            findings.Add($"complexity: {selection.Complexity}");
+            findings.Add($"complexity: {roleSelection.Complexity}");
 
             AddProfileFinding(
                 findings,
@@ -297,10 +302,10 @@ public static class WorkerProfileDispatcher
                 $"worker profile '{profile.Name}' pins selected model");
             var reasoningEffort = modelOverride?.ReasoningEffort is not null
                 ? modelOverride.ReasoningEffort
-                : ResolveEffectiveSubscriptionReasoningEffort(agent, selection);
+                : ResolveEffectiveSubscriptionReasoningEffort(agent, roleSelection);
             AddProfileFinding(
                 findings,
-                RequiresSubscriptionReasoningPlaceholder(selection.Model.ProviderName, reasoningEffort) &&
+                RequiresSubscriptionReasoningPlaceholder(roleSelection.Model.ProviderName, reasoningEffort) &&
                     !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate),
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
@@ -325,7 +330,7 @@ public static class WorkerProfileDispatcher
             if (DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
-                selection.Model.ProviderName,
+                roleSelection.Model.ProviderName,
                 now,
                 out var providerCooldown))
             {
@@ -356,6 +361,7 @@ public static class WorkerProfileDispatcher
 
     private static void AddClaudeLowIntegrityAuthFinding(
         List<string> findings,
+        AgentRole role,
         IWorkerProvider provider,
         WorkerSandboxOptions sandbox,
         Func<ClaudeCliAuthState>? claudeAuthProbe)
@@ -533,7 +539,7 @@ public static class WorkerProfileDispatcher
         IReadOnlyList<AgentDefinition> agents)
     {
         var agent = ResolveAssignedAgent(null, null, task, agents);
-        var selection = ResolveSubscriptionModel(agent, goal, task);
+        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
         var modelName = ResolveEffectiveSubscriptionModelName(agent, selection);
         var brief = kernel.BuildTaskBrief(
             goal.Id,
@@ -550,7 +556,8 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        IReadOnlySet<TaskId>? taskIdsToPrepare = null)
+        IReadOnlySet<TaskId>? taskIdsToPrepare = null,
+        Func<string, bool>? commandExists = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -560,7 +567,8 @@ public static class WorkerProfileDispatcher
             promptRoot,
             workingDirectory,
             dispatchedAt,
-            taskIdsToPrepare).Dispatches;
+            taskIdsToPrepare,
+            commandExists).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -571,7 +579,8 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        IReadOnlySet<TaskId>? taskIdsToPrepare = null)
+        IReadOnlySet<TaskId>? taskIdsToPrepare = null,
+        Func<string, bool>? commandExists = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -594,12 +603,13 @@ public static class WorkerProfileDispatcher
         var blocked = new List<ReadyBlockedDiagnostic>();
         foreach (var selection in selections)
         {
-            var subscriptionModel = ResolveSubscriptionModel(selection.Agent, goal, selection.Task);
-            var profile = ResolveSubscriptionProfile(selection.Agent, subscriptionModel.Model, profiles);
-            var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, subscriptionModel);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task, profiles: profiles, commandExists: commandExists);
+            var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection.Model, profiles);
+            var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection);
             var preflight = PreflightSubscriptionTask(
                 goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
-                allowGitReference: sandboxConfinesWrites);
+                allowGitReference: sandboxConfinesWrites,
+                commandExists: commandExists);
             if (!preflight.Allowed)
             {
                 blocked.Add(BuildReadyBlockedDiagnostic(goal, selection.Task, preflight));
@@ -611,7 +621,7 @@ public static class WorkerProfileDispatcher
                 continue;
             }
 
-            var dispatchProviderName = ResolveDispatchProviderName(subscriptionModel.Model.ProviderName, profile.Name, null);
+            var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, null);
 
             results.Add(PrepareTask(
                 kernel,
@@ -621,12 +631,12 @@ public static class WorkerProfileDispatcher
                 promptRoot,
                 workingDirectory,
                 dispatchedAt,
-                BuildSubscriptionTemplateVariables(selection.Agent, subscriptionModel),
+                BuildSubscriptionTemplateVariables(selection.Agent, roleSelection),
                 dispatchProviderName,
-                ResolveEffectiveSubscriptionModelName(selection.Agent, subscriptionModel),
+                ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection),
                 reasoningEffort,
-                subscriptionModel.Complexity,
-                subscriptionModel.UsesComplexModel,
+                roleSelection.Complexity,
+                roleSelection.UsesComplexModel,
                 preflight.Findings));
         }
 
@@ -741,12 +751,18 @@ public static class WorkerProfileDispatcher
 
     public static string ResolveSubscriptionProfileName(AgentDefinition agent, Goal goal, TaskSpec task)
     {
-        return ResolveSubscriptionProfileName(agent, ResolveSubscriptionModel(agent, goal, task).Model);
+        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task).Model);
+    }
+
+    public static string ResolveSubscriptionProfileName(AgentDefinition agent, Goal goal, TaskSpec task, WorkerProfileCatalog profiles)
+    {
+        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles).Model);
     }
 
     private static string ResolveSubscriptionProfileName(AgentDefinition agent, ModelProfile model)
     {
-        if (!string.IsNullOrWhiteSpace(agent.Subscription?.WorkerProfileName))
+        if (model.ProviderName.Equals(agent.Model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(agent.Subscription?.WorkerProfileName))
         {
             return agent.Subscription.WorkerProfileName;
         }
@@ -786,7 +802,16 @@ public static class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task)
     {
-        return BuildSubscriptionTemplateVariables(agent, ResolveSubscriptionModel(agent, goal, task));
+        return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task));
+    }
+
+    public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task,
+        WorkerProfileCatalog profiles)
+    {
+        return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles));
     }
 
     private static Dictionary<string, string?> BuildSubscriptionTemplateVariables(
@@ -801,6 +826,7 @@ public static class WorkerProfileDispatcher
             ["subscriptionModelName"] = ResolveEffectiveSubscriptionModelName(agent, selection),
             ["subscriptionReasoningEffort"] = ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
             ["taskComplexity"] = selection.Complexity.ToString(),
+            ["modelSelectionReason"] = selection.Reason,
             ["executionPolicy"] = agent.ExecutionPolicy.ToString()
         };
     }
@@ -809,6 +835,8 @@ public static class WorkerProfileDispatcher
     {
         return selection.UsesComplexModel
             ? selection.Model.ModelName
+            : !selection.UsesSubscriptionLaunchProfile
+                ? selection.Model.ModelName
             : agent.Subscription?.ModelAlias ?? selection.Model.ModelName;
     }
 
@@ -816,6 +844,8 @@ public static class WorkerProfileDispatcher
     {
         return selection.UsesComplexModel
             ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
+            : !selection.UsesSubscriptionLaunchProfile
+                ? selection.Model.ReasoningEffort
             : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
     }
 
@@ -864,6 +894,207 @@ public static class WorkerProfileDispatcher
         return new SubscriptionModelSelection(complexity, model, UsesComplexModel(agent, model));
     }
 
+    private static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task,
+        DispatchModelOverride? modelOverride = null,
+        WorkerProfileCatalog? profiles = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
+    {
+        var fullSelection = ResolveSubscriptionModel(agent, goal, task);
+        return modelOverride is not null
+            ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
+            : ResolveRoleModelSelection(agent, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+    }
+
+    private static SubscriptionModelSelection ResolveRoleModelSelection(
+        AgentDefinition agent,
+        TaskSpec task,
+        SubscriptionModelSelection fullSelection,
+        WorkerProfileCatalog? profiles,
+        Func<ClaudeCliAuthState>? claudeAuthProbe,
+        WorkerSandboxOptions? sandboxOptions,
+        Func<string, bool>? commandExists)
+    {
+        if (!IsLightReadOnlyRole(task.RequiredRole))
+        {
+            return fullSelection with { Reason = "full-profile: role is write-capable or gate-heavy" };
+        }
+
+        if (HasCustomWorkerProfileOverride(agent))
+        {
+            return fullSelection with { Reason = "full-profile: role has custom subscription worker profile" };
+        }
+
+        if (TryFindRoleGuardrailFailure(task, out var guardrailFailure))
+        {
+            return fullSelection with { Reason = $"fallback-full-profile: {guardrailFailure}" };
+        }
+
+        if (profiles is not null &&
+            !TryValidateLightRoleProfile(profiles, claudeAuthProbe, sandboxOptions, commandExists, out var unavailableReason))
+        {
+            return fullSelection with { Reason = $"full-profile: light-role profile unavailable ({unavailableReason})" };
+        }
+
+        return new SubscriptionModelSelection(
+            fullSelection.Complexity,
+            new ModelProfile(
+                "Anthropic",
+                LightRoleAnthropicModelName,
+                agent.Model.Capabilities,
+                SubscriptionMode.ApiKey,
+                MaxOutputTokens: agent.Model.MaxOutputTokens),
+            UsesComplexModel: false,
+            UsesSubscriptionLaunchProfile: false,
+            Reason: $"light-role: {task.RequiredRole} uses {AnthropicSubscriptionProfileName}/{LightRoleAnthropicModelName}");
+    }
+
+    private static bool TryValidateLightRoleProfile(
+        WorkerProfileCatalog profiles,
+        Func<ClaudeCliAuthState>? claudeAuthProbe,
+        WorkerSandboxOptions? sandboxOptions,
+        Func<string, bool>? commandExists,
+        out string unavailableReason)
+    {
+        var profile = profiles.Profiles.FirstOrDefault(profile =>
+            profile.Name.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            unavailableReason = $"{AnthropicSubscriptionProfileName} not configured";
+            return false;
+        }
+
+        if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
+        {
+            unavailableReason = $"{AnthropicSubscriptionProfileName} is echo-only";
+            return false;
+        }
+
+        if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
+        {
+            unavailableReason = $"{AnthropicSubscriptionProfileName} does not pin selected model";
+            return false;
+        }
+
+        var launcher = WorkerProfileDiagnostics.EvaluateRealLauncher(
+            profile,
+            DefaultProviders.ResolveProfile(AnthropicSubscriptionProfileName),
+            commandExists);
+        if (!launcher.IsRealLauncher)
+        {
+            unavailableReason = launcher.Detail;
+            return false;
+        }
+
+        var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
+        if (sandbox.Enabled)
+        {
+            var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
+            if (!authState.HasAnthropicApiKey && authState.HasCliCredentialArtifact)
+            {
+                unavailableReason = "Claude CLI Low-IL auth unavailable";
+                return false;
+            }
+        }
+
+        unavailableReason = string.Empty;
+        return true;
+    }
+
+    private static bool IsLightReadOnlyRole(AgentRole role)
+    {
+        return role is AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer;
+    }
+
+    private static bool HasCustomWorkerProfileOverride(AgentDefinition agent)
+    {
+        if (agent.Subscription?.WorkerProfileName is not { Length: > 0 } profileName)
+        {
+            return false;
+        }
+
+        try
+        {
+            var defaultProfileName = DefaultProviders.ResolveModelProvider(agent.Model.ProviderName).ProfileName;
+            return !profileName.Equals(defaultProfileName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    private static bool TryFindRoleGuardrailFailure(TaskSpec task, out string reason)
+    {
+        reason = string.Empty;
+        if (task.LastVerification is not { } verification)
+        {
+            return false;
+        }
+
+        var text = $"{verification.StandardOutput}\n{verification.StandardError}";
+        if (!WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic))
+        {
+            reason = $"prior {task.RequiredRole} WORKER_RESULT invalid ({diagnostic})";
+            return true;
+        }
+
+        var missingFields = WorkerResultRequiredFieldsForLightRole(task.RequiredRole)
+            .Where(field => !fields.ContainsKey(field))
+            .ToArray();
+        if (missingFields.Length > 0)
+        {
+            reason = $"prior {task.RequiredRole} WORKER_RESULT missing field(s): {string.Join(", ", missingFields)}";
+            return true;
+        }
+
+        if (task.RequiredRole == AgentRole.Researcher && !HasSubstantiveField(fields, "citations"))
+        {
+            reason = "prior Researcher WORKER_RESULT missing citations";
+            return true;
+        }
+
+        if (task.RequiredRole == AgentRole.Reviewer && !HasSubstantiveField(fields, "verdict"))
+        {
+            reason = "prior Reviewer WORKER_RESULT missing verdict";
+            return true;
+        }
+
+        if (task.RequiredRole == AgentRole.Reviewer && !HasPresentField(fields, "blockers"))
+        {
+            reason = "prior Reviewer WORKER_RESULT missing blockers";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> WorkerResultRequiredFieldsForLightRole(AgentRole role)
+    {
+        return AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(role);
+    }
+
+    private static bool HasPresentField(IReadOnlyDictionary<string, string> fields, string fieldName)
+    {
+        return fields.TryGetValue(fieldName, out var value) &&
+            !string.IsNullOrWhiteSpace(value) &&
+            !value.StartsWith('<') &&
+            !value.EndsWith('>');
+    }
+
+    private static bool HasSubstantiveField(IReadOnlyDictionary<string, string> fields, string fieldName)
+    {
+        return fields.TryGetValue(fieldName, out var value) &&
+            !string.IsNullOrWhiteSpace(value) &&
+            !value.Equals("none", StringComparison.OrdinalIgnoreCase) &&
+            !value.StartsWith('<') &&
+            !value.EndsWith('>');
+    }
+
     private static bool UsesComplexModel(AgentDefinition agent, ModelProfile model)
     {
         return agent.ComplexModel is not null &&
@@ -871,7 +1102,12 @@ public static class WorkerProfileDispatcher
             agent.ComplexModel.ModelName.Equals(model.ModelName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed record SubscriptionModelSelection(TaskComplexity Complexity, ModelProfile Model, bool UsesComplexModel);
+    private sealed record SubscriptionModelSelection(
+        TaskComplexity Complexity,
+        ModelProfile Model,
+        bool UsesComplexModel,
+        bool UsesSubscriptionLaunchProfile = true,
+        string Reason = "full-profile: default subscription model selection");
 
     private sealed record TargetContext(string? BranchName, string? HeadCommit);
 

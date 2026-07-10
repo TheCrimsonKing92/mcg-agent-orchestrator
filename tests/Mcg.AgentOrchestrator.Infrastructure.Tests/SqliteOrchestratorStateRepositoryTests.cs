@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
+[Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class SqliteOrchestratorStateRepositoryTests
 {
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_existing_schema_startup_skips_DDL")]

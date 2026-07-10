@@ -48,6 +48,31 @@ public sealed class WorkerProfileTests
         provider).IsPatchCapable);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDiagnostics_validates_real_claude_launcher")]
+    public void WorkerProfileDiagnosticsValidatesRealClaudeLauncher()
+{
+    var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.AnthropicClaudeCli);
+    var profile = new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode}");
+
+    var validation = WorkerProfileDiagnostics.EvaluateRealLauncher(profile, provider, executable => executable == "claude");
+
+    Assert.True(validation.IsRealLauncher);
+    Assert.Equal("claude", validation.Executable);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDiagnostics_rejects_echo_stub_claude_launcher")]
+    public void WorkerProfileDiagnosticsRejectsEchoStubClaudeLauncher()
+{
+    var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.AnthropicClaudeCli);
+    var profile = new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}");
+
+    var validation = WorkerProfileDiagnostics.EvaluateRealLauncher(profile, provider, _ => true);
+
+    Assert.False(validation.IsRealLauncher);
+    Assert.Equal("Write-Output", validation.Executable);
+    Assert.Contains("not the expected claude CLI", validation.Detail, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileCatalog_default_codex_oss_profile_is_patch_capable_local_bridge")]
     public void WorkerProfileCatalogDefaultCodexOssProfileIsPatchCapableLocalBridge()
 {

@@ -191,9 +191,9 @@ public static string FindRepositoryRoot()
 {
     var candidates = new[]
     {
-        Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable),
         Environment.CurrentDirectory,
-        AppContext.BaseDirectory
+        AppContext.BaseDirectory,
+        Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable)
     };
 
     foreach (var candidate in candidates)

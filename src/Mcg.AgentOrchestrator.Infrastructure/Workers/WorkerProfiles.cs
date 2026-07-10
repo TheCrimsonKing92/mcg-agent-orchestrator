@@ -36,6 +36,39 @@ public static class WorkerProfileDiagnostics
         return commandTemplate.Contains("{subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase);
     }
 
+    public static WorkerProfileLauncherValidation EvaluateRealLauncher(
+        WorkerProfile profile,
+        IWorkerProvider provider,
+        Func<string, bool>? commandExists = null)
+    {
+        var executable = ExtractExecutable(profile.CommandTemplate);
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            return new WorkerProfileLauncherValidation(false, executable, "No executable was found in the command template.");
+        }
+
+        if (IsEchoOnlyCommand(profile.CommandTemplate))
+        {
+            return new WorkerProfileLauncherValidation(false, executable, "Command only echoes the prompt path; it does not execute worker work.");
+        }
+
+        var expected = ExpectedExecutableNames(provider);
+        var executableName = Path.GetFileNameWithoutExtension(executable);
+        if (expected.Length > 0 &&
+            !expected.Any(name => executableName.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return new WorkerProfileLauncherValidation(
+                false,
+                executable,
+                $"Launcher executable '{executable}' is not the expected {string.Join("/", expected)} CLI.");
+        }
+
+        var exists = (commandExists ?? LocalCommandExists)(executable);
+        return exists
+            ? new WorkerProfileLauncherValidation(true, executable, "Launcher executable exists and matches the provider CLI.")
+            : new WorkerProfileLauncherValidation(false, executable, $"Launcher executable '{executable}' was not found on PATH or as a file.");
+    }
+
     public static WorkerProfilePatchCapability EvaluatePatchCapability(string commandTemplate)
     {
         var normalized = commandTemplate.Trim();
@@ -146,9 +179,172 @@ public static class WorkerProfileDiagnostics
             $"Claude launcher is not patch-capable; missing {string.Join(", ", missing)}.");
     }
 
+    public static string ExtractExecutable(string commandTemplate)
+    {
+        var trimmed = ExtractExecutableStatement(commandTemplate);
+        if (trimmed.StartsWith("& ", StringComparison.Ordinal))
+        {
+            trimmed = trimmed[2..].TrimStart();
+        }
+
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (trimmed[0] is '\'' or '"')
+        {
+            var quote = trimmed[0];
+            var end = trimmed.IndexOf(quote, 1);
+            return end > 1 ? trimmed[1..end] : string.Empty;
+        }
+
+        var separator = trimmed.IndexOfAny([' ', '\t']);
+        return separator < 0 ? trimmed : trimmed[..separator];
+    }
+
+    public static bool LocalCommandExists(string executable)
+    {
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            return false;
+        }
+
+        if (IsKnownPowerShellCommand(executable))
+        {
+            return true;
+        }
+
+        if (Path.IsPathRooted(executable))
+        {
+            return File.Exists(executable) || CandidateExecutablePaths(executable).Any(File.Exists);
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var candidate in CandidateExecutablePaths(Path.Combine(directory, executable)))
+            {
+                if (File.Exists(candidate))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string ExtractExecutableStatement(string commandTemplate)
+    {
+        foreach (var statement in SplitPowerShellStatements(commandTemplate))
+        {
+            var trimmed = statement.Trim();
+            if (trimmed.Length == 0 || IsPowerShellSetupStatement(trimmed))
+            {
+                continue;
+            }
+
+            return trimmed;
+        }
+
+        return string.Empty;
+    }
+
+    private static IEnumerable<string> SplitPowerShellStatements(string commandTemplate)
+    {
+        var start = 0;
+        char? quote = null;
+        for (var index = 0; index < commandTemplate.Length; index++)
+        {
+            var current = commandTemplate[index];
+            if (quote is not null)
+            {
+                if (current == quote)
+                {
+                    quote = null;
+                }
+
+                continue;
+            }
+
+            if (current is '\'' or '"')
+            {
+                quote = current;
+                continue;
+            }
+
+            if (current == ';')
+            {
+                yield return commandTemplate[start..index];
+                start = index + 1;
+            }
+        }
+
+        yield return commandTemplate[start..];
+    }
+
+    private static bool IsPowerShellSetupStatement(string statement) =>
+        IsPowerShellEnvironmentAssignment(statement) ||
+        IsPowerShellLocationStatement(statement);
+
+    private static bool IsPowerShellEnvironmentAssignment(string statement)
+    {
+        if (!statement.StartsWith("$env:", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var separator = statement.IndexOf('=');
+        return separator > "$env:".Length;
+    }
+
+    private static bool IsPowerShellLocationStatement(string statement) =>
+        statement.StartsWith("Set-Location ", StringComparison.OrdinalIgnoreCase) ||
+        statement.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) ||
+        statement.StartsWith("Push-Location ", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsKnownPowerShellCommand(string executable) =>
+        executable.Equals("Write-Output", StringComparison.OrdinalIgnoreCase) ||
+        executable.Equals("Write-Host", StringComparison.OrdinalIgnoreCase) ||
+        executable.Equals("echo", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> CandidateExecutablePaths(string basePath)
+    {
+        if (!string.IsNullOrWhiteSpace(Path.GetExtension(basePath)))
+        {
+            yield return basePath;
+            yield break;
+        }
+
+        yield return basePath;
+        var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+        string[] extensions = string.IsNullOrWhiteSpace(pathExt)
+            ? [".COM", ".EXE", ".BAT", ".CMD", ".PS1"]
+            : pathExt.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var extension in extensions)
+        {
+            yield return basePath + extension;
+        }
+    }
+
+    private static string[] ExpectedExecutableNames(IWorkerProvider provider) =>
+        provider.Identity.Kind switch
+        {
+            ProviderKind.AnthropicClaudeCli => ["claude"],
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => ["codex"],
+            ProviderKind.OllamaQwenCodeCli => ["qwen"],
+            _ => []
+        };
 }
 
 public sealed record WorkerProfilePatchCapability(bool IsPatchCapable, string Detail);
+public sealed record WorkerProfileLauncherValidation(bool IsRealLauncher, string Executable, string Detail);
 
 public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 {

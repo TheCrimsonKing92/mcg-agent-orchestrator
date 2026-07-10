@@ -69,6 +69,21 @@ public sealed class DispatchOutcomeClassifyTests
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: stdout.Length);
 
+    private static TaskVerificationRecord WorkerResultVerification(
+        int exitCode,
+        string stdout,
+        bool hasCommittedChanges = false) =>
+        new(
+            "cmd",
+            "C:\\repo",
+            exitCode,
+            stdout,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: hasCommittedChanges,
+            HeartbeatStandardOutputBytes: stdout.Length);
+
     private static string WorkerResultStdout(string tests, string blockers = "none") =>
         $"WORKER_RESULT:{Environment.NewLine}" +
         $"files: none{Environment.NewLine}" +
@@ -84,6 +99,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
         Xunit.Assert.Equal(0, outcome.ExitCode);
+        Xunit.Assert.StartsWith("CLASSIFIER ", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "Classify completes read-only role with worker result output and no changes")]
@@ -144,6 +161,72 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
         Xunit.Assert.Equal(0, outcome.ExitCode);
+        Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify reads WORKER_RESULT blockers from stdout artifact")]
+    public void ClassifyReadsWorkerResultBlockersFromStdoutArtifact()
+    {
+        var stdoutPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                stdoutPath,
+                WorkerResultStdout("dotnet test --filter DispatchOutcomeClassifyTests passed", "none"));
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                "C:\\repo",
+                0,
+                string.Empty,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath,
+                WorkerResultPresent: true,
+                HasCommittedChanges: false,
+                HeartbeatStandardOutputBytes: 0);
+
+            var outcome = DispatchFailureClassifier.Classify(
+                DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+                verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+            Xunit.Assert.Contains("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(stdoutPath);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Classify completes historical committed worker result variants")]
+    [Xunit.InlineData(-1, AgentRole.Developer, true, false, "manufactured-exit-minus-one")]
+    [Xunit.InlineData(0, AgentRole.Tester, true, false, "tester-with-commit")]
+    [Xunit.InlineData(0, AgentRole.Developer, false, true, "developer-with-orchestrator-commit")]
+    [Xunit.InlineData(0, AgentRole.Developer, true, false, "exit-zero-green")]
+    public void ClassifyCompletesHistoricalCommittedWorkerResultVariants(
+        int exitCode,
+        AgentRole role,
+        bool verificationHasCommittedChanges,
+        bool orchestratorResultCommit,
+        string variant)
+    {
+        var stdout = WorkerResultStdout($"pass - historical variant {variant}");
+        var verification = WorkerResultVerification(exitCode, stdout, verificationHasCommittedChanges);
+        var task = orchestratorResultCommit
+            ? DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1")
+            : SimpleTask(role);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify fails exit zero worker result with failing tests")]
@@ -187,6 +270,28 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
         Xunit.Assert.True(outcome.RetryAfter is { TotalSeconds: > 0 });
         Xunit.Assert.Contains("Rate limit reached", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "ClassifyProviderFailure emits complete classifier receipt signal shape")]
+    public void ClassifyProviderFailureEmitsCompleteClassifierReceiptSignalShape()
+    {
+        var outcome = DispatchFailureClassifier.ClassifyProviderFailure(
+            ProviderFailureKind.Connectivity,
+            1,
+            hasZeroByteOutput: true,
+            "Unable to connect to API.");
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
+        Xunit.Assert.StartsWith("CLASSIFIER ", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=provider-connectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("exit_code=1", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("exit_artifact=direct-provider-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stdout_bytes=unknown", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stderr_bytes=unknown", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heartbeat_stdout_bytes=unknown", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worker_result=absent", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("commit=none", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verdict=ProviderConnectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider rate limit stdout")]
@@ -236,6 +341,26 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.True(outcome.HasZeroByteOutput);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves exit zero empty output failover when heartbeat has no bytes")]
+    public void ClassifyPreservesExitZeroEmptyOutputFailoverWhenHeartbeatHasNoBytes()
+    {
+        var verification = new TaskVerificationRecord(
+            "cmd",
+            "C:\\repo",
+            0,
+            string.Empty,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            HeartbeatStandardOutputBytes: 0);
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=empty-output-flake", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heartbeat_stdout_bytes=0", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify returns SandboxCommitBlocked for index lock with worker result")]

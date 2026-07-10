@@ -272,7 +272,8 @@ public static partial class DashboardRenderer
 
     private static string RenderNextActionControl(Goal goal, NextActionItem item, DashboardRenderOptions options)
     {
-        var control = DashboardNextActionControls.Build(goal, item, options.HealthReport?.Agents, options.AgentDefinitions);
+        var workerProfiles = RequireWorkerProfiles(options);
+        var control = DashboardNextActionControls.Build(goal, item, workerProfiles, options.HealthReport?.Agents, options.AgentDefinitions);
         if (control is null)
         {
             if (item.Kind == NextActionKind.AnswerHumanInput && item.HumanInputRequestId is not null)
@@ -287,6 +288,9 @@ public static partial class DashboardRenderer
             ? $"<button type=\"button\" data-next-action=\"{item.Kind}\" data-action-button=\"{Encode(control.Url)}\">{Encode(control.Label)}</button>"
             : $"<a data-next-action=\"{item.Kind}\" href=\"{Encode(control.Url)}\" target=\"_blank\" rel=\"noreferrer\">{Encode(control.Label)}</a>";
     }
+
+    private static WorkerProfileCatalog RequireWorkerProfiles(DashboardRenderOptions options) =>
+        options.WorkerProfiles ?? throw new InvalidOperationException("Dashboard render options must include worker profiles.");
 
     private static string BuildSuggestedCommand(
         Goal goal,

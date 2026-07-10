@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 
 [Xunit.Collection("EnvMutation")]
@@ -32,10 +33,11 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             Path.Combine(root, "prompts"),
             root,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget)));
 
         Assert.Equal(newAgent.Id, task.AssignedAgentId);
-        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
         Assert.Contains("Warning: assigned agent 'old-planner'", stderr);
         Assert.Contains("Planner", stderr);
         Assert.Contains("new-planner", stderr);
@@ -64,10 +66,11 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             Path.Combine(root, "prompts"),
             root,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget)));
 
         Assert.Equal(agent.Id, task.AssignedAgentId);
-        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
         Assert.DoesNotContain("Warning:", stderr);
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
@@ -100,7 +103,11 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             promptRoot,
             root,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: true,
+                HasCliCredentialArtifact: false,
+                CredentialArtifactPath: null));
 
         Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
         Assert.NotNull(prepared.PromptPath);
@@ -128,11 +135,12 @@ public sealed class WorkerDispatchTests
             DispatchTestProfiles(),
             Path.Combine(root, "prompts"),
             root,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
         Assert.Equal(newAgent.Id, task.AssignedAgentId);
-        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
-        Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+        Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
     }
 
     [Xunit.Fact(DisplayName = "CliStartup_sets_protected_pid_before_worker_dispatch")]
@@ -558,7 +566,8 @@ public sealed class WorkerDispatchTests
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt));
+        dispatchedAt,
+        new DispatchModelOverride("qwen-code-cli", "qwen3:8b", null)));
 
     Assert.Equal(task.Id, ex.TaskId);
     Assert.False(Directory.Exists(promptRoot));
@@ -1143,6 +1152,58 @@ public sealed class WorkerDispatchTests
     Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
     Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
     Assert.Contains("Low-IL Claude subscription dispatch is refused before worker start", findings);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_light_role_claude_auth_under_low_integrity_before_dispatch")]
+    public void WorkerProfileDispatcherPreflightBlocksLightRoleClaudeAuthUnderLowIntegrityBeforeDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude light-role auth preflight", [new TaskSpec(TaskId.New(), "Review implementation output.", AgentRole.Reviewer)]);
+    var agents = AgentCatalog.AnthropicDefault().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var credentialPath = Path.Combine(root, ".claude", ".credentials.json");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: credentialPath);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox));
+
+    var findings = string.Join("\n", preflight.Findings);
+    Assert.False(preflight.Allowed);
+    Assert.Equal("claude-cli", preflight.ProfileName);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
+    Assert.Contains("model-selection: full-profile: light-role profile unavailable (Claude CLI Low-IL auth unavailable)", findings, StringComparison.Ordinal);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
     Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
     Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
     Assert.False(Directory.Exists(promptRoot));
@@ -2229,12 +2290,523 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Equal(assignedAgent.Id, task.AssignedAgentId);
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
     Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+}
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_light_readonly_role_resolves_haiku_with_recorded_reason")]
+    public void WorkerProfileDispatcherLightReadonlyRoleResolvesHaikuWithRecordedReason()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Route light read-only role", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_echo_stub_claude_profile_falls_back_from_light_role_with_reason")]
+    public void WorkerProfileDispatcherEchoStubClaudeProfileFallsBackFromLightRoleWithReason()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Fallback from fake Claude light role", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    var profiles = WorkerProfileCatalog.Default()
+        .Upsert(new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output {promptPath}"));
+    kernel.ActivateGoal(goal.Id, agents);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox,
+        commandExists: _ => true);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: full-profile: light-role profile unavailable", preflight, StringComparison.Ordinal);
+    Assert.Contains("not the expected claude CLI", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_default_path_dispatch_is_identical_when_no_light_role_applies")]
+    public void WorkerProfileDispatcherDefaultPathDispatchIsIdenticalWhenNoLightRoleApplies()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var codexProfile = new WorkerProfile(
+        "codex-cli",
+        "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}");
+    var codexOnlyProfiles = new WorkerProfileCatalog([codexProfile]);
+    var codexWithLightProfile = new WorkerProfileCatalog(
+    [
+        codexProfile,
+        new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode}")
+    ]);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var codexOnlyDispatch = PrepareDeveloperDispatch(codexOnlyProfiles);
+    var codexWithLightProfileDispatch = PrepareDeveloperDispatch(codexWithLightProfile);
+
+    Assert.Equal(codexOnlyDispatch.WorkerName, codexWithLightProfileDispatch.WorkerName);
+    Assert.Equal(codexOnlyDispatch.Command, codexWithLightProfileDispatch.Command);
+    Assert.Equal(codexOnlyDispatch.WorkingDirectory, codexWithLightProfileDispatch.WorkingDirectory);
+    Assert.Equal(codexOnlyDispatch.ProviderName, codexWithLightProfileDispatch.ProviderName);
+    Assert.Equal(codexOnlyDispatch.ModelName, codexWithLightProfileDispatch.ModelName);
+    Assert.Equal(codexOnlyDispatch.ReasoningEffort, codexWithLightProfileDispatch.ReasoningEffort);
+    Assert.Equal(codexOnlyDispatch.TaskComplexity, codexWithLightProfileDispatch.TaskComplexity);
+    Assert.Equal(codexOnlyDispatch.UsesComplexModel, codexWithLightProfileDispatch.UsesComplexModel);
+
+    TaskDispatchRecord PrepareDeveloperDispatch(WorkerProfileCatalog profiles)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement the requested source change.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve developer dispatch route", [task]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+
+        WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            agents,
+            profiles,
+            promptRoot,
+            workingDirectory,
+            dispatchedAt,
+            sandboxOptions: sandbox);
+
+        return task.LastDispatch!;
+    }
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_light_role_result_keeps_haiku")]
+    public void WorkerProfileDispatcherTemplateConformingLightRoleResultKeepsHaiku()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Keep light model after contract-conforming research", [task]);
+    var agents = AgentCatalog.AnthropicDefault().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: rg -n WorkerProfileDispatcher src tests
+        tests: fail - retry requested for unrelated operator feedback
+        commit: none
+        blockers: none
+        citations: src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs; tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs
+        model_fit: Anthropic/claude-haiku-4-5 - adequate - research shape - cited repo evidence
+        skills: none
+        confidence: high
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: light-role: Researcher uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
+    Assert.DoesNotContain("fallback-full-profile", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_guardrail_failure_falls_back_to_full_profile_with_recorded_reason")]
+    public void WorkerProfileDispatcherGuardrailFailureFallsBackToFullProfileWithRecordedReason()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Fallback after weak light-role output", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: none
+        tests: fail - missing required citations
+        blockers: none
+        model_fit: Anthropic/claude-haiku-4-5 - underpowered - research shape - omitted citations
+        skills: none
+        confidence: low
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing field(s): citations", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_plan_readiness_and_dispatch_agree_for_light_role_fallback")]
+    public void WorkerProfileDispatcherPlanReadinessAndDispatchAgreeForLightRoleFallback()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Fallback route agreement", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    var profiles = WorkerProfileCatalog.Default();
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: none
+        tests: fail - missing required citations
+        blockers: none
+        model_fit: Anthropic/claude-haiku-4-5 - underpowered - research shape - omitted citations
+        skills: none
+        confidence: low
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var plan = SubscriptionPlanBuilder.Build(
+        goal,
+        agents,
+        profiles,
+        _ => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents));
+    var planItem = plan.Items.Single();
+    var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, dispatchedAt);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
+
+    Assert.IsType<DispatchReadinessReady>(readiness);
+    Assert.True(planItem.CanPrepare);
+    Assert.Equal("codex-cli", planItem.ProfileName);
+    Assert.Equal("OpenAI", planItem.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, planItem.SubscriptionModelName);
+    Assert.Equal(planItem.ProfileName, task.LastDispatch!.WorkerName);
+    Assert.Equal(planItem.ProviderName, task.LastDispatch.ProviderName);
+    Assert.Equal(planItem.SubscriptionModelName, task.LastDispatch.ModelName);
+    Assert.Contains(planItem.Route!.Reasons, reason => reason.Contains("fallback-full-profile", StringComparison.OrdinalIgnoreCase));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_source_call_sites_use_catalog_aware_model_resolution")]
+    public void WorkerProfileDispatcherSourceCallSitesUseCatalogAwareModelResolution()
+{
+    var repoRoot = InfrastructureTestSupport.FindRepositoryRoot();
+    var srcRoot = Path.Combine(repoRoot, "src");
+    var bypasses = new List<string>();
+    var callPattern = new Regex(
+        @"WorkerProfileDispatcher\.(?:BuildSubscriptionTemplateVariables|ResolveSubscriptionProfileName)\((?<args>.*?)\)",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    var advanceLoopDefaultCatalogPattern = new Regex(
+        @"Advance(?:Goal)?UntilBlockedAsync\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    var catalogAwareDefaultParameterPattern = new Regex(
+        @"(?:DashboardNextActionControls\.Build|ToNextActionsDto|ToNextActionDto|ToNextActionControlDto|ToGoalWorkSummaryDto|ToTaskWorkContextDto|GoalTranscriptRenderer\.Render|PrintNextActions)\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    var catalogAwareDeclarations = new (string RelativePath, string MethodName)[]
+    {
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Rendering", "DashboardNextActionControls.cs"), "Build"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionsDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionControlDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToGoalWorkSummaryDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToTaskWorkContextDto"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Rendering", "GoalTranscriptRenderer.cs"), "Render"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "ConsoleViews.DispatchAndNextActions.cs"), "PrintNextActions")
+    };
+
+    foreach (var path in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
+    {
+        if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(Path.Combine("Workers", "WorkerProfileDispatcher.cs"), StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        var text = File.ReadAllText(path);
+        foreach (Match match in callPattern.Matches(text))
+        {
+            var args = match.Groups["args"].Value;
+            if (args.Contains("goal", StringComparison.Ordinal) &&
+                args.Contains("task", StringComparison.Ordinal) &&
+                !args.Contains("profiles", StringComparison.Ordinal) &&
+                !args.Contains("WorkerProfileCatalog.Default()", StringComparison.Ordinal) &&
+                !args.Contains("resolvedProfiles", StringComparison.Ordinal))
+            {
+                var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+                bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: {match.Value.ReplaceLineEndings(" ")}");
+            }
+        }
+
+        foreach (Match match in advanceLoopDefaultCatalogPattern.Matches(text))
+        {
+            var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+            bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: advance-loop entry point defaults WorkerProfileCatalog");
+        }
+
+        foreach (Match match in catalogAwareDefaultParameterPattern.Matches(text))
+        {
+            var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+            bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: catalog-aware next-action surface defaults WorkerProfileCatalog");
+        }
+    }
+
+    foreach (var declaration in catalogAwareDeclarations)
+    {
+        var path = Path.Combine(srcRoot, declaration.RelativePath);
+        var text = File.ReadAllText(path);
+        var optionalPattern = new Regex(
+            $@"\b{Regex.Escape(declaration.MethodName)}\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        foreach (Match match in optionalPattern.Matches(text))
+        {
+            var line = text[..match.Index].Count(ch => ch == '\n') + 1;
+            bypasses.Add($"{Path.GetRelativePath(repoRoot, path)}:{line}: catalog-aware next-action surface defaults WorkerProfileCatalog");
+        }
+    }
+
+    Assert.Empty(bypasses);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_reviewer_result_keeps_haiku")]
+    public void WorkerProfileDispatcherTemplateConformingReviewerResultKeepsHaiku()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Keep light model after contract-conforming review", [task]);
+    var agents = AgentCatalog.AnthropicDefault().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: git diff --stat
+        tests: fail - retry requested for unrelated operator feedback
+        commit: none
+        blockers: none
+        verdict: needs-work
+        model_fit: Anthropic/claude-haiku-4-5 - adequate - review shape - returned verdict and blocker status
+        skills: none
+        confidence: high
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox,
+        commandExists: RealClaudeLauncherExists);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: light-role: Reviewer uses claude-cli/claude-haiku-4-5", preflight, StringComparison.Ordinal);
+    Assert.DoesNotContain("fallback-full-profile", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_reviewer_guardrail_requires_verdict_and_blockers_before_light_retry")]
+    public void WorkerProfileDispatcherReviewerGuardrailRequiresVerdictAndBlockersBeforeLightRetry()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Fallback after weak reviewer output", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker refresh",
+        workingDirectory,
+        1,
+        """
+        WORKER_RESULT:
+        files: none
+        commands: none
+        tests: fail - missing review blockers
+        verdict: fail
+        model_fit: Anthropic/claude-haiku-4-5 - underpowered - review shape - omitted blockers
+        skills: none
+        confidence: low
+        END_WORKER_RESULT
+        """,
+        string.Empty,
+        dispatchedAt.AddMinutes(-1)));
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Contains("model-selection: fallback-full-profile: prior Reviewer WORKER_RESULT invalid (missing field(s): blockers.)", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_model_unchanged")]
+    public void WorkerProfileDispatcherDeveloperDispatchModelUnchanged()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Implement a focused source change.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Keep developer model unchanged", [task]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Contains("model-selection: full-profile: role is write-capable or gate-heavy", preflight, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_subscription_tasks_by_assigned_provider")]
     public void WorkerProfileDispatcherPreparesSubscriptionTasksByAssignedProvider()
@@ -2260,7 +2832,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Equal(5, results.Count);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
@@ -2272,10 +2845,10 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains($"--cd '{workingDirectory}'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.False(developer.LastDispatch.Command.Contains("{workingDirectory}", StringComparison.Ordinal));
-    Assert.Equal("codex-cli", researcher.LastDispatch!.WorkerName);
-    Assert.Contains("codex exec", researcher.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", researcher.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("model_reasoning_effort='low'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
+    Assert.Contains("claude --model 'claude-haiku-4-5'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Equal("Anthropic", researcher.LastDispatch.ProviderName);
+    Assert.Equal("claude-haiku-4-5", researcher.LastDispatch.ModelName);
     Assert.True(File.Exists(results.Single(result => result.Task.Id == developer.Id).PromptPath));
     Assert.Equal(WorkTaskStatus.Running, developer.Status);
     Assert.Equal(workingDirectory, developer.LastDispatch.WorkingDirectory);
@@ -2362,7 +2935,9 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+        commandExists: RealClaudeLauncherExists);
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
 
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
@@ -2372,7 +2947,8 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Single(results);
     var developer = goal.Tasks.Single();
@@ -2689,15 +3265,17 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
         "Dispatch Anthropic subscription model",
-        [new TaskSpec(TaskId.New(), "Review the implementation notes.", AgentRole.Reviewer)]);
+        [new TaskSpec(TaskId.New(), "Implement the requested change.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("anthropic-reviewer"),
-        "Anthropic reviewer",
-        AgentRole.Reviewer,
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
         new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
@@ -2717,7 +3295,7 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
         sandboxOptions: sandbox);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains("claude --model 'claude-sonnet' --permission-mode 'plan'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("claude --model 'claude-sonnet' --permission-mode 'bypassPermissions'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
 }
@@ -2726,16 +3304,16 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Reject unpinned subscription reasoning");
+    var goal = kernel.CreateGoal("Reject unpinned subscription reasoning", [new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("openai-reviewer"),
-        "OpenAI reviewer",
-        AgentRole.Reviewer,
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex", "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli --model {subscriptionModelName} {promptPath}")]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -2759,15 +3337,17 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
     var workingDirectory = Path.Combine(root, "repo");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Dispatch default OpenAI subscription profile");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var goal = kernel.CreateGoal("Dispatch default OpenAI subscription profile", [new TaskSpec(TaskId.New(), "Implement default OpenAI subscription profile.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("openai-researcher"),
-        "OpenAI researcher",
-        AgentRole.Researcher,
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
         ExecutionPolicy: AgentExecutionPolicy.PreferSubscription);
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -2818,16 +3398,16 @@ private static AgentDefinition TestSubscriptionAgent(string id, string name, Age
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Reject unpinned subscription model");
+    var goal = kernel.CreateGoal("Reject unpinned subscription model", [new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
-        new AgentId("openai-reviewer"),
-        "OpenAI reviewer",
-        AgentRole.Reviewer,
+        new AgentId("openai-developer"),
+        "OpenAI developer",
+        AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("custom-agent", "gpt-5.3-codex"));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = new WorkerProfileCatalog([new WorkerProfile("custom-agent", "agent-cli {promptPath}")]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -4217,6 +4797,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_records_resource_accounting")]
     public void BackgroundDispatchRunnerNonLocalDispatchRecordsResourceAccounting()
 {
+    using var _ = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var logs = Path.Combine(root, "logs");
     var kernel = new AgentOrchestratorKernel();
@@ -4229,7 +4810,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         root,
         DateTimeOffset.UtcNow));
 
-    using var _ = ClearProtectedPidEnvironment();
+    using var protectedPidScope = ClearProtectedPidEnvironment();
     var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
     WaitForExitFile(process.ExitCodePath);
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -6576,8 +7157,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("status is Completed", ex.Message, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_read_only_codex_sandbox")]
-    public void WorkerProfileDispatcherResearcherDispatchUsesReadOnlyCodexSandbox()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_plan_mode")]
+    public void WorkerProfileDispatcherResearcherDispatchUsesClaudePlanMode()
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
@@ -6597,9 +7178,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
-    Assert.Contains("--sandbox 'read-only'", researcher.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
+    Assert.Contains("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_uses_workspace_write_codex_sandbox")]
@@ -7998,11 +8581,17 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
 
+    private static bool RealClaudeLauncherExists(string executable) =>
+        executable.Equals("claude", StringComparison.OrdinalIgnoreCase);
+
     private static WorkerProfileCatalog DispatchTestProfiles() => new(
     [
         new WorkerProfile(
             "codex-cli",
-            "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}")
+            "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"),
+        new WorkerProfile(
+            "claude-cli",
+            "claude --model {subscriptionModelName} --permission-mode {permissionMode}")
     ]);
 
     private static AgentOrchestratorKernel WithGoalStatus(

@@ -696,7 +696,7 @@ public sealed class CliCommandTests
             "Evidence checked.\nModel fit: OpenAI/gpt-5-codex - overkill - copy-only change.",
             string.Empty,
             DateTimeOffset.UtcNow));
-        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), [agent]));
+        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), [agent]));
         Xunit.Assert.Contains("command: run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", output);
         Xunit.Assert.Contains("cost: prior overkill API model. Prior evidence says OpenAI/gpt-5-codex was overkill; try local Ollama/qwen3:8b via agent configuration before paid API run.", output);
     }
@@ -756,6 +756,56 @@ public sealed class CliCommandTests
         var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
 
         Xunit.Assert.Equal("subscription-dispatch 1", command);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_static_dashboard_export_uses_workspace_worker_profiles_for_light_role_next_actions")]
+    public void CliStaticDashboardExportUsesWorkspaceWorkerProfilesForLightRoleNextActions()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan with a light role",
+            [new TaskSpec(TaskId.New(), "Summarize the implementation path.", AgentRole.Planner)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("planner"),
+                "Planner",
+                AgentRole.Planner,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var claudeLauncher = Path.Combine(root, "claude.cmd");
+        File.WriteAllText(claudeLauncher, "@echo off\r\n");
+        var profiles = new WorkerProfileCatalog(
+        [
+            new WorkerProfile("claude-cli", $"\"{claudeLauncher}\" --model {{subscriptionModelName}} --print {{promptPath}}")
+        ]);
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var dashboardPath = Path.Combine(root, "static-dashboard.html");
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["dashboard", dashboardPath],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+        var html = File.ReadAllText(dashboardPath);
+
+        Xunit.Assert.Contains($"Dashboard: {Path.GetFullPath(dashboardPath)}", output);
+        Xunit.Assert.Contains("subscription-dispatch 1", html, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("<code>run 1</code>", html, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("OpenAI/gpt-5.5", html, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Cli_backlog_intake_prints_goal_slice_without_mutating_state")]
@@ -2058,7 +2108,7 @@ public sealed class CliCommandTests
     {
         var kernel = new AgentOrchestratorKernel();
         var first = kernel.CreateGoal("Update src/Alpha.cs", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Planner)]);
-        var second = kernel.CreateGoal("Update src/Beta.cs", [new TaskSpec(TaskId.New(), "Change src/Beta.cs", AgentRole.Researcher)]);
+        var second = kernel.CreateGoal("Update src/Beta.cs", [new TaskSpec(TaskId.New(), "Change src/Beta.cs", AgentRole.Developer)]);
         var conflict = kernel.CreateGoal("Update src/Alpha.cs too", [new TaskSpec(TaskId.New(), "Change src/Alpha.cs", AgentRole.Researcher)]);
         IReadOnlyList<AgentDefinition> agents =
         [
@@ -2069,6 +2119,13 @@ public sealed class CliCommandTests
                 new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
+            new(
+                new AgentId("developer-ollama"),
+                "Developer Ollama",
+                AgentRole.Developer,
+                new ModelProfile("Ollama", "qwen3:8b", ModelCapability.Text, SubscriptionMode.LocalBridge),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("qwen-code-cli")),
             new(
                 new AgentId("researcher-anthropic"),
                 "Researcher Anthropic",
@@ -2172,13 +2229,7 @@ public sealed class CliCommandTests
     [Xunit.Fact(DisplayName = "Cli_goal_recovery_classifies_branch_diff_verification_breadth")]
     public void CliGoalRecoveryClassifiesBranchDiffVerificationBreadth()
     {
-        var root = CreateTempDirectory();
-        RunGit(root, "init", "-b", "main");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "CLI Tests");
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
+        var root = CreateShortAcceptanceRepository();
 
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
@@ -3217,7 +3268,7 @@ public sealed class CliCommandTests
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
         var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+        var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Write-Output {promptPath}")]);
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         EnsureGitRepository(root);
@@ -7647,7 +7698,7 @@ public sealed class CliCommandTests
                 ref currentGoal));
 
             Xunit.Assert.Contains("Acceptance repair: normalized raw Completed goal", output, StringComparison.Ordinal);
-            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Xunit.Assert.True(File.Exists(Path.Combine(root, "src", "raw-completed.txt")));
             Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
             Xunit.Assert.True(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
@@ -8649,13 +8700,6 @@ public sealed class CliCommandTests
             CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             var repository = new InMemoryTransactionalStateRepository(kernel);
-            var observedCommitBudget = false;
-            repository.BeforeSaveCommit = token =>
-            {
-                observedCommitBudget = token.CanBeCanceled;
-                Xunit.Assert.True(token.CanBeCanceled);
-                Xunit.Assert.False(token.IsCancellationRequested);
-            };
 
             var output = CaptureConsole(() =>
             {
@@ -8670,12 +8714,15 @@ public sealed class CliCommandTests
                 Xunit.Assert.True(changed);
             });
 
-            Xunit.Assert.True(observedCommitBudget);
-            Xunit.Assert.Equal(1, repository.TransactionCount);
-            Xunit.Assert.Contains("cleanup: branch deleted", output);
-            Xunit.Assert.Contains("cleanup: goal marked CleanedUp", output);
-            Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
-            Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+            Xunit.Assert.Equal(0, repository.TransactionCount);
+            Xunit.Assert.Contains("Workspace cleanup deferred", output);
+            Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.Contains(GoalWorktrees.BranchName(goal.Id), RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)), StringComparison.Ordinal);
+            Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
+            var cleanupEntry = GoalOperationJournal.Read(root, goal.Id).LatestByOperation.FirstOrDefault(e =>
+                e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
+            Xunit.Assert.NotNull(cleanupEntry);
+            Xunit.Assert.Contains("Deferred cleanup after goal-mark-landed", cleanupEntry.Detail, StringComparison.Ordinal);
         }
         finally
         {
@@ -8704,32 +8751,32 @@ public sealed class CliCommandTests
                 "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
-            var repository = new InMemoryTransactionalStateRepository(kernel)
+            GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+            GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
+            GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
+            GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var stderr = CaptureConsoleError(() =>
             {
-                BeforeSaveCommit = _ =>
+                var output = CaptureConsole(() =>
                 {
-                    GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
-                    GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
-                    GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
-                    GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
-                    throw new TimeoutException("state commit timed out");
-                }
-            };
+                    var changed = CliPersistentStateRunner.ExecuteCommand(
+                        ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                        repository,
+                        CreateRefinedWorkspace(root),
+                        ref agents,
+                        providers,
+                        ref profiles,
+                        ref currentGoal);
+                    Xunit.Assert.True(changed);
+                });
+                Xunit.Assert.Contains("Workspace cleanup deferred", output);
+            });
 
-            var stderr = CaptureConsoleError(() => CaptureConsole(() =>
-            {
-                var changed = CliPersistentStateRunner.ExecuteCommand(
-                    ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
-                    repository,
-                    CreateRefinedWorkspace(root),
-                    ref agents,
-                    providers,
-                    ref profiles,
-                    ref currentGoal);
-                Xunit.Assert.True(changed);
-            }));
-
-            Xunit.Assert.Contains("warning: goal-mark-landed state commit failed after durable landed state", stderr);
+            Xunit.Assert.DoesNotContain("warning: goal-mark-landed state commit failed", stderr);
+            Xunit.Assert.Equal(0, repository.TransactionCount);
+            Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
         }
         finally
         {
@@ -8737,8 +8784,8 @@ public sealed class CliCommandTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_returns_success_when_cleanup_backoff_write_is_unavailable")]
-    public void PersistentRunnerGoalMarkLandedReturnsSuccessWhenCleanupBackoffWriteIsUnavailable()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_returns_success_with_deferred_cleanup_backoff")]
+    public void PersistentRunnerGoalMarkLandedReturnsSuccessWithDeferredCleanupBackoff()
     {
         var root = CreateShortAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -8758,32 +8805,31 @@ public sealed class CliCommandTests
                 "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
-            var repository = new InMemoryTransactionalStateRepository(kernel)
+            GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+            GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
+            GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
+            GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var stderr = CaptureConsoleError(() =>
             {
-                BeforeSaveCommit = _ =>
+                var output = CaptureConsole(() =>
                 {
-                    GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
-                    GoalOperationJournal.Completed(root, goal, "conductor:record", "recorded");
-                    GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
-                    Xunit.Assert.Null(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
-                    throw new TimeoutException("state commit timed out");
-                }
-            };
+                    var changed = CliPersistentStateRunner.ExecuteCommand(
+                        ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                        repository,
+                        CreateRefinedWorkspace(root),
+                        ref agents,
+                        providers,
+                        ref profiles,
+                        ref currentGoal);
+                    Xunit.Assert.True(changed);
+                });
+                Xunit.Assert.Contains("Cleanup backoff:", output);
+            });
 
-            var stderr = CaptureConsoleError(() => CaptureConsole(() =>
-            {
-                var changed = CliPersistentStateRunner.ExecuteCommand(
-                    ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
-                    repository,
-                    CreateRefinedWorkspace(root),
-                    ref agents,
-                    providers,
-                    ref profiles,
-                    ref currentGoal);
-                Xunit.Assert.True(changed);
-            }));
-
-            Xunit.Assert.Contains("warning: goal-mark-landed state commit failed after durable landed state", stderr);
+            Xunit.Assert.DoesNotContain("warning: goal-mark-landed state commit failed", stderr);
+            Xunit.Assert.Equal(0, repository.TransactionCount);
         }
         finally
         {
@@ -8812,28 +8858,36 @@ public sealed class CliCommandTests
                 "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
-            var repository = new InMemoryTransactionalStateRepository(kernel)
+            var journalPath = GoalOperationJournal.PathFor(root, goal.Id);
+            if (File.Exists(journalPath))
             {
-                BeforeSaveCommit = _ =>
+                File.Delete(journalPath);
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+            GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+            GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
+            GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var stderr = CaptureConsoleError(() =>
+            {
+                var output = CaptureConsole(() =>
                 {
-                    File.Delete(GoalOperationJournal.PathFor(root, goal.Id));
-                    GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
-                    GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Deferred cleanup after landing: cleanup-needed");
-                    GoalWorktrees.RecordGoalCleanupNeeded(root, goal.Id, "remove:cleanup-budget-exhausted");
-                    throw new TimeoutException("state commit timed out");
-                }
-            };
+                    var changed = CliPersistentStateRunner.ExecuteCommand(
+                        ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                        repository,
+                        CreateRefinedWorkspace(root),
+                        ref agents,
+                        providers,
+                        ref profiles,
+                        ref currentGoal);
+                    Xunit.Assert.True(changed);
+                });
+                Xunit.Assert.Contains("Workspace cleanup deferred", output);
+            });
 
-            var ex = Xunit.Assert.ThrowsAny<TimeoutException>(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
-                repository,
-                CreateRefinedWorkspace(root),
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal)));
-
-            Xunit.Assert.Equal("state commit timed out", ex.Message);
+            Xunit.Assert.DoesNotContain("warning: goal-mark-landed state commit failed", stderr);
+            Xunit.Assert.Equal(0, repository.TransactionCount);
         }
         finally
         {
@@ -8873,12 +8927,14 @@ public sealed class CliCommandTests
             Xunit.Assert.True(changed);
         });
 
-        Xunit.Assert.Contains("CleanedUp", output);
+        Xunit.Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
+        Xunit.Assert.Contains("Workspace cleanup deferred", output);
         var journal = GoalOperationJournal.Read(root, goal.Id);
         var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
-            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Completed);
+            e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
         Xunit.Assert.NotNull(cleanupEntry);
-        var facts = new GoalLifecycleFacts(WorkspaceExists: false, IsMerged: true, IsRecorded: true, IsCleanedUp: true);
-        Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(goal, facts));
+        Xunit.Assert.Contains("Deferred cleanup after goal-mark-landed", cleanupEntry.Detail, StringComparison.Ordinal);
+        var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
+        Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
     }
 }

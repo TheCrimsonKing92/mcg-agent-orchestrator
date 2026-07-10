@@ -487,7 +487,9 @@ public sealed class StatePersistenceAndPerformanceTests
         var elapsed = Stopwatch.StartNew();
         await repository.SaveAsync(kernel);
         var restored = await repository.LoadAsync();
-        var html = DashboardRenderer.Render(restored, new DashboardRenderOptions(AutoRefreshSeconds: 5));
+        var html = DashboardRenderer.Render(restored, new DashboardRenderOptions(
+            AutoRefreshSeconds: 5,
+            WorkerProfiles: WorkerProfileCatalog.Default()));
         elapsed.Stop();
 
         Assert.True(restored.Goals.Single().Tasks.Count >= 100);

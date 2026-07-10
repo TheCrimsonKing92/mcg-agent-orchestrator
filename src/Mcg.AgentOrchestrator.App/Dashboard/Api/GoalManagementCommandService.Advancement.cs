@@ -12,6 +12,7 @@ private const int MaxAutomaticHandoffSteps = 20;
 public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     AgentOrchestratorKernel kernel,
     IReadOnlyList<AgentDefinition> agents,
+    WorkerProfileCatalog workerProfiles,
     IModelProviderRegistry providers,
     OrchestratorWorkspace workspace,
     Goal goal)
@@ -24,7 +25,7 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
-    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, workerProfiles, agents);
     if (!automation.CanExecute || automation.TaskId is null)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
@@ -54,11 +55,13 @@ public static async Task<AdvanceLoopResultDto> AdvanceGoalUntilBlockedAsync(
     OrchestratorWorkspace workspace,
     Goal goal)
 {
+    var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
     return await AdvanceUntilBlockedAsync(
         kernel,
         goal,
         automation => ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false),
         automation => automation.Message,
+        profiles,
         agents);
 }
 
@@ -188,7 +191,7 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     }
 
     var automation = NextActionAutomationPolicy.Build(item);
-    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents);
+    var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, profiles, agents);
     if (!automation.CanExecute || automation.TaskId is null)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(automation.Message), null);
@@ -232,6 +235,7 @@ public static AdvanceLoopResultDto AdvanceGoalWithSubscriptionsUntilBlocked(
         goal,
         automation => Task.FromResult(ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart, providers)),
         GetSubscriptionAutomationMessage,
+        profiles,
         agents).GetAwaiter().GetResult();
 }
 
@@ -240,6 +244,7 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
     Goal goal,
     Func<NextActionAutomationPlan, Task<object?>> execute,
     Func<NextActionAutomationPlan, string> messageFor,
+    WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
     var steps = new List<AdvanceResultDto>();
@@ -258,7 +263,7 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
         }
 
         var automation = NextActionAutomationPolicy.Build(item);
-        var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents);
+        var action = DashboardResponseMapper.ToNextActionDto(goal, item, 1, workerProfiles, agents);
         if (!automation.CanExecute || automation.TaskId is null)
         {
             blockingAction = action;
@@ -314,7 +319,7 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
     {
         var actions = kernel.BuildNextActions(goal.Id);
         var item = actions.Items.FirstOrDefault();
-        blockingAction = item is null ? null : DashboardResponseMapper.ToNextActionDto(goal, item, 1, agents);
+        blockingAction = item is null ? null : DashboardResponseMapper.ToNextActionDto(goal, item, 1, workerProfiles, agents);
         stopReason = $"Stopped after {MaxAutomaticHandoffSteps} automated step(s); run continuation again if more safe actions remain.";
     }
 

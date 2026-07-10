@@ -237,12 +237,13 @@ internal static class SubscriptionPlanBuilder
                     ["Run delegate or add the missing agent profile."]));
         }
 
-        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task);
+        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
         var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
         var effectiveModelName = GetTemplateValue(templateVariables, "apiModelName") ?? agent.Model.ModelName;
         var usesComplexModel = UsesComplexModel(agent, effectiveProviderName, effectiveModelName);
         var subscriptionModelName = GetTemplateValue(templateVariables, "subscriptionModelName");
         var subscriptionReasoningEffort = GetTemplateValue(templateVariables, "subscriptionReasoningEffort");
+        var modelSelectionReason = GetTemplateValue(templateVariables, "modelSelectionReason");
         var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
 
         var scorecardKey = $"{effectiveProviderName}/{subscriptionModelName ?? effectiveModelName}";
@@ -250,7 +251,7 @@ internal static class SubscriptionPlanBuilder
 
         try
         {
-            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task);
+            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
             var profile = profiles.Profiles.FirstOrDefault(candidate => candidate.Name.Equals(profileName, StringComparison.OrdinalIgnoreCase));
             validations.TryGetValue(profileName, out var validation);
             var hasProfile = profile is not null;
@@ -267,14 +268,15 @@ internal static class SubscriptionPlanBuilder
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var now = DateTimeOffset.UtcNow;
             var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
+            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
+            var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
+            var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);
             var providerCoolingDown = DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
-                effectiveProviderName,
+                dispatchProviderName,
                 now,
                 out var providerCooldown);
-            var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
-            var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - now).TotalSeconds))
                 : providerCoolingDown
@@ -334,7 +336,7 @@ internal static class SubscriptionPlanBuilder
                 task,
                 agent,
                 profileName,
-                effectiveProviderName,
+                dispatchProviderName,
                 subscriptionModelName ?? agent.Subscription?.ModelAlias ?? effectiveModelName,
                 taskComplexity,
                 usesComplexModel,
@@ -353,6 +355,7 @@ internal static class SubscriptionPlanBuilder
                 costGuardPromptCharacterCount,
                 taskBriefHeadroom,
                 detail,
+                modelSelectionReason,
                 scorecardRecord);
 
             return new SubscriptionPlanItem(
@@ -363,7 +366,7 @@ internal static class SubscriptionPlanBuilder
                 OutputTextPreview.CreateSummary(task.Description).Text,
                 agent.Id.Value,
                 agent.Name,
-                effectiveProviderName,
+                dispatchProviderName,
                 effectiveModelName,
                 agent.ExecutionPolicy,
                 profileName,
@@ -444,6 +447,7 @@ internal static class SubscriptionPlanBuilder
         int? costGuardPromptCharacterCount,
         int? taskBriefHeadroom,
         string detail,
+        string? modelSelectionReason,
         ModelOutcomeRecord? scorecardRecord = null)
     {
         var reasons = new List<string>
@@ -457,6 +461,10 @@ internal static class SubscriptionPlanBuilder
         if (usesComplexModel)
         {
             reasons.Add("selected complex model from complexity or model-fit evidence");
+        }
+        if (!string.IsNullOrWhiteSpace(modelSelectionReason))
+        {
+            reasons.Add($"model-selection: {modelSelectionReason}");
         }
 
         if (costGuardPromptCharacterCount is not null)
@@ -600,6 +608,14 @@ internal static class SubscriptionPlanBuilder
         {
             return provider;
         }
+    }
+
+    private static string ResolveDispatchProviderName(string selectedProviderName, string profileName)
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
+        return provider.Identity.Kind == ProviderKind.Unknown
+            ? selectedProviderName
+            : provider.ProviderName;
     }
 
     private static string? GetTemplateValue(IReadOnlyDictionary<string, string?> variables, string name)

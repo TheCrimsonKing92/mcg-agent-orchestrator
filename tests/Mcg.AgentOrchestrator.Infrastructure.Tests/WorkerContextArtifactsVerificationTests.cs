@@ -24,4 +24,23 @@ public sealed class WorkerContextArtifactsVerificationTests
         Xunit.Assert.Contains("Do not run raw `dotnet test`", currentTask);
         Xunit.Assert.Contains("raw test execution can create per-worktree testhost firewall prompts", currentTask);
     }
+
+    [Xunit.Theory(DisplayName = "WorkerContextArtifacts_role_worker_result_contract_contains_guardrail_fields")]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void WorkerContextArtifactsRoleWorkerResultContractContainsGuardrailFields(AgentRole role)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Report role-specific output.", role);
+        var goal = kernel.CreateGoal("Context role output contract", [task]);
+
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, root);
+
+        var currentTask = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
+        foreach (var field in AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(role))
+        {
+            Xunit.Assert.Contains($"{field}:", currentTask);
+        }
+    }
 }

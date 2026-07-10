@@ -346,32 +346,20 @@ internal sealed class ConductorDriver
 
         _cleanup = goal =>
         {
-            GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Removing goal workspace.");
-            GoalWorktreeRemoveResult result;
-            try
-            {
-                result = GoalWorktrees.Remove(dir, goal.Id, kernel);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
-            {
-                var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(dir, goal.Id, "remove:conductor-cleanup-failed");
-                var path = GoalWorktrees.WorktreePath(dir, goal.Id);
-                result = new GoalWorktreeRemoveResult(
-                    $"Workspace cleanup deferred after removal failure: {ex.Message}",
-                    path,
-                    GoalWorktrees.FindLockHoldersForCleanup(path),
-                    $"conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop",
-                    CleanupBackoff: cleanupBackoff);
-            }
-
-            if (result.IsComplete)
-                GoalOperationJournal.Completed(dir, goal, "conductor:cleanup", result.Message);
-            else
-                GoalOperationJournal.Failed(dir, goal, "conductor:cleanup", result.Message);
-            if (result.IsComplete)
-                worktreeSnapshot.Remove(goal.Id);
+            GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Deferred goal cleanup scheduled for terminal sweep.");
+            var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(dir, goal.Id, "remove:conductor-deferred");
+            var path = GoalWorktrees.WorktreePath(dir, goal.Id);
+            var message = cleanupBackoff is null
+                ? "Workspace cleanup deferred to terminal sweep."
+                : $"Workspace cleanup deferred to terminal sweep: {GoalWorktrees.FormatCleanupBackoff(cleanupBackoff)}";
+            GoalOperationJournal.Failed(dir, goal, "conductor:cleanup", message);
             RefreshJournal(goal.Id);
-            return result;
+            return new GoalWorktreeRemoveResult(
+                message,
+                path,
+                [],
+                $"conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop",
+                CleanupBackoff: cleanupBackoff);
         };
         _completeGoal = goal => kernel.CompleteGoal(goal.Id, "Conductor completed goal after durable landing, recording, and cleanup evidence.");
 
@@ -1189,18 +1177,11 @@ internal sealed class ConductorDriver
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
+            _completeGoal(goal);
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
+                new ConductorAdvanceOutcome.Executed(
                     GoalLifecycleState.Recorded,
                     $"Workspace cleanup deferred after removal failure; retry later. {ex.Message}"));
-        }
-
-        if (!cleanup.IsComplete)
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Recorded,
-                    $"Workspace cleanup deferred; retry later. {FormatCleanupDiagnostic(cleanup)}"));
         }
 
         _completeGoal(goal);

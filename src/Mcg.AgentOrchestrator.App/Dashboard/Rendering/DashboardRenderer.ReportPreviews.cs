@@ -27,6 +27,7 @@ public static partial class DashboardRenderer
         var testImpact = DashboardResponseMapper.ToGoalWorkSummaryDto(
             kernel,
             goal,
+            RequireWorkerProfiles(options),
             options.AgentDefinitions,
             executionDirectory: options.Workspace?.ExecutionDirectory,
             changedFiles: options.FocusGoalChangedFiles).TestImpact;
@@ -201,7 +202,7 @@ public static partial class DashboardRenderer
             kernel,
             goal,
             options.AgentDefinitions ?? [],
-            options.WorkerProfiles ?? WorkerProfileCatalog.Default(),
+            RequireWorkerProfiles(options),
             options.Workspace.ExecutionDirectory,
             AutonomyPolicy.Default);
     }

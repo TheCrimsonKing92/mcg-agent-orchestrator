@@ -285,10 +285,7 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
-        var nextAgents = agents;
-        var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
-        Goal? nextCurrentGoal = currentGoal;
         GoalId? goalMarkLandedGoalId = currentGoal?.Id;
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var slowStep = "state-load";
@@ -296,39 +293,36 @@ internal static class CliPersistentStateRunner
 
         try
         {
-            var changed = stateRepository.TransactAsync(
-                    (kernel, token) =>
-                    {
-                        slowStep = "command-handler";
-                        var commandAgents = nextAgents;
-                        var commandProfiles = nextWorkerProfiles;
-                        var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
-                        var shouldSave = CliCommandDispatcher.ExecuteCommand(
-                            args,
-                            kernel,
-                            workspace,
-                            ref commandAgents,
-                            providers,
-                            ref commandProfiles,
-                            ref commandGoal,
-                            channel,
-                            () => stateRepository.LoadAsync(token).GetAwaiter().GetResult(),
-                            goalMarkLandedElapsedMilliseconds: () => elapsed.ElapsedMilliseconds);
+            var kernel = stateRepository.LoadAsync(cancellation.Token).GetAwaiter().GetResult();
+            currentGoal = ResolveCurrentGoal(kernel, currentGoalId);
 
-                        nextAgents = commandAgents;
-                        nextWorkerProfiles = commandProfiles;
-                        nextCurrentGoal = commandGoal;
-                        goalMarkLandedGoalId = commandGoal?.Id;
-                        slowStep = "state-save-commit";
-                        return Task.FromResult((shouldSave, shouldSave));
-                    },
-                    cancellation.Token)
-                .GetAwaiter()
-                .GetResult();
+            void Persist(AgentOrchestratorKernel checkpoint)
+            {
+                slowStep = "state-save-commit";
+                stateRepository.SaveAsync(checkpoint, cancellation.Token).GetAwaiter().GetResult();
+                slowStep = "command-handler";
+            }
 
-            agents = nextAgents;
-            workerProfiles = nextWorkerProfiles;
-            currentGoal = nextCurrentGoal;
+            slowStep = "command-handler";
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref workerProfiles,
+                    ref currentGoal,
+                    channel,
+                    () => stateRepository.LoadAsync(cancellation.Token).GetAwaiter().GetResult(),
+                    Persist,
+                    goalMarkLandedElapsedMilliseconds: () => elapsed.ElapsedMilliseconds);
+
+            goalMarkLandedGoalId = currentGoal?.Id;
+            if (changed)
+            {
+                Persist(kernel);
+            }
+
             return changed;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -402,7 +396,7 @@ internal static class CliPersistentStateRunner
     private static bool IsDeferredGoalMarkLandedCleanupEvidence(GoalOperationJournalEntry entry) =>
         entry.Operation.Equals("conductor:cleanup", StringComparison.OrdinalIgnoreCase) &&
         entry.Status == GoalOperationStatus.Failed &&
-        (entry.Detail?.Contains("Deferred cleanup after landing", StringComparison.OrdinalIgnoreCase) == true ||
+        (entry.Detail?.Contains("Deferred cleanup after", StringComparison.OrdinalIgnoreCase) == true ||
          entry.Detail?.Contains("cleanup-needed", StringComparison.OrdinalIgnoreCase) == true);
 
     internal static string FormatTickMergeReceipt(GoalSnapshotSaveResult result) =>
@@ -817,6 +811,7 @@ internal static class CliPersistentStateRunner
                         if (result.FastForwarded)
                         {
                             transactionKernel.ClearAcceptanceFailure(request.GoalId);
+                            transactionKernel.CompleteGoal(request.GoalId, request.CompletionReason);
                         }
                         else if (result.Message is not null)
                         {

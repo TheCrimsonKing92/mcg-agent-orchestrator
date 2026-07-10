@@ -1,7 +1,9 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class LandingExecutorTests
 {
     [Xunit.Fact(DisplayName = "LandingExecutor_failed_count_excludes_auto_recovered_empty_output_flake")]
@@ -106,6 +108,101 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Goal_mark_landed_persists_landed_state_before_cleanup_needed_enqueue")]
+    public void GoalMarkLandedPersistsLandedStateBeforeCleanupNeededEnqueue()
+    {
+        var repo = CreateGitRepository();
+        var previousWarningSink = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var innerRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = new CountingStateRepository(innerRepository);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            innerRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+            stateRepository.ResetSaveCount();
+
+            var saveCountAtCleanupNeeded = 0;
+            GoalWorktrees.CleanupWarningSink = warning =>
+            {
+                if (warning.Operation.Equals("remove:cleanup-needed", StringComparison.OrdinalIgnoreCase))
+                {
+                    saveCountAtCleanupNeeded = stateRepository.SaveCount;
+                }
+            };
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Assert.True(changed);
+            Assert.True(saveCountAtCleanupNeeded > 0, "cleanup-needed was enqueued before a landed-state save");
+            var persisted = innerRepository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+            Assert.Equal(GoalStatus.Completed, persisted.Status);
+        }
+        finally
+        {
+            GoalWorktrees.CleanupWarningSink = previousWarningSink;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Terminal_sweep_cleanup_failure_reports_blocker_without_failing_landed_goal")]
+    public void TerminalSweepCleanupFailureReportsBlockerWithoutFailingLandedGoal()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (kernel, goal) = CreateCompletedGoalWithLeftoverWorkspace(repo);
+            GoalWorktrees.RecordGoalCleanupNeeded(repo, goal.Id, "remove:simulated-cleanup-failure");
+
+            var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            var goalResult = Assert.Single(result.Goals);
+            var blocker = Assert.Single(goalResult.Blockers);
+            Assert.Equal("completed-worktree-cleanup-needed", blocker.Kind);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Assert.DoesNotContain(
+                kernel.GetGoal(goal.Id).Timeline,
+                evt => evt.Message.Contains("AcceptanceFailed", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Terminal_sweep_cleanup_second_run_is_noop_after_success")]
+    public void TerminalSweepCleanupSecondRunIsNoopAfterSuccess()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (kernel, goal) = CreateCompletedGoalWithLeftoverWorkspace(repo);
+
+            var first = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var second = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.Contains(first.Goals, item => item.Repairs.Any(repair => repair.Kind == "merged-branch-cleanup"));
+            Assert.Empty(second.Goals);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateGoal(params AgentRole[] roles)
     {
         var kernel = new AgentOrchestratorKernel();
@@ -178,6 +275,16 @@ public sealed class LandingExecutorTests
         return (kernel, goal);
     }
 
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateCompletedGoalWithLeftoverWorkspace(string repo)
+    {
+        var (kernel, goal) = CreateVerifiedGoal(repo);
+        kernel.CompleteGoal(goal.Id, "Already landed; cleanup remains.");
+        var leftoverPath = GoalWorktrees.WorktreePath(repo, goal.Id);
+        Directory.CreateDirectory(leftoverPath);
+        File.WriteAllText(Path.Combine(leftoverPath, "leftover.txt"), "cleanup debt");
+        return (kernel, goal);
+    }
+
     private static string CreateGitRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-landing-tests", Guid.NewGuid().ToString("N"));
@@ -212,5 +319,70 @@ public sealed class LandingExecutorTests
         catch
         {
         }
+    }
+
+    private sealed class CountingStateRepository(ITransactionalOrchestratorStateRepository inner)
+        : ITransactionalOrchestratorStateRepository
+    {
+        private int _saveCount;
+
+        public int SaveCount => Volatile.Read(ref _saveCount);
+
+        public void ResetSaveCount() => Volatile.Write(ref _saveCount, 0);
+
+        public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default) =>
+            inner.LoadAsync(cancellationToken);
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) =>
+            inner.LoadGoalsAsync(goalIds, cancellationToken);
+
+        public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
+        {
+            await inner.SaveAsync(kernel, cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _saveCount);
+        }
+
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            inner.ListGoalMetadataAsync(cancellationToken);
+
+        public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            inner.ListConductLoopGoalMetadataAsync(cancellationToken);
+
+        public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
+            inner.ListModelFitHistoryAsync(cancellationToken);
+
+        public Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+            int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+            CancellationToken cancellationToken = default) =>
+            inner.BuildModelOutcomeScorecardAsync(windowSize, cancellationToken);
+
+        public Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default) =>
+            inner.QueryBestFitForRoleAsync(role, cancellationToken);
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default) =>
+            inner.TransactAsync(transaction, cancellationToken);
+
+        public Task<T> TransactAsync<T>(
+            Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+            CancellationToken cancellationToken = default) =>
+            inner.TransactAsync(transaction, cancellationToken);
+
+        public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default) =>
+            inner.LoadGoalAsync(goalId, cancellationToken);
+
+        public Task SaveGoalSnapshotsAsync(
+            IReadOnlyCollection<GoalSnapshot> goals,
+            CancellationToken cancellationToken = default) =>
+            inner.SaveGoalSnapshotsAsync(goals, cancellationToken);
+
+        public Task<T> TransactGoalAsync<T>(
+            GoalId goalId,
+            Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+            CancellationToken cancellationToken = default) =>
+            inner.TransactGoalAsync(goalId, transaction, cancellationToken);
     }
 }

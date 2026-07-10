@@ -99,7 +99,8 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
-        return Text(GoalTranscriptRenderer.Render(current, goal, agents), "text/markdown; charset=utf-8");
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
+        return Text(GoalTranscriptRenderer.Render(current, goal, workerProfiles, agents), "text/markdown; charset=utf-8");
     }
 
     private static async Task<IResult> GetGoalWorkSummaryAsync(string goalId, DashboardEndpointServices services)
@@ -107,10 +108,12 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(services.Workspace.RunEventStorePath, goal);
         return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(
             current,
             goal,
+            workerProfiles,
             agents,
             BuildHostInfo(services),
             services.Workspace.ExecutionDirectory,
@@ -331,12 +334,13 @@ internal static partial class DashboardEndpoints
     private static async Task<IResult> AdvanceGoalAsync(string goalId, DashboardEndpointServices services)
     {
         var agents = services.LoadAgentCatalog().Agents;
+        var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         return await MutateIfChangedAsync(
             services,
             async current =>
             {
                 var goal = ResolveGoal(current, goalId);
-                var result = await GoalManagementCommandService.AdvanceGoalAsync(current, agents, services.Providers, services.Workspace, goal);
+                var result = await GoalManagementCommandService.AdvanceGoalAsync(current, agents, workerProfiles, services.Providers, services.Workspace, goal);
                 return (result.Executed, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict));
             });
     }

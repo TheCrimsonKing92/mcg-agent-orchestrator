@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
+[Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class GoalLifecycleEventWriterTests
 {
     [Xunit.Fact]
@@ -52,6 +53,7 @@ public sealed class GoalLifecycleEventWriterTests
                 "TaskDelegated",
                 "TaskDispatched",
                 "TaskVerified",
+                "TaskNote",
                 "TaskCompleted",
                 "GoalLifecycleDecision",
                 "GoalLanded",

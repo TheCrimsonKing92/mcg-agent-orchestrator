@@ -66,6 +66,10 @@ public sealed partial class AgentOrchestratorKernel
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
+        if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
+        {
+            Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
+        }
 
         var isRecoverableSubscriptionLimit = outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit;
         if (!verification.Succeeded && isRecoverableSubscriptionLimit)

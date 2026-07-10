@@ -23,6 +23,95 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("codex", StringComparison.Ordinal) &&
         evt.Message.Contains("implement feature", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_records_classifier_receipt")]
+    public void RecordDispatchExecutionResultRecordsClassifierReceipt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Record classifier receipt");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec prompt";
+    var stdout = "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT";
+
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            command,
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
+        evt.Message.Contains("worker_result=present(blockers=none)", StringComparison.Ordinal) &&
+        evt.Message.Contains("commit=orchestrator", StringComparison.Ordinal) &&
+        evt.Message.Contains("verdict=VerifiedSuccess", StringComparison.Ordinal));
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_after_task_output_committed_worker_result")]
+    public void RecordDispatchExecutionResultCompletesAfterTaskOutputCommittedWorkerResult()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Complete committed worker result");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec prompt";
+    var stdout = WorkerResultStdout("src/Foo.cs", "not-run - acceptance gate owns full verification", "none");
+
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+    kernel.RecordTaskNote(goal.Id, task.Id, "TaskOutputCommitted: sha=ce5e35c1; provenance=orchestrator.");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            command,
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
+        evt.Message.Contains("rule=committed-worker-result-evidence", StringComparison.Ordinal) &&
+        evt.Message.Contains("commit=orchestrator", StringComparison.Ordinal) &&
+        evt.Message.Contains("verdict=VerifiedSuccess", StringComparison.Ordinal));
+    var timeline = goal.Timeline.ToList();
+    Assert.True(
+        timeline.FindIndex(evt => evt.TaskId == task.Id && evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal)) <
+        timeline.FindIndex(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
+}
+
     [Xunit.Fact(DisplayName = "RecordTaskDispatch_rejects_unassigned_task")]
     public void RecordTaskDispatchRejectsUnassignedTask()
 {
