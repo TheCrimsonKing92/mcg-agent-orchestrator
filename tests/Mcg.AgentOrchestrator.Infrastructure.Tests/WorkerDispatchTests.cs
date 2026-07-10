@@ -4222,6 +4222,49 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Xunit.Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_records_resource_accounting")]
+    public void BackgroundDispatchRunnerNonLocalDispatchRecordsResourceAccounting()
+{
+    var root = CreateTempDirectory();
+    var logs = Path.Combine(root, "logs");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Record worker dispatch resources");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "Write-Output $env:DOTNET_CLI_USE_MSBUILD_SERVER; Write-Output $env:MSBUILDDISABLENODEREUSE; Write-Output $env:UseSharedCompilation",
+        root,
+        DateTimeOffset.UtcNow));
+
+    var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
+    WaitForExitFile(process.ExitCodePath);
+    new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    var refreshed = task.LastProcess!;
+    var output = File.ReadAllLines(process.StandardOutputPath);
+    Assert.True(File.Exists(BackgroundDispatchRunner.GetHeartbeatPath(process)));
+    Assert.Equal(3, output.Length);
+    Assert.Equal("0", output[0]);
+    Assert.Equal("1", output[1]);
+    Assert.Equal("false", output[2]);
+    Assert.NotNull(refreshed.ResourceAccounting);
+    Assert.True(refreshed.ResourceAccounting.CpuMilliseconds >= 0);
+    Assert.True(refreshed.ResourceAccounting.PeakMemoryBytes > 0);
+    Assert.True(refreshed.ResourceAccounting.IoBytes >= 0);
+    Assert.Contains("RESOURCE ", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("cpu_ms=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("peak_mem_bytes=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("io_bytes=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains(
+        kernel.GetTimeline(goal.Id),
+        evt => evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+            evt.Message.Contains("cpu_ms=", StringComparison.Ordinal) &&
+            evt.Message.Contains("peak_mem_bytes=", StringComparison.Ordinal) &&
+            evt.Message.Contains("io_bytes=", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_completes_when_exit_file_exists_even_if_wrapper_is_running")]
     public void BackgroundDispatchRunnerRefreshCompletesWhenExitFileExistsEvenIfWrapperIsRunning()
 {
