@@ -94,6 +94,14 @@ public sealed class DispatchStateSurface
 
     public DispatchAuthoritativeState Evaluate(GoalId goalId, TaskSpec task)
     {
+        return Evaluate(goalId, task, commandLineSnapshot: null);
+    }
+
+    public DispatchAuthoritativeState Evaluate(
+        GoalId goalId,
+        TaskSpec task,
+        ProcessCommandLineSnapshot? commandLineSnapshot)
+    {
         if (task.LastProcess is not { } process)
         {
             var heartbeat = new DispatchHeartbeatStatus(string.Empty, false, "no-process", 0, null, [], "none", null, null, null, null, 0, 0);
@@ -114,7 +122,7 @@ public sealed class DispatchStateSurface
         }
 
         var heartbeatStatus = ProcessLogReader.ReadHeartbeat(process, _clock.UtcNow);
-        var processTree = BuildProcessTree(process, heartbeatStatus);
+        var processTree = BuildProcessTree(process, heartbeatStatus, commandLineSnapshot);
         var artifactsStatus = ReadArtifacts(process, heartbeatStatus);
         var worktreeState = InspectWorktree(process.WorkingDirectory, task.LastDispatch?.DispatchedAt, _inspectWorktree);
         var staleBudget = DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task);
@@ -136,7 +144,10 @@ public sealed class DispatchStateSurface
             BuildSummary(goalId, task, kind, recovery, processTree, artifactsStatus, heartbeatStatus, worktreeState));
     }
 
-    private DispatchProcessTreeSummary BuildProcessTree(TaskProcessRecord process, DispatchHeartbeatStatus heartbeat)
+    private DispatchProcessTreeSummary BuildProcessTree(
+        TaskProcessRecord process,
+        DispatchHeartbeatStatus heartbeat,
+        ProcessCommandLineSnapshot? commandLineSnapshot)
     {
         var processIds = new List<int>();
         Add(processIds, process.ProcessId);
@@ -159,7 +170,7 @@ public sealed class DispatchStateSurface
             }
         }
 
-        var commandLines = _readCommandLines(processIds);
+        var commandLines = commandLineSnapshot?.Read(processIds) ?? _readCommandLines(processIds);
         var nodes = processIds
             .Select(pid => new DispatchProcessTreeNode(
                 pid,

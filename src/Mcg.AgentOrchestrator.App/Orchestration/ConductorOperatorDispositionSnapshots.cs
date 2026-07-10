@@ -68,13 +68,25 @@ internal static class ConductorOperatorDispositionSnapshots
         AgentOrchestratorKernel kernel,
         string? executionDirectory)
     {
+        return Build(kernel, executionDirectory, ProcessCommandLines.Snapshot);
+    }
+
+    internal static IReadOnlyList<ConductorOperatorDispositionSnapshot> Build(
+        AgentOrchestratorKernel kernel,
+        string? executionDirectory,
+        Func<ProcessCommandLineSnapshot> createCommandLineSnapshot)
+    {
         var surface = new GoalOperatorDispositionSurface();
+        var commandLineSnapshot = createCommandLineSnapshot();
         return kernel.Goals
             .Select(goal => surface.Evaluate(
                 goal,
                 kernel.BuildMonitor(goal.Id).PendingHumanInputCount,
                 kernel.BuildVerificationGate(goal.Id).IsSatisfied,
-                executionDirectory))
+                executionDirectory,
+                commandLineSnapshot,
+                skipTerminalDispatchEvaluation: true,
+                skipInactiveDispatchEvaluation: true))
             .Select(ConductorOperatorDispositionSnapshot.From)
             .ToList();
     }
