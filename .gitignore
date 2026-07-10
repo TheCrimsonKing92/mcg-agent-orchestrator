@@ -33,6 +33,7 @@ publish/
 **/.orchestrator-prototype/
 **/.orchestrator-legacy-*/
 **/.scratch/
+i/
 .test-results/
 .build.out
 .build-lock/
