@@ -435,7 +435,16 @@ public sealed class AdvanceLoopTests
     var goal = CreateRefinedGoal(kernel,
         "Dispatch into execution root",
         [new TaskSpec(TaskId.New(), "Inspect command", AgentRole.Planner)]);
-    var agents = AgentCatalog.Default().Agents;
+    IReadOnlyList<AgentDefinition> agents =
+    [
+        new AgentDefinition(
+            new AgentId("codex-cli"),
+            "Planner Codex",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"))
+    ];
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
 
