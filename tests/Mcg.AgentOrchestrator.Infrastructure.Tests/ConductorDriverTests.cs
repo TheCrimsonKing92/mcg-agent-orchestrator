@@ -1044,7 +1044,7 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Recorded, executed.FromState);
         Assert.Equal(1, cleanupCalls);
         Assert.True(executed.Description.Contains("leftover", StringComparison.Ordinal), executed.Description);
-        Assert.Equal(GoalStatus.Completed, goal.Status);
+        Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Recorded_cleanup_failure_completes_without_throwing")]
@@ -1064,7 +1064,7 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Recorded, executed.FromState);
         Assert.Contains("Workspace cleanup deferred after removal failure", executed.Description, StringComparison.Ordinal);
         Assert.Contains("git worktree remove refused dirty workspace", executed.Description, StringComparison.Ordinal);
-        Assert.Equal(GoalStatus.Completed, goal.Status);
+        Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
     }
 
     // ── CleanedUp state ───────────────────────────────────────────────────
