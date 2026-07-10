@@ -10,6 +10,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal static class ProcessCommandLines
 {
+    public static ProcessCommandLineSnapshot Snapshot() =>
+        new(ReadAll());
+
     public static Dictionary<int, string> Read(IEnumerable<int> pids)
     {
         var pidList = pids.Distinct().ToList();
@@ -29,6 +32,56 @@ internal static class ProcessCommandLines
         }
 
         return [];
+    }
+
+    private static Dictionary<int, string> ReadAll()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return ReadWindowsAll();
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return ReadLinuxAll();
+        }
+
+        return [];
+    }
+
+    private static Dictionary<int, string> ReadWindowsAll()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "wmic",
+                Arguments = "process get ProcessId,CommandLine /format:list",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                return [];
+            }
+
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(3000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return [];
+            }
+
+            return GoalWorktrees.ParseWmicListOutput(output);
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private static Dictionary<int, string> ReadWindows(List<int> pids)
@@ -91,6 +144,55 @@ internal static class ProcessCommandLines
             catch
             {
                 // Best-effort; an unreadable /proc entry is treated as "unknown" by callers.
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<int, string> ReadLinuxAll()
+    {
+        try
+        {
+            var pids = Directory
+                .EnumerateDirectories("/proc")
+                .Select(Path.GetFileName)
+                .Where(name => int.TryParse(name, out _))
+                .Select(int.Parse)
+                .ToList();
+
+            return ReadLinux(pids);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+}
+
+public sealed class ProcessCommandLineSnapshot
+{
+    private readonly IReadOnlyDictionary<int, string> _commandLines;
+    private readonly Action<int>? _onRead;
+
+    internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines, Action<int>? onRead = null)
+    {
+        _commandLines = commandLines;
+        _onRead = onRead;
+    }
+
+    public static ProcessCommandLineSnapshot Empty { get; } = new(new Dictionary<int, string>());
+
+    public IReadOnlyDictionary<int, string> Read(IEnumerable<int> pids)
+    {
+        var result = new Dictionary<int, string>();
+        var distinctPids = pids.Distinct().ToArray();
+        _onRead?.Invoke(distinctPids.Length);
+        foreach (var pid in distinctPids)
+        {
+            if (_commandLines.TryGetValue(pid, out var commandLine))
+            {
+                result[pid] = commandLine;
             }
         }
 

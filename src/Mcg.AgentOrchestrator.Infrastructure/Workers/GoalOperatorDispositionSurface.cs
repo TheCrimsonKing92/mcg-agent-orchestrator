@@ -61,13 +61,17 @@ public sealed class GoalOperatorDispositionSurface
         Goal goal,
         int pendingHumanInputCount,
         bool verificationSatisfied,
-        string? executionDirectory = null)
+        string? executionDirectory = null,
+        ProcessCommandLineSnapshot? commandLineSnapshot = null,
+        bool skipTerminalDispatchEvaluation = false,
+        bool skipInactiveDispatchEvaluation = false)
     {
-        var dispatches = goal.Tasks.Select(task => EvaluateTask(goal, task)).ToList();
+        var operationallyTerminal = IsTerminal(goal.Status);
+        var dispatches = operationallyTerminal && skipTerminalDispatchEvaluation
+            ? new List<DispatchOperatorDisposition>()
+            : goal.Tasks.Select(task => EvaluateTask(goal, task, commandLineSnapshot, skipInactiveDispatchEvaluation)).ToList();
         var blockers = new List<string>();
         var evidence = new List<OperatorEvidencePointer>();
-
-        var operationallyTerminal = IsTerminal(goal.Status);
 
         if (operationallyTerminal && pendingHumanInputCount > 0)
         {
@@ -106,15 +110,22 @@ public sealed class GoalOperatorDispositionSurface
             "no dispatch recovery action is currently required", "next", blockers, evidence, dispatches);
     }
 
-    private DispatchOperatorDisposition EvaluateTask(Goal goal, TaskSpec task)
+    private DispatchOperatorDisposition EvaluateTask(
+        Goal goal,
+        TaskSpec task,
+        ProcessCommandLineSnapshot? commandLineSnapshot,
+        bool skipInactiveDispatchEvaluation)
     {
         var taskNumber = GetTaskNumber(goal, task);
         var evidence = new List<OperatorEvidencePointer>();
         var blockers = new List<string>();
         DispatchAuthoritativeState? dispatchState = null;
-        if (task.LastDispatch is not null || task.LastProcess is not null)
+        var shouldEvaluateDispatch = skipInactiveDispatchEvaluation
+            ? task.LastProcess is { IsRunning: true }
+            : task.LastDispatch is not null || task.LastProcess is not null;
+        if (shouldEvaluateDispatch)
         {
-            dispatchState = _dispatchSurface.Evaluate(goal.Id, task);
+            dispatchState = _dispatchSurface.Evaluate(goal.Id, task, commandLineSnapshot);
             AddDispatchEvidence(evidence, dispatchState);
         }
 
