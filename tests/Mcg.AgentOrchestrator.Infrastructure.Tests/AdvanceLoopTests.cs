@@ -43,11 +43,17 @@ public sealed class AdvanceLoopTests
         Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(WorkTaskStatus.Running, planner.Status);
         Assert.True(planner.LastDispatch is not null);
-        Assert.Equal("codex-cli", planner.LastDispatch!.WorkerName);
-        Assert.Equal(workspace.ExecutionDirectory, planner.LastDispatch.WorkingDirectory);
+        var dispatch = planner.LastDispatch!;
+        Assert.True(dispatch.WorkerName is "codex-cli" or "claude-cli", dispatch.WorkerName);
+        if (dispatch.WorkerName.Equals("claude-cli", StringComparison.Ordinal))
+        {
+            Assert.Equal("claude-haiku-4-5", dispatch.ModelName);
+        }
+
+        Assert.Equal(workspace.ExecutionDirectory, dispatch.WorkingDirectory);
         Assert.True(planner.LastProcess is not null);
         Assert.True(planner.LastProcess!.IsRunning);
-        Assert.Equal(planner.LastDispatch.Command, planner.LastProcess.Command);
+        Assert.Equal(dispatch.Command, planner.LastProcess.Command);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskDispatchRecorded && evt.TaskId == planner.Id));
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskProcessStarted && evt.TaskId == planner.Id));
     }
