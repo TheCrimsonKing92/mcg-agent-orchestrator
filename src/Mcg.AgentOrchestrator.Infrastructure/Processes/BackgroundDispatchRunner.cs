@@ -1388,11 +1388,12 @@ public sealed class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to cancel.");
 
+        TaskProcessResourceAccounting? resourceAccounting = null;
         if (processRecord.IsRunning)
         {
             try
             {
-                TryKillTrackedProcesses(processRecord, waitForExit: true);
+                resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
             }
             catch (ArgumentException)
             {
@@ -1400,14 +1401,20 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        resourceAccounting ??= ReleaseTrackedProcessJobs(processRecord);
         var cancelled = processRecord with
         {
             CompletedAt = _clock.UtcNow,
-            WasCancelled = true
+            WasCancelled = true,
+            ResourceAccounting = resourceAccounting
         };
-        ReleaseTrackedProcessJobs(processRecord);
 
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+        if (resourceAccounting is not null)
+        {
+            kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
+        }
+
         return cancelled;
     }
 

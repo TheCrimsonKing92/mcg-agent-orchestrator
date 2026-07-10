@@ -4113,20 +4113,33 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var dispatch = new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now);
     kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
-    kernel.RecordTaskProcessStarted(
-        goal.Id,
-        task.Id,
-        new TaskProcessRecord(
-            111,
-            dispatch.Command,
-            dispatch.WorkingDirectory,
-            "out.log",
-            "err.log",
-            "exit.txt",
-            now,
-            null,
-            null,
-            OwnedProcessIds: [111, 222]));
+    var process = new TaskProcessRecord(
+        111,
+        dispatch.Command,
+        dispatch.WorkingDirectory,
+        "out.log",
+        "err.log",
+        Path.Combine(root, "worker.exit.txt"),
+        now,
+        null,
+        null,
+        OwnedProcessIds: [111, 222]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    File.WriteAllText(
+        BackgroundDispatchRunner.GetHeartbeatPath(process),
+        "{" +
+        "\"pid\":111," +
+        "\"childPid\":222," +
+        "\"ownedPids\":[111,222]," +
+        $"\"startedAt\":\"{now:O}\"," +
+        $"\"lastObservedAt\":\"{now.AddSeconds(10):O}\"," +
+        $"\"lastProgressAt\":\"{now.AddSeconds(10):O}\"," +
+        "\"state\":\"running\"," +
+        "\"stdoutBytes\":0," +
+        "\"stderrBytes\":0," +
+        "\"exitFileExists\":false," +
+        "\"ownedCpuMs\":42" +
+        "}");
     var running = new HashSet<int> { 111, 222 };
     var killed = new List<int>();
     var runner = new BackgroundDispatchRunner(
@@ -4139,11 +4152,23 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             return true;
         });
 
-    runner.CancelLatestProcess(kernel, goal.Id, task.Id);
+    var cancelled = runner.CancelLatestProcess(kernel, goal.Id, task.Id);
     kernel.RequeueInterruptedDispatch(goal.Id, task.Id, "Redispatch after stopped worker tree.");
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt 2", root, now.AddMinutes(2)));
 
     Assert.True(killed.SequenceEqual([111, 222]));
+    Assert.NotNull(cancelled.ResourceAccounting);
+    Assert.Equal(42, cancelled.ResourceAccounting.CpuMilliseconds);
+    Assert.True(cancelled.ResourceAccounting.Reaped);
+    Assert.Equal("snapshot", cancelled.ResourceAccounting.AccountingSource);
+    Assert.Contains(
+        kernel.GetTimeline(goal.Id),
+        evt => evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+            evt.Message.Contains("cpu_ms=42", StringComparison.Ordinal) &&
+            evt.Message.Contains("peak_mem_bytes=", StringComparison.Ordinal) &&
+            evt.Message.Contains("io_bytes=", StringComparison.Ordinal) &&
+            evt.Message.Contains("reaped=true", StringComparison.Ordinal));
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Equal("codex exec prompt 2", task.LastDispatch!.Command);
     Xunit.Assert.Null(task.LastProcess);
