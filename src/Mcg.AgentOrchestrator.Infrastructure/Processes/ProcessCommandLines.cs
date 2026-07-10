@@ -173,10 +173,12 @@ internal static class ProcessCommandLines
 public sealed class ProcessCommandLineSnapshot
 {
     private readonly IReadOnlyDictionary<int, string> _commandLines;
+    private readonly Action<int>? _onRead;
 
-    internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines)
+    internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines, Action<int>? onRead = null)
     {
         _commandLines = commandLines;
+        _onRead = onRead;
     }
 
     public static ProcessCommandLineSnapshot Empty { get; } = new(new Dictionary<int, string>());
@@ -184,7 +186,9 @@ public sealed class ProcessCommandLineSnapshot
     public IReadOnlyDictionary<int, string> Read(IEnumerable<int> pids)
     {
         var result = new Dictionary<int, string>();
-        foreach (var pid in pids.Distinct())
+        var distinctPids = pids.Distinct().ToArray();
+        _onRead?.Invoke(distinctPids.Length);
+        foreach (var pid in distinctPids)
         {
             if (_commandLines.TryGetValue(pid, out var commandLine))
             {
