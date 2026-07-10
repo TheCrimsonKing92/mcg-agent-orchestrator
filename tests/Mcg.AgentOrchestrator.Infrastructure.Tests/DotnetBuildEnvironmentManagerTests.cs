@@ -301,7 +301,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             }
 
             Assert.True(File.Exists(readyPath), "Lease holder did not signal readiness.");
-            Assert.Throws<IOException>(() =>
+            Assert.ThrowsAny<IOException>(() =>
                 DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromMilliseconds(100)));
 
             holder.Kill(entireProcessTree: true);
@@ -320,8 +320,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_all_stable_slots_leased_reports_wait_and_times_out")]
-    public void DotnetBuildEnvironmentManagerAllStableSlotsLeasedReportsWaitAndTimesOut()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_all_stable_slots_leased_returns_slots_busy")]
+    public void DotnetBuildEnvironmentManagerAllStableSlotsLeasedReturnsSlotsBusy()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var locks = new List<FileStream>();
@@ -335,15 +335,23 @@ public sealed class DotnetBuildEnvironmentManagerTests
             }
 
             var waits = new List<DotnetBuildStableSlotWait>();
-            var ex = Assert.Throws<IOException>(() =>
-                DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
                     TimeSpan.FromMilliseconds(150),
-                    waits.Add));
+                    waits.Add);
+            });
 
-            Assert.Contains("Timed out waiting for an available stable dotnet build slot", ex.Message);
+            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+            Assert.Equal("first-available-stable-slot", busy.WantedBy);
+            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, busy.BusySlots.Count);
+            Assert.All(busy.BusySlots, slot => Assert.Equal(Environment.ProcessId, slot.OwnerProcessId));
             var wait = Assert.Single(waits);
             Assert.Equal(0, wait.SlotIndex);
             Assert.Equal(Environment.ProcessId, wait.OwnerProcessId);
+            Assert.Contains("SLOTS_BUSY", output);
+            Assert.Contains("wantedBy=first-available-stable-slot", output);
         }
         finally
         {

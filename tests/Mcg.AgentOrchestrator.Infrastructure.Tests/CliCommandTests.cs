@@ -6642,11 +6642,11 @@ public sealed class CliCommandTests
             var leaseHeldObserved = false;
             var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
             {
-                var reacquire = Xunit.Assert.Throws<IOException>(() =>
+                var reacquire = Xunit.Assert.ThrowsAny<IOException>(() =>
                     DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
                         stableSlotLease!.Environment,
                         TimeSpan.FromMilliseconds(50)));
-                Xunit.Assert.Contains("Timed out waiting for build lease execution lock", reacquire.Message);
+                Xunit.Assert.IsType<DotnetBuildSlotsBusyException>(reacquire);
                 leaseHeldObserved = true;
             });
 

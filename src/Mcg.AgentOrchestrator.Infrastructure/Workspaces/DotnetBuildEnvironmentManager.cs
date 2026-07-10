@@ -38,6 +38,26 @@ public sealed record DotnetBuildStableSlotWait(
     int SlotIndex,
     int? OwnerProcessId);
 
+public abstract record DotnetBuildLeaseAcquisition
+{
+    public sealed record Acquired(DotnetBuildEnvironmentLease Lease) : DotnetBuildLeaseAcquisition;
+
+    public sealed record SlotsBusy(
+        string WantedBy,
+        IReadOnlyList<DotnetBuildStableSlotWait> BusySlots) : DotnetBuildLeaseAcquisition;
+}
+
+public sealed class DotnetBuildSlotsBusyException : IOException
+{
+    public DotnetBuildSlotsBusyException(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
+        : base($"Stable dotnet build slots busy for {slotsBusy.WantedBy}.")
+    {
+        SlotsBusy = slotsBusy;
+    }
+
+    public DotnetBuildLeaseAcquisition.SlotsBusy SlotsBusy { get; }
+}
+
 public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
@@ -139,6 +159,19 @@ public static class DotnetBuildEnvironmentManager
         Action<DotnetBuildStableSlotWait>? onWait = null,
         CancellationToken cancellationToken = default)
     {
+        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken) switch
+        {
+            DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
+            DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
+            _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
+        };
+    }
+
+    public static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableStableSlotExecutionLock(
+        TimeSpan? timeout = null,
+        Action<DotnetBuildStableSlotWait>? onWait = null,
+        CancellationToken cancellationToken = default)
+    {
         var waitTimeout = timeout ?? TimeSpan.FromMinutes(5);
         var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
         var waitingReported = false;
@@ -150,15 +183,15 @@ public static class DotnetBuildEnvironmentManager
             {
                 var slot = (scanStart + offset) % StableSlotCount;
                 var environment = CreateStableSlotEnvironment(slot);
-                if (TryAcquireLeaseExecutionLock(environment, out var stream))
+                if (TryOpenLeaseExecutionLock(environment, out var stream))
                 {
-                    return new DotnetBuildEnvironmentLease(environment, stream);
+                    return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
                 }
             }
 
             if (DateTimeOffset.UtcNow >= timeoutAt)
             {
-                throw new IOException("Timed out waiting for an available stable dotnet build slot.");
+                return EmitSlotsBusy("first-available-stable-slot");
             }
 
             var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
@@ -169,9 +202,9 @@ public static class DotnetBuildEnvironmentManager
             }
 
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
-            if (TryAcquireLeaseExecutionLock(target, out var targetStream))
+            if (TryOpenLeaseExecutionLock(target, out var targetStream))
             {
-                return new DotnetBuildEnvironmentLease(target, targetStream);
+                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(target, targetStream));
             }
 
             Thread.Sleep(100);
@@ -312,6 +345,19 @@ public static class DotnetBuildEnvironmentManager
         TimeSpan? timeout,
         CancellationToken cancellationToken = default)
     {
+        return TryAcquireLeaseExecutionLock(environment, timeout, cancellationToken) switch
+        {
+            DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease.DetachStreamForLegacyCaller(),
+            DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
+            _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
+        };
+    }
+
+    public static DotnetBuildLeaseAcquisition TryAcquireLeaseExecutionLock(
+        DotnetBuildEnvironment environment,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken = default)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? TimeSpan.FromMinutes(5));
         while (true)
@@ -333,13 +379,13 @@ public static class DotnetBuildEnvironmentManager
                     throw;
                 }
 
-                return stream;
+                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
             }
             catch (IOException)
             {
                 if (DateTimeOffset.UtcNow >= timeoutAt)
                 {
-                    throw new IOException($"Timed out waiting for build lease execution lock: {environment.ExecutionLockPath}");
+                    return EmitSlotsBusy(environment.LeaseId);
                 }
 
                 Thread.Sleep(100);
@@ -603,7 +649,38 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(StableSlotRoot(slotName), "lease.execution.lock");
     }
 
-    private static bool TryAcquireLeaseExecutionLock(DotnetBuildEnvironment environment, out FileStream stream)
+    private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(string wantedBy)
+    {
+        var busySlots = BuildBusySlotSnapshot();
+        Console.WriteLine(
+            $"SLOTS_BUSY wantedBy={wantedBy} busySlots={FormatBusySlots(busySlots)} pid={Environment.ProcessId}");
+        return new DotnetBuildLeaseAcquisition.SlotsBusy(wantedBy, busySlots);
+    }
+
+    private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot()
+    {
+        var waits = new DotnetBuildStableSlotWait[StableSlotCount];
+        for (var slot = 0; slot < StableSlotCount; slot++)
+        {
+            waits[slot] = new DotnetBuildStableSlotWait(slot, TryReadStableSlotExecutionOwner(slot));
+        }
+
+        return waits;
+    }
+
+    private static int? TryReadStableSlotExecutionOwner(int slotIndex)
+    {
+        var metadata = TryReadExecutionLeaseMetadata(StableSlotExecutionLockPath($"slot-{slotIndex}"));
+        return metadata?.OwnerProcessId ?? TryReadStableSlotOwnerMarker(slotIndex)?.OwnerProcessId;
+    }
+
+    private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
+        string.Join(
+            "|",
+            busySlots.Select(slot =>
+                $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+
+    private static bool TryOpenLeaseExecutionLock(DotnetBuildEnvironment environment, out FileStream stream)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         try
@@ -954,6 +1031,7 @@ public static class DotnetBuildEnvironmentManager
 public sealed class DotnetBuildEnvironmentLease : IDisposable
 {
     private readonly FileStream _stream;
+    private bool _detached;
 
     internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream)
     {
@@ -963,8 +1041,19 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
     public DotnetBuildEnvironment Environment { get; }
 
+    internal FileStream DetachStreamForLegacyCaller()
+    {
+        _detached = true;
+        return _stream;
+    }
+
     public void Dispose()
     {
+        if (_detached)
+        {
+            return;
+        }
+
         try
         {
             _stream.Dispose();

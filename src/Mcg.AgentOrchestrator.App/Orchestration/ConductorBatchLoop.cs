@@ -760,10 +760,16 @@ internal sealed class ConductorBatchLoop
         }
 
         var candidates = new List<ConductorParallelAcceptanceCandidate>();
+        var deferredByAdmission = 0;
         foreach (var goal in eligible)
         {
             if (candidates.Count >= slotCount)
             {
+                if (TryBuildParallelAcceptanceCandidate(driver, goal, policy, candidates.Count) is not null)
+                {
+                    deferredByAdmission++;
+                }
+
                 break;
             }
 
@@ -780,6 +786,13 @@ internal sealed class ConductorBatchLoop
             }
 
             candidates.Add(candidate);
+        }
+
+        if (deferredByAdmission > 0)
+        {
+            EmitProgress(
+                $"ADMISSION tick={tick} result=deferred reason=reserved-gate-slot cap={slotCount} deferred={deferredByAdmission}",
+                changedGoalLines);
         }
 
         if (candidates.Count < 2)
@@ -848,6 +861,17 @@ internal sealed class ConductorBatchLoop
     {
         if (run.Exception is not null)
         {
+            if (run.Exception is DotnetBuildSlotsBusyException slotsBusy)
+            {
+                return new ConductorAdvanceResult(
+                    run.Candidate.Goal.Id.Value,
+                    run.Candidate.GoalPrefix,
+                    policy.Name,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(slotsBusy.SlotsBusy)}"));
+            }
+
             return ParallelAcceptanceFault(run.Candidate, policy, run.Exception);
         }
 
@@ -890,7 +914,7 @@ internal sealed class ConductorBatchLoop
     {
         if (run.Exception is not null)
         {
-            return "fault";
+            return run.Exception is DotnetBuildSlotsBusyException ? "slots-busy" : "fault";
         }
 
         if (run.EarlyResult is not null)
@@ -899,6 +923,15 @@ internal sealed class ConductorBatchLoop
         }
 
         return run.Acceptance?.Passed == true ? "passed" : "failed";
+    }
+
+    private static string FormatSlotsBusy(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
+    {
+        var slots = string.Join(
+            ",",
+            slotsBusy.BusySlots.Select(slot =>
+                $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+        return $"wanted-by={slotsBusy.WantedBy}; busy={slots}";
     }
 
     private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome, int? slotIndex = null)

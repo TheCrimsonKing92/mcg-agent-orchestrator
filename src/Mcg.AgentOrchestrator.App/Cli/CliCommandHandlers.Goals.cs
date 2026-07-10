@@ -2802,6 +2802,13 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 stableSlotIndex = ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
                     ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
             }
+            catch (DotnetBuildSlotsBusyException ex)
+            {
+                stableSlotLease?.Dispose();
+                Console.WriteLine($"SLOTS_BUSY goal={goal.Id.Value[..8]} wantedBy={ex.SlotsBusy.WantedBy} busySlots={FormatBusySlots(ex.SlotsBusy.BusySlots)}");
+                Console.WriteLine("Acceptance verification: stable dotnet build slots busy; goal remains ready and will retry on a later conduct tick.");
+                return false;
+            }
             catch (IOException ex)
             {
                 stableSlotLease?.Dispose();
@@ -2989,6 +2996,12 @@ private static DotnetBuildEnvironmentLease SelectFirstAvailableStableSlot(TimeSp
 {
     return DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(timeout, onWait);
 }
+
+private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
+    string.Join(
+        "|",
+        busySlots.Select(slot =>
+            $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
 
 private static int? ParseStableSlotIndex(string slotOwnerToken)
 {

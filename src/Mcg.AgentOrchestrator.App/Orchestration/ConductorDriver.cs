@@ -992,6 +992,15 @@ internal sealed class ConductorDriver
         return $" Acceptance output tail: {tail}";
     }
 
+    private static string FormatSlotsBusy(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
+    {
+        var slots = string.Join(
+            ", ",
+            slotsBusy.BusySlots.Select(slot =>
+                $"slot-{slot.SlotIndex} pid {slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+        return $"wanted-by={slotsBusy.WantedBy}; busy slots: {slots}";
+    }
+
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
         var early = RebaseBeforeAcceptance(goal, goalPrefix, policy);
@@ -1001,7 +1010,19 @@ internal sealed class ConductorDriver
         }
 
         // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
-        var acceptance = _runAcceptanceVerification(goal, null);
+        AcceptanceVerificationSummary acceptance;
+        try
+        {
+            acceptance = _runAcceptanceVerification(goal, null);
+        }
+        catch (DotnetBuildSlotsBusyException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(ex.SlotsBusy)}"));
+        }
+
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
     }
 
