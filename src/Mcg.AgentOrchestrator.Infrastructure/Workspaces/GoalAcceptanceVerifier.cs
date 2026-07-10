@@ -278,6 +278,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(await RunForbiddenChangedPathsCheckAsync(manifest.ForbiddenChangedPathGlobs, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
+        if (checks.All(check => check.Passed) && ProposalValidationApplies(worktreePath, changedFiles))
+        {
+            checks.Add(RunStateEffectProposalSchemaCheck(worktreePath, changedFiles));
+        }
+
         // Advisory checks: always run, failures are recorded but do not affect overall Passed.
         foreach (var advisoryCheck in advisoryChecks)
         {
@@ -931,6 +936,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return slnContent.Contains(Path.GetFileName(projectPath), StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool ProposalValidationApplies(string worktreePath, IReadOnlyList<string>? changedFiles) =>
+        changedFiles is { Count: > 0 }
+            ? changedFiles.Any(StateEffectProposalParser.IsProposalPath)
+            : Directory.Exists(Path.Combine(worktreePath, ".orchestrator-proposals"));
+
+    private static AcceptanceCheckResult RunStateEffectProposalSchemaCheck(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles)
+    {
+        var result = StateEffectProposalParser.ValidateDirectory(worktreePath, changedFiles);
+        return new AcceptanceCheckResult(
+            "state-effect proposal schema",
+            result.Passed,
+            result.Passed ? 0 : 1,
+            result.Passed ? null : result.Summary,
+            ResultSummary: result.Summary);
+    }
+
     private static AcceptanceManifestCheck[] LoadAdvisoryChecks(string worktreePath)
     {
         var path = System.IO.Path.Combine(worktreePath, ".orchestrator", "goal-acceptance-criteria.json");
@@ -1171,10 +1194,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     cancellationToken).ConfigureAwait(false);
                 if (stableSlotLease is null)
                 {
+                    leaseLock?.Dispose();
+                    leaseLock = null;
                     environment = stableSlotIndex.HasValue
                         ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
                         : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
-                    leaseLock?.Dispose();
                     leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
                 }
 

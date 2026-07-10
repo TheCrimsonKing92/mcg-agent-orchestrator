@@ -6642,11 +6642,11 @@ public sealed class CliCommandTests
             var leaseHeldObserved = false;
             var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
             {
-                var reacquire = Xunit.Assert.Throws<IOException>(() =>
+                var reacquire = Xunit.Assert.ThrowsAny<IOException>(() =>
                     DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
                         stableSlotLease!.Environment,
                         TimeSpan.FromMilliseconds(50)));
-                Xunit.Assert.Contains("Timed out waiting for build lease execution lock", reacquire.Message);
+                Xunit.Assert.IsType<DotnetBuildSlotsBusyException>(reacquire);
                 leaseHeldObserved = true;
             });
 
@@ -6662,11 +6662,12 @@ public sealed class CliCommandTests
                 phaseTimings: new CliPhaseTimingRecorder("acceptance"),
                 stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
 
-            Xunit.Assert.Equal(1, verifier.LastStableSlotIndex);
-            Xunit.Assert.Equal("slot-1", verifier.LastStableSlotLease?.Environment.SlotOwnerToken);
+            Xunit.Assert.NotEqual(0, verifier.LastStableSlotIndex);
+            var selectedSlot = verifier.LastStableSlotLease?.Environment.SlotOwnerToken;
+            Xunit.Assert.False(string.IsNullOrWhiteSpace(selectedSlot));
             Xunit.Assert.True(leaseHeldObserved);
             Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=verification-suite", output);
-            Xunit.Assert.Contains("slot=slot-1", output);
+            Xunit.Assert.Contains($"slot={selectedSlot}", output);
         }
         finally
         {
@@ -8042,6 +8043,20 @@ public sealed class CliCommandTests
             repository.LoadGoalBatches.Single().OrderBy(id => id, StringComparer.Ordinal).ToArray());
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_tick_merge_skip_formats_receipt")]
+    public void PersistentRunnerTickMergeSkipFormatsReceipt()
+    {
+        var receipt = CliPersistentStateRunner.FormatTickMergeReceipt(new GoalSnapshotSaveResult(
+            "abcdef123456",
+            GoalSnapshotSaveDisposition.Skipped,
+            null,
+            "stored goal no longer contains task 12345678 changed by tick"));
+
+        Xunit.Assert.Equal(
+            "TICK_MERGE goal=abcdef12 disposition=SKIPPED stored goal no longer contains task 12345678 changed by tick",
+            receipt);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_preserves_terminal_dependency_readiness_without_loading_dependency")]
     public void PersistentRunnerConductLoopPreservesTerminalDependencyReadinessWithoutLoadingDependency()
     {
@@ -8440,6 +8455,21 @@ public sealed class CliCommandTests
             merged.AddRange(replacements.Values.Where(goal => snapshot.Goals.All(existing => existing.Id != goal.Id)));
             _kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = merged });
             return Task.CompletedTask;
+        }
+
+        public async Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
+            IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+            CancellationToken cancellationToken = default)
+        {
+            var snapshots = goals.Select(goal => goal.Current).ToArray();
+            await SaveGoalSnapshotsAsync(snapshots, cancellationToken);
+            return snapshots
+                .Select(snapshot => new GoalSnapshotSaveResult(
+                    snapshot.Id,
+                    GoalSnapshotSaveDisposition.Saved,
+                    snapshot,
+                    "in-memory save"))
+                .ToArray();
         }
 
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>

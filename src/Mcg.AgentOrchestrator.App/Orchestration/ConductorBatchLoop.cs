@@ -87,7 +87,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "stop", null, busyWriteDelay);
+                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop", null, busyWriteDelay);
                 break;
             }
 
@@ -96,7 +96,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "max-iterations", null, busyWriteDelay);
+                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-iterations", null, busyWriteDelay);
                 break;
             }
 
@@ -105,7 +105,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "max-duration", null, busyWriteDelay);
+                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay);
                 break;
             }
 
@@ -154,7 +154,7 @@ internal sealed class ConductorBatchLoop
                     {
                         _sweep(kernel);
                         _recoverInterruptedDispatches(kernel);
-                        TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "idle-wake-sweep", null, busyWriteDelay);
+                        TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "idle-wake-sweep", null, busyWriteDelay);
                     }
 
                     if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
@@ -162,7 +162,7 @@ internal sealed class ConductorBatchLoop
                         stopRequested = true;
                         EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                        TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "stop-while-idle", null, busyWriteDelay);
+                        TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-while-idle", null, busyWriteDelay);
                         break;
                     }
 
@@ -424,7 +424,7 @@ internal sealed class ConductorBatchLoop
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                    TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "no-progress", tickLines, busyWriteDelay);
+                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay);
                     onTick?.Invoke(tickSummary);
                     break;
                 }
@@ -446,7 +446,7 @@ internal sealed class ConductorBatchLoop
                 {
                     _sweep(kernel);
                     _recoverInterruptedDispatches(kernel);
-                    TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "wake-sweep", tickLines, busyWriteDelay);
+                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "wake-sweep", tickLines, busyWriteDelay);
                 }
 
                 if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
@@ -455,7 +455,7 @@ internal sealed class ConductorBatchLoop
                     EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                    TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(kernel, onlyGoalId), "stop-during-sleep", tickLines, busyWriteDelay);
+                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-during-sleep", tickLines, busyWriteDelay);
                     break;
                 }
 
@@ -564,6 +564,51 @@ internal sealed class ConductorBatchLoop
             kind,
             tickLines,
             busyWriteDelay);
+    }
+
+    private static bool TryPersistCheckpoint(
+        Action<AgentOrchestratorKernel>? persistTick,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
+        AgentOrchestratorKernel kernel,
+        int tick,
+        string? onlyGoalId,
+        string kind,
+        List<string>? tickLines,
+        Action<TimeSpan>? busyWriteDelay)
+    {
+        if (persistGoalTick is null)
+        {
+            return TryPersistTick(
+                persistTick,
+                kernel,
+                tick,
+                ResolveGoalContext(kernel, onlyGoalId),
+                kind,
+                tickLines,
+                busyWriteDelay);
+        }
+
+        var goalIds = ResolveCheckpointGoalIds(kernel, onlyGoalId);
+        if (goalIds.Length == 0)
+        {
+            return true;
+        }
+
+        return TryPersistWithBusyContainment(
+            () => persistGoalTick(kernel, goalIds),
+            tick,
+            ResolveGoalContext(goalIds, onlyGoalId),
+            kind,
+            tickLines,
+            busyWriteDelay);
+    }
+
+    private static GoalId[] ResolveCheckpointGoalIds(AgentOrchestratorKernel kernel, string? onlyGoalId)
+    {
+        var goals = onlyGoalId is null
+            ? kernel.Goals.Where(goal => !IsTerminalGoal(goal))
+            : kernel.Goals.Where(goal => goal.Id.Value == onlyGoalId);
+        return goals.Select(goal => goal.Id).ToArray();
     }
 
     private static bool TryPersistWithBusyContainment(
@@ -708,17 +753,23 @@ internal sealed class ConductorBatchLoop
         int tick,
         List<string> changedGoalLines)
     {
-        var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount - 1);
+        var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount);
         if (slotCount < 2)
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
 
         var candidates = new List<ConductorParallelAcceptanceCandidate>();
+        var deferredByAdmission = 0;
         foreach (var goal in eligible)
         {
             if (candidates.Count >= slotCount)
             {
+                if (TryBuildParallelAcceptanceCandidate(driver, goal, policy, candidates.Count) is not null)
+                {
+                    deferredByAdmission++;
+                }
+
                 break;
             }
 
@@ -735,6 +786,13 @@ internal sealed class ConductorBatchLoop
             }
 
             candidates.Add(candidate);
+        }
+
+        if (deferredByAdmission > 0)
+        {
+            EmitProgress(
+                $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-slot-cap cap={slotCount} deferred={deferredByAdmission}",
+                changedGoalLines);
         }
 
         if (candidates.Count < 2)
@@ -803,6 +861,17 @@ internal sealed class ConductorBatchLoop
     {
         if (run.Exception is not null)
         {
+            if (run.Exception is DotnetBuildSlotsBusyException slotsBusy)
+            {
+                return new ConductorAdvanceResult(
+                    run.Candidate.Goal.Id.Value,
+                    run.Candidate.GoalPrefix,
+                    policy.Name,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(slotsBusy.SlotsBusy)}"));
+            }
+
             return ParallelAcceptanceFault(run.Candidate, policy, run.Exception);
         }
 
@@ -845,7 +914,7 @@ internal sealed class ConductorBatchLoop
     {
         if (run.Exception is not null)
         {
-            return "fault";
+            return run.Exception is DotnetBuildSlotsBusyException ? "slots-busy" : "fault";
         }
 
         if (run.EarlyResult is not null)
@@ -854,6 +923,15 @@ internal sealed class ConductorBatchLoop
         }
 
         return run.Acceptance?.Passed == true ? "passed" : "failed";
+    }
+
+    private static string FormatSlotsBusy(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
+    {
+        var slots = string.Join(
+            ",",
+            slotsBusy.BusySlots.Select(slot =>
+                $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+        return $"wanted-by={slotsBusy.WantedBy}; busy={slots}";
     }
 
     private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome, int? slotIndex = null)

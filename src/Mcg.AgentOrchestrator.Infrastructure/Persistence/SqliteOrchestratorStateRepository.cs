@@ -270,6 +270,76 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         }
     }
 
+    public async Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
+        IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+
+        if (goals.Count == 0)
+            return [];
+
+        var results = new List<GoalSnapshotSaveResult>(goals.Count);
+        foreach (var request in goals)
+        {
+            if (!string.Equals(request.Baseline.Id, request.Current.Id, StringComparison.Ordinal))
+            {
+                results.Add(new GoalSnapshotSaveResult(
+                    request.Current.Id,
+                    GoalSnapshotSaveDisposition.Skipped,
+                    null,
+                    "baseline/current goal id mismatch"));
+                continue;
+            }
+
+            var result = await TransactGoalAsync(
+                new GoalId(request.Current.Id),
+                (storedSnapshot, _) =>
+                {
+                    if (storedSnapshot is null)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
+                            (false, null, new GoalSnapshotSaveResult(
+                                request.Current.Id,
+                                GoalSnapshotSaveDisposition.Skipped,
+                                null,
+                                "goal row no longer exists")));
+                    }
+
+                    if (SnapshotEquals(storedSnapshot, request.Baseline))
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
+                            (true, request.Current, new GoalSnapshotSaveResult(
+                                request.Current.Id,
+                                GoalSnapshotSaveDisposition.Saved,
+                                request.Current,
+                                "stored version matched tick baseline")));
+                    }
+
+                    if (!TryMergeGoalSnapshots(request.Baseline, storedSnapshot, request.Current, out var merged, out var reason))
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
+                            (false, null, new GoalSnapshotSaveResult(
+                                request.Current.Id,
+                                GoalSnapshotSaveDisposition.Skipped,
+                                storedSnapshot,
+                                reason)));
+                    }
+
+                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
+                        (true, merged, new GoalSnapshotSaveResult(
+                            request.Current.Id,
+                            GoalSnapshotSaveDisposition.Merged,
+                            merged,
+                            reason)));
+                },
+                cancellationToken);
+            results.Add(result);
+        }
+
+        return results;
+    }
+
     public async Task<T> TransactAsync<T>(
         Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default)
@@ -517,6 +587,175 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
     private static bool IsSnapshotDeserializeException(Exception exception) =>
         exception is JsonException or NotSupportedException or ArgumentException;
+
+    private static bool TryMergeGoalSnapshots(
+        GoalSnapshot baseline,
+        GoalSnapshot stored,
+        GoalSnapshot current,
+        out GoalSnapshot merged,
+        out string reason)
+    {
+        if (!string.Equals(baseline.Id, stored.Id, StringComparison.Ordinal) ||
+            !string.Equals(baseline.Id, current.Id, StringComparison.Ordinal))
+        {
+            merged = stored;
+            reason = "goal id changed during tick";
+            return false;
+        }
+
+        if (!TryMergeTaskSnapshots(baseline.Tasks, stored.Tasks, current.Tasks, out var mergedTasks, out reason))
+        {
+            merged = stored;
+            return false;
+        }
+
+        merged = stored with
+        {
+            Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
+            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
+            Tasks = mergedTasks,
+            Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
+            DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
+            SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
+            RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
+            LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure)
+        };
+        reason = "stored version advanced during tick; reapplied tick snapshot delta onto fresh goal row";
+        return true;
+    }
+
+    private static bool TryMergeTaskSnapshots(
+        IReadOnlyList<TaskSnapshot> baseline,
+        IReadOnlyList<TaskSnapshot> stored,
+        IReadOnlyList<TaskSnapshot> current,
+        out IReadOnlyList<TaskSnapshot> merged,
+        out string reason)
+    {
+        var baselineById = baseline.ToDictionary(task => task.Id, StringComparer.Ordinal);
+        var storedById = stored.ToDictionary(task => task.Id, StringComparer.Ordinal);
+        var currentById = current.ToDictionary(task => task.Id, StringComparer.Ordinal);
+        var taskIds = stored.Select(task => task.Id)
+            .Concat(current.Select(task => task.Id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var results = new List<TaskSnapshot>(taskIds.Length);
+
+        foreach (var taskId in taskIds)
+        {
+            var hasStored = storedById.TryGetValue(taskId, out var storedTask);
+            var hasCurrent = currentById.TryGetValue(taskId, out var currentTask);
+            var hasBaseline = baselineById.TryGetValue(taskId, out var baselineTask);
+
+            if (!hasCurrent)
+            {
+                if (hasStored && baselineById.ContainsKey(taskId))
+                {
+                    results.Add(storedTask!);
+                    continue;
+                }
+
+                reason = $"tick snapshot no longer contains task {ShortGoalId(taskId)}";
+                merged = stored;
+                return false;
+            }
+
+            if (!hasBaseline)
+            {
+                results.Add(hasStored ? storedTask! : currentTask!);
+                continue;
+            }
+
+            if (!hasStored)
+            {
+                if (SnapshotEquals(baselineTask, currentTask))
+                    continue;
+
+                reason = $"stored goal no longer contains task {ShortGoalId(taskId)} changed by tick";
+                merged = stored;
+                return false;
+            }
+
+            results.Add(MergeTaskSnapshot(baselineTask!, storedTask!, currentTask!));
+        }
+
+        merged = results;
+        reason = "stored version advanced during tick; merged task deltas";
+        return true;
+    }
+
+    private static TaskSnapshot MergeTaskSnapshot(TaskSnapshot baseline, TaskSnapshot stored, TaskSnapshot current) =>
+        stored with
+        {
+            Description = PickStoreOwned(baseline.Description, stored.Description, current.Description),
+            RequiredRole = PickStoreOwned(baseline.RequiredRole, stored.RequiredRole, current.RequiredRole),
+            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
+            AssignedAgentId = PickTickOwned(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId),
+            LastExecution = PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution),
+            LastVerification = PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification),
+            VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
+            LastDispatch = PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch),
+            LastProcess = PickTickOwned(baseline.LastProcess, stored.LastProcess, current.LastProcess),
+            VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
+            SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
+            SubscriptionLimitReviewNote = PickStoreOwned(baseline.SubscriptionLimitReviewNote, stored.SubscriptionLimitReviewNote, current.SubscriptionLimitReviewNote),
+            SubscriptionLimitReviewedAt = PickStoreOwned(baseline.SubscriptionLimitReviewedAt, stored.SubscriptionLimitReviewedAt, current.SubscriptionLimitReviewedAt),
+            SubscriptionLimitReviewedFailureCount = PickStoreOwned(baseline.SubscriptionLimitReviewedFailureCount, stored.SubscriptionLimitReviewedFailureCount, current.SubscriptionLimitReviewedFailureCount),
+            CriterionRetryCount = PickStoreOwned(baseline.CriterionRetryCount, stored.CriterionRetryCount, current.CriterionRetryCount),
+            CriterionRetryFeedback = PickStoreOwnedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
+            EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount)
+        };
+
+    private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
+        IReadOnlyList<ProgressEventSnapshot> baseline,
+        IReadOnlyList<ProgressEventSnapshot> stored,
+        IReadOnlyList<ProgressEventSnapshot> current)
+    {
+        var baselineKeys = baseline.Select(SnapshotKey).ToHashSet(StringComparer.Ordinal);
+        var merged = stored.ToList();
+        var mergedKeys = merged.Select(SnapshotKey).ToHashSet(StringComparer.Ordinal);
+        foreach (var evt in current)
+        {
+            var key = SnapshotKey(evt);
+            if (baselineKeys.Contains(key) || !mergedKeys.Add(key))
+                continue;
+
+            merged.Add(evt);
+        }
+
+        return merged.OrderBy(evt => evt.OccurredAt).ToList();
+    }
+
+    private static T PickTickOwned<T>(T baseline, T stored, T current) =>
+        PickWithSameFieldPrecedence(baseline, stored, current, preferStoredOnConflict: false);
+
+    private static T PickStoreOwned<T>(T baseline, T stored, T current) =>
+        PickWithSameFieldPrecedence(baseline, stored, current, preferStoredOnConflict: true);
+
+    private static T PickWithSameFieldPrecedence<T>(T baseline, T stored, T current, bool preferStoredOnConflict)
+    {
+        var storedChanged = !SnapshotEquals(baseline, stored);
+        var currentChanged = !SnapshotEquals(baseline, current);
+
+        return (storedChanged, currentChanged) switch
+        {
+            (true, true) => preferStoredOnConflict ? stored : current,
+            (true, false) => stored,
+            (false, true) => current,
+            _ => stored
+        };
+    }
+
+    private static IReadOnlyList<T>? PickStoreOwnedList<T>(
+        IReadOnlyList<T>? baseline,
+        IReadOnlyList<T>? stored,
+        IReadOnlyList<T>? current) =>
+        PickStoreOwned(baseline, stored, current);
+
+    private static bool SnapshotEquals<T>(T? left, T? right) =>
+        JsonSerializer.Serialize(left, SerializerOptions) == JsonSerializer.Serialize(right, SerializerOptions);
+
+    private static string SnapshotKey<T>(T snapshot) =>
+        JsonSerializer.Serialize(snapshot, SerializerOptions);
 
     private static string ShortGoalId(string goalId) =>
         goalId.Length <= 8 ? goalId : goalId[..8];

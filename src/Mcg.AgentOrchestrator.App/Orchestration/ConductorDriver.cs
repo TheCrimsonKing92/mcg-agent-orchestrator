@@ -42,6 +42,7 @@ internal sealed class ConductorDriver
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
+    private readonly Func<bool> _hasGateReadyGoal;
 
     internal Action<string>? PhaseTimingSink { get; set; }
 
@@ -95,6 +96,8 @@ internal sealed class ConductorDriver
 
         _getRunningPaidWorkerCount = () =>
             kernel.Goals.Sum(g => g.Tasks.Count(t => t.LastProcess is { IsRunning: true }));
+        _hasGateReadyGoal = () =>
+            kernel.Goals.Any(g => GoalLifecycle.ResolveState(g, _getFacts(g)) == GoalLifecycleState.Verified);
 
         _createWorkspace = goal =>
         {
@@ -344,7 +347,23 @@ internal sealed class ConductorDriver
         _cleanup = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Removing goal workspace.");
-            var result = GoalWorktrees.Remove(dir, goal.Id, kernel);
+            GoalWorktreeRemoveResult result;
+            try
+            {
+                result = GoalWorktrees.Remove(dir, goal.Id, kernel);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(dir, goal.Id, "remove:conductor-cleanup-failed");
+                var path = GoalWorktrees.WorktreePath(dir, goal.Id);
+                result = new GoalWorktreeRemoveResult(
+                    $"Workspace cleanup deferred after removal failure: {ex.Message}",
+                    path,
+                    GoalWorktrees.FindLockHoldersForCleanup(path),
+                    $"conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop",
+                    CleanupBackoff: cleanupBackoff);
+            }
+
             if (result.IsComplete)
                 GoalOperationJournal.Completed(dir, goal, "conductor:cleanup", result.Message);
             else
@@ -428,7 +447,8 @@ internal sealed class ConductorDriver
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
-        Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null)
+        Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
+        Func<bool>? hasGateReadyGoal = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -462,6 +482,7 @@ internal sealed class ConductorDriver
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
+        _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
     }
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
@@ -698,12 +719,27 @@ internal sealed class ConductorDriver
         GoalLifecycleState fromState)
     {
         var running = _getRunningPaidWorkerCount();
-        if (running >= policy.MaxConcurrentPaidWorkers)
+        var workerCap = policy.MaxConcurrentPaidWorkers;
+        if (_hasGateReadyGoal())
         {
+            workerCap = Math.Min(workerCap, Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount - 1));
+        }
+
+        if (running >= workerCap)
+        {
+            var reservedGateSlot = workerCap < policy.MaxConcurrentPaidWorkers;
+            if (reservedGateSlot)
+            {
+                Console.WriteLine(
+                    $"ADMISSION goal={goalPrefix} result=deferred reason=reserved-gate-slot cap={workerCap} running={running}");
+            }
+
             EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(fromState,
-                    $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
+                    reservedGateSlot
+                        ? $"At worker cap ({running}/{workerCap}) with a gate-ready goal reserving a stable slot; will advance when a slot opens"
+                        : $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
@@ -976,6 +1012,15 @@ internal sealed class ConductorDriver
         return $" Acceptance output tail: {tail}";
     }
 
+    private static string FormatSlotsBusy(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
+    {
+        var slots = string.Join(
+            ", ",
+            slotsBusy.BusySlots.Select(slot =>
+                $"slot-{slot.SlotIndex} pid {slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+        return $"wanted-by={slotsBusy.WantedBy}; busy slots: {slots}";
+    }
+
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
         var early = RebaseBeforeAcceptance(goal, goalPrefix, policy);
@@ -985,7 +1030,19 @@ internal sealed class ConductorDriver
         }
 
         // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
-        var acceptance = _runAcceptanceVerification(goal, null);
+        AcceptanceVerificationSummary acceptance;
+        try
+        {
+            acceptance = _runAcceptanceVerification(goal, null);
+        }
+        catch (DotnetBuildSlotsBusyException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(ex.SlotsBusy)}"));
+        }
+
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
     }
 
@@ -1125,7 +1182,19 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteCleanup(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var cleanup = _cleanup(goal);
+        GoalWorktreeRemoveResult cleanup;
+        try
+        {
+            cleanup = _cleanup(goal);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Recorded,
+                    $"Workspace cleanup deferred after removal failure; retry later. {ex.Message}"));
+        }
+
         if (!cleanup.IsComplete)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,

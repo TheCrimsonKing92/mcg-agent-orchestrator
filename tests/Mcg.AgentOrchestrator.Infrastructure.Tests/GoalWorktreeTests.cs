@@ -749,6 +749,56 @@ public sealed class GoalWorktreeIntegrationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_deletes_receipt_only_dirty_worktree")]
+    public void GoalWorktreesRemoveDeletesReceiptOnlyDirtyWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.WriteAllText(Path.Combine(path, WorkerSandboxPreparer.ReceiptFileName), "{}");
+
+            Assert.Equal($"?? {WorkerSandboxPreparer.ReceiptFileName}", RunGitOutput(path, "status", "--short").Trim());
+
+            var removeResult = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.True(removeResult.IsComplete);
+            Assert.False(Directory.Exists(path));
+            Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
+            Assert.False(HasCleanupNeededRecord(repo, path, "remove:worktree-remove-failed"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_failure_records_cleanup_needed_without_throwing")]
+    public void GoalWorktreesRemoveFailureRecordsCleanupNeededWithoutThrowing()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.WriteAllText(Path.Combine(path, "real-change.txt"), "not orchestrator-owned");
+
+            var removeResult = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(removeResult.IsComplete);
+            Assert.Equal(path, removeResult.LeftoverPath);
+            Assert.Equal("remove:worktree-remove-failed", removeResult.CleanupBackoff?.Reason);
+            Assert.True(Directory.Exists(path));
+            Assert.True(GoalWorktrees.TryResolve(repo, goalId) is not null);
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:worktree-remove-failed"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_preserves_cleanup_needed_when_only_branch_delete_fails")]
     public void GoalWorktreesRemovePreservesCleanupNeededWhenOnlyBranchDeleteFails()
     {

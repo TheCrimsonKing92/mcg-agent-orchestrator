@@ -310,13 +310,13 @@ public sealed class ConductorBatchLoopTests
     public void BatchLoopParallelAcceptanceSlotExhaustionQueuesExtraGoal()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(0, 4)
+        var goals = Enumerable.Range(0, DotnetBuildEnvironmentManager.StableSlotCount + 1)
             .Select(index => CreateVerifiedSimpleGoal(
                 kernel,
                 $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
             .ToArray();
         using var release = new ManualResetEventSlim(false);
-        using var firstWaveStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount - 1);
+        using var firstWaveStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount);
         var running = 0;
         var maxRunning = 0;
         var slots = new ConcurrentQueue<int?>();
@@ -357,17 +357,71 @@ public sealed class ConductorBatchLoopTests
                 return [$"src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"];
             });
 
+        BatchTickSummary? tick = null;
         var summary = new ConductorBatchLoop().Run(
             kernel,
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 1);
+            maxIterations: 1,
+            onTick: t => tick = t);
 
-        Assert.Equal(4, summary.Advanced);
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount - 1, maxRunning);
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount - 1, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, summary.Advanced);
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, maxRunning);
+        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
         Assert.Single(slots.Where(slot => !slot.HasValue));
+        Assert.DoesNotContain(tick!.ProgressLines!, line =>
+            line.Contains("reason=reserved-gate-slot", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_slots_busy_gate_retries_and_lands_on_later_tick")]
+    public void BatchLoopSlotsBusyGateRetriesAndLandsOnLaterTick()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/SlotsBusy.cs");
+        var attempts = 0;
+        var escalations = 0;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
+                        "goal-slots-busy",
+                        Enumerable.Range(0, DotnetBuildEnvironmentManager.StableSlotCount)
+                            .Select(slot => new DotnetBuildStableSlotWait(slot, 1000 + slot))
+                            .ToArray()));
+                }
+
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var ticks = new List<BatchTickSummary>();
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        Assert.Equal(2, attempts);
+        Assert.Equal(1, summary.Held);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(0, escalations);
+        Assert.Contains(ticks[0].ProgressLines!, line =>
+            line.Contains("GOAL", StringComparison.Ordinal) &&
+            line.Contains("result=held", StringComparison.Ordinal));
+        Assert.Contains(ticks[1].ProgressLines!, line =>
+            line.Contains("GOAL", StringComparison.Ordinal) &&
+            line.Contains("result=executed", StringComparison.Ordinal));
     }
 
     // Creates a stop file and returns its path.
@@ -1041,6 +1095,93 @@ public sealed class ConductorBatchLoopTests
             evt.TaskId == taskId && evt.Kind == ProgressKind.TaskDispatchRecorded));
         Assert.Equal(1, reloaded.Goals.Single(g => g.Id == goalId).Timeline.Count(evt =>
             evt.TaskId == taskId && evt.Kind == ProgressKind.TaskProcessStarted));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_final_checkpoint_preserves_cli_retry_written_after_last_tick")]
+    public async Task FinalCheckpointPreservesCliRetryWrittenAfterLastTick()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-final-checkpoint-merge-{Guid.NewGuid():N}.db");
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var developerTaskId = TaskId.New();
+        var testerTaskId = TaskId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect final checkpoint retry", [
+            new TaskSpec(developerTaskId, "Implement final checkpoint persistence", AgentRole.Developer),
+            new TaskSpec(testerTaskId, "Test final checkpoint persistence", AgentRole.Tester)
+        ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskVerification(
+            goal.Id,
+            testerTaskId,
+            new TaskVerificationRecord("manual", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+        await repo.SaveAsync(kernel);
+
+        kernel = await repo.LoadAsync();
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var persistCalls = 0;
+        var injectedRetry = false;
+        void PersistGoalTick(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            persistCalls++;
+            if (persistCalls == 2 && !injectedRetry)
+            {
+                injectedRetry = true;
+                repo.TransactGoalAsync(goal.Id, (storedSnapshot, _) =>
+                {
+                    var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([storedSnapshot!], []));
+                    storedKernel.RetryTask(goal.Id, testerTaskId, "operator retry between last tick and final checkpoint");
+                    return Task.FromResult((
+                        true,
+                        storedKernel.ExportSnapshot().Goals.Single(),
+                        true));
+                }).GetAwaiter().GetResult();
+            }
+
+            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            var requests = checkpoint.ExportSnapshot().Goals
+                .Where(snapshot => changed.Contains(snapshot.Id))
+                .Select(snapshot => new GoalSnapshotSaveRequest(baselines[snapshot.Id], snapshot))
+                .ToArray();
+            var results = repo.SaveGoalSnapshotsWithMergeAsync(requests).GetAwaiter().GetResult();
+            foreach (var result in results)
+            {
+                if (result.PersistedSnapshot is not null)
+                    baselines[result.GoalId] = result.PersistedSnapshot;
+            }
+        }
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: g =>
+            {
+                kernel.RecordTaskDispatch(g.Id, developerTaskId,
+                    new TaskDispatchRecord("claude-cli", "claude -p work", "C:\\wt", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(g.Id, developerTaskId,
+                    new TaskProcessRecord(4242, "claude -p work", "C:\\wt", "out.log", "err.log", "exit.txt",
+                        DateTimeOffset.UtcNow, null, null));
+                return DispatchStartOutcome.Started();
+            });
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            persistGoalTick: PersistGoalTick);
+
+        var reloaded = await repo.LoadAsync();
+        var developerTask = reloaded.GetTask(goal.Id, developerTaskId);
+        var testerTask = reloaded.GetTask(goal.Id, testerTaskId);
+        Assert.True(injectedRetry);
+        Assert.True(persistCalls >= 2);
+        Assert.Equal(WorkTaskStatus.Running, developerTask.Status);
+        Assert.NotNull(developerTask.LastProcess);
+        Assert.Equal(WorkTaskStatus.Assigned, testerTask.Status);
+        Assert.Contains(reloaded.GetGoal(goal.Id).Timeline, evt =>
+            evt.TaskId == testerTaskId &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("operator retry between last tick and final checkpoint", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_exhaustion_persists_neither_record")]
@@ -3186,7 +3327,7 @@ public sealed class ConductorBatchLoopTests
             busyWriteDelay: _ => { });
 
         Assert.Equal(1, summary.Ticks);
-        Assert.Equal(3, attempts);
+        Assert.True(attempts >= 3, $"Expected at least 3 persistence attempts, got {attempts}");
         var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
         Assert.Equal(2, lines.Count(line => line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)));
         Assert.DoesNotContain(lines, line => line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal));
@@ -3219,8 +3360,8 @@ public sealed class ConductorBatchLoopTests
             maxIterations: 1,
             persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
 
-        // A changed disposition (workspace created); B was held with no state change.
-        var persistedGoalIds = Assert.Single(persistedGoalBatches);
+        // A changed disposition (workspace created); B was held with no state change in the tick batch.
+        var persistedGoalIds = persistedGoalBatches.First();
         Assert.Contains(goalA.Id, persistedGoalIds);
         Assert.DoesNotContain(goalB.Id, persistedGoalIds);
         Assert.Single(persistedGoalIds);

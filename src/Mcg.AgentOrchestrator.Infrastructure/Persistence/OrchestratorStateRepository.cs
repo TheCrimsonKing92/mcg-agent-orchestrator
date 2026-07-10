@@ -49,6 +49,11 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         IReadOnlyCollection<GoalSnapshot> goals,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
+        IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support conductor tick snapshot merge persistence.");
+
     /// <summary>
     /// Loads the goal's current snapshot outside a transaction, calls the delegate to produce
     /// a new snapshot, then performs a short BEGIN IMMEDIATE compare-and-swap write of only
@@ -59,4 +64,19 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         GoalId goalId,
         Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
         CancellationToken cancellationToken = default);
+}
+
+public sealed record GoalSnapshotSaveRequest(GoalSnapshot Baseline, GoalSnapshot Current);
+
+public sealed record GoalSnapshotSaveResult(
+    string GoalId,
+    GoalSnapshotSaveDisposition Disposition,
+    GoalSnapshot? PersistedSnapshot,
+    string Message);
+
+public enum GoalSnapshotSaveDisposition
+{
+    Saved,
+    Merged,
+    Skipped
 }

@@ -442,11 +442,19 @@ public static class GoalWorktrees
 
         if (hasRegisteredWorktree)
         {
+            DeleteUntrackedOrchestratorInternalArtifacts(path);
             var removal = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "remove", path);
             if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
             {
-                throw new InvalidOperationException(
-                    $"Failed to remove goal workspace '{path}': {removal.Error} Commit, discard, or recover its changes; conductor cleanup will retry after the worktree is clean.");
+                RecordCleanupNeeded(path, "remove:worktree-remove-failed");
+                var detail = TryGetCleanupBackoff(path);
+                return new GoalWorktreeRemoveResult(
+                    $"Workspace cleanup deferred because git worktree remove failed for {path}: {removal.Error.Trim()} Commit, discard, or recover its changes; conductor cleanup will retry after the worktree is clean." +
+                        (detail is null ? string.Empty : $" {FormatCleanupBackoff(detail)}"),
+                    path,
+                    FindLockHoldersForCleanup(path),
+                    ConductorRetryCommand(goalId),
+                    CleanupBackoff: detail);
             }
         }
         else
@@ -921,6 +929,46 @@ public static class GoalWorktrees
     }
 
     private static string ConductorRetryCommand(GoalId goalId) => $"conduct {Prefix(goalId)} --loop";
+
+    private static void DeleteUntrackedOrchestratorInternalArtifacts(string worktreePath)
+    {
+        var status = GitCli.Run(worktreePath, "status", "--porcelain");
+        if (status.ExitCode != 0 || string.IsNullOrWhiteSpace(status.Output))
+        {
+            return;
+        }
+
+        foreach (var relativePath in status.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("?? ", StringComparison.Ordinal))
+            .SelectMany(GitCli.ParseStatusLinePaths)
+            .Where(GitCli.IsOrchestratorInternalArtifactPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var fullPath = Path.GetFullPath(Path.Combine(worktreePath, relativePath));
+            var worktreeRoot = Path.GetFullPath(worktreePath);
+            if (!fullPath.StartsWith(worktreeRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                }
+                else if (Directory.Exists(fullPath))
+                {
+                    Directory.Delete(fullPath, recursive: true);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                WarnCleanupFailure(fullPath, "remove:internal-artifact-delete", ex);
+            }
+        }
+    }
 
     public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string executionDirectory, GoalId goalId) =>
         TryGetCleanupBackoff(WorktreePath(executionDirectory, goalId));
