@@ -138,25 +138,17 @@ public sealed class WorkerDispatchTests
     [Xunit.Fact(DisplayName = "CliStartup_sets_protected_pid_before_worker_dispatch")]
     public void CliStartupSetsProtectedPidBeforeWorkerDispatch()
     {
-        var original = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
-        try
-        {
-            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, null);
+        using var _ = ClearProtectedPidEnvironment();
 
-            CliProtectedProcessEnvironment.EnsureProtectedPid();
+        CliProtectedProcessEnvironment.EnsureProtectedPid();
 
-            var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
-            Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
+        var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+        Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
 
-            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
-            CliProtectedProcessEnvironment.EnsureProtectedPid();
+        Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
+        CliProtectedProcessEnvironment.EnsureProtectedPid();
 
-            Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, original);
-        }
+        Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
     }
 
     [Xunit.Fact(DisplayName = "Headless_monitor_goal_preflight_does_not_start_paid_worker_dispatch")]
@@ -4237,6 +4229,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         root,
         DateTimeOffset.UtcNow));
 
+    using var _ = ClearProtectedPidEnvironment();
     var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
     WaitForExitFile(process.ExitCodePath);
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);

@@ -1,6 +1,7 @@
 global using static InfrastructureTestSupport;
 
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
@@ -9,6 +10,8 @@ using System.Net.Sockets;
 
 internal static class InfrastructureTestSupport
 {
+private static readonly SemaphoreSlim ProtectedPidEnvironmentLock = new(1, 1);
+
 public static string CaptureConsole(Action action) => AsyncLocalConsoleRouter.Capture(action);
 
 public static string CaptureConsoleError(Action action) => AsyncLocalConsoleRouter.CaptureError(action);
@@ -33,6 +36,14 @@ public static string CreateTempDirectory()
     var path = Path.Combine(Path.GetTempPath(), "mcg-orchestrator-tests", Guid.NewGuid().ToString("n"));
     Directory.CreateDirectory(path);
     return path;
+}
+
+public static IDisposable ClearProtectedPidEnvironment()
+{
+    ProtectedPidEnvironmentLock.Wait();
+    var previous = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+    Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, null);
+    return new EnvironmentRestore(CliProtectedProcessEnvironment.ProtectedPidVariable, previous, ProtectedPidEnvironmentLock);
 }
 
 public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
@@ -208,6 +219,23 @@ public static string FindRepositoryRoot()
     throw new DirectoryNotFoundException("Could not locate repository root.");
 }
 
+}
+
+internal sealed class EnvironmentRestore(string variableName, string? previousValue, SemaphoreSlim gate) : IDisposable
+{
+    private bool _disposed;
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        Environment.SetEnvironmentVariable(variableName, previousValue);
+        gate.Release();
+        _disposed = true;
+    }
 }
 
 internal sealed class CapturingHandler : HttpMessageHandler
