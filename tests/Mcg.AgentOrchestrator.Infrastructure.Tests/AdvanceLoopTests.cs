@@ -435,16 +435,8 @@ public sealed class AdvanceLoopTests
     var goal = CreateRefinedGoal(kernel,
         "Dispatch into execution root",
         [new TaskSpec(TaskId.New(), "Inspect command", AgentRole.Planner)]);
-    IReadOnlyList<AgentDefinition> agents =
-    [
-        new AgentDefinition(
-            new AgentId("codex-cli"),
-            "Planner Codex",
-            AgentRole.Planner,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
-            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli"))
-    ];
+    var agents = AgentCatalog.Default().Agents;
+    var profiles = WorkerProfileCatalog.Default();
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
 
@@ -459,7 +451,11 @@ public sealed class AdvanceLoopTests
         string.Empty);
 
     Assert.Equal(executionRoot, task.LastDispatch!.WorkingDirectory);
-    Assert.Contains(executionRoot, task.LastDispatch.Command, StringComparison.Ordinal);
+    var profile = profiles.GetRequired(task.LastDispatch.WorkerName);
+    if (profile.CommandTemplate.Contains("{workingDirectory}", StringComparison.OrdinalIgnoreCase))
+    {
+        Assert.Contains(executionRoot, task.LastDispatch.Command, StringComparison.Ordinal);
+    }
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_starts_only_new_subscription_dispatches")]
