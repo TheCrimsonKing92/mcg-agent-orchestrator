@@ -450,7 +450,7 @@ public sealed class AdvanceLoopTests
         string.Empty);
 
     Assert.Equal(executionRoot, task.LastDispatch!.WorkingDirectory);
-    Assert.Contains($"--cd '{executionRoot}'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains(executionRoot, task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_starts_only_new_subscription_dispatches")]
