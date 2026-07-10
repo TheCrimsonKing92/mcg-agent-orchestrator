@@ -138,25 +138,17 @@ public sealed class WorkerDispatchTests
     [Xunit.Fact(DisplayName = "CliStartup_sets_protected_pid_before_worker_dispatch")]
     public void CliStartupSetsProtectedPidBeforeWorkerDispatch()
     {
-        var original = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
-        try
-        {
-            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, null);
+        using var _ = ClearProtectedPidEnvironment();
 
-            CliProtectedProcessEnvironment.EnsureProtectedPid();
+        CliProtectedProcessEnvironment.EnsureProtectedPid();
 
-            var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
-            Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
+        var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+        Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
 
-            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
-            CliProtectedProcessEnvironment.EnsureProtectedPid();
+        Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
+        CliProtectedProcessEnvironment.EnsureProtectedPid();
 
-            Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, original);
-        }
+        Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
     }
 
     [Xunit.Fact(DisplayName = "Headless_monitor_goal_preflight_does_not_start_paid_worker_dispatch")]
@@ -4113,20 +4105,33 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var dispatch = new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now);
     kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
-    kernel.RecordTaskProcessStarted(
-        goal.Id,
-        task.Id,
-        new TaskProcessRecord(
-            111,
-            dispatch.Command,
-            dispatch.WorkingDirectory,
-            "out.log",
-            "err.log",
-            "exit.txt",
-            now,
-            null,
-            null,
-            OwnedProcessIds: [111, 222]));
+    var process = new TaskProcessRecord(
+        111,
+        dispatch.Command,
+        dispatch.WorkingDirectory,
+        "out.log",
+        "err.log",
+        Path.Combine(root, "worker.exit.txt"),
+        now,
+        null,
+        null,
+        OwnedProcessIds: [111, 222]);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    File.WriteAllText(
+        BackgroundDispatchRunner.GetHeartbeatPath(process),
+        "{" +
+        "\"pid\":111," +
+        "\"childPid\":222," +
+        "\"ownedPids\":[111,222]," +
+        $"\"startedAt\":\"{now:O}\"," +
+        $"\"lastObservedAt\":\"{now.AddSeconds(10):O}\"," +
+        $"\"lastProgressAt\":\"{now.AddSeconds(10):O}\"," +
+        "\"state\":\"running\"," +
+        "\"stdoutBytes\":0," +
+        "\"stderrBytes\":0," +
+        "\"exitFileExists\":false," +
+        "\"ownedCpuMs\":42" +
+        "}");
     var running = new HashSet<int> { 111, 222 };
     var killed = new List<int>();
     var runner = new BackgroundDispatchRunner(
@@ -4139,11 +4144,23 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             return true;
         });
 
-    runner.CancelLatestProcess(kernel, goal.Id, task.Id);
+    var cancelled = runner.CancelLatestProcess(kernel, goal.Id, task.Id);
     kernel.RequeueInterruptedDispatch(goal.Id, task.Id, "Redispatch after stopped worker tree.");
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt 2", root, now.AddMinutes(2)));
 
     Assert.True(killed.SequenceEqual([111, 222]));
+    Assert.NotNull(cancelled.ResourceAccounting);
+    Assert.Equal(42, cancelled.ResourceAccounting.CpuMilliseconds);
+    Assert.True(cancelled.ResourceAccounting.Reaped);
+    Assert.Equal("snapshot", cancelled.ResourceAccounting.AccountingSource);
+    Assert.Contains(
+        kernel.GetTimeline(goal.Id),
+        evt => evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+            evt.Message.Contains("cpu_ms=42", StringComparison.Ordinal) &&
+            evt.Message.Contains("peak_mem_bytes=", StringComparison.Ordinal) &&
+            evt.Message.Contains("io_bytes=", StringComparison.Ordinal) &&
+            evt.Message.Contains("reaped=true", StringComparison.Ordinal));
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Equal("codex exec prompt 2", task.LastDispatch!.Command);
     Xunit.Assert.Null(task.LastProcess);
@@ -4197,31 +4214,48 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Xunit.Assert.Null(task.LastProcess);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_runs_with_shared_compilation_disabled")]
-    public void BackgroundDispatchRunnerNonLocalDispatchRunsWithSharedCompilationDisabled()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_records_resource_accounting")]
+    public void BackgroundDispatchRunnerNonLocalDispatchRecordsResourceAccounting()
 {
     var root = CreateTempDirectory();
     var logs = Path.Combine(root, "logs");
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Disable shared compilation for worker dispatch");
+    var goal = kernel.CreateGoal("Record worker dispatch resources");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
         "codex-cli",
         "Write-Output $env:DOTNET_CLI_USE_MSBUILD_SERVER; Write-Output $env:MSBUILDDISABLENODEREUSE; Write-Output $env:UseSharedCompilation",
         root,
         DateTimeOffset.UtcNow));
 
+    using var _ = ClearProtectedPidEnvironment();
     var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
     WaitForExitFile(process.ExitCodePath);
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
 
+    var refreshed = task.LastProcess!;
     var output = File.ReadAllLines(process.StandardOutputPath);
     Assert.True(File.Exists(BackgroundDispatchRunner.GetHeartbeatPath(process)));
     Assert.Equal(3, output.Length);
     Assert.Equal("0", output[0]);
     Assert.Equal("1", output[1]);
     Assert.Equal("false", output[2]);
+    Assert.NotNull(refreshed.ResourceAccounting);
+    Assert.True(refreshed.ResourceAccounting.CpuMilliseconds >= 0);
+    Assert.True(refreshed.ResourceAccounting.PeakMemoryBytes > 0);
+    Assert.True(refreshed.ResourceAccounting.IoBytes >= 0);
+    Assert.Contains("RESOURCE ", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("cpu_ms=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("peak_mem_bytes=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("io_bytes=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains(
+        kernel.GetTimeline(goal.Id),
+        evt => evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("RESOURCE ", StringComparison.Ordinal) &&
+            evt.Message.Contains("cpu_ms=", StringComparison.Ordinal) &&
+            evt.Message.Contains("peak_mem_bytes=", StringComparison.Ordinal) &&
+            evt.Message.Contains("io_bytes=", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_completes_when_exit_file_exists_even_if_wrapper_is_running")]
@@ -8164,6 +8198,20 @@ private static void WriteSkill(string workingDirectory, string skillName)
     if (!File.Exists(path))
     {
         throw new TimeoutException($"Timed out waiting for exit file '{path}'.");
+    }
+}
+
+    private static void WaitUntil(Func<bool> condition, TimeSpan timeout)
+{
+    var deadline = DateTimeOffset.UtcNow.Add(timeout);
+    while (!condition() && DateTimeOffset.UtcNow < deadline)
+    {
+        Thread.Sleep(50);
+    }
+
+    if (!condition())
+    {
+        throw new TimeoutException("Timed out waiting for test condition.");
     }
 }
 

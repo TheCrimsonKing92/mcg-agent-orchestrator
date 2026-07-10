@@ -66,6 +66,11 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         if (OperatingSystem.IsWindows())
         {
+            if (_jobHandle is not null && !_jobHandle.IsClosed && !_jobHandle.IsInvalid)
+            {
+                WindowsJob.TryTerminate(_jobHandle);
+            }
+
             Dispose();
             return;
         }
@@ -76,6 +81,42 @@ internal sealed class OwnedProcessGroup : IDisposable
             Thread.Sleep(250);
             UnixProcessGroups.TryKillProcessGroup(pgid, UnixProcessGroups.SigKill);
         }
+    }
+
+    public bool TryReadAccounting(out WorkerProcessJobAccounting accounting)
+    {
+        accounting = WorkerProcessJobAccounting.Empty;
+        if (_disposed ||
+            !OperatingSystem.IsWindows() ||
+            _jobHandle is null ||
+            _jobHandle.IsClosed ||
+            _jobHandle.IsInvalid)
+        {
+            return false;
+        }
+
+        return WindowsJob.TryReadAccounting(_jobHandle, out accounting);
+    }
+
+    public bool TryDuplicateAccountingHandle(out SafeFileHandle duplicate)
+    {
+        duplicate = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+        if (_disposed ||
+            !OperatingSystem.IsWindows() ||
+            _jobHandle is null ||
+            _jobHandle.IsClosed ||
+            _jobHandle.IsInvalid)
+        {
+            return false;
+        }
+
+        return WindowsJob.TryDuplicateCurrentProcessHandle(_jobHandle, out duplicate);
+    }
+
+    public static bool TryReadAccounting(SafeFileHandle jobHandle, out WorkerProcessJobAccounting accounting)
+    {
+        accounting = WorkerProcessJobAccounting.Empty;
+        return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
     }
 
     public void Dispose()
@@ -97,8 +138,10 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     private static class WindowsJob
     {
+        private const int JobObjectBasicAccountingInformation = 1;
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        private const uint DuplicateSameAccess = 0x00000002;
 
         public static SafeFileHandle CreateKillOnCloseJob()
         {
@@ -145,7 +188,170 @@ internal sealed class OwnedProcessGroup : IDisposable
             uint cbJobObjectInfoLength);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool QueryInformationJobObject(
+            IntPtr hJob,
+            int jobObjectInfoClass,
+            IntPtr lpJobObjectInfo,
+            uint cbJobObjectInfoLength,
+            IntPtr lpReturnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DuplicateHandle(
+            IntPtr hSourceProcessHandle,
+            IntPtr hSourceHandle,
+            IntPtr hTargetProcessHandle,
+            out SafeFileHandle lpTargetHandle,
+            uint dwDesiredAccess,
+            bool bInheritHandle,
+            uint dwOptions);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool TerminateJobObject(SafeFileHandle hJob, uint uExitCode);
+
+        public static bool TryDuplicateCurrentProcessHandle(SafeFileHandle job, out SafeFileHandle duplicate)
+        {
+            duplicate = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            if (job.IsClosed || job.IsInvalid)
+            {
+                return false;
+            }
+
+            var addedRef = false;
+            try
+            {
+                job.DangerousAddRef(ref addedRef);
+                var currentProcess = GetCurrentProcess();
+                return DuplicateHandle(
+                    currentProcess,
+                    job.DangerousGetHandle(),
+                    currentProcess,
+                    out duplicate,
+                    0,
+                    false,
+                    DuplicateSameAccess) &&
+                    !duplicate.IsInvalid;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+            }
+        }
+
+        public static bool TryTerminate(SafeFileHandle job) =>
+            !job.IsClosed && !job.IsInvalid && TerminateJobObject(job, 1);
+
+        public static bool TryReadAccounting(SafeFileHandle job, out WorkerProcessJobAccounting accounting)
+        {
+            accounting = WorkerProcessJobAccounting.Empty;
+            if (job.IsClosed || job.IsInvalid)
+            {
+                return false;
+            }
+
+            if (!TryQuery(job, JobObjectBasicAccountingInformation, out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION basic) ||
+                !TryQuery(job, JobObjectExtendedLimitInformation, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION extended))
+            {
+                return false;
+            }
+
+            var cpuTicks = SaturatingAddNonNegative(basic.TotalUserTime, basic.TotalKernelTime);
+            var ioBytes = SaturatingAdd(
+                SaturatingAdd(extended.IoInfo.ReadTransferCount, extended.IoInfo.WriteTransferCount),
+                extended.IoInfo.OtherTransferCount);
+            accounting = new WorkerProcessJobAccounting(
+                cpuTicks / TimeSpan.TicksPerMillisecond,
+                ToInt64(extended.PeakJobMemoryUsed),
+                ToInt64(ioBytes));
+            return true;
+        }
+
+        private static bool TryQuery<T>(SafeFileHandle job, int infoClass, out T value)
+            where T : struct
+        {
+            value = default;
+            var addedRef = false;
+            var length = Marshal.SizeOf<T>();
+            var buffer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (job.IsClosed || job.IsInvalid)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    job.DangerousAddRef(ref addedRef);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return false;
+                }
+
+                if (!QueryInformationJobObject(job.DangerousGetHandle(), infoClass, buffer, (uint)length, IntPtr.Zero))
+                {
+                    return false;
+                }
+
+                value = Marshal.PtrToStructure<T>(buffer);
+                return true;
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        private static ulong SaturatingAdd(ulong left, ulong right)
+        {
+            var result = left + right;
+            return result < left ? ulong.MaxValue : result;
+        }
+
+        private static long SaturatingAddNonNegative(long left, long right)
+        {
+            if (left < 0 || right < 0)
+            {
+                return 0;
+            }
+
+            return long.MaxValue - left < right ? long.MaxValue : left + right;
+        }
+
+        private static long ToInt64(UIntPtr value) => ToInt64(value.ToUInt64());
+
+        private static long ToInt64(ulong value) => value > long.MaxValue ? long.MaxValue : (long)value;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+        {
+            public long TotalUserTime;
+            public long TotalKernelTime;
+            public long ThisPeriodTotalUserTime;
+            public long ThisPeriodTotalKernelTime;
+            public uint TotalPageFaultCount;
+            public uint TotalProcesses;
+            public uint ActiveProcesses;
+            public uint TotalTerminatedProcesses;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct JOBOBJECT_BASIC_LIMIT_INFORMATION

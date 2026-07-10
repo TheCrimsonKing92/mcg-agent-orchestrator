@@ -109,7 +109,15 @@ public sealed record TaskProcessSnapshot(
     DateTimeOffset? CompletedAt,
     int? ExitCode,
     bool WasCancelled = false,
-    IReadOnlyList<int>? OwnedProcessIds = null);
+    IReadOnlyList<int>? OwnedProcessIds = null,
+    TaskProcessResourceAccountingSnapshot? ResourceAccounting = null);
+
+public sealed record TaskProcessResourceAccountingSnapshot(
+    long CpuMilliseconds,
+    long PeakMemoryBytes,
+    long IoBytes,
+    bool Reaped = false,
+    string AccountingSource = "live");
 
 public sealed record ProgressEventSnapshot(
     string GoalId,

@@ -49,7 +49,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? StdoutPath = null,
         string? StderrPath = null,
         TimeSpan? Timeout = null,
-        TimeSpan? Elapsed = null);
+        TimeSpan? Elapsed = null,
+        TaskProcessResourceAccounting? ResourceAccounting = null,
+        bool ResourceAccountingExpected = false);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -1124,7 +1126,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 false,
                 result.ExitCode,
                 BuildTimeoutOutput(result),
-                ResultSummary: BuildTimeoutSummary(result),
+                ResultSummary: BuildGenericCommandResultSummary(result),
                 Advisory: check.Advisory), false);
         }
 
@@ -1133,6 +1135,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             result.ExitCode == 0,
             result.ExitCode,
             result.ExitCode == 0 ? null : TailOutput(result.Output),
+            ResultSummary: BuildGenericCommandResultSummary(result),
             Advisory: check.Advisory), false);
     }
 
@@ -1258,7 +1261,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried)
     {
-        var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
+        var summary = AppendResourceReceipt(
+            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output),
+            result.ResourceAccounting,
+            result.ResourceAccountingExpected);
         if (!transientCompilerLockRetried)
         {
             return summary;
@@ -1268,6 +1274,30 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return string.IsNullOrWhiteSpace(summary)
             ? remediation
             : $"{remediation}; {summary}";
+    }
+
+    private static string? BuildGenericCommandResultSummary(CommandResult result)
+    {
+        var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
+        return AppendResourceReceipt(summary, result.ResourceAccounting, result.ResourceAccountingExpected);
+    }
+
+    private static string? AppendResourceReceipt(
+        string? summary,
+        TaskProcessResourceAccounting? accounting,
+        bool accountingExpected)
+    {
+        var receipt = accounting is null
+            ? accountingExpected ? "RESOURCE phase=gate cpu_ms=0 peak_mem_bytes=0 io_bytes=0 accounting_source=accounting-unavailable" : null
+            : $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}";
+        if (receipt is null)
+        {
+            return summary;
+        }
+
+        return string.IsNullOrWhiteSpace(summary)
+            ? receipt
+            : $"{summary}; {receipt}";
     }
 
     // A testhost that crashes MID-run ("host process exited unexpectedly" / "Test Run Aborted") with no
@@ -1619,6 +1649,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
+        WorkerProcessJobAccounting? killedAccounting = null;
         var elapsed = Stopwatch.StartNew();
         var startInfo = new ProcessStartInfo
         {
@@ -1671,7 +1702,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (OperationCanceledException)
             {
-                try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
+                try { WorkerProcessJobs.TryKillOrFallback(process.Id, out killedAccounting); } catch { /* best effort */ }
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 if (cancellationToken.IsCancellationRequested)
                     throw;
@@ -1683,6 +1714,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
+            WorkerProcessJobs.Release(process.Id, out var accounting);
+            accounting ??= killedAccounting;
+            startedProcessId = null;
             return new CommandResult(
                 exitCode,
                 (stdout + stderr).Trim(),
@@ -1691,7 +1725,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stdoutPath,
                 stderrPath,
                 commandTimeout,
-                elapsed.Elapsed);
+                elapsed.Elapsed,
+                accounting is null
+                    ? null
+                    : new TaskProcessResourceAccounting(
+                        accounting.CpuMilliseconds,
+                        accounting.PeakMemoryBytes,
+                        accounting.IoBytes,
+                        AccountingSource: accounting.AccountingSource),
+                ResourceAccountingExpected: OperatingSystem.IsWindows());
         }
         finally
         {

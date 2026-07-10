@@ -230,7 +230,7 @@ public abstract class GoalAcceptanceVerifierTestBase
     }
 }
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+[Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
@@ -299,6 +299,100 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_records_job_resource_receipt")]
+    public async Task GoalAcceptanceVerifierSlotGateRecordsJobResourceReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "missing project gate", "type": "dotnet-test", "project": "MissingProject.csproj", "arguments": ["--verbosity", "minimal"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier();
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("24682468246824682468246824682468"),
+                stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            var check = Assert.Single(result.Checks!);
+            Assert.Equal("missing project gate", check.Name);
+            Assert.True(check.ResultSummary?.Contains("RESOURCE phase=gate", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("cpu_ms=", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("peak_mem_bytes=", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("io_bytes=", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_timeout_records_job_resource_receipt")]
+    public async Task GoalAcceptanceVerifierSlotGateTimeoutRecordsJobResourceReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "slow build gate", "type": "command", "command": "dotnet", "arguments": ["build", "SlowGate.csproj", "--nologo"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var originalTimeout = AppContext.GetData(AcceptanceCheckTimeouts.AppContextKey);
+        AppContext.SetData(AcceptanceCheckTimeouts.AppContextKey, TimeSpan.FromMilliseconds(500));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "SlowGate.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <OutputType>Exe</OutputType>
+                  </PropertyGroup>
+                  <Target Name="SleepBeforeBuild" BeforeTargets="CoreCompile">
+                    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;Start-Sleep -Seconds 30&quot;" />
+                  </Target>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(root, "Program.cs"), "Console.WriteLine(\"slow gate\");");
+
+            var verifier = new GoalAcceptanceVerifier();
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("24682468246824682468246824682468"),
+                stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            var check = Assert.Single(result.Checks!);
+            Assert.StartsWith("acceptance-check-timeout: slow-build-gate", check.Name, StringComparison.Ordinal);
+            Assert.True(check.ResultSummary?.Contains("RESOURCE phase=gate", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("cpu_ms=", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("peak_mem_bytes=", StringComparison.Ordinal) == true);
+            Assert.True(check.ResultSummary?.Contains("io_bytes=", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            AppContext.SetData(AcceptanceCheckTimeouts.AppContextKey, originalTimeout);
             Directory.Delete(root, recursive: true);
         }
     }

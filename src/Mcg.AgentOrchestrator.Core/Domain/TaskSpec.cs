@@ -136,7 +136,15 @@ public sealed class TaskSpec
                     LastProcess.CompletedAt,
                     LastProcess.ExitCode,
                     LastProcess.WasCancelled,
-                    LastProcess.TrackedProcessIds),
+                    LastProcess.TrackedProcessIds,
+                    LastProcess.ResourceAccounting is null
+                        ? null
+                        : new TaskProcessResourceAccountingSnapshot(
+                            LastProcess.ResourceAccounting.CpuMilliseconds,
+                            LastProcess.ResourceAccounting.PeakMemoryBytes,
+                            LastProcess.ResourceAccounting.IoBytes,
+                            LastProcess.ResourceAccounting.Reaped,
+                            LastProcess.ResourceAccounting.AccountingSource)),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -246,7 +254,15 @@ public sealed class TaskSpec
                 snapshot.LastProcess.CompletedAt,
                 snapshot.LastProcess.ExitCode,
                 snapshot.LastProcess.WasCancelled,
-                snapshot.LastProcess.OwnedProcessIds));
+                snapshot.LastProcess.OwnedProcessIds,
+                snapshot.LastProcess.ResourceAccounting is null
+                    ? null
+                    : new TaskProcessResourceAccounting(
+                        snapshot.LastProcess.ResourceAccounting.CpuMilliseconds,
+                        snapshot.LastProcess.ResourceAccounting.PeakMemoryBytes,
+                        snapshot.LastProcess.ResourceAccounting.IoBytes,
+                        snapshot.LastProcess.ResourceAccounting.Reaped,
+                        snapshot.LastProcess.ResourceAccounting.AccountingSource)));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);

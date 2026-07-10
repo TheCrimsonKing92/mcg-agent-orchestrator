@@ -5,6 +5,7 @@ public static class TestCollections
     public const string DotnetBuildSlots = "DotnetBuildSlots";
     public const string EnvMutation = "EnvMutation";
     public const string GoalWorktreeCleanupHooks = "GoalWorktreeCleanupHooks";
+    public const string JobAccounting = "JobAccounting";
     public const string ProcessSpawning = "ProcessSpawning";
     public const string ProviderEnvironment = "ProviderEnvironment";
 }
