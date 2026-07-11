@@ -6,6 +6,10 @@ public sealed class EnvMutationCollection;
 [Xunit.CollectionDefinition(TestCollections.DotnetBuildSlots, DisableParallelization = true)]
 public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// Verifier tests can spawn nested acceptance/build activity; keep that work off the host gate slots.
+[Xunit.CollectionDefinition(TestCollections.GoalAcceptanceVerifier, DisableParallelization = true)]
+public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+
 // GoalWorktrees exposes cleanup hook seams for tests; keep those process-wide replacements serial.
 [Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
 public sealed class GoalWorktreeCleanupHooksCollection;
