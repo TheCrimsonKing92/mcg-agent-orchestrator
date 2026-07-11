@@ -24,6 +24,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, int?, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
+    private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<Goal, IReadOnlyList<string>> _recordAcceptanceFailure;
@@ -238,7 +239,7 @@ internal sealed class ConductorDriver
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
             var unmetCriteria = verification.Checks?
-                .Where(check => check.Advisory && !check.Passed)
+                .Where(check => !check.Passed)
                 .ToArray() ?? [];
             var failedChecks = verification.Checks?
                 .Where(check => !check.Advisory && !check.Passed)
@@ -260,6 +261,10 @@ internal sealed class ConductorDriver
         };
 
         _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
+        _recordTaskNote = (goalId, taskId, message) =>
+        {
+            kernel.RecordTaskNote(goalId, taskId, message);
+        };
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
         _recordAcceptanceFailure = (goal, failedChecks) => kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
@@ -417,6 +422,7 @@ internal sealed class ConductorDriver
         Func<Goal, AcceptanceVerificationSummary> runAcceptanceVerification,
         Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask,
+        Action<GoalId, TaskId, string>? recordTaskNote,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback,
         Action<GoalId, TaskId>? clearCriterionRetryFeedback,
         Func<Goal, GoalWorktreeRebaseResult> rebaseOntoMain,
@@ -449,6 +455,7 @@ internal sealed class ConductorDriver
         _runAcceptanceVerification = runAcceptanceVerificationWithSlot ?? ((goal, _) => runAcceptanceVerification(goal));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
+        _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _) => { });
@@ -1099,7 +1106,7 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        if (!acceptance.Passed)
+        if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
         {
             if (acceptance.FailedChecks is { Count: > 0 })
             {
@@ -1111,11 +1118,14 @@ internal sealed class ConductorDriver
                 FormatFailureTail(acceptance.FailureDetail));
         }
 
-        _clearAcceptanceFailure(goal);
-
-        if (acceptance.UnmetCriteria.Count > 0)
+        if (acceptance.Passed)
         {
-            var criteria = FormatUnmetCriteria(acceptance.UnmetCriteria);
+            _clearAcceptanceFailure(goal);
+        }
+
+        if (acceptance.RequiredUnmetCriteria.Count > 0)
+        {
+            var criteria = FormatUnmetCriteria(acceptance.RequiredUnmetCriteria);
             var task = SelectTaskForCriterionRetry(goal);
             if (task is null)
             {
@@ -1125,7 +1135,7 @@ internal sealed class ConductorDriver
 
             if (task.CriterionRetryCount < policy.MaxCriterionRetries)
             {
-                var retryFeedback = FormatCriterionRetryFeedback(acceptance.UnmetCriteria);
+                var retryFeedback = FormatCriterionRetryFeedback(acceptance.RequiredUnmetCriteria);
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,
@@ -1164,6 +1174,8 @@ internal sealed class ConductorDriver
         {
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, escalate.Reason);
         }
+
+        RecordAdvisoryAcceptanceNotes(goal, acceptance.AdvisoryUnmetCriteria);
 
         if (landResult.MainAdvanced)
         {
@@ -1227,6 +1239,25 @@ internal sealed class ConductorDriver
     private static TaskSpec? SelectTaskForCriterionRetry(Goal goal) =>
         goal.Tasks.LastOrDefault(task => task.Status == WorkTaskStatus.Completed && task.RequiredRole == AgentRole.Developer) ??
         goal.Tasks.LastOrDefault(task => task.Status == WorkTaskStatus.Completed);
+
+    private void RecordAdvisoryAcceptanceNotes(Goal goal, IReadOnlyList<AcceptanceCheckResult> advisoryCriteria)
+    {
+        if (advisoryCriteria.Count == 0)
+        {
+            return;
+        }
+
+        var task = SelectTaskForCriterionRetry(goal);
+        if (task is null)
+        {
+            return;
+        }
+
+        _recordTaskNote(
+            goal.Id,
+            task.Id,
+            $"Advisory acceptance criteria observed during landing (non-gating): {FormatUnmetCriteria(advisoryCriteria)}");
+    }
 
     private static string FormatUnmetCriteria(IReadOnlyList<AcceptanceCheckResult> criteria) =>
         string.Join("; ", criteria.Select(FormatUnmetCriterion));

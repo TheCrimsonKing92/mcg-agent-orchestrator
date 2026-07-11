@@ -11,4 +11,12 @@ internal sealed record AcceptanceVerificationSummary(
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 
     public static AcceptanceVerificationSummary Failed { get; } = new(false, []);
+
+    public IReadOnlyList<AcceptanceCheckResult> RequiredUnmetCriteria { get; } = UnmetCriteria
+        .Where(check => !check.Advisory && !check.Passed)
+        .ToArray();
+
+    public IReadOnlyList<AcceptanceCheckResult> AdvisoryUnmetCriteria { get; } = UnmetCriteria
+        .Where(check => check.Advisory && !check.Passed)
+        .ToArray();
 }

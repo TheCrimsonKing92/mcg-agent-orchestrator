@@ -66,6 +66,7 @@ public sealed class ConductorBatchLoopTests
                 : AcceptanceVerificationSummary.Failed,
             null,
             retryTask,
+            null,
             recordCriterionRetryFeedback,
             null,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
@@ -264,8 +265,7 @@ public sealed class ConductorBatchLoopTests
                 "src/RetryEvidence.cs(4,5): error CS0103: The name 'missing' does not exist in the current context",
                 "[xUnit.net 00:00:02.00]     Mcg.AgentOrchestrator.Tests.SlotRetryEvidenceTests.ReportsFailingTest [FAIL]",
             ]),
-            ResultSummary: "slot acceptance failed",
-            Advisory: true);
+            ResultSummary: "slot acceptance failed");
 
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
