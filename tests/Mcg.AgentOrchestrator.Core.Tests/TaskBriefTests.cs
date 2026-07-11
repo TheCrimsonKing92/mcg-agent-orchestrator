@@ -550,6 +550,127 @@ public sealed class TaskBriefTests
 
     Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_acceptance_retry_includes_structured_failure_receipt")]
+    public void BuildTaskBriefAcceptanceRetryIncludesStructuredFailureReceipt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Recover failed acceptance", [developer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
+    var startedProcess = new TaskProcessRecord(
+        42,
+        "codex exec",
+        "C:\\repo",
+        "C:\\repo\\.orchestrator\\logs\\worker.out.log",
+        "C:\\repo\\.orchestrator\\logs\\worker.err.log",
+        "C:\\repo\\.orchestrator\\logs\\worker.exit",
+        clock.UtcNow,
+        null,
+        null);
+    kernel.RecordTaskProcessStarted(goal.Id, developer.Id, startedProcess);
+    clock.Advance();
+    kernel.RecordTaskProcessRefreshed(goal.Id, developer.Id, startedProcess with
+    {
+        CompletedAt = clock.UtcNow,
+        ExitCode = 1
+    }, verification: null);
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "acceptance",
+        "C:\\repo",
+        1,
+        "Failed Tests:\r\n  ReceiptTests.AcceptanceTailPinsNames\r\nExit Code: 1",
+        "compiler error CS1002: ; expected",
+        clock.UtcNow,
+        StandardOutputPath: "C:\\repo\\.orchestrator\\logs\\acceptance.out.log",
+        StandardErrorPath: "C:\\repo\\.orchestrator\\logs\\acceptance.err.log"));
+    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Acceptance verification failed.");
+    clock.Advance();
+    kernel.RecordAcceptanceFailure(goal.Id, ["test tamper guard: 1 test degradation signal(s)"]);
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "Fix the acceptance failure.");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+    Assert.Contains("## ACCEPTANCE FAILURE - FIX FIRST", brief, StringComparison.Ordinal);
+    Assert.Contains("Structured failure receipt (bounded):", brief, StringComparison.Ordinal);
+    Assert.Contains("test tamper guard: 1 test degradation signal(s)", brief, StringComparison.Ordinal);
+    Assert.Contains("Verification command: acceptance", brief, StringComparison.Ordinal);
+    Assert.Contains("Verification exit code: 1", brief, StringComparison.Ordinal);
+    Assert.Contains("ReceiptTests.AcceptanceTailPinsNames", brief, StringComparison.Ordinal);
+    Assert.Contains("compiler error CS1002", brief, StringComparison.Ordinal);
+    Assert.Contains("C:\\repo\\.orchestrator\\logs\\acceptance.out.log", brief, StringComparison.Ordinal);
+    Assert.Contains("C:\\repo\\.orchestrator\\logs\\acceptance.err.log", brief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_operator_retry_includes_last_failed_verification_receipt")]
+    public void BuildTaskBriefOperatorRetryIncludesLastFailedVerificationReceipt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Test retry prompt regeneration.", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "dotnet test --filter RetryReceipt",
+        "C:\\repo",
+        1,
+        "Failed Mcg.AgentOrchestrator.Core.Tests.RetryReceiptTests.OperatorRetryIncludesReceipt",
+        "Assert.Contains() Failure",
+        clock.UtcNow,
+        StandardOutputPath: "C:\\repo\\.orchestrator\\logs\\developer.out.log",
+        StandardErrorPath: "C:\\repo\\.orchestrator\\logs\\developer.err.log"));
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "Please fix the retry receipt.");
+
+    var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
+
+    Assert.Contains("## Recent retry/recovery feedback", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("Structured failure receipt (bounded):", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("TaskVerificationRecorded: Verification failed (1): dotnet test --filter RetryReceipt", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("Verification command: dotnet test --filter RetryReceipt", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("Verification exit code: 1", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("RetryReceiptTests.OperatorRetryIncludesReceipt", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("C:\\repo\\.orchestrator\\logs\\developer.out.log", testerBrief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_failure_receipt_is_capped_and_tail_preferred")]
+    public void BuildTaskBriefFailureReceiptIsCappedAndTailPreferred()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Fix noisy acceptance failure.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Recover noisy failed acceptance", [developer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var stdout = $"stdout-start {new string('s', 3000)} stdout-tail failing TestName";
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "acceptance",
+        "C:\\repo",
+        1,
+        stdout,
+        $"stderr-start {new string('e', 1200)} stderr-tail exit 1",
+        clock.UtcNow,
+        StandardOutputPath: "C:\\repo\\.orchestrator\\logs\\acceptance.out.log"));
+    clock.Advance();
+    kernel.RecordAcceptanceFailure(goal.Id, ["acceptance check"]);
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "Retry with receipt.");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+    var receiptStart = brief.IndexOf("Structured failure receipt (bounded):", StringComparison.Ordinal);
+    var receiptEnd = brief.IndexOf("<!-- ACCEPTANCE_FAILURE_END -->", receiptStart, StringComparison.Ordinal);
+    var receipt = brief[receiptStart..receiptEnd].Trim();
+
+    Assert.True(receipt.Length <= 2000);
+    Assert.Contains("...[truncated", receipt, StringComparison.Ordinal);
+    Assert.Contains("chars before failure tail]...", receipt, StringComparison.Ordinal);
+    Assert.Contains("stdout-tail failing TestName", receipt, StringComparison.Ordinal);
+    Assert.Contains("stderr-tail exit 1", receipt, StringComparison.Ordinal);
+    Assert.True(!receipt.Contains(new string('s', 3000), StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_reviewer")]
     public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForReviewer()
 {
