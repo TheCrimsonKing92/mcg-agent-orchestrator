@@ -328,6 +328,24 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
+        if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
+        {
+            return BuildOutcome(
+                "retry-round-produced-no-commit-and-no-deferral",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                "retry round produced no commit and no deferral"));
+        }
+
         if (verification.Succeeded &&
             HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
         {
@@ -626,11 +644,24 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetWorkerResultBlockersValue(TaskVerificationRecord verification, out string blockers)
     {
-        blockers = string.Empty;
+        return TryGetWorkerResultFieldValue(verification, "blockers", out blockers);
+    }
+
+    private static bool TryGetWorkerResultDeferralsValue(TaskVerificationRecord verification, out string deferrals)
+    {
+        return TryGetWorkerResultFieldValue(verification, "deferrals", out deferrals);
+    }
+
+    private static bool TryGetWorkerResultFieldValue(
+        TaskVerificationRecord verification,
+        string fieldName,
+        out string value)
+    {
+        value = string.Empty;
         var combined = CombineOutputWithArtifacts(verification);
         var lines = combined.Replace("\r\n", "\n").Split('\n');
         var inBlock = false;
-        string? latestBlockers = null;
+        string? latestValue = null;
 
         foreach (var rawLine in lines)
         {
@@ -638,15 +669,15 @@ public static class DispatchFailureClassifier
             if (IsWorkerResultOpener(line))
             {
                 inBlock = true;
-                latestBlockers = null;
+                latestValue = null;
                 continue;
             }
 
             if (IsWorkerResultEndMarker(line))
             {
-                if (inBlock && latestBlockers is not null)
+                if (inBlock && latestValue is not null)
                 {
-                    blockers = latestBlockers;
+                    value = latestValue;
                     return true;
                 }
 
@@ -666,15 +697,15 @@ public static class DispatchFailureClassifier
             }
 
             var key = NormalizeWorkerResultMarker(line[..sep]).TrimStart('-', ' ').Trim();
-            if (string.Equals(key, "blockers", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
             {
-                latestBlockers = line[(sep + 1)..].Trim();
+                latestValue = line[(sep + 1)..].Trim();
             }
         }
 
-        if (inBlock && latestBlockers is not null)
+        if (inBlock && latestValue is not null)
         {
-            blockers = latestBlockers;
+            value = latestValue;
             return true;
         }
 
@@ -978,6 +1009,22 @@ public static class DispatchFailureClassifier
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent && hasCommittedChanges;
+
+    private static bool IsRetryRoundWithoutCommitOrDeferral(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges) =>
+        verification.Succeeded &&
+        workerResultPresent &&
+        !hasCommittedChanges &&
+        task.RequiredRole == AgentRole.Developer &&
+        (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
+        !HasWorkerResultDeferral(verification);
+
+    private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
+        TryGetWorkerResultDeferralsValue(verification, out var deferrals) &&
+        !IsNoWorkerResultBlockersValue(deferrals);
 
     private static bool HasGreenCommittedWorkerResultEvidence(
         TaskVerificationRecord verification,
