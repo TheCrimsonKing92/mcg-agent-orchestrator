@@ -6,12 +6,13 @@ internal sealed class WorkerResultContractParser
 {
     internal void AddWorkerResultContractFindings(List<string> lines, TaskSpec task, TaskVerificationRecord verification)
     {
-        if (!TryParseWorkerResultContract(verification, out var fields))
+        if (!TryParseTypedWorkerResultContract(verification, out var result))
         {
             lines.Add($"- warn: prior {task.RequiredRole} task {task.Id.Value} has no WORKER_RESULT contract.");
             return;
         }
 
+        var fields = result.Fields;
         lines.Add($"- ok: prior {task.RequiredRole} task {task.Id.Value} reported WORKER_RESULT contract.");
         if (!fields.TryGetValue("files", out var files) || string.IsNullOrWhiteSpace(files))
         {
@@ -28,13 +29,14 @@ internal sealed class WorkerResultContractParser
 
         if (!fields.TryGetValue("tests", out var tests) ||
             string.IsNullOrWhiteSpace(tests) ||
-            tests.Equals("none", StringComparison.OrdinalIgnoreCase))
+            (result.TestsStatus == WorkerResultParser.TestsStatus.Unknown &&
+             tests.Equals("none", StringComparison.OrdinalIgnoreCase)))
         {
             lines.Add($"- warn: prior {task.RequiredRole} task {task.Id.Value} contract has no test evidence.");
         }
 
         if (!fields.TryGetValue("blockers", out var blockers) ||
-            !blockers.Equals("none", StringComparison.OrdinalIgnoreCase))
+            result.BlockersStatus != WorkerResultParser.BlockersStatus.None)
         {
             lines.Add($"- warn: prior {task.RequiredRole} task {task.Id.Value} reported advisory blockers: {blockers}.");
         }
@@ -51,6 +53,14 @@ internal sealed class WorkerResultContractParser
     {
         var text = $"{verification.StandardOutput}\n{verification.StandardError}";
         return WorkerResultParser.TryParseFields(text, out fields, out _);
+    }
+
+    private static bool TryParseTypedWorkerResultContract(
+        TaskVerificationRecord verification,
+        out WorkerResultParser.ParsedWorkerResult result)
+    {
+        var text = $"{verification.StandardOutput}\n{verification.StandardError}";
+        return WorkerResultParser.TryParseResult(text, out result, out _);
     }
 
     private static string[] SplitContractList(string value)

@@ -1112,9 +1112,8 @@ public sealed class BackgroundDispatchRunner
 
     private static bool TryFindFailedWorkerBuildCheckInText(string text, out string diagnostic)
     {
-        if (!WorkerResultParser.TryParseFields(text, out var fields, out _) ||
-            !fields.TryGetValue("tests", out var tests) ||
-            !WorkerBuildCheckTestsReportFailure(tests))
+        if (!WorkerResultParser.TryParseResult(text, out var result, out _) ||
+            !WorkerResultParser.WorkerBuildCheckTestsReportFailure(result, out var tests))
         {
             diagnostic = string.Empty;
             return false;
@@ -1127,43 +1126,8 @@ public sealed class BackgroundDispatchRunner
     private static bool TryFindFailingTestsInWorkerResult(string text, out string tests)
     {
         tests = string.Empty;
-        if (!WorkerResultParser.TryParseFields(text, out var fields, out _) ||
-            !fields.TryGetValue("tests", out var parsedTests))
-        {
-            return false;
-        }
-
-        tests = parsedTests ?? string.Empty;
-        var normalized = tests.Trim();
-        if (normalized.Length == 0 ||
-            !normalized.Contains("fail", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return !normalized.Contains("failed: 0", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("failures: 0", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("0 failed", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("0 failures", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool WorkerBuildCheckTestsReportFailure(string tests)
-    {
-        if (!tests.Contains("Invoke-WorkerBuildCheck", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (tests.Contains("0 errors", StringComparison.OrdinalIgnoreCase) ||
-            tests.Contains("0 error(s)", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return tests.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
-            Regex.IsMatch(tests, @"\b[1-9]\d*\s+errors?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
-            Regex.IsMatch(tests, @"\b[1-9]\d*\s+error\(s\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return WorkerResultParser.TryParseResult(text, out var result, out _) &&
+            WorkerResultParser.TestsReportFailure(result, out tests);
     }
 
     private static bool TesterTaskRequestsFileChanges(TaskSpec task)

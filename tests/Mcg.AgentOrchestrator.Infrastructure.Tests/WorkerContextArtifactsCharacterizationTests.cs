@@ -97,6 +97,41 @@ public sealed class WorkerContextArtifactsCharacterizationTests
         Assert.Equal("none", fields["blockers"]);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerResultContractParser_findings_use_structured_blockers_token")]
+    public void WorkerResultContractParserFindingsUseStructuredBlockersToken()
+    {
+        var task = new TaskSpec(
+            new TaskId("prior-task"),
+            "Implement parser behavior.",
+            AgentRole.Developer,
+            "Run parser tests.");
+        var verification = new TaskVerificationRecord(
+            "verify",
+            CreateTempDirectory(),
+            0,
+            """
+            WORKER_RESULT:
+            files: src/A.cs
+            commands: dotnet test
+            tests: pass - prior retry mentioned failed and timed out prose
+            commit: abc123
+            blockers: none - no blockers remain
+            model_fit: OpenAI/gpt-5.5 - adequate - parser characterization
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            END_WORKER_RESULT
+            """,
+            string.Empty,
+            DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var lines = new List<string>();
+
+        new WorkerResultContractParser().AddWorkerResultContractFindings(lines, task, verification);
+
+        Assert.Contains(lines, line => line.Contains("reported WORKER_RESULT contract", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("reported advisory blockers", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("has no test evidence", StringComparison.Ordinal));
+    }
+
     private static string CreateRepresentativeRepository()
     {
         var root = CreateTempDirectory();

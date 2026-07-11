@@ -13,6 +13,27 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal static class WorkerResultParser
 {
+    internal enum TestsStatus
+    {
+        Unknown,
+        Pass,
+        Fail,
+        NotRun,
+        Deferred
+    }
+
+    internal enum BlockersStatus
+    {
+        Unknown,
+        None,
+        Present
+    }
+
+    internal sealed record ParsedWorkerResult(
+        IReadOnlyDictionary<string, string> Fields,
+        TestsStatus TestsStatus,
+        BlockersStatus BlockersStatus);
+
     internal static readonly string[] RequiredFields =
         [.. AgentOutputDirectives.WorkerResultFieldNames];
 
@@ -61,16 +82,44 @@ internal static class WorkerResultParser
         return false;
     }
 
+    internal static bool TryParseResult(
+        string text,
+        out ParsedWorkerResult result,
+        out string diagnostic)
+    {
+        result = new ParsedWorkerResult(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            TestsStatus.Unknown,
+            BlockersStatus.Unknown);
+
+        if (!TryParseFields(text, out var fields, out diagnostic))
+        {
+            return false;
+        }
+
+        var testsStatus = fields.TryGetValue("tests", out var tests)
+            ? ParseTestsStatus(tests)
+            : TestsStatus.Unknown;
+        var blockersStatus = fields.TryGetValue("blockers", out var blockers)
+            ? ParseBlockersStatus(blockers)
+            : BlockersStatus.Unknown;
+
+        result = new ParsedWorkerResult(fields, testsStatus, blockersStatus);
+        return true;
+    }
+
     internal static bool TryParseSuccessfulResult(
         string text,
         out Dictionary<string, string> fields,
         out string diagnostic)
     {
-        if (!TryParseFields(text, out fields, out diagnostic))
+        if (!TryParseResult(text, out var result, out diagnostic))
         {
+            fields = [];
             return false;
         }
 
+        fields = new Dictionary<string, string>(result.Fields, StringComparer.OrdinalIgnoreCase);
         if (!HasSubstantiveValue(fields, "files"))
         {
             diagnostic = "WORKER_RESULT has no changed files.";
@@ -78,14 +127,16 @@ internal static class WorkerResultParser
         }
 
         if (!HasSubstantiveValue(fields, "tests") ||
-            fields["tests"].Equals("not-run", StringComparison.OrdinalIgnoreCase) ||
-            fields["tests"].Equals("not run", StringComparison.OrdinalIgnoreCase))
+            result.TestsStatus == TestsStatus.NotRun ||
+            (result.TestsStatus == TestsStatus.Unknown &&
+             (fields["tests"].Equals("not-run", StringComparison.OrdinalIgnoreCase) ||
+              fields["tests"].Equals("not run", StringComparison.OrdinalIgnoreCase))))
         {
             diagnostic = "WORKER_RESULT has no completed test evidence.";
             return false;
         }
 
-        if (WorkerResultTestsReportFailure(fields["tests"]))
+        if (TestsReportFailure(result, out _))
         {
             diagnostic = $"WORKER_RESULT tests reported failure: {fields["tests"]}.";
             return false;
@@ -260,6 +311,92 @@ internal static class WorkerResultParser
         return noMarkdown.TrimStart('-', ' ').Trim();
     }
 
+    internal static TestsStatus ParseTestsStatus(string value)
+    {
+        return ReadLeadingWorkerResultToken(value) switch
+        {
+            "pass" => TestsStatus.Pass,
+            "fail" => TestsStatus.Fail,
+            "not-run" => TestsStatus.NotRun,
+            "deferred" => TestsStatus.Deferred,
+            _ => TestsStatus.Unknown
+        };
+    }
+
+    internal static BlockersStatus ParseBlockersStatus(string value)
+    {
+        var token = ReadLeadingWorkerResultToken(value);
+        if (token.Length == 0)
+        {
+            return BlockersStatus.Unknown;
+        }
+
+        return string.Equals(token, "none", StringComparison.OrdinalIgnoreCase)
+            ? BlockersStatus.None
+            : BlockersStatus.Present;
+    }
+
+    internal static bool TestsReportFailure(ParsedWorkerResult result, out string tests)
+    {
+        tests = result.Fields.TryGetValue("tests", out var value) ? value : string.Empty;
+        if (result.TestsStatus == TestsStatus.Fail)
+        {
+            return true;
+        }
+
+        if (result.TestsStatus != TestsStatus.Unknown)
+        {
+            tests = string.Empty;
+            return false;
+        }
+
+        if (LegacyTestsReportFailure(tests))
+        {
+            return true;
+        }
+
+        tests = string.Empty;
+        return false;
+    }
+
+    internal static bool WorkerBuildCheckTestsReportFailure(ParsedWorkerResult result, out string tests)
+    {
+        tests = result.Fields.TryGetValue("tests", out var value) ? value : string.Empty;
+        if (!tests.Contains("Invoke-WorkerBuildCheck", StringComparison.OrdinalIgnoreCase))
+        {
+            tests = string.Empty;
+            return false;
+        }
+
+        if (result.TestsStatus == TestsStatus.Fail)
+        {
+            return true;
+        }
+
+        if (result.TestsStatus != TestsStatus.Unknown)
+        {
+            tests = string.Empty;
+            return false;
+        }
+
+        if (tests.Contains("0 errors", StringComparison.OrdinalIgnoreCase) ||
+            tests.Contains("0 error(s)", StringComparison.OrdinalIgnoreCase))
+        {
+            tests = string.Empty;
+            return false;
+        }
+
+        if (LegacyTestsReportFailure(tests) ||
+            Regex.IsMatch(tests, @"\b[1-9]\d*\s+errors?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(tests, @"\b[1-9]\d*\s+error\(s\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
+        tests = string.Empty;
+        return false;
+    }
+
     private static bool HasSubstantiveValue(IReadOnlyDictionary<string, string> fields, string key)
     {
         return fields.TryGetValue(key, out var value) &&
@@ -267,7 +404,7 @@ internal static class WorkerResultParser
             !value.Equals("none", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool WorkerResultTestsReportFailure(string value)
+    private static bool LegacyTestsReportFailure(string value)
     {
         var normalized = value.Trim();
         if (normalized.Length == 0)
@@ -285,5 +422,24 @@ internal static class WorkerResultParser
             !normalized.Contains("0 failed", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("0 failures", StringComparison.OrdinalIgnoreCase) &&
             !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ReadLeadingWorkerResultToken(string value)
+    {
+        var trimmed = value.Trim();
+        var length = 0;
+        while (length < trimmed.Length)
+        {
+            var ch = trimmed[length];
+            if (char.IsLetterOrDigit(ch) || ch == '-')
+            {
+                length++;
+                continue;
+            }
+
+            break;
+        }
+
+        return length == 0 ? string.Empty : trimmed[..length].ToLowerInvariant();
     }
 }
