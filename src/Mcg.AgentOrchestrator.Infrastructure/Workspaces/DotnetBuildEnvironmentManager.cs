@@ -410,7 +410,7 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed);
+                    PrepareArtifactsDirectory(environment, forceClean: reclaimed, currentProcessOwnsExecutionLease: true);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -880,7 +880,10 @@ public static class DotnetBuildEnvironmentManager
 
     private static readonly string[] TesthostFirewallConfigurations = ["Debug", "Release"];
 
-    private static void PrepareArtifactsDirectory(DotnetBuildEnvironment environment, bool forceClean = false)
+    private static void PrepareArtifactsDirectory(
+        DotnetBuildEnvironment environment,
+        bool forceClean = false,
+        bool currentProcessOwnsExecutionLease = false)
     {
         PrepareArtifactsDirectoryForTests?.Invoke(environment);
         var clean = forceClean || environment.StaleLockCleared;
@@ -900,7 +903,10 @@ public static class DotnetBuildEnvironmentManager
             {
                 var lockedPath = LockAttribution.TryExtractLockedPath(ex.ToString()) ?? environment.ArtifactsPath;
                 var attribution = LockAttribution.Attribute(lockedPath, environment.ArtifactsPath);
-                if (!IsCurrentLeaseSelfHeldArtifactLock(environment, attribution))
+                if (!IsCurrentLeaseSelfHeldArtifactLock(
+                    environment,
+                    attribution,
+                    currentProcessOwnsExecutionLease))
                 {
                     throw;
                 }
@@ -957,7 +963,8 @@ public static class DotnetBuildEnvironmentManager
 
     private static bool IsCurrentLeaseSelfHeldArtifactLock(
         DotnetBuildEnvironment environment,
-        BuildLockAttribution attribution)
+        BuildLockAttribution attribution,
+        bool currentProcessOwnsExecutionLease)
     {
         if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath))
         {
@@ -967,6 +974,16 @@ public static class DotnetBuildEnvironmentManager
         if (attribution.Holders.Any(holder => !holder.IsOrchestratorOwned))
         {
             return false;
+        }
+
+        if (attribution.Holders.Any(holder => holder.ProcessId is { } processId && processId != Environment.ProcessId))
+        {
+            return false;
+        }
+
+        if (currentProcessOwnsExecutionLease)
+        {
+            return true;
         }
 
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
