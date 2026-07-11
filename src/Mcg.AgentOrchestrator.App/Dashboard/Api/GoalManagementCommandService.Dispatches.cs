@@ -302,7 +302,11 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         profiles,
         providers,
         checkpointBeforeWorkerStart);
-    return new SubscriptionStartResult(batch.Dispatches, processes, safeBatch.Plan, batch.Blocked);
+    return new SubscriptionStartResult(
+        batch.Dispatches,
+        processes,
+        safeBatch.Plan,
+        safeBatch.Blocked.Concat(batch.Blocked).ToList());
 }
 
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
@@ -321,7 +325,10 @@ private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
             .Where(task => firstBatch.IntentIds.Contains(task.Id.Value, StringComparer.OrdinalIgnoreCase))
             .Select(task => task.Id)
             .ToHashSet();
-    return new ParallelSafeBatchSelection(taskIds, plan);
+    return new ParallelSafeBatchSelection(
+        taskIds,
+        plan,
+        BuildAssignedTaskExclusionDiagnostics(goal, agents, plan, taskIds));
 }
 
 public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
@@ -349,7 +356,10 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
     return ParallelExecutionPlanner.Build(intents, providerQuotas, approveHighRiskOwnership);
 }
 
-private sealed record ParallelSafeBatchSelection(HashSet<TaskId> TaskIds, ParallelExecutionPlan Plan);
+private sealed record ParallelSafeBatchSelection(
+    HashSet<TaskId> TaskIds,
+    ParallelExecutionPlan Plan,
+    IReadOnlyList<ReadyBlockedDiagnostic> Blocked);
 
 private static bool IsSubscriptionStartCandidate(TaskSpec task)
 {
@@ -370,6 +380,96 @@ private static bool HasBlockingRunningProcess(TaskSpec task)
     return !File.Exists(process.ExitCodePath);
 }
 
+private static IReadOnlyList<ReadyBlockedDiagnostic> BuildAssignedTaskExclusionDiagnostics(
+    Goal goal,
+    IReadOnlyList<AgentDefinition> agents,
+    ParallelExecutionPlan plan,
+    IReadOnlySet<TaskId> selectedTaskIds)
+{
+    var diagnostics = new List<ReadyBlockedDiagnostic>();
+    var decisionsByTaskId = plan.Decisions.ToDictionary(decision => decision.IntentId, StringComparer.OrdinalIgnoreCase);
+
+    foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
+    {
+        if (selectedTaskIds.Contains(task.Id))
+        {
+            continue;
+        }
+
+        if (task.LastProcess is { IsRunning: true } process)
+        {
+            diagnostics.Add(BuildReadyBlockedDiagnostic(
+                goal,
+                task,
+                agents,
+                "last-process-running",
+                [$"LastProcess.IsRunning is true for pid {process.ProcessId}; exit artifact is absent at {process.ExitCodePath}"]));
+            continue;
+        }
+
+        if (decisionsByTaskId.TryGetValue(task.Id.Value, out var decision))
+        {
+            if (decision.Disposition == ParallelExecutionDisposition.RequiresOperatorApproval &&
+                decision.Reasons.Any(reason => reason.Contains("operator approval", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            diagnostics.Add(BuildReadyBlockedDiagnostic(
+                goal,
+                task,
+                agents,
+                decision.Disposition == ParallelExecutionDisposition.RequiresOperatorApproval
+                    ? "unmet-dependency"
+                    : "parallel-serialized",
+                decision.Reasons));
+            continue;
+        }
+
+        var predecessor = goal.Tasks.FirstOrDefault(candidate =>
+            IsEarlierSdlcStage(candidate.RequiredRole, task.RequiredRole) &&
+            candidate.Status != WorkTaskStatus.Completed);
+        if (predecessor is not null)
+        {
+            diagnostics.Add(BuildReadyBlockedDiagnostic(
+                goal,
+                task,
+                agents,
+                "unmet-dependency",
+                [$"predecessor {predecessor.Id.Value} is {predecessor.Status}, not Completed"]));
+        }
+    }
+
+    return diagnostics;
+}
+
+private static ReadyBlockedDiagnostic BuildReadyBlockedDiagnostic(
+    Goal goal,
+    TaskSpec task,
+    IReadOnlyList<AgentDefinition> agents,
+    string reason,
+    IReadOnlyList<string>? details = null)
+{
+    return new ReadyBlockedDiagnostic(
+        goal.Id.Value[..8],
+        TaskDisplayNumber.Resolve(goal, task.Id),
+        task.Id.Value,
+        ResolveReadyBlockedProvider(task, agents),
+        reason,
+        details);
+}
+
+private static string ResolveReadyBlockedProvider(TaskSpec task, IReadOnlyList<AgentDefinition> agents)
+{
+    if (task.AssignedAgentId is null)
+    {
+        return "unknown";
+    }
+
+    var agent = agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
+    return agent?.Subscription?.WorkerProfileName ?? agent?.Model.ProviderName ?? "unknown";
+}
+
 private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKernel kernel, Goal goal)
 {
     foreach (var task in goal.Tasks)
@@ -387,6 +487,10 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
             ExitCode = exitCode
         };
         kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitCode}.");
     }
 }
 

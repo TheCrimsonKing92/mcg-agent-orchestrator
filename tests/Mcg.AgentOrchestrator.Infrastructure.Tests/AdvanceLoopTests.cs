@@ -565,6 +565,11 @@ public sealed class AdvanceLoopTests
     Assert.NotNull(reconciledTask.LastDispatch);
     Assert.NotEqual("old dispatch", reconciledTask.LastDispatch!.Command);
     Assert.Null(reconciledTask.LastVerification);
+    Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal) &&
+        evt.Message.Contains("exit artifact", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_uses_parallel_planner_first_safe_batch")]

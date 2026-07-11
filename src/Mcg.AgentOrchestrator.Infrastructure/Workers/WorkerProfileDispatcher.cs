@@ -9,7 +9,8 @@ public sealed record ReadyBlockedDiagnostic(
     int TaskNumber,
     string TaskId,
     string Provider,
-    string Reason)
+    string Reason,
+    IReadOnlyList<string>? Details = null)
 {
     public string ToLine() =>
         $"READY_BLOCKED goal={GoalPrefix} task={TaskNumber} provider={Provider} reason={Reason}";
@@ -653,7 +654,10 @@ public static class WorkerProfileDispatcher
             TaskDisplayNumber.Resolve(goal, task.Id),
             task.Id.Value,
             string.IsNullOrWhiteSpace(preflight.ProfileName) ? "unknown" : preflight.ProfileName,
-            ResolveReadyBlockedReason(preflight.Findings));
+            ResolveReadyBlockedReason(preflight.Findings),
+            preflight.Findings
+                .Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase))
+                .ToArray());
     }
 
     private static string ResolveReadyBlockedReason(IReadOnlyList<string> findings)
