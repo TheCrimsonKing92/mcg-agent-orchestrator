@@ -30,6 +30,17 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
+    private static TaskSpec RetryTask(AgentRole role = AgentRole.Developer)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify retry test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == role);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["change-demanding retry feedback"]);
+        return task;
+    }
+
     private static TaskSpec DispatchedTaskWithResultCommit(string baseCommit, string resultCommit)
     {
         var clock = new FakeClock();
@@ -84,10 +95,11 @@ public sealed class DispatchOutcomeClassifyTests
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: stdout.Length);
 
-    private static string WorkerResultStdout(string tests, string blockers = "none") =>
+    private static string WorkerResultStdout(string tests, string blockers = "none", string? deferrals = null) =>
         $"WORKER_RESULT:{Environment.NewLine}" +
         $"files: none{Environment.NewLine}" +
         $"tests: {tests}{Environment.NewLine}" +
+        (deferrals is null ? string.Empty : $"deferrals: {deferrals}{Environment.NewLine}") +
         $"blockers: {blockers}{Environment.NewLine}" +
         "END_WORKER_RESULT";
 
@@ -124,6 +136,54 @@ public sealed class DispatchOutcomeClassifyTests
             WorkerResultVerification(WorkerResultStdout("pass - verification completed")));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify fails retry developer round with no commit and no deferral")]
+    public void ClassifyFailsRetryDeveloperRoundWithNoCommitAndNoDeferral()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout("pass - no code changes needed", deferrals: "none")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("retry round produced no commit and no deferral", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify completes retry developer round with explicit deferral and no commit")]
+    public void ClassifyCompletesRetryDeveloperRoundWithExplicitDeferralAndNoCommit()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout(
+                "pass - dependency not available",
+                deferrals: "external dependency requires operator follow-up")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify still completes reviewer with no commit")]
+    public void ClassifyStillCompletesReviewerWithNoCommit()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTask(AgentRole.Reviewer),
+            WorkerResultVerification(WorkerResultStdout("pass - review completed", deferrals: "none")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves first-round developer no-commit behavior")]
+    public void ClassifyPreservesFirstRoundDeveloperNoCommitBehavior()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout("pass - first round no code changes needed", deferrals: "none")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify keeps developer worker result without changes incomplete")]
