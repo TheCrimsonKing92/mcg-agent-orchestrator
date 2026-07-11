@@ -88,6 +88,7 @@ public sealed class ConductorDriverTests
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null,
         Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        Action<GoalId, TaskId, string>? recordTaskNote = null,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<GoalId, TaskId>? clearCriterionRetryFeedback = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
@@ -116,6 +117,7 @@ public sealed class ConductorDriverTests
                 : AcceptanceVerificationSummary.Failed),
             runAdvisorySemanticAcceptance,
             retryTask,
+            recordTaskNote,
             recordCriterionRetryFeedback,
             clearCriterionRetryFeedback,
             rebaseOntoMain ?? (_ => DefaultRebaseSuccess()),
@@ -528,8 +530,57 @@ public sealed class ConductorDriverTests
         Assert.Contains("src/Foo.cs", escalationReason!, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_criterion_retries_task_with_feedback")]
-    public void ConductorDriverVerifiedUnmetAcceptanceCriterionRetriesTaskWithFeedback()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_advisory_only_unmet_acceptance_criteria_land_with_task_note")]
+    public void ConductorDriverVerifiedAdvisoryOnlyUnmetAcceptanceCriteriaLandWithTaskNote()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["stale required retry feedback"]);
+        var landCalled = false;
+        var retryCalled = false;
+        var advisory = new AcceptanceCheckResult(
+            "test tamper guard",
+            false,
+            0,
+            "1 test degradation signal(s)",
+            ResultSummary: "1 test degradation signal(s)",
+            Advisory: true);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [advisory]),
+            retryTask: (_, _, _) =>
+            {
+                retryCalled = true;
+                throw new InvalidOperationException("Advisory acceptance criteria must not retry tasks.");
+            },
+            recordTaskNote: (goalId, taskId, message) => kernel.RecordTaskNote(goalId, taskId, message),
+            clearCriterionRetryFeedback: kernel.ClearCriterionRetryFeedback,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.False(retryCalled);
+        Assert.True(landCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+        Assert.Empty(task.CriterionRetryFeedback);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Advisory acceptance criteria observed during landing (non-gating)", StringComparison.Ordinal) &&
+            evt.Message.Contains("test tamper guard: 1 test degradation signal(s)", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_required_unmet_acceptance_criterion_retries_task_with_feedback")]
+    public void ConductorDriverVerifiedRequiredUnmetAcceptanceCriterionRetriesTaskWithFeedback()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
@@ -546,8 +597,7 @@ public sealed class ConductorDriverTests
                 "src/Foo.cs(12,34): error CS1002: ; expected",
                 "[xUnit.net 00:00:01.23]     Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]",
             ]),
-            ResultSummary: "focused conductor tests failed",
-            Advisory: true);
+            ResultSummary: "focused conductor tests failed");
 
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -598,8 +648,7 @@ public sealed class ConductorDriverTests
             false,
             1,
             output,
-            ResultSummary: "many compiler errors",
-            Advisory: true);
+            ResultSummary: "many compiler errors");
 
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -631,8 +680,7 @@ public sealed class ConductorDriverTests
             false,
             1,
             "Pattern 'Ready' was not found.",
-            ResultSummary: "docs/usage.md is missing Ready",
-            Advisory: true);
+            ResultSummary: "docs/usage.md is missing Ready");
 
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -665,8 +713,7 @@ public sealed class ConductorDriverTests
             false,
             1,
             "file missing",
-            ResultSummary: "docs/usage.md missing",
-            Advisory: true);
+            ResultSummary: "docs/usage.md missing");
 
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -887,8 +934,7 @@ public sealed class ConductorDriverTests
             false,
             1,
             "failed",
-            ResultSummary: "focused command failed",
-            Advisory: true);
+            ResultSummary: "focused command failed");
 
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
