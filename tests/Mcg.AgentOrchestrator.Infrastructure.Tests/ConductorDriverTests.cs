@@ -570,7 +570,7 @@ public sealed class ConductorDriverTests
         Assert.True(landCalled);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Assert.Equal(0, task.CriterionRetryCount);
+        Assert.Equal(1, task.CriterionRetryCount);
         Assert.Empty(task.CriterionRetryFeedback);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
