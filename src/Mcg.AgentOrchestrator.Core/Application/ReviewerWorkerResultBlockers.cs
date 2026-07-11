@@ -291,8 +291,8 @@ internal static class WorkerResultBlockers
         var token = ReadLeadingWorkerResultToken(value);
         if (token.Length == 0)
         {
-            status = BlockersStatus.None;
-            return true;
+            status = BlockersStatus.Unknown;
+            return false;
         }
 
         status = string.Equals(token, "none", StringComparison.OrdinalIgnoreCase)

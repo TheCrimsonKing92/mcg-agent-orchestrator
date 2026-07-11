@@ -227,7 +227,7 @@ internal sealed class WorkerArtifactWriter
                 string.Empty,
                 "## Build/Test Verification",
                 "- Run `.\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` before writing WORKER_RESULT for every project whose sources you changed; this is the only sanctioned worker-side .NET build check.",
-                "- Report the build result in WORKER_RESULT `tests`, for example `tests: build: 0 errors (Invoke-WorkerBuildCheck)` or include the failing build error text.",
+                "- Report the build result in WORKER_RESULT `tests`, for example `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.",
                 "- Do not run raw `dotnet test`, raw `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1` directly from a subscription worker; raw test execution can create per-worktree testhost firewall prompts.",
                 "- If no .NET project sources changed, report the non-.NET verification you ran or `tests: not-run - no .NET project sources changed; orchestrator acceptance gate verifies via stable slots`."
             ]);
@@ -325,7 +325,7 @@ internal sealed class WorkerArtifactWriter
                 lines.Add("- Developer/Tester subscription workers must run `.\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` for every project whose sources they changed before writing WORKER_RESULT.");
                 lines.Add($"- The helper performs build-only verification through isolated artifacts under `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`; it does not run tests or spawn testhost.");
                 lines.Add("- Subscription workers must not run raw `dotnet test`, raw `dotnet build`, or `.\\scripts\\Invoke-IsolatedDotnet.ps1`; raw test execution can create per-worktree testhost firewall prompts.");
-                lines.Add("- In WORKER_RESULT, report build evidence such as `tests: build: 0 errors (Invoke-WorkerBuildCheck)` or include the failing build error text.");
+                lines.Add("- In WORKER_RESULT, report build evidence such as `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.");
             }
             else if (toolchain == Toolchain.Go)
             {

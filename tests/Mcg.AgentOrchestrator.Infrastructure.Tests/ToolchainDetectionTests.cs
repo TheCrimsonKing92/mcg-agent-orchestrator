@@ -197,7 +197,7 @@ public sealed class ToolchainDetectionTests
         Xunit.Assert.Contains("## Worker Build Check", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("for every project whose sources they changed", verification, StringComparison.Ordinal);
-        Xunit.Assert.Contains("tests: build: 0 errors (Invoke-WorkerBuildCheck)", verification, StringComparison.Ordinal);
+        Xunit.Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("Subscription workers must not run raw `dotnet test`", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("does not run tests or spawn testhost", verification, StringComparison.Ordinal);
     }

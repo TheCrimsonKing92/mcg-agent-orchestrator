@@ -252,6 +252,21 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.DoesNotContain("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify_does_not_treat_blank_blockers_as_explicit_none")]
+    public void ClassifyDoesNotTreatBlankBlockersAsExplicitNone()
+    {
+        var verification = WorkerResultVerification(
+            WorkerResultStdout("pass - focused tests passed", blockers: string.Empty),
+            hasCommittedChanges: false);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            verification);
+
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify_fails_exit_zero_worker_result_with_structured_fail_tests_token")]
     public void ClassifyFailsExitZeroWorkerResultWithStructuredFailTestsToken()
     {

@@ -20,7 +20,8 @@ public sealed class WorkerContextArtifactsVerificationTests
         Xunit.Assert.True(verificationIndex < descriptionIndex);
         Xunit.Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", currentTask);
         Xunit.Assert.Contains("for every project whose sources you changed", currentTask);
-        Xunit.Assert.Contains("tests: build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
+        Xunit.Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
+        Xunit.Assert.DoesNotContain("tests: build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
         Xunit.Assert.Contains("Do not run raw `dotnet test`", currentTask);
         Xunit.Assert.Contains("raw test execution can create per-worktree testhost firewall prompts", currentTask);
     }
