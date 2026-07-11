@@ -549,7 +549,7 @@ public sealed class AdvanceLoopTests
     });
     goal = kernel.GetGoal(goal.Id);
     task = goal.Tasks.Single();
-    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Write-Output {promptPath}")]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
 
     var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
         kernel,
@@ -560,9 +560,11 @@ public sealed class AdvanceLoopTests
 
     Assert.Single(batch.Dispatches);
     Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
-    Assert.False(task.LastProcess!.IsRunning);
-    Assert.Equal(0, task.LastProcess.ExitCode);
-    Assert.Null(task.LastVerification);
+    var reconciledTask = kernel.GetTask(goal.Id, task.Id);
+    Assert.Null(reconciledTask.LastProcess);
+    Assert.NotNull(reconciledTask.LastDispatch);
+    Assert.NotEqual("old dispatch", reconciledTask.LastDispatch!.Command);
+    Assert.Null(reconciledTask.LastVerification);
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_uses_parallel_planner_first_safe_batch")]

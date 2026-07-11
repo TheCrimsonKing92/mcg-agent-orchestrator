@@ -216,6 +216,7 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     ReconcileExitedAssignedProcessRecords(kernel, goal);
+    goal = kernel.GetGoal(goal.Id);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
@@ -275,6 +276,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     ReconcileExitedAssignedProcessRecords(kernel, goal);
+    goal = kernel.GetGoal(goal.Id);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
