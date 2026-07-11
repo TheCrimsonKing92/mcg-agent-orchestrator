@@ -828,6 +828,50 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.True(!redispatchPrompt.Contains($"- HEAD commit: {head}", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_retry_prompt_includes_failed_verification_receipt")]
+    public void WorkerProfileDispatcherRetryPromptIncludesFailedVerificationReceipt()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var clock = new MutableClock(DateTimeOffset.Parse("2026-06-27T12:00:00Z"));
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt regeneration.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Test retry prompt regeneration.", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Fix retry prompt regeneration", [developer, tester]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "dotnet test --filter DispatchReceipt",
+        workingDirectory,
+        1,
+        "Failed Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchReceiptTests.PromptContainsReceipt",
+        "exit code 1",
+        clock.UtcNow,
+        StandardOutputPath: Path.Combine(root, "logs", "developer.out.log"),
+        StandardErrorPath: Path.Combine(root, "logs", "developer.err.log")));
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "Operator steer stays short.");
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory}");
+
+    var dispatch = WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        tester,
+        profile,
+        promptRoot,
+        workingDirectory,
+        clock.UtcNow);
+
+    var prompt = File.ReadAllText(dispatch.PromptPath);
+    Assert.Contains("Operator steer stays short.", prompt, StringComparison.Ordinal);
+    Assert.Contains("Structured failure receipt (bounded):", prompt, StringComparison.Ordinal);
+    Assert.Contains("Verification command: dotnet test --filter DispatchReceipt", prompt, StringComparison.Ordinal);
+    Assert.Contains("Verification exit code: 1", prompt, StringComparison.Ordinal);
+    Assert.Contains("DispatchReceiptTests.PromptContainsReceipt", prompt, StringComparison.Ordinal);
+    Assert.Contains(Path.Combine(root, "logs", "developer.out.log"), prompt, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_assigned_agent_when_catalog_still_contains_it")]
     public void WorkerProfileDispatcherKeepsAssignedAgentWhenCatalogStillContainsIt()
 {

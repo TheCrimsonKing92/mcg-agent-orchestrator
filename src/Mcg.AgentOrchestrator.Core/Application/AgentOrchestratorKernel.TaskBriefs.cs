@@ -1,7 +1,16 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    private const int FailureReceiptMaxChars = 2000;
+    private const int FailureReceiptStreamTailChars = 700;
+    private static readonly JsonSerializerOptions GoalOperationJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public HumanInputRequest GetHumanInputRequest(HumanInputRequestId requestId)
     {
         return _humanInputRequests.TryGetValue(requestId, out var request)
@@ -53,7 +62,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty
         };
         headerLines.AddRange(BuildLatestDeveloperRetryBlock(goal, task, targetBranchName, targetHeadCommit));
-        headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task));
+        headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
             $"Goal id: {goal.Id.Value}",
@@ -163,7 +172,7 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(feedbackLines));
         }
 
-        var recentRetryFeedback = BuildRecentRetryFeedbackBriefBlock(goal, task);
+        var recentRetryFeedback = BuildRecentRetryFeedbackBriefBlock(goal, task, workingDirectory);
         if (recentRetryFeedback.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(recentRetryFeedback));
@@ -374,7 +383,7 @@ public sealed partial class AgentOrchestratorKernel
         return complexLines;
     }
 
-    private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task)
+    private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
     {
         if (goal.LatestAcceptanceFailure is not { } failure)
         {
@@ -405,6 +414,12 @@ public sealed partial class AgentOrchestratorKernel
             "Failing tests/checks:",
         };
         lines.AddRange(failure.FailedChecks.Select(check => $"- {check}"));
+        lines.AddRange(BuildStructuredFailureReceiptLines(
+            "acceptance/verification",
+            failure.FailedChecks,
+            task,
+            retryEvent.OccurredAt,
+            ReadLatestFailedAcceptanceOperation(workingDirectory, goal.Id, retryEvent.OccurredAt)));
         lines.Add("<!-- ACCEPTANCE_FAILURE_END -->");
         lines.Add(string.Empty);
         return lines;
@@ -468,7 +483,7 @@ public sealed partial class AgentOrchestratorKernel
         return $"Include a final model-selection note: {ModelFitEvidence.BuildNoteTemplate(target)}.";
     }
 
-    private static IReadOnlyList<string> BuildRecentRetryFeedbackBriefBlock(Goal goal, TaskSpec task)
+    private static IReadOnlyList<string> BuildRecentRetryFeedbackBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
     {
         if (task.RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer))
         {
@@ -511,6 +526,17 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"Prior outcome: {priorOutcomeEvent.OccurredAt:u}; {DescribeTimelineTask(goal, priorOutcomeEvent)}; {priorOutcomeEvent.Kind}: {PromptContextFormatter.TrimPromptBlock(priorOutcomeEvent.Message)}");
         }
 
+        if (latestRetry.TaskId is { } retriedTaskId)
+        {
+            var retriedTask = goal.FindTask(retriedTaskId);
+            lines.AddRange(BuildStructuredFailureReceiptLines(
+                "operator retry/verification",
+                priorOutcomeEvent is null ? [] : [$"{priorOutcomeEvent.Kind}: {priorOutcomeEvent.Message}"],
+                retriedTask,
+                latestRetry.OccurredAt,
+                ReadLatestFailedAcceptanceOperation(workingDirectory, goal.Id, latestRetry.OccurredAt)));
+        }
+
         lines.Add("Use this as the current correction context; older duplicate retry/recovery notes are omitted.");
 
         var emittedMessages = new HashSet<string>(StringComparer.Ordinal);
@@ -546,6 +572,205 @@ public sealed partial class AgentOrchestratorKernel
 
         lines.Add(string.Empty);
         return lines;
+    }
+
+    private static IReadOnlyList<string> BuildStructuredFailureReceiptLines(
+        string source,
+        IReadOnlyList<string> failedChecks,
+        TaskSpec task,
+        DateTimeOffset retryOccurredAt,
+        GoalOperationFailureReceipt? acceptanceFailure = null)
+    {
+        var verification = LatestFailedVerificationBefore(task, retryOccurredAt);
+        if (verification is null && failedChecks.Count == 0 && task.LastProcess is null && acceptanceFailure is null)
+        {
+            return [];
+        }
+
+        var lines = new List<string>
+        {
+            "Structured failure receipt (bounded):",
+            $"Source: {source}",
+            $"Receipt cap: {FailureReceiptMaxChars} chars; output is tail-preferred."
+        };
+
+        if (failedChecks.Count > 0)
+        {
+            lines.Add("Failed checks/criteria:");
+            lines.AddRange(failedChecks.Select(check => $"- {PromptContextFormatter.TrimPromptBlock(check)}"));
+        }
+
+        if (acceptanceFailure is not null)
+        {
+            lines.Add($"Acceptance operation: {acceptanceFailure.Operation}");
+            lines.Add($"Acceptance operation failed: {acceptanceFailure.At:u}");
+            AddPathLine(lines, "Goal operation journal path", acceptanceFailure.JournalPath);
+            AddTail(lines, "Acceptance operation detail tail", acceptanceFailure.Detail);
+        }
+
+        if (verification is not null)
+        {
+            lines.Add($"Verification command: {verification.Command}");
+            lines.Add($"Verification exit code: {verification.ExitCode}");
+            lines.Add($"Verification completed: {verification.CompletedAt:u}");
+            AddPathLine(lines, "Verification stdout path", verification.StandardOutputPath);
+            AddPathLine(lines, "Verification stderr path", verification.StandardErrorPath);
+        }
+
+        if (task.LastProcess is not null)
+        {
+            AddPathLine(lines, "Process stdout path", task.LastProcess.StandardOutputPath);
+            AddPathLine(lines, "Process stderr path", task.LastProcess.StandardErrorPath);
+        }
+
+        if (verification is not null)
+        {
+            AddTail(lines, "Stdout tail", verification.StandardOutput);
+            AddTail(lines, "Stderr tail", verification.StandardError);
+        }
+
+        return CapReceiptLines(lines);
+    }
+
+    private static TaskVerificationRecord? LatestFailedVerificationBefore(TaskSpec task, DateTimeOffset retryOccurredAt)
+    {
+        return task.VerificationHistory
+            .Where(verification => !verification.Succeeded && verification.CompletedAt <= retryOccurredAt)
+            .OrderByDescending(verification => verification.CompletedAt)
+            .FirstOrDefault();
+    }
+
+    private static GoalOperationFailureReceipt? ReadLatestFailedAcceptanceOperation(
+        string? workingDirectory,
+        GoalId goalId,
+        DateTimeOffset retryOccurredAt)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return null;
+        }
+
+        string journalPath;
+        try
+        {
+            journalPath = Path.Combine(
+                Path.GetFullPath(workingDirectory),
+                ".orchestrator",
+                "goal-operations",
+                $"{goalId.Value}.jsonl");
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        if (!File.Exists(journalPath))
+        {
+            return null;
+        }
+
+        return File.ReadLines(journalPath)
+            .Select(TryReadGoalOperationReceiptEntry)
+            .Where(entry =>
+                entry is not null &&
+                IsAcceptanceOperation(entry.Operation) &&
+                string.Equals(entry.Status, "Failed", StringComparison.OrdinalIgnoreCase) &&
+                entry.At <= retryOccurredAt)
+            .OrderByDescending(entry => entry!.At)
+            .Select(entry => new GoalOperationFailureReceipt(
+                entry!.Operation!.Trim(),
+                entry.At,
+                entry.Detail ?? string.Empty,
+                journalPath))
+            .FirstOrDefault();
+    }
+
+    private static GoalOperationReceiptEntry? TryReadGoalOperationReceiptEntry(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<GoalOperationReceiptEntry>(line, GoalOperationJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsAcceptanceOperation(string? operation) =>
+        operation is not null &&
+        (operation.Equals("conductor:acceptance", StringComparison.OrdinalIgnoreCase) ||
+         operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase));
+
+    private sealed record GoalOperationFailureReceipt(
+        string Operation,
+        DateTimeOffset At,
+        string Detail,
+        string JournalPath);
+
+    private sealed class GoalOperationReceiptEntry
+    {
+        public string? Operation { get; set; }
+
+        public string? Status { get; set; }
+
+        public DateTimeOffset At { get; set; }
+
+        public string? Detail { get; set; }
+    }
+
+    private static void AddPathLine(List<string> lines, string label, string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            lines.Add($"{label}: {path.Trim()}");
+        }
+    }
+
+    private static void AddTail(List<string> lines, string label, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        lines.Add($"{label}:");
+        lines.Add(TailPreferredText(text.Trim(), FailureReceiptStreamTailChars));
+    }
+
+    private static IReadOnlyList<string> CapReceiptLines(List<string> lines)
+    {
+        var text = string.Join(Environment.NewLine, lines);
+        if (text.Length <= FailureReceiptMaxChars)
+        {
+            return lines;
+        }
+
+        const int headChars = 700;
+        var marker = $"{Environment.NewLine}...[failure receipt truncated for prompt budget]...{Environment.NewLine}";
+        var tailChars = FailureReceiptMaxChars - headChars - marker.Length;
+        if (tailChars <= 0)
+        {
+            return [text[^FailureReceiptMaxChars..]];
+        }
+
+        var capped = text[..headChars] + marker + text[^tailChars..];
+        return capped.Split(Environment.NewLine).ToList();
+    }
+
+    private static string TailPreferredText(string text, int maxChars)
+    {
+        if (text.Length <= maxChars)
+        {
+            return text;
+        }
+
+        return $"...[truncated {text.Length - maxChars} chars before failure tail]..." + Environment.NewLine + text[^maxChars..];
     }
 
     private static bool IsRetryPriorOutcomeEvent(ProgressEvent evt)
