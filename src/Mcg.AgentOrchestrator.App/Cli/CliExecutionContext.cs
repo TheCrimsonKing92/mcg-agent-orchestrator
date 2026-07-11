@@ -17,7 +17,8 @@ internal sealed class CliExecutionContext(
     Func<AcceptanceMergeCommitRequest, AcceptanceMergeCommitResult>? finalizeAcceptanceMerge = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalKernel = null,
     Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null,
-    CliPhaseTimingRecorder? phaseTimings = null)
+    CliPhaseTimingRecorder? phaseTimings = null,
+    Action? releaseConductLoopLease = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -66,6 +67,8 @@ public TimeSpan? RunGoalPollInterval { get; init; }
 public RunGoalService.SleepFunc? RunGoalSleep { get; init; }
 
 public Func<Goal, Task<RunGoalService.RunGoalResult>>? RunGoalOverride { get; init; }
+
+public Action ReleaseConductLoopLease { get; } = releaseConductLoopLease ?? (() => { });
 
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();

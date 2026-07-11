@@ -22,7 +22,8 @@ public static bool ExecuteCommand(
     Func<long>? goalMarkLandedElapsedMilliseconds = null,
     CliPhaseTimingRecorder? phaseTimings = null,
     TimeSpan? stableSlotAcquisitionTimeout = null,
-    Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null)
+    Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
+    Action? releaseConductLoopLease = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
     kernel.SetEventWriter(eventWriter);
@@ -38,7 +39,8 @@ public static bool ExecuteCommand(
         persistKernel,
         finalizeAcceptanceMerge,
         persistGoalKernel,
-        phaseTimings: phaseTimings)
+        phaseTimings: phaseTimings,
+        releaseConductLoopLease: releaseConductLoopLease)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),
