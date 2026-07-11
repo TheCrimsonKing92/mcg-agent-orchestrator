@@ -892,7 +892,19 @@ public static class DotnetBuildEnvironmentManager
 
         if (clean && Directory.Exists(environment.ArtifactsPath))
         {
-            Directory.Delete(environment.ArtifactsPath, recursive: true);
+            try
+            {
+                Directory.Delete(environment.ArtifactsPath, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                var lockedPath = LockAttribution.TryExtractLockedPath(ex.ToString()) ?? environment.ArtifactsPath;
+                var attribution = LockAttribution.Attribute(lockedPath, environment.ArtifactsPath);
+                if (!IsCurrentLeaseSelfHeldArtifactLock(environment, attribution))
+                {
+                    throw;
+                }
+            }
         }
 
         Directory.CreateDirectory(environment.ArtifactsPath);
@@ -941,6 +953,40 @@ public static class DotnetBuildEnvironmentManager
     {
         var marker = new ArtifactsOwnerMarker(1, ownerToken, Environment.ProcessId, Environment.MachineName, DateTimeOffset.UtcNow);
         File.WriteAllText(ownerPath, JsonSerializer.Serialize(marker, JsonOptions));
+    }
+
+    private static bool IsCurrentLeaseSelfHeldArtifactLock(
+        DotnetBuildEnvironment environment,
+        BuildLockAttribution attribution)
+    {
+        if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath))
+        {
+            return false;
+        }
+
+        if (attribution.Holders.Any(holder => !holder.IsOrchestratorOwned))
+        {
+            return false;
+        }
+
+        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+        return metadata?.OwnerProcessId == Environment.ProcessId;
+    }
+
+    private static bool PathIsUnderDirectory(string path, string directory)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return fullPath.Equals(fullDirectory, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(fullDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(fullDirectory + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static bool TryReclaimStaleExecutionLease(DotnetBuildEnvironment environment)
