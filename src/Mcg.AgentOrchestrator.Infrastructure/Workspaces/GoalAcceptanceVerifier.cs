@@ -1577,6 +1577,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static List<string> AnalyzeTestFileDiff(string diff)
     {
         var signals = new List<string>();
+        var fileStats = new List<TestFileDiffStats>();
         string? currentFile = null;
         string? pendingFile = null;
         int assertRemoved = 0, assertAdded = 0;
@@ -1586,21 +1587,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         void FlushFile()
         {
             if (currentFile is null) return;
-            var fileSignals = new List<string>();
 
-            var netAssert = assertRemoved - assertAdded;
-            if (netAssert > 0)
-                fileSignals.Add($"net -{netAssert} assertion(s) removed");
-
-            var netTestAttr = testAttrRemoved - testAttrAdded;
-            if (netTestAttr > 0)
-                fileSignals.Add($"{netTestAttr} test method(s) removed");
+            fileStats.Add(new TestFileDiffStats(
+                currentFile,
+                assertRemoved,
+                assertAdded,
+                testAttrRemoved,
+                testAttrAdded));
 
             foreach (var t in tautologies)
-                fileSignals.Add($"tautology assertion added: {t}");
-
-            if (fileSignals.Count > 0)
-                signals.Add($"{currentFile}: {string.Join("; ", fileSignals)}");
+                signals.Add($"{currentFile}: tautology assertion added: {t}");
         }
 
         void StartFile(string filePath)
@@ -1656,8 +1652,50 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         FlushFile();
+
+        var totalAssertRemoved = fileStats.Sum(file => file.AssertRemoved);
+        var totalAssertAdded = fileStats.Sum(file => file.AssertAdded);
+        var netAssertRemoved = totalAssertRemoved - totalAssertAdded;
+        if (netAssertRemoved > 0)
+        {
+            signals.Insert(
+                0,
+                $"diff-wide net -{netAssertRemoved} assertion(s) removed ({FormatTestFileDiffDetails(fileStats)})");
+        }
+
+        var totalTestAttrRemoved = fileStats.Sum(file => file.TestAttrRemoved);
+        var totalTestAttrAdded = fileStats.Sum(file => file.TestAttrAdded);
+        var netTestAttrRemoved = totalTestAttrRemoved - totalTestAttrAdded;
+        if (netTestAttrRemoved > 0)
+        {
+            signals.Insert(
+                netAssertRemoved > 0 ? 1 : 0,
+                $"diff-wide {netTestAttrRemoved} test method(s) removed ({FormatTestFileDiffDetails(fileStats)})");
+        }
+
         return signals;
     }
+
+    private static string FormatTestFileDiffDetails(IReadOnlyList<TestFileDiffStats> fileStats)
+    {
+        var details = fileStats
+            .Where(file =>
+                file.AssertRemoved != 0 ||
+                file.AssertAdded != 0 ||
+                file.TestAttrRemoved != 0 ||
+                file.TestAttrAdded != 0)
+            .Select(file =>
+                $"{file.FilePath}: assertions -{file.AssertRemoved}/+{file.AssertAdded}, tests -{file.TestAttrRemoved}/+{file.TestAttrAdded}");
+
+        return "per-file: " + string.Join("; ", details);
+    }
+
+    private sealed record TestFileDiffStats(
+        string FilePath,
+        int AssertRemoved,
+        int AssertAdded,
+        int TestAttrRemoved,
+        int TestAttrAdded);
 
     private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check)
     {

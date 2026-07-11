@@ -1958,6 +1958,109 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_allows_mechanical_test_split")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardAllowsMechanicalTestSplit()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,5 +10,0 @@",
+            "-    [Xunit.Fact(DisplayName = \"some test\")]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }",
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs",
+            "--- /dev/null",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs",
+            "@@ -0,0 +1,5 @@",
+            "+    [Xunit.Fact(DisplayName = \"some test\")]",
+            "+    public void SomeTest()",
+            "+    {",
+            "+        Assert.True(something);",
+            "+    }"
+        ]);
+
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),
+            new(0, diff)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            Task.FromResult(responses.Dequeue()));
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs"
+            ]);
+
+        Assert.True(result.Passed);
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Advisory);
+        Assert.True(tamperCheck.Passed);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_flags_diff_wide_net_removal")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardFlagsDiffWideNetRemoval()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,10 +10,0 @@",
+            "-    [Xunit.Fact(DisplayName = \"first test\")]",
+            "-    public void FirstTest()",
+            "-    {",
+            "-        Assert.True(first);",
+            "-    }",
+            "-    [Xunit.Fact(DisplayName = \"second test\")]",
+            "-    public void SecondTest()",
+            "-    {",
+            "-        Assert.True(second);",
+            "-    }",
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs",
+            "--- /dev/null",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs",
+            "@@ -0,0 +1,5 @@",
+            "+    [Xunit.Fact(DisplayName = \"first test\")]",
+            "+    public void FirstTest()",
+            "+    {",
+            "+        Assert.True(first);",
+            "+    }"
+        ]);
+
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),
+            new(0, diff)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            Task.FromResult(responses.Dequeue()));
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs"
+            ]);
+
+        Assert.True(result.Passed);
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Advisory);
+        Assert.False(tamperCheck.Passed);
+        Assert.Equal("2 test degradation signal(s)", tamperCheck.ResultSummary);
+        Assert.Contains("diff-wide net -1 assertion(s) removed", tamperCheck.OutputTail!, StringComparison.Ordinal);
+        Assert.Contains("diff-wide 1 test method(s) removed", tamperCheck.OutputTail!, StringComparison.Ordinal);
+        Assert.Contains("FooTests.cs: assertions -2/+0, tests -2/+0", tamperCheck.OutputTail!, StringComparison.Ordinal);
+        Assert.Contains("SplitFooTests.cs: assertions -0/+1, tests -0/+1", tamperCheck.OutputTail!, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_flags_tautology_assertion")]
     public async Task GoalAcceptanceVerifierTestTamperGuardFlagsTautologyAssertion()
     {
@@ -1992,6 +2095,57 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.True(tamperCheck.Advisory);
         Assert.False(tamperCheck.Passed);
         Assert.True(tamperCheck.OutputTail is not null);
+        Assert.Contains("tautology", tamperCheck.OutputTail!, StringComparison.OrdinalIgnoreCase);
+        var tautologyAssertion = "Assert." + "True(true)";
+        Assert.Contains(tautologyAssertion, tamperCheck.OutputTail!, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_flags_tautology_across_files")]
+    public async Task GoalAcceptanceVerifierTestTamperGuardFlagsTautologyAcrossFiles()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,5 +10,0 @@",
+            "-    [Xunit.Fact(DisplayName = \"some test\")]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }",
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs",
+            "--- /dev/null",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs",
+            "@@ -0,0 +1,5 @@",
+            "+    [Xunit.Fact(DisplayName = \"some test\")]",
+            "+    public void SomeTest()",
+            "+    {",
+            "+        Assert.True(true);",
+            "+    }"
+        ]);
+
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),
+            new(0, diff)
+        ]);
+
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            Task.FromResult(responses.Dequeue()));
+
+        var result = await verifier.RunAsync(
+            "C:\\fake\\worktree",
+            changedFiles: [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs"
+            ]);
+
+        Assert.True(result.Passed);
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Advisory);
+        Assert.False(tamperCheck.Passed);
+        Assert.Equal("1 test degradation signal(s)", tamperCheck.ResultSummary);
+        Assert.Contains("SplitFooTests.cs", tamperCheck.OutputTail!, StringComparison.Ordinal);
         Assert.Contains("tautology", tamperCheck.OutputTail!, StringComparison.OrdinalIgnoreCase);
         var tautologyAssertion = "Assert." + "True(true)";
         Assert.Contains(tautologyAssertion, tamperCheck.OutputTail!, StringComparison.Ordinal);
