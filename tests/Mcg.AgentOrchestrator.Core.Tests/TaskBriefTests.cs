@@ -553,53 +553,34 @@ public sealed class TaskBriefTests
     [Xunit.Fact(DisplayName = "BuildTaskBrief_acceptance_retry_includes_structured_failure_receipt")]
     public void BuildTaskBriefAcceptanceRetryIncludesStructuredFailureReceipt()
 {
+    var workingDirectory = Path.Combine(Path.GetTempPath(), "mcg-taskbrief-tests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(Path.Combine(workingDirectory, ".orchestrator", "goal-operations"));
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
     var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
     var goal = kernel.CreateGoal("Recover failed acceptance", [developer]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
-    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", clock.UtcNow));
-    var startedProcess = new TaskProcessRecord(
-        42,
-        "codex exec",
-        "C:\\repo",
-        "C:\\repo\\.orchestrator\\logs\\worker.out.log",
-        "C:\\repo\\.orchestrator\\logs\\worker.err.log",
-        "C:\\repo\\.orchestrator\\logs\\worker.exit",
-        clock.UtcNow,
-        null,
-        null);
-    kernel.RecordTaskProcessStarted(goal.Id, developer.Id, startedProcess);
-    clock.Advance();
-    kernel.RecordTaskProcessRefreshed(goal.Id, developer.Id, startedProcess with
-    {
-        CompletedAt = clock.UtcNow,
-        ExitCode = 1
-    }, verification: null);
-    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
-        "acceptance",
-        "C:\\repo",
-        1,
-        "Failed Tests:\r\n  ReceiptTests.AcceptanceTailPinsNames\r\nExit Code: 1",
-        "compiler error CS1002: ; expected",
-        clock.UtcNow,
-        StandardOutputPath: "C:\\repo\\.orchestrator\\logs\\acceptance.out.log",
-        StandardErrorPath: "C:\\repo\\.orchestrator\\logs\\acceptance.err.log"));
-    kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Acceptance verification failed.");
+    var acceptanceFailedAt = clock.UtcNow;
+    var journalPath = Path.Combine(workingDirectory, ".orchestrator", "goal-operations", $"{goal.Id.Value}.jsonl");
+    File.WriteAllText(journalPath,
+        $$"""
+        {"idempotencyKey":"{{goal.Id.Value}}:conductor:acceptance","goalId":{"value":"{{goal.Id.Value}}"},"operation":"conductor:acceptance","status":"Failed","at":"{{acceptanceFailedAt:O}}","detail":"Acceptance failed (exit 1). Acceptance output tail: Failed Tests:\n  ReceiptTests.AcceptanceTailPinsNames\ncompiler error CS1002: ; expected\nstdout: C:\\repo\\.orchestrator\\logs\\acceptance.out.log\nstderr: C:\\repo\\.orchestrator\\logs\\acceptance.err.log"}
+        """ + Environment.NewLine);
     clock.Advance();
     kernel.RecordAcceptanceFailure(goal.Id, ["test tamper guard: 1 test degradation signal(s)"]);
     clock.Advance();
     kernel.RetryTask(goal.Id, developer.Id, "Fix the acceptance failure.");
 
-    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id, workingDirectory: workingDirectory).Content;
 
     Assert.Contains("## ACCEPTANCE FAILURE - FIX FIRST", brief, StringComparison.Ordinal);
     Assert.Contains("Structured failure receipt (bounded):", brief, StringComparison.Ordinal);
     Assert.Contains("test tamper guard: 1 test degradation signal(s)", brief, StringComparison.Ordinal);
-    Assert.Contains("Verification command: acceptance", brief, StringComparison.Ordinal);
-    Assert.Contains("Verification exit code: 1", brief, StringComparison.Ordinal);
+    Assert.Contains("Acceptance operation: conductor:acceptance", brief, StringComparison.Ordinal);
+    Assert.Contains("Acceptance failed (exit 1)", brief, StringComparison.Ordinal);
     Assert.Contains("ReceiptTests.AcceptanceTailPinsNames", brief, StringComparison.Ordinal);
     Assert.Contains("compiler error CS1002", brief, StringComparison.Ordinal);
+    Assert.Contains(journalPath, brief, StringComparison.Ordinal);
     Assert.Contains("C:\\repo\\.orchestrator\\logs\\acceptance.out.log", brief, StringComparison.Ordinal);
     Assert.Contains("C:\\repo\\.orchestrator\\logs\\acceptance.err.log", brief, StringComparison.Ordinal);
 }
