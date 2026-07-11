@@ -165,6 +165,17 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify_completes_retry_developer_round_with_tests_deferred_token")]
+    public void ClassifyCompletesRetryDeveloperRoundWithTestsDeferredToken()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout("deferred - external verification requires operator follow-up")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify still completes reviewer with no commit")]
     public void ClassifyStillCompletesReviewerWithNoCommit()
     {
@@ -225,6 +236,45 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("worker_result=present(blockers=none)", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify_ignores_failure_words_after_structured_pass_tests_token")]
+    public void ClassifyIgnoresFailureWordsAfterStructuredPassTestsToken()
+    {
+        var verification = WorkerResultVerification(
+            WorkerResultStdout("pass - retry previously failed and timed out before this successful rerun"),
+            hasCommittedChanges: false);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_fails_exit_zero_worker_result_with_structured_fail_tests_token")]
+    public void ClassifyFailsExitZeroWorkerResultWithStructuredFailTestsToken()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout("fail - 1 test failed after commit")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify_does_not_apply_failing_tests_rule_to_read_only_roles")]
+    public void ClassifyDoesNotApplyFailingTestsRuleToReadOnlyRoles()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Reviewer),
+            WorkerResultVerification(WorkerResultStdout("fail - review found issues")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify reads WORKER_RESULT blockers from stdout artifact")]
     public void ClassifyReadsWorkerResultBlockersFromStdoutArtifact()
     {
@@ -233,7 +283,7 @@ public sealed class DispatchOutcomeClassifyTests
         {
             File.WriteAllText(
                 stdoutPath,
-                WorkerResultStdout("dotnet test --filter DispatchOutcomeClassifyTests passed", "none"));
+                WorkerResultStdout("pass - dotnet test --filter DispatchOutcomeClassifyTests passed", "none"));
             var verification = new TaskVerificationRecord(
                 "cmd",
                 "C:\\repo",

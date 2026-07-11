@@ -4,6 +4,22 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class WorkerResultBlockers
 {
+    public enum TestsStatus
+    {
+        Unknown,
+        Pass,
+        Fail,
+        NotRun,
+        Deferred
+    }
+
+    public enum BlockersStatus
+    {
+        Unknown,
+        None,
+        Present
+    }
+
     public static bool TryFindBlocker(TaskVerificationRecord? verification, out string blocker)
     {
         blocker = string.Empty;
@@ -38,7 +54,7 @@ internal static class WorkerResultBlockers
             return true;
         }
 
-        return TryFindTests(verification, out var tests) && TestsReportFailure(tests);
+        return TryFindFailingTests(verification, out _);
     }
 
     public static bool TryFindAdvisoryBlocker(TaskVerificationRecord? verification, out string blocker)
@@ -59,12 +75,56 @@ internal static class WorkerResultBlockers
 
     public static bool TryFindFailingTests(TaskVerificationRecord? verification, out string tests)
     {
-        if (TryFindTests(verification, out tests) && TestsReportFailure(tests))
+        if (!TryFindTests(verification, out tests))
+        {
+            tests = string.Empty;
+            return false;
+        }
+
+        if (TryParseTestsStatus(tests, out var status))
+        {
+            if (status == TestsStatus.Fail)
+            {
+                return true;
+            }
+
+            tests = string.Empty;
+            return false;
+        }
+
+        if (TestsReportFailure(tests))
         {
             return true;
         }
 
         tests = string.Empty;
+        return false;
+    }
+
+    public static bool TryGetTestsStatus(TaskVerificationRecord? verification, out TestsStatus status)
+    {
+        status = TestsStatus.Unknown;
+        return TryFindTests(verification, out var tests) &&
+            TryParseTestsStatus(tests, out status);
+    }
+
+    public static bool TryGetBlockersStatus(TaskVerificationRecord? verification, out BlockersStatus status)
+    {
+        status = BlockersStatus.Unknown;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "blockers", out var value) &&
+                TryParseBlockersStatus(value, out status))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -89,7 +149,7 @@ internal static class WorkerResultBlockers
 
     private static IEnumerable<string> EnumerateWorkerResultLines(TaskVerificationRecord verification)
     {
-        var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
+        var combined = CombineOutputWithArtifacts(verification);
         var lines = combined.Replace("\r\n", "\n").Split('\n');
         List<string>? latestBlock = null;
         var currentBlock = new List<string>();
@@ -212,6 +272,54 @@ internal static class WorkerResultBlockers
             !normalized.Contains("no failures", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool TryParseTestsStatus(string value, out TestsStatus status)
+    {
+        status = ReadLeadingWorkerResultToken(value) switch
+        {
+            "pass" => TestsStatus.Pass,
+            "fail" => TestsStatus.Fail,
+            "not-run" => TestsStatus.NotRun,
+            "deferred" => TestsStatus.Deferred,
+            _ => TestsStatus.Unknown
+        };
+
+        return status != TestsStatus.Unknown;
+    }
+
+    private static bool TryParseBlockersStatus(string value, out BlockersStatus status)
+    {
+        var token = ReadLeadingWorkerResultToken(value);
+        if (token.Length == 0)
+        {
+            status = BlockersStatus.None;
+            return true;
+        }
+
+        status = string.Equals(token, "none", StringComparison.OrdinalIgnoreCase)
+            ? BlockersStatus.None
+            : BlockersStatus.Present;
+        return true;
+    }
+
+    private static string ReadLeadingWorkerResultToken(string value)
+    {
+        var trimmed = value.Trim();
+        var length = 0;
+        while (length < trimmed.Length)
+        {
+            var ch = trimmed[length];
+            if (char.IsLetterOrDigit(ch) || ch == '-')
+            {
+                length++;
+                continue;
+            }
+
+            break;
+        }
+
+        return length == 0 ? string.Empty : trimmed[..length].ToLowerInvariant();
+    }
+
     private static bool IsNoChangeContractRole(TaskSpec task)
     {
         return task.RequiredRole switch
@@ -252,6 +360,11 @@ internal static class WorkerResultBlockers
 
     private static bool IsNoBlockerValue(string value)
     {
+        if (TryParseBlockersStatus(value, out var status))
+        {
+            return status == BlockersStatus.None;
+        }
+
         if (string.IsNullOrWhiteSpace(value))
         {
             return true;
@@ -267,6 +380,40 @@ internal static class WorkerResultBlockers
             value.StartsWith("none-", StringComparison.OrdinalIgnoreCase) ||
             value.StartsWith("none.", StringComparison.OrdinalIgnoreCase) ||
             value.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CombineOutputWithArtifacts(TaskVerificationRecord verification)
+    {
+        var builder = new System.Text.StringBuilder()
+            .AppendLine(verification.StandardOutput)
+            .AppendLine(verification.StandardError);
+
+        AppendArtifactText(builder, verification.StandardOutputPath);
+        AppendArtifactText(builder, verification.StandardErrorPath);
+        return builder.ToString();
+    }
+
+    private static void AppendArtifactText(System.Text.StringBuilder builder, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var text = File.ReadAllText(path);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                builder.AppendLine(text);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string NormalizeWorkerResultLine(string line)

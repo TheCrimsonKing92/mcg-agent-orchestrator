@@ -2154,7 +2154,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         root,
         AgentRole.Tester,
         "NO_CHANGE: Existing focused test already covers this behavior." + Environment.NewLine +
-            WorkerResultBlock("none", "inspected existing tests", "existing focused test covers behavior", "none"),
+            WorkerResultBlock("none", "inspected existing tests", "pass - existing focused test covers behavior", "none"),
         string.Empty,
         clock);
     WriteHeartbeat(task.LastProcess!, clock.UtcNow, clock.UtcNow, "completed", 128, 0, childPid: null, exitFileExists: true);

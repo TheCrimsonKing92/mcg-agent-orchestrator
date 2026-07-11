@@ -111,6 +111,16 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        if (!verification.Succeeded &&
+            outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
+        {
+            Append(
+                goal,
+                taskId,
+                ProgressKind.TaskNote,
+                "Reconciled failed dispatch verification to Completed from structured WORKER_RESULT evidence and commit provenance.");
+        }
+
         ReportTaskProgress(
             goalId,
             taskId,

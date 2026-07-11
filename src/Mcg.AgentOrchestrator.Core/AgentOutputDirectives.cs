@@ -32,9 +32,9 @@ public static class AgentOutputDirectives
         {
             "files: <comma-separated changed files or none>",
             "commands: <commands run or none>",
-            "tests: <pass/fail/not-run evidence>",
+            "tests: <pass|fail|not-run|deferred - evidence>",
             "commit: <commit sha or none>",
-            "blockers: <none or exact blocker; put deferred-verification notes in tests>"
+            "blockers: <none|exact-blocker; put deferred-verification notes in tests>"
         };
 
         if (role == AgentRole.Researcher)

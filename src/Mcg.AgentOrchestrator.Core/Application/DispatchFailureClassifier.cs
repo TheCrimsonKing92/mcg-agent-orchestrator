@@ -292,7 +292,9 @@ public static class DispatchFailureClassifier
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
         if (verification.Succeeded &&
-            WorkerResultBlockers.TryFindFailingTests(verification, out _))
+            GetDispatchRoleOutputCapability(task.RequiredRole) != DispatchRoleOutputCapability.ReadOnly &&
+            WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+            testsStatus == WorkerResultBlockers.TestsStatus.Fail)
         {
             return BuildOutcome(
                 "succeeded-worker-result-failing-tests",
@@ -973,6 +975,11 @@ public static class DispatchFailureClassifier
             return true;
         }
 
+        if (HasWorkerResultDeferral(verification))
+        {
+            return true;
+        }
+
         if (workerResultPresent)
         {
             return CanCompleteWithoutChangeEvidence(task, verification) &&
@@ -986,13 +993,13 @@ public static class DispatchFailureClassifier
         GetDispatchRoleOutputCapability(task.RequiredRole) switch
         {
             DispatchRoleOutputCapability.ReadOnly => true,
-            DispatchRoleOutputCapability.VerificationOnly => !WorkerResultBlockers.TryFindFailingTests(verification, out _),
+            DispatchRoleOutputCapability.VerificationOnly => HasAcceptableStructuredTestsForCompletion(verification),
             _ => false
         };
 
     private static bool HasPassingVerificationEvidence(TaskVerificationRecord verification) =>
         HasVerificationEvidence(verification.StandardOutput, verification.StandardError) &&
-        !WorkerResultBlockers.TryFindFailingTests(verification, out _);
+        !HasFailingTestsForCompatibility(verification);
 
     private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
         verification.HeartbeatStandardOutputBytes > 0 ||
@@ -1023,8 +1030,10 @@ public static class DispatchFailureClassifier
         !HasWorkerResultDeferral(verification);
 
     private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
-        TryGetWorkerResultDeferralsValue(verification, out var deferrals) &&
-        !IsNoWorkerResultBlockersValue(deferrals);
+        (WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+         testsStatus == WorkerResultBlockers.TestsStatus.Deferred) ||
+        (TryGetWorkerResultDeferralsValue(verification, out var deferrals) &&
+         !IsNoWorkerResultBlockersValue(deferrals));
 
     private static bool HasGreenCommittedWorkerResultEvidence(
         TaskVerificationRecord verification,
@@ -1033,10 +1042,25 @@ public static class DispatchFailureClassifier
         workerResultPresent &&
         hasCommittedChanges &&
         HasPopulatedStandardOutput(verification) &&
-        TryGetWorkerResultBlockersValue(verification, out var blockers) &&
-        IsNoWorkerResultBlockersValue(blockers) &&
+        WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+        blockersStatus == WorkerResultBlockers.BlockersStatus.None &&
+        WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+        testsStatus is WorkerResultBlockers.TestsStatus.Pass or WorkerResultBlockers.TestsStatus.NotRun &&
         !WorkerResultBlockers.TryFindBlocker(verification, out _) &&
-        !WorkerResultBlockers.TryFindFailingTests(verification, out _);
+        !HasStructuredFailingTests(verification);
+
+    private static bool HasStructuredFailingTests(TaskVerificationRecord verification) =>
+        WorkerResultBlockers.TryGetTestsStatus(verification, out var status) &&
+        status == WorkerResultBlockers.TestsStatus.Fail;
+
+    private static bool HasFailingTestsForCompatibility(TaskVerificationRecord verification) =>
+        HasStructuredFailingTests(verification) ||
+        (!WorkerResultBlockers.TryGetTestsStatus(verification, out _) &&
+         WorkerResultBlockers.TryFindFailingTests(verification, out _));
+
+    private static bool HasAcceptableStructuredTestsForCompletion(TaskVerificationRecord verification) =>
+        WorkerResultBlockers.TryGetTestsStatus(verification, out var status) &&
+        status is WorkerResultBlockers.TestsStatus.Pass or WorkerResultBlockers.TestsStatus.NotRun;
 
     private static bool HasWorkerEvidenceThatOutranksSubscriptionLimit(
         TaskVerificationRecord verification,

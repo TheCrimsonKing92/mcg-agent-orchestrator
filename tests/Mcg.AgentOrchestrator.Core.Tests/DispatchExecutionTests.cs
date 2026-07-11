@@ -112,6 +112,51 @@ public sealed class DispatchExecutionTests
         timeline.FindIndex(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_self_heals_failed_dispatch_with_structured_green_worker_result")]
+    public void RecordDispatchExecutionResultSelfHealsFailedDispatchWithStructuredGreenWorkerResult()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Self-heal failed dispatch");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec prompt";
+    var stdout = WorkerResultStdout(
+        "src/Foo.cs",
+        "pass - prior run failed and timed out, focused rerun passed",
+        "none");
+
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            command,
+            "C:\\repo",
+            1,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Reconciled failed dispatch verification to Completed from structured WORKER_RESULT evidence", StringComparison.Ordinal));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskCompleted &&
+        evt.Message.Contains("Dispatch completed successfully", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "RecordTaskDispatch_rejects_unassigned_task")]
     public void RecordTaskDispatchRejectsUnassignedTask()
 {
