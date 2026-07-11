@@ -410,7 +410,7 @@ internal static class TerminalGoalSweep
                 return new GoalBranchFactIndex(fullExecutionDirectory, false, EmptySet(), EmptySet(), EmptyPathSet());
             }
 
-            var mergedResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "main", "refs/heads/goal/");
+            var mergedResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
             var worktreeResult = RunGit(fullExecutionDirectory, "worktree", "list", "--porcelain");
 
             return new GoalBranchFactIndex(
