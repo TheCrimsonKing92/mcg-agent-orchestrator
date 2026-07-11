@@ -94,15 +94,15 @@ internal static partial class ConductorLoopHandoff
     {
         if (File.Exists(options.StopFilePath))
         {
-            RecordHandoffEvent(options.RunEventStorePath, "Skipped", "stop-file");
+            TryRecordHandoffEvent(options.RunEventStorePath, "Skipped", "stop-file");
             return ConductorLoopHandoffResult.Skipped("stop-file");
         }
 
-        var nextRenewalCount = request.Done > 0 ? 0 : options.RenewalCount + 1;
+        var nextRenewalCount = request.LandedGoalDelta > 0 ? 0 : options.RenewalCount + 1;
         if (nextRenewalCount > options.MaxRenewals)
         {
             var reason = $"renewal-cap count={nextRenewalCount} max={options.MaxRenewals}";
-            RecordHandoffEvent(options.RunEventStorePath, "Escalated", reason);
+            TryRecordHandoffEvent(options.RunEventStorePath, "Escalated", reason);
             return ConductorLoopHandoffResult.Skipped(reason);
         }
 
@@ -117,7 +117,7 @@ internal static partial class ConductorLoopHandoff
 
         options.ReleaseCurrentLease();
         var result = launch(launchRequest);
-        RecordHandoffEvent(options.RunEventStorePath, "Started",
+        TryRecordHandoffEvent(options.RunEventStorePath, "Started",
             $"pid={result.ProcessId} stdout={result.StdoutPath} stderr={result.StderrPath}");
         return ConductorLoopHandoffResult.StartedProcess(result.ProcessId, result.StdoutPath, result.StderrPath);
     }
@@ -230,7 +230,7 @@ internal static partial class ConductorLoopHandoff
         return "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
     }
 
-    private static void RecordHandoffEvent(string runEventStorePath, string status, string detail)
+    private static void TryRecordHandoffEvent(string runEventStorePath, string status, string detail)
     {
         try
         {
@@ -251,9 +251,20 @@ internal static partial class ConductorLoopHandoff
                 .GetAwaiter()
                 .GetResult();
         }
-        catch
+        catch (Exception ex)
         {
+            EmitJournalFailure(runEventStorePath, status, ex);
         }
+    }
+
+    private static void EmitJournalFailure(string runEventStorePath, string status, Exception ex)
+    {
+        var line =
+            $"LOOP_HANDOFF_JOURNAL_FAILED status={status} store={runEventStorePath} error={ex.GetType().Name}:{ex.Message}";
+        Console.WriteLine(line);
+        Console.Error.WriteLine(line);
+        Console.Out.Flush();
+        Console.Error.Flush();
     }
 
     private static string ToSafeName(string value)

@@ -457,6 +457,7 @@ public sealed class ConductorBatchLoopTests
         string root,
         IReadOnlyList<string>? args = null,
         string? stopFilePath = null,
+        string? runEventStorePath = null,
         int renewalCount = 0,
         int maxRenewals = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
         Action? release = null) =>
@@ -465,7 +466,7 @@ public sealed class ConductorBatchLoopTests
             ExecutionDirectory: root,
             OrchestratorDirectory: Path.Combine(root, ".orchestrator"),
             LogDirectory: Path.Combine(root, ".orchestrator", "logs"),
-            RunEventStorePath: Path.Combine(root, ".orchestrator", "run-events.db"),
+            RunEventStorePath: runEventStorePath ?? Path.Combine(root, ".orchestrator", "run-events.db"),
             StopFilePath: stopFilePath ?? Path.Combine(root, ConductorBatchLoop.StopFileName),
             RenewalCount: renewalCount,
             MaxRenewals: maxRenewals,
@@ -690,6 +691,107 @@ public sealed class ConductorBatchLoopTests
         finally
         {
             Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", previousName);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_handoff_renewal_cap_resets_for_landing_adopted_by_reconcile")]
+    public void BatchLoopHandoffRenewalCapResetsForLandingAdoptedByReconcile()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-adopted-landing");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, "Adopted landing");
+            var start = DateTimeOffset.Parse("2026-07-11T00:00:00Z");
+            var nowCalls = 0;
+            DateTimeOffset UtcNow() => nowCalls++ switch
+            {
+                0 => start,
+                1 => start,
+                _ => start.AddSeconds(2)
+            };
+
+            var reconciled = false;
+            ConductLoopLaunchRequest? launchRequest = null;
+            ConductorLoopHandoffRequest? handoffRequest = null;
+            var summary = new ConductorBatchLoop(
+                measuredSweep: loopKernel =>
+                {
+                    if (!reconciled)
+                    {
+                        reconciled = true;
+                        loopKernel.CompleteGoal(goal.Id, "Test fixture: landing adopted during first reconcile.");
+                    }
+
+                    return null;
+                },
+                handoffOnMaxDuration: request =>
+                {
+                    handoffRequest = request;
+                    return ConductorLoopHandoff.TryStartSuccessor(
+                        HandoffOptions(root, renewalCount: 6, maxRenewals: 6),
+                        request,
+                        launch =>
+                        {
+                            launchRequest = launch;
+                            return new ConductLoopLaunchResult(4567, launch.StdoutPath, launch.StderrPath);
+                        });
+                },
+                utcNow: UtcNow).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                Path.Combine(root, ConductorBatchLoop.StopFileName),
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ => false,
+                maxDuration: TimeSpan.FromSeconds(1),
+                keepAliveWhenIdle: true);
+
+            Assert.True(summary.Handoff?.Started);
+            Assert.NotNull(handoffRequest);
+            Assert.Equal(0, handoffRequest!.Done);
+            Assert.Equal(1, handoffRequest.LandedGoalDelta);
+            Assert.Equal("0", launchRequest!.Args.Last());
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_journal_failure_is_loud_and_still_launches_successor")]
+    public void ConductorLoopHandoffJournalFailureIsLoudAndStillLaunchesSuccessor()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-journal-failure");
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var outWriter = new StringWriter();
+        using var errorWriter = new StringWriter();
+        try
+        {
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            var launched = false;
+
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(root, runEventStorePath: root),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    launched = true;
+                    return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
+                });
+
+            Assert.True(result.Started);
+            Assert.True(launched);
+            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", outWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
             TryDeleteDirectory(root);
         }
     }

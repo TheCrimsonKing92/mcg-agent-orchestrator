@@ -21,6 +21,7 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
+    private readonly Func<DateTimeOffset> _utcNow;
 
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
@@ -30,7 +31,8 @@ internal sealed class ConductorBatchLoop
         Action<AgentOrchestratorKernel, Goal>? refreshGoalDispatchesBeforeAdvance = null,
         ConductorWatchProgressReporter? watchProgressReporter = null,
         Func<AgentOrchestratorKernel, TerminalGoalSweepResult?>? measuredSweep = null,
-        Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null)
+        Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -43,6 +45,7 @@ internal sealed class ConductorBatchLoop
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _handoffOnMaxDuration = handoffOnMaxDuration;
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
     public BatchLoopSummary Run(
@@ -82,7 +85,8 @@ internal sealed class ConductorBatchLoop
         var totalDone = 0;
         var stopRequested = false;
         var maxDurationReached = false;
-        var started = DateTimeOffset.UtcNow;
+        var started = _utcNow();
+        var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
 
         while (true)
         {
@@ -105,7 +109,7 @@ internal sealed class ConductorBatchLoop
                 break;
             }
 
-            if (maxDuration.HasValue && DateTimeOffset.UtcNow - started >= maxDuration.Value)
+            if (maxDuration.HasValue && _utcNow() - started >= maxDuration.Value)
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
@@ -475,7 +479,8 @@ internal sealed class ConductorBatchLoop
         ConductorLoopHandoffResult? handoff = null;
         if (maxDurationReached && _handoffOnMaxDuration is not null)
         {
-            var request = new ConductorLoopHandoffRequest(totalTicks, maxDuration ?? TimeSpan.Zero, totalDone);
+            var landedGoalDelta = GetCompletedGoalIds(kernel).Except(initiallyCompletedGoalIds, StringComparer.Ordinal).Count();
+            var request = new ConductorLoopHandoffRequest(totalTicks, maxDuration ?? TimeSpan.Zero, totalDone, landedGoalDelta);
             handoff = _handoffOnMaxDuration(request);
             EmitHandoffProgress(totalTicks, handoff);
         }
@@ -512,6 +517,12 @@ internal sealed class ConductorBatchLoop
         result is null
             ? string.Empty
             : $" sweep_cache_hits={result.CacheHitCount} sweep_cache_misses={result.CacheMissCount}";
+
+    private static HashSet<string> GetCompletedGoalIds(AgentOrchestratorKernel kernel) =>
+        kernel.Goals
+            .Where(goal => goal.Status == GoalStatus.Completed)
+            .Select(goal => goal.Id.Value)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static string FormatSlowestGoalWalks(IReadOnlyList<GoalWalkTiming> timings)
     {
@@ -1443,7 +1454,8 @@ public sealed record BatchLoopSummary(
 public sealed record ConductorLoopHandoffRequest(
     int Tick,
     TimeSpan MaxDuration,
-    int Done);
+    int Done,
+    int LandedGoalDelta = 0);
 
 public sealed record ConductorLoopHandoffResult(
     bool Started,
