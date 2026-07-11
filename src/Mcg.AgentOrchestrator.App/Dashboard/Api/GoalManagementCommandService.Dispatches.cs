@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class GoalManagementCommandService
 {
+internal static Func<int, bool> IsTrackedProcessRunningForReadyBatch { get; set; } = IsProcessRunning;
+
 public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTasks(
     AgentOrchestratorKernel kernel,
     OrchestratorWorkspace workspace,
@@ -372,12 +374,7 @@ internal static bool HasAssignedDispatchCandidates(Goal goal) =>
 
 private static bool HasBlockingRunningProcess(TaskSpec task)
 {
-    if (task.LastProcess is not { IsRunning: true } process)
-    {
-        return false;
-    }
-
-    return !File.Exists(process.ExitCodePath);
+    return task.LastProcess is { IsRunning: true };
 }
 
 private static IReadOnlyList<ReadyBlockedDiagnostic> BuildAssignedTaskExclusionDiagnostics(
@@ -403,7 +400,7 @@ private static IReadOnlyList<ReadyBlockedDiagnostic> BuildAssignedTaskExclusionD
                 task,
                 agents,
                 "last-process-running",
-                [$"LastProcess.IsRunning is true for pid {process.ProcessId}; exit artifact is absent at {process.ExitCodePath}"]));
+                [$"LastProcess.IsRunning is true for pid {process.ProcessId}; exit artifact path {process.ExitCodePath}"]));
             continue;
         }
 
@@ -476,7 +473,8 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
     {
         if (task.Status != WorkTaskStatus.Assigned ||
             task.LastProcess is not { IsRunning: true } process ||
-            !TryReadExitCode(process.ExitCodePath, out var exitCode))
+            !TryReadExitCode(process.ExitCodePath, out var exitCode) ||
+            HasLiveTrackedProcess(process))
         {
             continue;
         }
@@ -491,6 +489,47 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
             goal.Id,
             task.Id,
             $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitCode}.");
+    }
+}
+
+private static bool HasLiveTrackedProcess(TaskProcessRecord process)
+{
+    var processIds = new HashSet<int>(process.TrackedProcessIds);
+    var heartbeat = ProcessLogReader.ReadHeartbeat(process);
+    if (heartbeat.IsAvailable)
+    {
+        if (heartbeat.ChildProcessId is { } childPid)
+        {
+            processIds.Add(childPid);
+        }
+
+        foreach (var ownedPid in heartbeat.OwnedProcessIds)
+        {
+            processIds.Add(ownedPid);
+        }
+    }
+
+    return processIds.Any(IsTrackedProcessRunningForReadyBatch);
+}
+
+private static bool IsProcessRunning(int processId)
+{
+    try
+    {
+        using var process = System.Diagnostics.Process.GetProcessById(processId);
+        return !process.HasExited;
+    }
+    catch (ArgumentException)
+    {
+        return false;
+    }
+    catch (InvalidOperationException)
+    {
+        return false;
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        return true;
     }
 }
 
