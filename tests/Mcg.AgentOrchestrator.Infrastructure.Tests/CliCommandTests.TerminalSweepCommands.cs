@@ -858,5 +858,52 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_batches_git_branch_facts_once_per_sweep")]
+    public void TerminalGoalSweepBatchesGitBranchFactsOncePerSweep()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        var originalRunner = TerminalGoalSweep.GitRunner;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            for (var index = 0; index < 3; index++)
+            {
+                var task = new TaskSpec(TaskId.New(), $"Do work {index}", AgentRole.Developer);
+                var goal = kernel.CreateGoal($"Completed unmerged {index}", [task]);
+                cleanupGoalId ??= goal.Id;
+                kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+                CommitGoalWork(root, goal.Id, $"src/batched-{index}.txt", "goal work");
+                kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+            }
+
+            var batchedGitCalls = new List<string>();
+            TerminalGoalSweep.GitRunner = (workingDirectory, args) =>
+            {
+                if (Path.GetFullPath(workingDirectory).Equals(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) &&
+                    args.Count > 0 &&
+                    (args[0] == "for-each-ref" || args.SequenceEqual(["worktree", "list", "--porcelain"])))
+                {
+                    batchedGitCalls.Add(string.Join(" ", args));
+                }
+
+                return originalRunner(workingDirectory, args);
+            };
+
+            var result = TerminalGoalSweep.Run(kernel, root);
+
+            Assert.Equal(3, result.Goals.Count);
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged main refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
+        }
+        finally
+        {
+            TerminalGoalSweep.GitRunner = originalRunner;
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
 
 }
