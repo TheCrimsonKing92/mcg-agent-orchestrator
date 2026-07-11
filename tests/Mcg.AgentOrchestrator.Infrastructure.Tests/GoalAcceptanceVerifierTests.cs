@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact(DisplayName = "LockAttribution_emits_LOCK_receipt_with_holder_identity")]

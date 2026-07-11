@@ -692,6 +692,86 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_persists_across_cache_instances")]
+    public void TerminalGoalSweepCachePersistsAcrossCacheInstances()
+    {
+        var root = CreateSeededGitRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical durable cache goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
+
+            var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+
+            Assert.Equal(1, first.CacheMissCount);
+            Assert.Equal(0, first.CacheHitCount);
+            Assert.Equal(0, second.CacheMissCount);
+            Assert.Equal(1, second.CacheHitCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_durable_cache_invalidates_when_branch_evidence_changes")]
+    public void TerminalGoalSweepDurableCacheInvalidatesWhenBranchEvidenceChanges()
+    {
+        var root = CreateSeededGitRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical branch evidence goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
+
+            var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            RunGit(root, "branch", GoalWorktrees.BranchName(cancelled.Id));
+            var third = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+
+            Assert.Equal(1, first.CacheMissCount);
+            Assert.Equal(1, second.CacheHitCount);
+            Assert.Equal(0, third.CacheHitCount);
+            Assert.Equal(1, third.CacheMissCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_corrupt_durable_cache_falls_back_to_rebuild")]
+    public void TerminalGoalSweepCorruptDurableCacheFallsBackToRebuild()
+    {
+        var root = CreateTempDirectory("mcg-terminal-sweep-corrupt-cache");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical corrupt cache goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
+            var cachePath = Path.Combine(root, ".orchestrator", "terminal-goal-sweep-cache.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+            File.WriteAllText(cachePath, "{not-json");
+
+            var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+
+            Assert.Equal(1, first.CacheMissCount);
+            Assert.Equal(0, first.CacheHitCount);
+            Assert.Equal(0, second.CacheMissCount);
+            Assert.Equal(1, second.CacheHitCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_pending_cleanup_blocker_is_not_cache_skipped")]
     public void TerminalGoalSweepPendingCleanupBlockerIsNotCacheSkipped()
     {

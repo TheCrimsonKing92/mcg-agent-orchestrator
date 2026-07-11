@@ -6,9 +6,14 @@ public sealed class EnvMutationCollection;
 [Xunit.CollectionDefinition(TestCollections.DotnetBuildSlots, DisableParallelization = true)]
 public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
-// GoalWorktrees exposes cleanup hook seams for tests; keep those process-wide replacements serial.
+// Verifier tests can spawn nested acceptance/build activity; keep that work off the host gate slots.
+[Xunit.CollectionDefinition(TestCollections.GoalAcceptanceVerifier, DisableParallelization = true)]
+public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+
+// GoalWorktrees exposes cleanup hook seams and some CLI acceptance tests acquire real slot leases;
+// keep those process-wide replacements serial and off the host gate slots.
 [Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
-public sealed class GoalWorktreeCleanupHooksCollection;
+public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
 // Job Object accounting tests use process-wide worker job registries, real fake worker processes,
 // and slot-pinned gate processes; keep them serial and isolated from the host slot lanes.

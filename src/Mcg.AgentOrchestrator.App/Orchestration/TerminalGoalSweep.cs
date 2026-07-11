@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -34,37 +35,129 @@ internal sealed record TerminalGoalSweepResult(
 
 internal sealed class TerminalGoalSweepCache
 {
-    private readonly Dictionary<GoalId, string> _terminalFingerprints = [];
+    private const int StoreVersion = 1;
+    private const string StoreFileName = "terminal-goal-sweep-cache.json";
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private readonly Dictionary<GoalId, TerminalGoalSweepCacheEntry> _terminalFingerprints = [];
+    private string? _loadedStorePath;
+    private bool _loaded;
 
     internal int Count => _terminalFingerprints.Count;
 
-    internal bool TryMarkHit(AgentOrchestratorKernel kernel, string executionDirectory, Goal goal)
+    internal bool TryMarkHit(AgentOrchestratorKernel kernel, string executionDirectory, Goal goal, string evidenceKey)
     {
+        EnsureLoaded(executionDirectory);
         if (!CanCache(executionDirectory, goal))
         {
-            _terminalFingerprints.Remove(goal.Id);
+            Remove(goal.Id);
             return false;
         }
 
         var fingerprint = BuildFingerprint(kernel, goal);
         return _terminalFingerprints.TryGetValue(goal.Id, out var cached) &&
-            string.Equals(cached, fingerprint, StringComparison.Ordinal);
+            string.Equals(cached.EvidenceKey, evidenceKey, StringComparison.Ordinal) &&
+            string.Equals(cached.Fingerprint, fingerprint, StringComparison.Ordinal);
     }
 
     internal void Record(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
         Goal goal,
+        string evidenceKey,
         IReadOnlyList<TerminalGoalSweepBlocker> blockers)
     {
+        EnsureLoaded(executionDirectory);
         if (!CanCache(executionDirectory, goal) || blockers.Any(IsCleanupBlocker))
         {
-            _terminalFingerprints.Remove(goal.Id);
+            Remove(goal.Id);
             return;
         }
 
-        _terminalFingerprints[goal.Id] = BuildFingerprint(kernel, goal);
+        _terminalFingerprints[goal.Id] = new TerminalGoalSweepCacheEntry(evidenceKey, BuildFingerprint(kernel, goal));
+        Save();
     }
+
+    private void Remove(GoalId goalId)
+    {
+        if (_terminalFingerprints.Remove(goalId))
+        {
+            Save();
+        }
+    }
+
+    private void EnsureLoaded(string executionDirectory)
+    {
+        var storePath = StorePath(executionDirectory);
+        if (_loaded && string.Equals(_loadedStorePath, storePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _terminalFingerprints.Clear();
+        _loaded = true;
+        _loadedStorePath = storePath;
+
+        try
+        {
+            if (!File.Exists(storePath))
+            {
+                return;
+            }
+
+            var file = JsonSerializer.Deserialize<TerminalGoalSweepCacheFile>(File.ReadAllText(storePath), JsonOptions);
+            if (file?.Version != StoreVersion)
+            {
+                return;
+            }
+
+            foreach (var item in file.Items)
+            {
+                if (string.IsNullOrWhiteSpace(item.GoalId) ||
+                    string.IsNullOrWhiteSpace(item.EvidenceKey) ||
+                    string.IsNullOrWhiteSpace(item.Fingerprint))
+                {
+                    continue;
+                }
+
+                _terminalFingerprints[new GoalId(item.GoalId)] =
+                    new TerminalGoalSweepCacheEntry(item.EvidenceKey, item.Fingerprint);
+            }
+        }
+        catch
+        {
+            _terminalFingerprints.Clear();
+        }
+    }
+
+    private void Save()
+    {
+        if (string.IsNullOrWhiteSpace(_loadedStorePath))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_loadedStorePath)!);
+            var file = new TerminalGoalSweepCacheFile(
+                StoreVersion,
+                _terminalFingerprints
+                    .OrderBy(item => item.Key.Value, StringComparer.Ordinal)
+                    .Select(item => new TerminalGoalSweepCacheFileEntry(
+                        item.Key.Value,
+                        item.Value.EvidenceKey,
+                        item.Value.Fingerprint))
+                    .ToArray());
+            File.WriteAllText(_loadedStorePath, JsonSerializer.Serialize(file, JsonOptions));
+        }
+        catch
+        {
+            // Sweep cache persistence is only a memoization layer; git and kernel state remain authoritative.
+        }
+    }
+
+    private static string StorePath(string executionDirectory) =>
+        Path.Combine(OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory, StoreFileName);
 
     private static bool CanCache(string executionDirectory, Goal goal) =>
         TerminalGoalSweep.IsTerminalSweepStatus(goal.Status) &&
@@ -160,6 +253,12 @@ internal sealed class TerminalGoalSweepCache
             .Concat(taskParts)
             .Concat(dependencyParts));
     }
+
+    private sealed record TerminalGoalSweepCacheEntry(string EvidenceKey, string Fingerprint);
+
+    private sealed record TerminalGoalSweepCacheFile(int Version, IReadOnlyList<TerminalGoalSweepCacheFileEntry> Items);
+
+    private sealed record TerminalGoalSweepCacheFileEntry(string GoalId, string EvidenceKey, string Fingerprint);
 }
 
 internal static class TerminalGoalSweep
@@ -181,7 +280,16 @@ internal static class TerminalGoalSweep
 
         foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {
-            if (cache is not null && cache.TryMarkHit(kernel, executionDirectory, originalGoal))
+            var cacheEvidenceKey = string.Empty;
+            if (cache is not null && IsTerminalSweepStatus(originalGoal.Status))
+            {
+                branchFactIndex ??= GoalBranchFactIndex.Build(executionDirectory);
+                cacheEvidenceKey = branchFactIndex.BuildGoalEvidenceKey(originalGoal);
+            }
+
+            if (cache is not null &&
+                cacheEvidenceKey.Length > 0 &&
+                cache.TryMarkHit(kernel, executionDirectory, originalGoal, cacheEvidenceKey))
             {
                 cacheHits++;
                 continue;
@@ -372,7 +480,11 @@ internal static class TerminalGoalSweep
 
             if (cache is not null)
             {
-                cache.Record(kernel, executionDirectory, kernel.GetGoal(originalGoal.Id), blockers);
+                var currentGoal = kernel.GetGoal(originalGoal.Id);
+                var currentEvidenceKey = IsTerminalSweepStatus(currentGoal.Status)
+                    ? branchFactIndex!.BuildGoalEvidenceKey(currentGoal)
+                    : cacheEvidenceKey;
+                cache.Record(kernel, executionDirectory, currentGoal, currentEvidenceKey, blockers);
             }
         }
 
@@ -397,17 +509,17 @@ internal static class TerminalGoalSweep
     private sealed class GoalBranchFactIndex(
         string executionDirectory,
         bool isGitWorkTree,
-        IReadOnlySet<string> goalBranches,
+        IReadOnlyDictionary<string, string> goalBranchTips,
         IReadOnlySet<string> mergedGoalBranches,
         IReadOnlySet<string> registeredWorktreePaths)
     {
         public static GoalBranchFactIndex Build(string executionDirectory)
         {
             var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
-            var branchResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "refs/heads/goal/");
+            var branchResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
             if (branchResult.ExitCode != 0)
             {
-                return new GoalBranchFactIndex(fullExecutionDirectory, false, EmptySet(), EmptySet(), EmptyPathSet());
+                return new GoalBranchFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet());
             }
 
             var mergedResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
@@ -416,7 +528,7 @@ internal static class TerminalGoalSweep
             return new GoalBranchFactIndex(
                 fullExecutionDirectory,
                 true,
-                ParseLines(branchResult.Output),
+                ParseBranchTips(branchResult.Output),
                 mergedResult.ExitCode == 0 ? ParseLines(mergedResult.Output) : EmptySet(),
                 worktreeResult.ExitCode == 0 ? ParseWorktreePaths(worktreeResult.Output) : EmptyPathSet());
         }
@@ -427,7 +539,7 @@ internal static class TerminalGoalSweep
             var isAcceptedOrVerifiedGitGoal = (goal.Status is GoalStatus.Verified or GoalStatus.Completed) && isGitWorkTree;
             var hasRegisteredWorktree = isAcceptedOrVerifiedGitGoal &&
                 registeredWorktreePaths.Contains(NormalizePath(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)));
-            var hasGoalBranch = isAcceptedOrVerifiedGitGoal && goalBranches.Contains(branch);
+            var hasGoalBranch = isAcceptedOrVerifiedGitGoal && goalBranchTips.ContainsKey(branch);
             var hasGoalBranchArtifact = hasRegisteredWorktree || hasGoalBranch;
             var branchAlreadyLanded = isAcceptedOrVerifiedGitGoal &&
                 hasGoalBranchArtifact &&
@@ -442,12 +554,42 @@ internal static class TerminalGoalSweep
                 branchAlreadyLanded);
         }
 
+        public string BuildGoalEvidenceKey(Goal goal)
+        {
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var hasTip = goalBranchTips.TryGetValue(branch, out var tip);
+            var registeredWorktree = registeredWorktreePaths.Contains(NormalizePath(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)));
+            var merged = mergedGoalBranches.Contains(branch);
+            return string.Join(
+                "|",
+                $"git={(isGitWorkTree ? "available" : "unavailable")}",
+                $"branch={branch}",
+                $"tip={(hasTip ? tip : "absent")}",
+                $"worktree={(registeredWorktree ? "present" : "absent")}",
+                $"merged={(merged ? "true" : "false")}");
+        }
+
         private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
             GitRunner(executionDirectory, args);
 
         private static IReadOnlySet<string> ParseLines(string output) =>
             output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToHashSet(StringComparer.Ordinal);
+
+        private static IReadOnlyDictionary<string, string> ParseBranchTips(string output)
+        {
+            var tips = EmptyTipMap();
+            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var parts = line.Split(' ', 2, StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
+                {
+                    tips[parts[0]] = parts[1];
+                }
+            }
+
+            return tips;
+        }
 
         private static HashSet<string> ParseWorktreePaths(string output)
         {
@@ -464,6 +606,9 @@ internal static class TerminalGoalSweep
         }
 
         private static HashSet<string> EmptySet() =>
+            new(StringComparer.Ordinal);
+
+        private static Dictionary<string, string> EmptyTipMap() =>
             new(StringComparer.Ordinal);
 
         private static HashSet<string> EmptyPathSet() =>

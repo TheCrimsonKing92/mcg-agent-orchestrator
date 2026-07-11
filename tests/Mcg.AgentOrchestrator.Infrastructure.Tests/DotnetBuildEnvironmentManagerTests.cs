@@ -264,6 +264,46 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_self_held_artifact_lock_is_not_build_lock_blocked")]
+    public void DotnetBuildEnvironmentManagerSelfHeldArtifactLockIsNotBuildLockBlocked()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        Directory.CreateDirectory(Path.Combine(environment.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Core", "debug"));
+        var lockedPath = Path.Combine(
+            environment.ArtifactsPath,
+            "bin",
+            "Mcg.AgentOrchestrator.Core",
+            "debug",
+            "Mcg.AgentOrchestrator.Core.dll");
+        File.WriteAllText(lockedPath, "loaded by active testhost");
+        using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                for (var attempt = 0; attempt < 3; attempt++)
+                {
+                    WriteForeignOwnerMarker(environment.ArtifactsPath);
+                    using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                        environment,
+                        TimeSpan.FromSeconds(1));
+                    Assert.Equal(environment.ExecutionLockPath, lease.Name);
+                }
+            });
+
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+            Assert.True(File.Exists(lockedPath));
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_lock_contention_returns_slots_busy_without_reaper")]
     public void DotnetBuildEnvironmentManagerLeaseLockContentionReturnsSlotsBusyWithoutReaper()
     {
@@ -1130,6 +1170,20 @@ public sealed class DotnetBuildEnvironmentManagerTests
     private static string EncodePowerShell(string script)
     {
         return Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+    }
+
+    private static void WriteForeignOwnerMarker(string artifactsPath)
+    {
+        File.WriteAllText(
+            Path.Combine(artifactsPath, ".mcg-artifacts-owner.json"),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                ownerToken = "foreign-owner",
+                ownerProcessId = 123456789,
+                machineName = Environment.MachineName,
+                lastAcquiredAt = DateTimeOffset.UtcNow
+            }));
     }
 
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]

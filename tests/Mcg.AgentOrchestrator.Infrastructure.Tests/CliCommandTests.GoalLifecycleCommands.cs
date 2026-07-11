@@ -2205,6 +2205,21 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_tests_use_fixture_isolated_dotnet_root")]
+    public void CliAcceptanceTestsUseFixtureIsolatedDotnetRoot()
+    {
+        var isolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(isolatedRoot));
+        Xunit.Assert.Contains(
+            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-slot-run-",
+            isolatedRoot,
+            StringComparison.Ordinal);
+        Xunit.Assert.NotEqual(
+            Path.Combine(Path.GetTempPath(), DotnetBuildEnvironmentManager.RootDirectoryName),
+            isolatedRoot);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_slot_timeout_prints_wait_and_blocker_to_stdout")]
     public void CliAcceptanceSlotTimeoutPrintsWaitAndBlockerToStdout()

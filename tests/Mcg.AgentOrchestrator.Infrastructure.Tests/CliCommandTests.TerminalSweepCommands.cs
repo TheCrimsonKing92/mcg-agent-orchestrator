@@ -894,7 +894,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var result = TerminalGoalSweep.Run(kernel, root);
 
             Assert.Equal(3, result.Goals.Count);
-            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
         }
