@@ -1,0 +1,906 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.CostControl;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using System.Text.RegularExpressions;
+using System.Text.Json;
+
+[Xunit.Collection("EnvMutation")]
+public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestSupport
+{
+    [Xunit.Fact(DisplayName = "CliStartup_sets_protected_pid_before_worker_dispatch")]
+    public void CliStartupSetsProtectedPidBeforeWorkerDispatch()
+    {
+        using var _ = ClearProtectedPidEnvironment();
+
+        CliProtectedProcessEnvironment.EnsureProtectedPid();
+
+        var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+        Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
+
+        Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
+        CliProtectedProcessEnvironment.EnsureProtectedPid();
+
+        Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_claude_cli_only_auth_under_low_integrity_before_dispatch")]
+    public void WorkerProfileDispatcherPreflightBlocksClaudeCliOnlyAuthUnderLowIntegrityBeforeDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude auth preflight", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var credentialPath = Path.Combine(root, ".claude", ".credentials.json");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: credentialPath);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox));
+
+    var findings = string.Join("\n", preflight.Findings);
+    Assert.False(preflight.Allowed);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
+    Assert.Contains("Low-IL Claude subscription dispatch is refused before worker start", findings);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_light_role_claude_auth_under_low_integrity_before_dispatch")]
+    public void WorkerProfileDispatcherPreflightBlocksLightRoleClaudeAuthUnderLowIntegrityBeforeDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude light-role auth preflight", [new TaskSpec(TaskId.New(), "Review implementation output.", AgentRole.Reviewer)]);
+    var agents = AgentCatalog.AnthropicDefault().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var credentialPath = Path.Combine(root, ".claude", ".credentials.json");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: credentialPath);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox));
+
+    var findings = string.Join("\n", preflight.Findings);
+    Assert.False(preflight.Allowed);
+    Assert.Equal("claude-cli", preflight.ProfileName);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
+    Assert.Contains("model-selection: full-profile: light-role profile unavailable (Claude CLI Low-IL auth unavailable)", findings, StringComparison.Ordinal);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
+    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
+    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
+    Assert.False(Directory.Exists(promptRoot));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_skips_claude_auth_guard_for_codex_low_integrity_dispatch")]
+    public void WorkerProfileDispatcherPreflightSkipsClaudeAuthGuardForCodexLowIntegrityDispatch()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify codex auth preflight isolation", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    Func<ClaudeCliAuthState> authProbe = () => throw new InvalidOperationException("Claude auth probe must not run for codex workers.");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Null(preflight.ErrorCode);
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_claude_low_integrity_when_api_key_is_present")]
+    public void WorkerProfileDispatcherPreflightAllowsClaudeLowIntegrityWhenApiKeyIsPresent()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude api key auth preflight", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: Path.Combine(root, ".claude", ".credentials.json"));
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+    Assert.Null(preflight.ErrorCode);
+    Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxOptions_has_no_provider_property")]
+    public void WorkerSandboxOptionsHasNoProviderProperty()
+{
+    Assert.Null(typeof(WorkerSandboxOptions).GetProperty("Provider"));
+}
+
+    [Xunit.Fact(DisplayName = "IWorkerProvider_keeps_sandbox_policy_on_IWorkerSandbox")]
+    public void IWorkerProviderKeepsSandboxPolicyOnIWorkerSandbox()
+{
+    Assert.True(typeof(IWorkerSandbox).IsInterface);
+    Assert.True(new EnvironmentWorkerSandbox() is IWorkerSandbox);
+
+    Assert.Null(typeof(IWorkerProvider).GetProperty("Options"));
+    Assert.Null(typeof(IWorkerProvider).GetProperty("Sandbox"));
+    Assert.Null(typeof(WorkerCapabilities).GetProperty("Sandbox"));
+    Assert.Null(typeof(WorkerCapabilities).GetProperty("SandboxMode"));
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_claude_auth_environment_for_claude_worker_sandbox")]
+    public void DispatchProcessHostSeedsClaudeAuthEnvironmentForClaudeWorkerSandbox()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot);
+
+        Assert.Equal("test-claude-key", startInfo.Environment["ANTHROPIC_API_KEY"]);
+        Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+        Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
+        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
+        Assert.True(Directory.Exists(claudeConfigDir));
+        Assert.Equal("{}\n", File.ReadAllText(Path.Combine(claudeConfigDir!, "settings.json")));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_does_not_inject_claude_environment_for_codex_worker_sandbox")]
+    public void DispatchProcessHostDoesNotInjectClaudeEnvironmentForCodexWorkerSandbox()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "test-claude-key");
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Codex, sandboxRoot);
+
+        Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+        Assert.Equal(Path.Combine(sandboxRoot, "codex-home"), startInfo.Environment["CODEX_HOME"]);
+        Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_repo_scoped_skill_targets_for_full_permission_profile")]
+    public void WorkerProfileDispatcherPreflightAllowsRepoScopedSkillTargetsForFullPermissionProfile()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Create .agents/skills/example/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/example/SKILL.md", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        workingDirectory,
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: sandbox);
+
+    Assert.True(preflight.Allowed);
+    Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
+    Assert.Contains("repo-scoped .agents/skills", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_repo_scoped_skill_full_permission_smoke_creates_and_commits_from_goal_worktree")]
+    public void WorkerProfileDispatcherRepoScopedSkillFullPermissionSmokeCreatesAndCommitsFromGoalWorktree()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Create .agents/skills/smoke/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/smoke/SKILL.md and commit it.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("repo-skill-smoke", "claude-sonnet-4-6", "medium"));
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile(
+            "repo-skill-smoke",
+            "Write-Output 'subscription model {subscriptionModelName}'; Write-Output 'permission --permission-mode bypassPermissions'; New-Item -ItemType Directory -Force '.agents/skills/smoke' | Out-Null; Set-Content -Path '.agents/skills/smoke/SKILL.md' -Value \"---`nname: smoke`ndescription: Smoke test skill.`n---`n`n# Smoke`n\"; git add .agents/skills/smoke/SKILL.md; git commit -m 'Add smoke skill'; Write-Output 'WORKER_RESULT:'; Write-Output 'files: .agents/skills/smoke/SKILL.md'; Write-Output 'commands: git add .agents/skills/smoke/SKILL.md; git commit -m Add smoke skill'; Write-Output 'tests: repo-skill smoke committed'; Write-Output 'blockers: none'; Write-Output 'model_fit: deterministic full-permission profile - adequate - repo skill write smoke'; Write-Output 'skills: skill-creator'; Write-Output 'confidence: high'; Write-Output 'END_WORKER_RESULT'")
+    ]);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-13T12:00:00Z");
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        profiles,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+    var result = RunPowerShellCommand(worktree, task.LastDispatch!.Command);
+
+    Assert.True(preflight.Allowed);
+    Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
+    Assert.Equal(0, result.ExitCode);
+    Assert.True(result.StandardOutput.Contains("WORKER_RESULT:", StringComparison.Ordinal));
+    Assert.True(File.Exists(Path.Combine(worktree, ".agents", "skills", "smoke", "SKILL.md")));
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal("Add smoke skill", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
+    var committedFiles = ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]);
+    Assert.True(committedFiles.Contains(".agents/skills/smoke/SKILL.md", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dirty_worktree_with_verification_evidence_only_stays_failed")]
+    public void BackgroundDispatchRunnerLowIntegrityDirtyWorktreeWithVerificationEvidenceOnlyStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        sandboxLowIntegrity: true);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_self_committing_provider_dirty_verified_without_low_integrity_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerSelfCommittingProviderDirtyVerifiedWithoutLowIntegrityEvidenceStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        workerName: "claude-cli",
+        command: "claude prompt");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_provider_can_self_commit_false_without_low_integrity_stays_failed")]
+    public void BackgroundDispatchRunnerCodexProviderCanSelfCommitFalseWithoutLowIntegrityStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"));
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_provider_can_self_commit_false_without_low_integrity_stays_failed")]
+    public void BackgroundDispatchRunnerTypedProviderCanSelfCommitFalseWithoutLowIntegrityStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var workerProfile = "typed-openai-worker";
+    var providers = new WorkerProviderCatalog([
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexCli, UsesCodexExitFileBehavior: true),
+            workerProfile,
+            "OpenAI",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: true,
+                SupportsPlanMode: true))
+    ]);
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but not committed"),
+        workerName: workerProfile,
+        command: "opaque worker prompt",
+        workerProviderKind: ProviderKind.OpenAICodexCli);
+
+    new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_typed_non_self_committing_provider_exit1_dirty_with_low_integrity_evidence_commits_on_behalf")]
+    public void BackgroundDispatchRunnerTypedNonSelfCommittingProviderExit1DirtyWithLowIntegrityEvidenceCommitsOnBehalf()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var workerProfile = "typed-openai-worker";
+    var providers = new WorkerProviderCatalog([
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexCli, UsesCodexExitFileBehavior: true),
+            workerProfile,
+            "OpenAI",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: true,
+                SupportsPlanMode: true))
+    ]);
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the feature and ran the focused tests." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "dotnet test --filter WorkerDispatch", "Passed: 2, Failed: 0"),
+        SandboxPrepCompleteEvent(),
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "implemented but codex exited one"),
+        workerName: workerProfile,
+        command: "codex exec prompt",
+        workerProviderKind: ProviderKind.OpenAICodexCli,
+        sandboxLowIntegrity: true);
+
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock, workerProviders: providers).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        "complete non-failing WORKER_RESULT and dirty worktree edits",
+        task.LastVerification.StandardError,
+        StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_verified_without_typed_sandbox_evidence_stays_failed")]
+    public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyVerifiedWithoutTypedSandboxEvidenceStaysFailed()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the change and ran the focused tests.\r\nPassed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.",
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited but commit failed under low integrity"),
+        sandboxLowIntegrity: true);
+
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains("feature.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_git_metadata_permission_failure_is_nonfatal_with_dirty_worker_result")]
+    public void BackgroundDispatchRunnerGitMetadataPermissionFailureIsNonfatalWithDirtyWorkerResult()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Edited the requested files, but git commit was blocked." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "git add -A; git commit -m Feature", "not-run"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git metadata failure"),
+        sandboxLowIntegrity: true);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var indexLockPath = Path.GetFullPath(Path.Combine(
+        root,
+        ".git",
+        "worktrees",
+        goal.Id.Value[..8],
+        "index.lock"));
+    File.WriteAllText(
+        process.StandardErrorPath,
+        $"fatal: Unable to create '{indexLockPath}': Permission denied");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        "Classified worker git metadata write failure as non-fatal",
+        task.LastVerification.StandardError,
+        StringComparison.Ordinal);
+    Assert.Contains("index_lock=", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dotnet_1312_dirty_worker_result_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerLowIntegrityDotnet1312DirtyWorkerResultIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the requested change." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "dotnet test --filter LowIntegrity", "not-run"),
+        string.Empty,
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before dotnet 1312 failure"),
+        sandboxLowIntegrity: true);
+    File.WriteAllText(
+        process.StandardErrorPath,
+        "dotnet.cmd: CreateProcessAsUserW 1312: A specified logon session does not exist. It may already have been terminated.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        "Orchestrator committed the worker's verified worktree edits",
+        task.LastVerification.StandardError,
+        StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_git_1312_commits_work_without_sandbox_marker")]
+    public void BackgroundDispatchRunnerLowIntegrityGit1312CommitsWorkWithoutSandboxMarker()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented the requested change." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "git status --short", "not-run"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "feature.txt"), "edited before git 1312 failure");
+            File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName), "{}");
+        },
+        sandboxLowIntegrity: true);
+    File.WriteAllText(
+        process.StandardErrorPath,
+        "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
+    File.WriteAllText(process.ExitCodePath, "1");
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains(
+        "Orchestrator committed the worker's verified worktree edits",
+        task.LastVerification.StandardError,
+        StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Contains("feature.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+    Assert.DoesNotContain(WorkerSandboxPreparer.MarkerFileName, ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.MarkerFileName]));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_first_round_preps_and_writes_receipt")]
+    public void WorkerSandboxPreparerFirstRoundPrepsAndWritesReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+
+    var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+    Assert.False(result.PrepReceiptHit);
+    Assert.True(result.WorktreeRecursiveRelabel);
+    Assert.False(result.SandboxRecursiveRelabel);
+    Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+    Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive);
+    Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+    Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_second_round_reuses_prep_receipt")]
+    public void WorkerSandboxPreparerSecondRoundReusesPrepReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+    var preparer = new WorkerSandboxPreparer(labeler);
+    _ = preparer.Prepare(worktree, sandboxRoot);
+    labeler.SetCalls.Clear();
+
+    var result = preparer.Prepare(worktree, sandboxRoot);
+
+    Assert.True(result.PrepReceiptHit);
+    Assert.False(result.WorktreeRecursiveRelabel);
+    Assert.False(result.SandboxRecursiveRelabel);
+    Assert.Empty(labeler.SetCalls);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_existing_labeled_worktree_repreps_without_receipt")]
+    public void WorkerSandboxPreparerExistingLabeledWorktreeReprepsWithoutReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    Directory.CreateDirectory(sandboxRoot);
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(
+        new IntegrityLabelState(Exists: true, Low: true, Inheritable: true),
+        setResult: false);
+
+    var result = new WorkerSandboxPreparer(labeler).Prepare(worktree, sandboxRoot);
+
+    Assert.False(result.RequiresRecovery);
+    Assert.False(result.PrepReceiptHit);
+    Assert.False(result.WorktreeRecursiveRelabel);
+    Assert.False(result.SandboxRecursiveRelabel);
+    Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+    Assert.Contains(labeler.SetCalls, call => call.Path == sandboxRoot && !call.Recursive);
+    Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+    Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_recreated_worktree_repreps_receipt")]
+    public void WorkerSandboxPreparerRecreatedWorktreeReprepsReceipt()
+{
+    var root = CreateTempDirectory();
+    var worktree = Path.Combine(root, "worktree");
+    var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+    var labeler = new WorkerDispatchRecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+    var preparer = new WorkerSandboxPreparer(labeler);
+    _ = preparer.Prepare(worktree, sandboxRoot);
+    Directory.Delete(worktree, recursive: true);
+    labeler.SetCalls.Clear();
+
+    var result = preparer.Prepare(worktree, sandboxRoot);
+
+    Assert.False(result.PrepReceiptHit);
+    Assert.True(result.WorktreeRecursiveRelabel);
+    Assert.Contains(labeler.SetCalls, call => call.Path == worktree && call.Recursive);
+    Assert.True(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
+    Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.ReceiptFileName)));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_exit_zero_dirty_with_setup_evidence_is_committed_by_orchestrator")]
+    public void BackgroundDispatchRunnerLowIntegrityExitZeroDirtyWithSetupEvidenceIsCommittedByOrchestrator()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Implemented feature." + Environment.NewLine +
+            WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1"),
+        SandboxPrepCompleteEvent(),
+        clock,
+        worktree => File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature"),
+        sandboxLowIntegrity: true);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(
+        task.Status == WorkTaskStatus.Completed,
+        task.LastVerification?.StandardError ?? "missing verification");
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.True(task.LastVerification.HasCommittedChanges);
+    Assert.Contains("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    Assert.Equal("Developer task.: Implemented feature.", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
+    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
+    var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
+    Assert.Equal(head, task.LastDispatch?.ResultCommit);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal) &&
+        evt.Message.Contains($"sha={head}", StringComparison.Ordinal) &&
+        evt.Message.Contains("provenance=orchestrator", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_plan_mode")]
+    public void WorkerProfileDispatcherResearcherDispatchUsesClaudePlanMode()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Survey the codebase configuration");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        researcher,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+
+    Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
+    Assert.Contains("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_developer_dispatch_uses_workspace_write_codex_sandbox")]
+    public void WorkerProfileDispatcherDeveloperDispatchUsesWorkspaceWriteCodexSandbox()
+{
+    // Hermetic: this asserts the DEFAULT (no-OS-sandbox) dispatch mode, which reads
+    // WorkerSandboxOptions.FromEnvironment(). Clear the operator's MCG_WORKER_SANDBOX so the test is
+    // deterministic even when the suite is run under `conduct`/acceptance with the var set.
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement the feature");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        developer,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt);
+
+    Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.True(!developer.LastDispatch.Command.Contains("read-only", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
+    public void WorkerProfileDispatcherClaudeResolvesPlanForReviewerAndBypassPermissionsForDeveloper()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var developerGoal = kernel.CreateGoal("Implement the change", [new TaskSpec(TaskId.New(), "Add the feature.", AgentRole.Developer)]);
+    var reviewerGoal = kernel.CreateGoal("Review the change", [new TaskSpec(TaskId.New(), "Review the implementation.", AgentRole.Reviewer)]);
+    var reviewerAgent = new AgentDefinition(
+        new AgentId("anthropic-reviewer"),
+        "Anthropic reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    var developerAgent = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    kernel.ActivateGoal(developerGoal.Id, [developerAgent]);
+    kernel.ActivateGoal(reviewerGoal.Id, [reviewerAgent]);
+    var developerTask = developerGoal.Tasks.Single();
+    var reviewerTask = reviewerGoal.Tasks.Single();
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+
+    Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'plan'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+}
+
+}
