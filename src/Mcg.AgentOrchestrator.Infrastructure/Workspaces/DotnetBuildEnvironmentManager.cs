@@ -191,9 +191,13 @@ public static class DotnetBuildEnvironmentManager
             {
                 var slot = (scanStart + offset) % StableSlotCount;
                 var environment = CreateStableSlotEnvironment(slot);
-                if (TryOpenLeaseExecutionLock(environment, out var stream))
+                if (TryOpenLeaseExecutionLock(environment, out var stream, out var blockedAttribution))
                 {
                     return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
+                }
+                if (blockedAttribution is not null)
+                {
+                    return EmitBuildLockBlocked(environment.LeaseId, blockedAttribution);
                 }
             }
 
@@ -210,9 +214,13 @@ public static class DotnetBuildEnvironmentManager
             }
 
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
-            if (TryOpenLeaseExecutionLock(target, out var targetStream))
+            if (TryOpenLeaseExecutionLock(target, out var targetStream, out var targetBlockedAttribution))
             {
                 return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(target, targetStream));
+            }
+            if (targetBlockedAttribution is not null)
+            {
+                return EmitBuildLockBlocked(target.LeaseId, targetBlockedAttribution);
             }
 
             Thread.Sleep(100);
@@ -731,11 +739,15 @@ public static class DotnetBuildEnvironmentManager
             busySlots.Select(slot =>
                 $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
 
-    private static bool TryOpenLeaseExecutionLock(DotnetBuildEnvironment environment, out FileStream stream)
+    private static bool TryOpenLeaseExecutionLock(
+        DotnetBuildEnvironment environment,
+        out FileStream stream,
+        out BuildLockAttribution? blockedAttribution)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         var attemptedCompilerLockRemediation = false;
         var attemptedOwnedProcessRemediation = false;
+        blockedAttribution = null;
         while (true)
         {
             try
@@ -748,6 +760,7 @@ public static class DotnetBuildEnvironmentManager
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     stream = null!;
+                    blockedAttribution = null;
                     return false;
                 }
 
@@ -772,7 +785,7 @@ public static class DotnetBuildEnvironmentManager
                     ex,
                     ref attemptedCompilerLockRemediation,
                     ref attemptedOwnedProcessRemediation,
-                    out _))
+                    out blockedAttribution))
                 {
                     continue;
                 }
