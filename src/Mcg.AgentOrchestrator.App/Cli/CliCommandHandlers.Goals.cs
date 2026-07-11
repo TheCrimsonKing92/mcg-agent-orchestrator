@@ -2591,7 +2591,16 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 
             using (stableSlotLease)
             {
-                verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
+                try
+                {
+                    verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
+                }
+                catch (BuildLockBlockedException ex)
+                {
+                    Console.WriteLine($"BUILD_LOCK_BLOCKED goal={goal.Id.Value[..8]} {FormatBuildLockBlocked(ex.Attribution)}");
+                    Console.WriteLine("Acceptance verification: build artifact lock blocked progress; goal remains ready and will retry on a later conduct tick.");
+                    return false;
+                }
             }
             verificationStarted.Stop();
             context.PhaseTimings.Record(
@@ -2861,6 +2870,17 @@ private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerification
         : verification.ArtifactsPath;
     var artifactDetail = string.IsNullOrWhiteSpace(artifactPath) ? "none" : artifactPath;
     return $"BLOCKER step=verification reason=timeout check=\"{timedOutCheck.Name}\" artifacts={artifactDetail} action=\"Inspect verification command, artifact path, and last output above; rerun acceptance after clearing the blocker.\"";
+}
+
+private static string FormatBuildLockBlocked(BuildLockAttribution attribution)
+{
+    var holders = attribution.Holders.Count == 0
+        ? "unknown"
+        : string.Join(
+            ",",
+            attribution.Holders.Select(holder =>
+                $"pid-{holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}:{holder.ProcessName ?? "unknown"}"));
+    return $"path=\"{EscapeBlockerDetail(attribution.Path)}\" holders={holders}";
 }
 
 private static string EscapeBlockerDetail(string value) =>

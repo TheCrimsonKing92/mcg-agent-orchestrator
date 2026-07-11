@@ -1030,8 +1030,24 @@ internal sealed class ConductorDriver
                     GoalLifecycleState.Verified,
                     $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(ex.SlotsBusy)}"));
         }
+        catch (BuildLockBlockedException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(ex.Attribution)}"));
+        }
 
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
+    }
+
+    private static string FormatBuildLockBlocked(BuildLockAttribution attribution)
+    {
+        var holders = attribution.Holders.Count == 0
+            ? "unknown"
+            : string.Join(", ", attribution.Holders.Select(holder =>
+                $"pid {holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} {holder.ProcessName ?? "unknown"}"));
+        return $"path={attribution.Path}; holders: {holders}";
     }
 
     private ConductorAdvanceResult? RebaseBeforeAcceptance(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)

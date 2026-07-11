@@ -511,6 +511,62 @@ public sealed class AdvanceLoopTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_reconciles_assigned_task_with_stale_exit_artifact")]
+    public void SubscriptionDispatchReadyBatchReconcilesAssignedTaskWithStaleExitArtifact()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var clock = DateTimeOffset.Parse("2026-07-11T01:46:19Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Inspect stale process state", AgentRole.Planner, "Record explicit verification.");
+    var goal = CreateRefinedGoal(kernel, "Recover stale process before batch formation", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-planner"),
+        "Subscription planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdout, "done");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "old dispatch", root, clock));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null));
+
+    var snapshot = kernel.ExportSnapshot();
+    var goalSnapshot = snapshot.Goals.Single();
+    var staleAssignedSnapshot = goalSnapshot.Tasks.Single() with { Status = WorkTaskStatus.Assigned };
+    kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+    {
+        Goals = [goalSnapshot with { Tasks = [staleAssignedSnapshot] }]
+    });
+    goal = kernel.GetGoal(goal.Id);
+    task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
+
+    var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+        kernel,
+        workspace,
+        goal,
+        [agent],
+        profiles);
+
+    Assert.Single(batch.Dispatches);
+    Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
+    var reconciledTask = kernel.GetTask(goal.Id, task.Id);
+    Assert.Null(reconciledTask.LastProcess);
+    Assert.NotNull(reconciledTask.LastDispatch);
+    Assert.NotEqual("old dispatch", reconciledTask.LastDispatch!.Command);
+    Assert.Null(reconciledTask.LastVerification);
+}
+
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_uses_parallel_planner_first_safe_batch")]
     public void StartSubscriptionReadyTasksUsesParallelPlannerFirstSafeBatch()
 {

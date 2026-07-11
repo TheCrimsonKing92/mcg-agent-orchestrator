@@ -3,6 +3,149 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact(DisplayName = "LockAttribution_emits_LOCK_receipt_with_holder_identity")]
+    public void LockAttributionEmitsLockReceiptWithHolderIdentity()
+    {
+        var lockedPath = Path.Combine(Path.GetTempPath(), "Mcg.AgentOrchestrator.App.dll");
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(1234, "dotnet", "dotnet test --artifacts-path slot-0", true)],
+            "test");
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() => LockAttribution.Attribute(lockedPath, "slot-0"));
+
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
+            Assert.Contains("holderPid=1234", output, StringComparison.Ordinal);
+            Assert.Contains("holderName=\"dotnet\"", output, StringComparison.Ordinal);
+            Assert.Contains("owned=true", output, StringComparison.Ordinal);
+            Assert.Contains("commandLine=\"dotnet test --artifacts-path slot-0\"", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_build_lock_after_attribution_and_build_server_shutdown")]
+    public async Task GoalAcceptanceVerifierRetriesBuildLockAfterAttributionAndBuildServerShutdown()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "app build", "type": "command", "command": "dotnet", "arguments": ["build", "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var lockedPath = Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.App.dll");
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(1, $"Csc error CS2012: Cannot open '{lockedPath}' for writing -- The process cannot access the file because it is being used by another process."),
+            new(0, ""),
+            new(0, "Build succeeded.")
+        ]);
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(4321, "testhost", $"dotnet test --artifacts-path {root}", true)],
+            "test");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.Equal(4, calls.Count);
+            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.Equal("dotnet", calls[1][0]);
+            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.Equal("dotnet", calls[3][0]);
+            var check = Assert.Single(result.Checks!);
+            Assert.True(check.LockRemediationApplied);
+            Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_with_LOCK_receipt_while_file_is_held_then_succeeds_after_release")]
+    public async Task GoalAcceptanceVerifierBlocksWithLockReceiptWhileFileIsHeldThenSucceedsAfterRelease()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "app build", "type": "command", "command": "dotnet", "arguments": ["build", "Fake.csproj"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var lockedPath = Path.Combine(root, "artifacts", "Mcg.AgentOrchestrator.App.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        File.WriteAllText(lockedPath, "held");
+        using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var calls = new List<string[]>();
+
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(Environment.ProcessId, "testhost", $"test held {lockedPath}", false)],
+            "test");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                try
+                {
+                    using var opened = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new IOException($"Access to the path '{lockedPath}' is denied.", ex);
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            BuildLockBlockedException? blocked = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync(root)).GetAwaiter().GetResult());
+
+            Assert.NotNull(blocked);
+            Assert.Equal(lockedPath, blocked!.Attribution.Path);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
+            Assert.Contains($"holderPid={Environment.ProcessId}", output, StringComparison.Ordinal);
+            Assert.Contains("holderName=\"testhost\"", output, StringComparison.Ordinal);
+            Assert.True(calls.Count >= 3);
+
+            held.Dispose();
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.Equal(0, result.ExitCode);
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_auto_runs_policy_required_browser_smoke")]
     public async Task GoalAcceptanceVerifierAutoRunsPolicyRequiredBrowserSmoke()
     {
@@ -482,7 +625,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Equal("goal-abcd1234", check.LeaseId);
         Assert.True(check.DurationMilliseconds is >= 0);
         Assert.True(check.LockRemediationApplied);
-        Assert.True(check.ResultSummary?.Contains("transient compiler lock detected; build server restarted; check retried", StringComparison.Ordinal) == true);
+        Assert.True(check.ResultSummary?.Contains("build artifact lock detected; holder attributed; remediation retried", StringComparison.Ordinal) == true);
         Assert.True(check.ResultSummary?.Contains("Failed: 0", StringComparison.Ordinal) == true);
     }
 
@@ -490,11 +633,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
     {
         var calls = new List<string[]>();
+        var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
             new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
             new(0, ""),
-            new(1, "error CS2012: Cannot open 'Core.dll' for writing because it is being used by another process.")
+            new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process.")
         ]);
 
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -503,19 +647,60 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(responses.Dequeue());
         });
 
-        var result = await verifier.RunAsync("C:\\fake\\worktree");
+        var blocked = await Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"));
 
-        Assert.False(result.Passed);
-        Assert.True(result.Retried);
-        Assert.True(result.OutputTail is not null);
-        Assert.True(result.OutputTail!.Contains("CS2012", StringComparison.Ordinal));
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(lockedPath, blocked.Attribution.Path);
         Assert.Equal(4, calls.Count);
         AssertIsolatedTestCommand(calls[1]);
         AssertIsolatedTestCommand(calls[3]);
-        var check = result.Checks!.Single(item => item.Name == "dotnet test");
-        Assert.True(check.LockRemediationApplied);
-        Assert.Equal("transient compiler lock detected; build server restarted; check retried", check.ResultSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_when_owned_process_kill_retry_still_reports_lock")]
+    public async Task GoalAcceptanceVerifierBlocksWhenOwnedProcessKillRetryStillReportsLock()
+    {
+        var calls = new List<string[]>();
+        var killed = new List<int>();
+        var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
+            new(0, ""),
+            new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
+            new(1, $"MSB3491: Could not write lines to file '{lockedPath}' because it is being used by another process.")
+        ]);
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(987654, "testhost", $"dotnet test --artifacts-path {path}", true)],
+            "test");
+        WorkerProcessJobs.TryKillPidTree = pid =>
+        {
+            killed.Add(pid);
+            return true;
+        };
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var blocked = await Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"));
+
+            Assert.Equal(lockedPath, blocked.Attribution.Path);
+            Assert.Equal([987654], killed);
+            Assert.Equal(5, calls.Count);
+            AssertIsolatedTestCommand(calls[1]);
+            AssertIsolatedTestCommand(calls[3]);
+            AssertIsolatedTestCommand(calls[4]);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            LockAttribution.AttributeForTests = null;
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_does_not_self_heal_non_lock_failure")]

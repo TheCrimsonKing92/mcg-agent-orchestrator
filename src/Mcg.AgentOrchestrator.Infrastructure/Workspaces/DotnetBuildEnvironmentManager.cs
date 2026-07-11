@@ -45,6 +45,10 @@ public abstract record DotnetBuildLeaseAcquisition
     public sealed record SlotsBusy(
         string WantedBy,
         IReadOnlyList<DotnetBuildStableSlotWait> BusySlots) : DotnetBuildLeaseAcquisition;
+
+    public sealed record BuildLockBlocked(
+        string WantedBy,
+        BuildLockAttribution Attribution) : DotnetBuildLeaseAcquisition;
 }
 
 public sealed class DotnetBuildSlotsBusyException : IOException
@@ -73,6 +77,8 @@ public static class DotnetBuildEnvironmentManager
     private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
     private static int s_nextStableSlotScanStart = -1;
+    internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
+    internal static Action? ShutdownBuildServersForTests { get; set; }
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -164,6 +170,7 @@ public static class DotnetBuildEnvironmentManager
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
+            DotnetBuildLeaseAcquisition.BuildLockBlocked blocked => throw new BuildLockBlockedException(blocked.Attribution),
             _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
         };
     }
@@ -184,9 +191,13 @@ public static class DotnetBuildEnvironmentManager
             {
                 var slot = (scanStart + offset) % StableSlotCount;
                 var environment = CreateStableSlotEnvironment(slot);
-                if (TryOpenLeaseExecutionLock(environment, out var stream))
+                if (TryOpenLeaseExecutionLock(environment, out var stream, out var blockedAttribution))
                 {
                     return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
+                }
+                if (blockedAttribution is not null)
+                {
+                    return EmitBuildLockBlocked(environment.LeaseId, blockedAttribution);
                 }
             }
 
@@ -203,9 +214,13 @@ public static class DotnetBuildEnvironmentManager
             }
 
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
-            if (TryOpenLeaseExecutionLock(target, out var targetStream))
+            if (TryOpenLeaseExecutionLock(target, out var targetStream, out var targetBlockedAttribution))
             {
                 return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(target, targetStream));
+            }
+            if (targetBlockedAttribution is not null)
+            {
+                return EmitBuildLockBlocked(target.LeaseId, targetBlockedAttribution);
             }
 
             Thread.Sleep(100);
@@ -316,6 +331,12 @@ public static class DotnetBuildEnvironmentManager
 
     public static void ShutdownBuildServersBestEffort()
     {
+        if (ShutdownBuildServersForTests is { } shutdownForTests)
+        {
+            shutdownForTests();
+            return;
+        }
+
         try
         {
             using var process = Process.Start(new ProcessStartInfo
@@ -350,6 +371,7 @@ public static class DotnetBuildEnvironmentManager
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease.DetachStreamForLegacyCaller(),
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
+            DotnetBuildLeaseAcquisition.BuildLockBlocked blocked => throw new BuildLockBlockedException(blocked.Attribution),
             _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
         };
     }
@@ -361,13 +383,30 @@ public static class DotnetBuildEnvironmentManager
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? DefaultSlotBusyPollTimeout);
+        var attemptedCompilerLockRemediation = false;
+        var attemptedOwnedProcessRemediation = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            LeaseFileStream stream;
+            var reclaimed = TryReclaimStaleExecutionLease(environment);
             try
             {
-                var reclaimed = TryReclaimStaleExecutionLease(environment);
-                var stream = OpenExecutionLeaseStream(environment);
+                stream = OpenExecutionLeaseStream(environment);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (DateTimeOffset.UtcNow >= timeoutAt)
+                {
+                    return EmitSlotsBusy(environment.LeaseId);
+                }
+
+                Thread.Sleep(100);
+                continue;
+            }
+
+            try
+            {
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
@@ -382,11 +421,21 @@ public static class DotnetBuildEnvironmentManager
 
                 return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                if (TryRemediateArtifactPrepLock(
+                    environment,
+                    ex,
+                    ref attemptedCompilerLockRemediation,
+                    ref attemptedOwnedProcessRemediation,
+                    out var blockedAttribution))
+                {
+                    continue;
+                }
+
                 if (DateTimeOffset.UtcNow >= timeoutAt)
                 {
-                    return EmitSlotsBusy(environment.LeaseId);
+                    return EmitBuildLockBlocked(environment.LeaseId, blockedAttribution);
                 }
 
                 Thread.Sleep(100);
@@ -658,6 +707,15 @@ public static class DotnetBuildEnvironmentManager
         return new DotnetBuildLeaseAcquisition.SlotsBusy(wantedBy, busySlots);
     }
 
+    private static DotnetBuildLeaseAcquisition.BuildLockBlocked EmitBuildLockBlocked(
+        string wantedBy,
+        BuildLockAttribution attribution)
+    {
+        Console.WriteLine(
+            $"BUILD_LOCK_BLOCKED wantedBy={wantedBy} path=\"{attribution.Path}\" holder={FormatBuildLockHolder(attribution.Holders.FirstOrDefault())} source={attribution.Source} pid={Environment.ProcessId}");
+        return new DotnetBuildLeaseAcquisition.BuildLockBlocked(wantedBy, attribution);
+    }
+
     private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot()
     {
         var waits = new DotnetBuildStableSlotWait[StableSlotCount];
@@ -681,32 +739,130 @@ public static class DotnetBuildEnvironmentManager
             busySlots.Select(slot =>
                 $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
 
-    private static bool TryOpenLeaseExecutionLock(DotnetBuildEnvironment environment, out FileStream stream)
+    private static bool TryOpenLeaseExecutionLock(
+        DotnetBuildEnvironment environment,
+        out FileStream stream,
+        out BuildLockAttribution? blockedAttribution)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
-        try
+        var attemptedCompilerLockRemediation = false;
+        var attemptedOwnedProcessRemediation = false;
+        blockedAttribution = null;
+        while (true)
         {
-            var reclaimed = TryReclaimStaleExecutionLease(environment);
-            stream = OpenExecutionLeaseStream(environment);
             try
             {
-                WriteExecutionLeaseMetadata(stream, environment);
-                PrepareArtifactsDirectory(environment, forceClean: reclaimed);
-                EmitLeaseReceipt("LEASE_ACQUIRE", environment);
-            }
-            catch
-            {
-                stream.Dispose();
-                throw;
-            }
+                var reclaimed = TryReclaimStaleExecutionLease(environment);
+                try
+                {
+                    stream = OpenExecutionLeaseStream(environment);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    stream = null!;
+                    blockedAttribution = null;
+                    return false;
+                }
 
-            return true;
+                try
+                {
+                    WriteExecutionLeaseMetadata(stream, environment);
+                    PrepareArtifactsDirectory(environment, forceClean: reclaimed);
+                    EmitLeaseReceipt("LEASE_ACQUIRE", environment);
+                }
+                catch
+                {
+                    stream.Dispose();
+                    throw;
+                }
+
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (TryRemediateArtifactPrepLock(
+                    environment,
+                    ex,
+                    ref attemptedCompilerLockRemediation,
+                    ref attemptedOwnedProcessRemediation,
+                    out blockedAttribution))
+                {
+                    continue;
+                }
+
+                stream = null!;
+                return false;
+            }
         }
-        catch (IOException)
+    }
+
+    private static bool TryRemediateArtifactPrepLock(
+        DotnetBuildEnvironment environment,
+        Exception exception,
+        ref bool attemptedCompilerLockRemediation,
+        ref bool attemptedOwnedProcessRemediation,
+        out BuildLockAttribution attribution)
+    {
+        var lockedPath = LockAttribution.TryExtractLockedPath(exception.ToString()) ?? environment.ArtifactsPath;
+        if (LockAttribution.IsLeaseLockPath(lockedPath))
         {
-            stream = null!;
+            attribution = new BuildLockAttribution(lockedPath, [], "lease-lock-refused");
             return false;
         }
+
+        attribution = LockAttribution.Attribute(lockedPath, environment.ArtifactsPath);
+        if (!attemptedCompilerLockRemediation && IsCompilerLock(attribution))
+        {
+            attemptedCompilerLockRemediation = true;
+            ShutdownBuildServersBestEffort();
+            return true;
+        }
+
+        if (attemptedOwnedProcessRemediation)
+        {
+            return false;
+        }
+
+        var killed = false;
+        foreach (var holder in attribution.Holders
+            .Where(holder => holder.IsOrchestratorOwned && holder.ProcessId.HasValue)
+            .DistinctBy(holder => holder.ProcessId!.Value))
+        {
+            killed |= WorkerProcessJobs.TryKillOrFallbackAndWait(holder.ProcessId!.Value, TimeSpan.FromSeconds(5));
+        }
+
+        attemptedOwnedProcessRemediation = killed;
+        return killed;
+    }
+
+    private static bool IsCompilerLock(BuildLockAttribution attribution) =>
+        attribution.Holders.Any(holder =>
+            ContainsCompilerLockSignal(holder.ProcessName) ||
+            ContainsCompilerLockSignal(holder.CommandLine));
+
+    private static bool ContainsCompilerLockSignal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("VBCSCompiler", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("MSBuild", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("csc", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("build-server", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatBuildLockHolder(BuildLockHolder? holder)
+    {
+        if (holder is null)
+        {
+            return "unknown";
+        }
+
+        var pid = holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        var name = string.IsNullOrWhiteSpace(holder.ProcessName) ? "unknown" : holder.ProcessName;
+        return $"pid-{pid}:name-{name}";
     }
 
     private static LeaseFileStream OpenExecutionLeaseStream(DotnetBuildEnvironment environment)
@@ -726,6 +882,7 @@ public static class DotnetBuildEnvironmentManager
 
     private static void PrepareArtifactsDirectory(DotnetBuildEnvironment environment, bool forceClean = false)
     {
+        PrepareArtifactsDirectoryForTests?.Invoke(environment);
         var clean = forceClean || environment.StaleLockCleared;
         var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
         if (Directory.Exists(environment.ArtifactsPath) && Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())

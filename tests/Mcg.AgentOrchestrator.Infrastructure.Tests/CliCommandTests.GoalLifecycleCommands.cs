@@ -2339,4 +2339,49 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
         Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
     }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_build_lock_blocked_stays_ready_without_failure_history")]
+    public void CliAcceptanceBuildLockBlockedStaysReadyWithoutFailureHistory()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Build lock acceptance", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var lockedPath = Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.App.dll");
+        var attribution = new BuildLockAttribution(
+            lockedPath,
+            [new BuildLockHolder(12345, "dotnet", "dotnet test --artifacts-path slot-0", true)],
+            "test");
+        var verifier = new ProbeAcceptanceVerifier(_ => throw new BuildLockBlockedException(attribution));
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier,
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("BUILD_LOCK_BLOCKED", output);
+        Xunit.Assert.Contains("Mcg.AgentOrchestrator.App.dll", output);
+        Xunit.Assert.Contains("pid-12345:dotnet", output);
+        Xunit.Assert.Contains("goal remains ready", output);
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
+    }
 }

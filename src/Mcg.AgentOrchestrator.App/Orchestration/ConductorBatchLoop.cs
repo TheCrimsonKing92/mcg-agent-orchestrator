@@ -872,6 +872,17 @@ internal sealed class ConductorBatchLoop
                         $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(slotsBusy.SlotsBusy)}"));
             }
 
+            if (run.Exception is BuildLockBlockedException buildLock)
+            {
+                return new ConductorAdvanceResult(
+                    run.Candidate.Goal.Id.Value,
+                    run.Candidate.GoalPrefix,
+                    policy.Name,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(buildLock.Attribution)}"));
+            }
+
             return ParallelAcceptanceFault(run.Candidate, policy, run.Exception);
         }
 
@@ -914,7 +925,12 @@ internal sealed class ConductorBatchLoop
     {
         if (run.Exception is not null)
         {
-            return run.Exception is DotnetBuildSlotsBusyException ? "slots-busy" : "fault";
+            return run.Exception switch
+            {
+                DotnetBuildSlotsBusyException => "slots-busy",
+                BuildLockBlockedException => "build-lock-blocked",
+                _ => "fault"
+            };
         }
 
         if (run.EarlyResult is not null)
@@ -932,6 +948,15 @@ internal sealed class ConductorBatchLoop
             slotsBusy.BusySlots.Select(slot =>
                 $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
         return $"wanted-by={slotsBusy.WantedBy}; busy={slots}";
+    }
+
+    private static string FormatBuildLockBlocked(BuildLockAttribution attribution)
+    {
+        var holders = attribution.Holders.Count == 0
+            ? "unknown"
+            : string.Join(", ", attribution.Holders.Select(holder =>
+                $"pid {holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} {holder.ProcessName ?? "unknown"}"));
+        return $"path={attribution.Path}; holders: {holders}";
     }
 
     private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome, int? slotIndex = null)
