@@ -119,6 +119,36 @@ internal sealed class OwnedProcessGroup : IDisposable
         return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
     }
 
+    // Bounded wait for the WHOLE job tree (children and grandchildren) to exit after a kill,
+    // polled via a duplicated job handle because Kill() closes the group's own handle. Slot
+    // release/handoff must never proceed over a live gate-owned process.
+    public static bool WaitForJobExit(SafeFileHandle jobHandle, TimeSpan timeout)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return true;
+        }
+
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (!WindowsJob.TryGetActiveProcessCount(jobHandle, out var activeProcesses))
+            {
+                return false;
+            }
+
+            if (activeProcesses == 0)
+            {
+                return true;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return WindowsJob.TryGetActiveProcessCount(jobHandle, out var finalActiveProcesses) &&
+            finalActiveProcesses == 0;
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -252,6 +282,23 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         public static bool TryTerminate(SafeFileHandle job) =>
             !job.IsClosed && !job.IsInvalid && TerminateJobObject(job, 1);
+
+        public static bool TryGetActiveProcessCount(SafeFileHandle job, out uint activeProcessCount)
+        {
+            activeProcessCount = 0;
+            if (job.IsClosed || job.IsInvalid)
+            {
+                return false;
+            }
+
+            if (!TryQuery(job, JobObjectBasicAccountingInformation, out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION basic))
+            {
+                return false;
+            }
+
+            activeProcessCount = basic.ActiveProcesses;
+            return true;
+        }
 
         public static bool TryReadAccounting(SafeFileHandle job, out WorkerProcessJobAccounting accounting)
         {

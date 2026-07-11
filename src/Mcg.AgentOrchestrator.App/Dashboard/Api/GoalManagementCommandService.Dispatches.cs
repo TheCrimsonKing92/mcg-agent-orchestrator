@@ -215,6 +215,7 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
         providers ?? new InMemoryModelProviderRegistry([]),
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+    ReconcileExitedAssignedProcessRecords(kernel, goal);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
@@ -273,6 +274,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         providers ?? new InMemoryModelProviderRegistry([]),
         goal);
     GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+    ReconcileExitedAssignedProcessRecords(kernel, goal);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
@@ -350,11 +352,59 @@ private sealed record ParallelSafeBatchSelection(HashSet<TaskId> TaskIds, Parall
 private static bool IsSubscriptionStartCandidate(TaskSpec task)
 {
     return task.Status == WorkTaskStatus.Assigned &&
-        task.LastProcess is not { IsRunning: true };
+        !HasBlockingRunningProcess(task);
 }
 
 internal static bool HasAssignedDispatchCandidates(Goal goal) =>
     goal.Tasks.Any(IsSubscriptionStartCandidate);
+
+private static bool HasBlockingRunningProcess(TaskSpec task)
+{
+    if (task.LastProcess is not { IsRunning: true } process)
+    {
+        return false;
+    }
+
+    return !File.Exists(process.ExitCodePath);
+}
+
+private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKernel kernel, Goal goal)
+{
+    foreach (var task in goal.Tasks)
+    {
+        if (task.Status != WorkTaskStatus.Assigned ||
+            task.LastProcess is not { IsRunning: true } process ||
+            !TryReadExitCode(process.ExitCodePath, out var exitCode))
+        {
+            continue;
+        }
+
+        var completed = process with
+        {
+            CompletedAt = DateTimeOffset.UtcNow,
+            ExitCode = exitCode
+        };
+        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
+    }
+}
+
+private static bool TryReadExitCode(string path, out int exitCode)
+{
+    exitCode = 0;
+    try
+    {
+        return File.Exists(path) &&
+            int.TryParse(File.ReadAllText(path).Trim(), out exitCode);
+    }
+    catch (IOException)
+    {
+        return false;
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return false;
+    }
+}
 
 private static string[] BuildIncompleteEarlierStageDependencies(Goal goal, TaskSpec task)
 {

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.JobAccounting)]
+[Xunit.Collection("EnvMutation")]
 public sealed class WorkerProcessJobsTests : IDisposable
 {
     private readonly string? _originalProtectedPid = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID");
@@ -133,6 +133,198 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_release_waits_for_gate_owned_child_process_tree")]
+    public void WorkerProcessJobsReleaseWaitsForGateOwnedChildProcessTree()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests");
+        var marker = Path.Combine(directory, Guid.NewGuid().ToString("n") + ".pid");
+        var startSignal = Path.Combine(directory, Guid.NewGuid().ToString("n") + ".go");
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        Process? wrapper = null;
+        try
+        {
+            wrapper = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(
+                WorkerShell.BaseArguments().Concat([
+                    $"while (-not (Test-Path -LiteralPath '{startSignal}')) {{ Start-Sleep -Milliseconds 25 }}; " +
+                    "$p = Start-Process ping.exe -ArgumentList '-n 9999 127.0.0.1' -PassThru -WindowStyle Hidden; " +
+                    $"Set-Content -LiteralPath '{marker}' -Value $p.Id; " +
+                    "Start-Sleep -Seconds 9999"
+                ])))
+                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+            Assert.True(WorkerProcessJobs.TryRegister(wrapper, "acceptance:test-slot"));
+            File.WriteAllText(startSignal, "go");
+            var childPid = WaitForPidFile(marker);
+            WorkerProcessJobs.Release(wrapper.Id);
+
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+            Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(2)));
+            Assert.True(WaitUntilNotRunning(childPid, TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            if (wrapper is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
+                wrapper.Dispose();
+            }
+
+            try { File.Delete(marker); } catch { }
+            try { File.Delete(startSignal); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild")]
+    public void WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var marker = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n") + ".pid");
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        Process? wrapper = null;
+        try
+        {
+            wrapper = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(
+                WorkerShell.BaseArguments().Concat([
+                    "$p = Start-Process ping.exe -ArgumentList '-n 9999 127.0.0.1' -PassThru -WindowStyle Hidden; " +
+                    $"Set-Content -LiteralPath '{marker}' -Value $p.Id; " +
+                    "Start-Sleep -Seconds 9999"
+                ])))
+                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+            var grandchildPid = WaitForPidFile(marker);
+
+            Assert.True(WorkerProcessJobs.TryKillOrFallback(wrapper.Id));
+
+            Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(2)));
+            Assert.True(WaitUntilNotRunning(grandchildPid, TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            if (wrapper is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
+                wrapper.Dispose();
+            }
+
+            try { File.Delete(marker); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_kill_or_fallback_and_wait_returns_after_wrapper_exit")]
+    public void WorkerProcessJobsKillOrFallbackAndWaitReturnsAfterWrapperExit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Process? wrapper = null;
+        try
+        {
+            wrapper = StartLongRunningShell();
+
+            Assert.True(WorkerProcessJobs.TryKillOrFallbackAndWait(wrapper.Id, TimeSpan.FromSeconds(5)));
+            Assert.False(IsRunning(wrapper.Id));
+        }
+        finally
+        {
+            if (wrapper is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
+                wrapper.Dispose();
+            }
+        }
+    }
+
+    private static Process StartLongRunningShell()
+    {
+        return Process.Start(new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }.WithArguments(
+            WorkerShell.BaseArguments().Concat([
+                "Start-Sleep -Seconds 9999"
+            ])))
+            ?? throw new InvalidOperationException("Failed to start wrapper process.");
+    }
+
+    private static int WaitForPidFile(string path)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(path) &&
+                int.TryParse(File.ReadAllText(path).Trim(), out var pid) &&
+                pid > 0)
+            {
+                return pid;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        throw new TimeoutException("Timed out waiting for grandchild pid file.");
+    }
+
+    private static bool WaitUntilNotRunning(int processId, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (!IsRunning(processId))
+            {
+                return true;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return !IsRunning(processId);
+    }
+
+    private static bool IsRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_release_returns_job_accounting_counters")]
     public void WorkerProcessJobsReleaseReturnsJobAccountingCounters()
     {
@@ -221,52 +413,6 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild")]
-    public void WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        var marker = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n") + ".pid");
-        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
-        Process? wrapper = null;
-        try
-        {
-            wrapper = Process.Start(new ProcessStartInfo
-            {
-                FileName = WorkerShell.Executable,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }.WithArguments(
-                WorkerShell.BaseArguments().Concat([
-                    "$p = Start-Process ping.exe -ArgumentList '-n 9999 127.0.0.1' -PassThru -WindowStyle Hidden; " +
-                    $"Set-Content -LiteralPath '{marker}' -Value $p.Id; " +
-                    "Start-Sleep -Seconds 9999"
-                ])))
-                ?? throw new InvalidOperationException("Failed to start wrapper process.");
-            var grandchildPid = WaitForPidFile(marker);
-
-            Assert.True(WorkerProcessJobs.TryKillOrFallback(wrapper.Id));
-
-            Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(2)));
-            Assert.True(WaitUntilNotRunning(grandchildPid, TimeSpan.FromSeconds(2)));
-        }
-        finally
-        {
-            if (wrapper is not null)
-            {
-                try { WorkerProcessJobs.TryKillOrFallback(wrapper.Id); } catch { }
-                wrapper.Dispose();
-            }
-
-            try { File.Delete(marker); } catch { }
-        }
-    }
-
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_source_routes_owned_group_close_through_accounting_helper")]
     public void WorkerProcessJobsSourceRoutesOwnedGroupCloseThroughAccountingHelper()
     {
@@ -310,73 +456,6 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var start = Array.FindIndex(lines, line => line.Contains("internal static bool ReadAccountingAndDispose(", StringComparison.Ordinal));
         var end = Array.FindIndex(lines, line => line.Contains("internal static bool HasRegisteredJob", StringComparison.Ordinal));
         return start >= 0 && end > start && lineNumber > start && lineNumber <= end;
-    }
-
-    private static Process StartLongRunningShell()
-    {
-        return Process.Start(new ProcessStartInfo
-        {
-            FileName = WorkerShell.Executable,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        }.WithArguments(
-            WorkerShell.BaseArguments().Concat([
-                "Start-Sleep -Seconds 9999"
-            ])))
-            ?? throw new InvalidOperationException("Failed to start wrapper process.");
-    }
-
-    private static int WaitForPidFile(string path)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (File.Exists(path) &&
-                int.TryParse(File.ReadAllText(path).Trim(), out var pid) &&
-                pid > 0)
-            {
-                return pid;
-            }
-
-            Thread.Sleep(50);
-        }
-
-        throw new TimeoutException("Timed out waiting for grandchild pid file.");
-    }
-
-    private static bool WaitUntilNotRunning(int processId, TimeSpan timeout)
-    {
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (!IsRunning(processId))
-            {
-                return true;
-            }
-
-            Thread.Sleep(50);
-        }
-
-        return !IsRunning(processId);
-    }
-
-    private static bool IsRunning(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
     }
 }
 

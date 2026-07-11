@@ -1179,38 +1179,44 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken)
                 : null;
 
-            var result = await _runner(
-                WithBuildEnvironmentArguments(arguments, environment),
+            var lockRemediationApplied = false;
+            var result = await RunManagedDotnetCommandAsync(
+                arguments,
+                environment,
                 worktreePath,
                 AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
 
-            var transientCompilerLockRetried = false;
-            if (!result.TimedOut &&
-                result.ExitCode != 0 &&
-                IsTransientCompilerLockFailure(result.Output))
+            if (IsBuildLockFailure(result, environment, out var attribution))
             {
-                await _runner(
-                    ["dotnet", "build-server", "shutdown"],
+                (result, lockRemediationApplied) = await RemediateBuildLockAndRetryAsync(
+                    arguments,
                     worktreePath,
-                    AcceptanceCheckTimeouts.DefaultTimeout,
-                    cancellationToken).ConfigureAwait(false);
-                if (stableSlotLease is null)
-                {
-                    leaseLock?.Dispose();
-                    leaseLock = null;
-                    environment = stableSlotIndex.HasValue
-                        ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-                        : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-retry");
-                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
-                }
+                    check,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    environment,
+                    attemptName,
+                    attribution,
+                    nextEnvironment =>
+                    {
+                        if (stableSlotLease is not null)
+                        {
+                            return;
+                        }
 
-                result = await _runner(
-                    WithBuildEnvironmentArguments(arguments, environment),
-                    worktreePath,
-                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                        leaseLock?.Dispose();
+                        leaseLock = null;
+                        environment = nextEnvironment;
+                        leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
+                    },
                     cancellationToken).ConfigureAwait(false);
-                transientCompilerLockRetried = true;
+            }
+
+            if (IsBuildLockFailure(result, environment, out var finalAttribution))
+            {
+                throw new BuildLockBlockedException(finalAttribution);
             }
 
             elapsed.Stop();
@@ -1230,8 +1236,59 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 "goal-acceptance-verifier",
                 environment.LeaseId,
                 (long)elapsed.Elapsed.TotalMilliseconds,
-                transientCompilerLockRetried,
-                BuildManagedDotnetResultSummary(result, transientCompilerLockRetried)), transientCompilerLockRetried);
+                lockRemediationApplied,
+                BuildManagedDotnetResultSummary(result, lockRemediationApplied)), lockRemediationApplied);
+        }
+        catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
+            ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
+        {
+            var lockedPath = TryExtractPathFromException(ex) ?? environment.ArtifactsPath;
+            var attribution = LockAttribution.Attribute(lockedPath, worktreePath);
+            var (result, _) = await RemediateBuildLockAndRetryAsync(
+                arguments,
+                worktreePath,
+                check,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                environment,
+                attemptName,
+                attribution,
+                nextEnvironment =>
+                {
+                    if (stableSlotLease is not null)
+                    {
+                        return;
+                    }
+
+                    leaseLock?.Dispose();
+                    leaseLock = null;
+                    environment = nextEnvironment;
+                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (IsBuildLockFailure(result, environment, out var finalAttribution))
+            {
+                throw new BuildLockBlockedException(finalAttribution);
+            }
+
+            elapsed.Stop();
+            var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+            var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
+            return (new AcceptanceCheckResult(
+                result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
+                passed,
+                result.ExitCode,
+                result.TimedOut
+                    ? BuildTimeoutOutput(result)
+                    : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
+                environment.ArtifactsPath,
+                "goal-acceptance-verifier",
+                environment.LeaseId,
+                (long)elapsed.Elapsed.TotalMilliseconds,
+                true,
+                BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true)), true);
         }
         finally
         {
@@ -1259,6 +1316,143 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             output.Contains("MSB3491", StringComparison.OrdinalIgnoreCase)) &&
         output.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
 
+    private async Task<(CommandResult Result, bool Remediated)> RemediateBuildLockAndRetryAsync(
+        string[] arguments,
+        string worktreePath,
+        AcceptanceManifestCheck check,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetBuildEnvironment currentEnvironment,
+        string attemptName,
+        BuildLockAttribution attribution,
+        Action<DotnetBuildEnvironment> reacquireLease,
+        CancellationToken cancellationToken)
+    {
+        await _runner(
+            ["dotnet", "build-server", "shutdown"],
+            worktreePath,
+            AcceptanceCheckTimeouts.DefaultTimeout,
+            cancellationToken).ConfigureAwait(false);
+
+        var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : currentEnvironment);
+        reacquireLease(retryEnvironment);
+        CommandResult? retry = null;
+        BuildLockAttribution? retryAttribution = null;
+        try
+        {
+            retry = await RunManagedDotnetCommandAsync(
+                arguments,
+                retryEnvironment,
+                worktreePath,
+                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsBuildArtifactIoException(ex))
+        {
+            var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
+            retryAttribution = LockAttribution.Attribute(lockedPath, worktreePath);
+        }
+
+        if (retry is not null && !IsBuildLockFailure(retry, retryEnvironment, out retryAttribution))
+        {
+            return (retry, true);
+        }
+
+        retryAttribution ??= attribution;
+
+        var killed = false;
+        foreach (var holder in attribution.Holders
+            .Concat(retryAttribution.Holders)
+            .Where(holder => holder.IsOrchestratorOwned && holder.ProcessId.HasValue)
+            .DistinctBy(holder => holder.ProcessId!.Value))
+        {
+            killed |= WorkerProcessJobs.TryKillOrFallbackAndWait(holder.ProcessId!.Value, TimeSpan.FromSeconds(5));
+        }
+
+        if (!killed)
+        {
+            throw new BuildLockBlockedException(retryAttribution);
+        }
+
+        var killRetryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : currentEnvironment);
+        reacquireLease(killRetryEnvironment);
+        CommandResult killRetry;
+        try
+        {
+            killRetry = await RunManagedDotnetCommandAsync(
+                arguments,
+                killRetryEnvironment,
+                worktreePath,
+                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsBuildArtifactIoException(ex))
+        {
+            var lockedPath = TryExtractPathFromException(ex) ?? killRetryEnvironment.ArtifactsPath;
+            throw new BuildLockBlockedException(LockAttribution.Attribute(lockedPath, worktreePath));
+        }
+
+        if (IsBuildLockFailure(killRetry, killRetryEnvironment, out var killRetryAttribution))
+        {
+            throw new BuildLockBlockedException(killRetryAttribution);
+        }
+
+        return (killRetry, true);
+    }
+
+    private async Task<CommandResult> RunManagedDotnetCommandAsync(
+        string[] arguments,
+        DotnetBuildEnvironment environment,
+        string worktreePath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        return await _runner(
+            WithBuildEnvironmentArguments(arguments, environment),
+            worktreePath,
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool IsBuildArtifactIoException(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException;
+
+    private static bool IsBuildLockFailure(CommandResult result, DotnetBuildEnvironment environment, out BuildLockAttribution attribution)
+    {
+        attribution = null!;
+        if (result.TimedOut || result.ExitCode == 0)
+        {
+            return false;
+        }
+
+        var lockedPath = LockAttribution.TryExtractLockedPath(result.Output);
+        if (lockedPath is null && !IsTransientCompilerLockFailure(result.Output))
+        {
+            return false;
+        }
+
+        attribution = LockAttribution.Attribute(lockedPath ?? environment.ArtifactsPath, environment.ArtifactsPath);
+        return true;
+    }
+
+    private static string? TryExtractPathFromException(Exception ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException!)
+        {
+            if (LockAttribution.TryExtractLockedPath(current.Message) is { } path)
+            {
+                return path;
+            }
+        }
+
+        return null;
+    }
+
     private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried)
     {
         var summary = AppendResourceReceipt(
@@ -1270,7 +1464,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return summary;
         }
 
-        const string remediation = "transient compiler lock detected; build server restarted; check retried";
+        const string remediation = "build artifact lock detected; holder attributed; remediation retried";
         return string.IsNullOrWhiteSpace(summary)
             ? remediation
             : $"{remediation}; {summary}";

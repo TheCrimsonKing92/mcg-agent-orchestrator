@@ -136,6 +136,27 @@ public static class WorkerProcessJobs
         return fallbackKilled;
     }
 
+    public static bool TryKillOrFallbackAndWait(int processId, TimeSpan timeout)
+    {
+        if (!TryKillOrFallback(processId))
+        {
+            return false;
+        }
+
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (!IsProcessRunning(processId))
+            {
+                return true;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return !IsProcessRunning(processId);
+    }
+
     public static void Release(int processId)
     {
         Release(processId, out _);
@@ -270,6 +291,10 @@ public static class WorkerProcessJobs
             if (kill)
             {
                 job.Group.Kill();
+                if (job.DuplicateAccountingHandle is not null)
+                {
+                    OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
+                }
             }
 
             killed = true;

@@ -67,6 +67,202 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.True(first.Arguments.Contains(first.ArtifactsPath));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_artifact_prep_unauthorized_returns_build_lock_blocked_with_holder_identity")]
+    public void DotnetBuildEnvironmentManagerArtifactPrepUnauthorizedReturnsBuildLockBlockedWithHolderIdentity()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
+        var shutdownCount = 0;
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(2468, "VBCSCompiler", "VBCSCompiler.exe -pipename:slot-0", true)],
+            "test");
+        WorkerProcessJobs.TryKillPidTree = _ => false;
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.BuildLockBlocked>(result);
+            Assert.Equal(environment.LeaseId, blocked.WantedBy);
+            Assert.Equal(lockedPath, blocked.Attribution.Path);
+            var holder = Assert.Single(blocked.Attribution.Holders);
+            Assert.Equal(2468, holder.ProcessId);
+            Assert.Equal("VBCSCompiler", holder.ProcessName);
+            Assert.Equal("VBCSCompiler.exe -pipename:slot-0", holder.CommandLine);
+            Assert.True(holder.IsOrchestratorOwned);
+            Assert.Equal(1, shutdownCount);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
+            Assert.Contains("holderPid=2468", output, StringComparison.Ordinal);
+            Assert.Contains("holderName=\"VBCSCompiler\"", output, StringComparison.Ordinal);
+            Assert.Contains("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("SLOTS_BUSY ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
+    public void DotnetBuildEnvironmentManagerOwnedArtifactHolderIsReapedAndRetried()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
+        var prepareAttempts = 0;
+        var killedPids = new List<int>();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath &&
+                Interlocked.Increment(ref prepareAttempts) == 1)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(987654321, "testhost", "dotnet test --artifacts-path slot-0", true)],
+            "test");
+        WorkerProcessJobs.TryKillPidTree = pid =>
+        {
+            killedPids.Add(pid);
+            return true;
+        };
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
+            acquired.Lease.Dispose();
+            Assert.Equal(2, prepareAttempts);
+            Assert.Equal([987654321], killedPids);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unowned_artifact_holder_blocks_without_reaper")]
+    public void DotnetBuildEnvironmentManagerUnownedArtifactHolderBlocksWithoutReaper()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
+        var killAttempts = 0;
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(987654322, "dotnet", "dotnet test --artifacts-path external", false)],
+            "test");
+        WorkerProcessJobs.TryKillPidTree = _ =>
+        {
+            killAttempts++;
+            return true;
+        };
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.BuildLockBlocked>(result);
+            Assert.Equal(lockedPath, blocked.Attribution.Path);
+            var holder = Assert.Single(blocked.Attribution.Holders);
+            Assert.Equal(987654322, holder.ProcessId);
+            Assert.False(holder.IsOrchestratorOwned);
+            Assert.Equal(0, killAttempts);
+            Assert.Contains("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_lock_contention_returns_slots_busy_without_reaper")]
+    public void DotnetBuildEnvironmentManagerLeaseLockContentionReturnsSlotsBusyWithoutReaper()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using var heldLease = new FileStream(
+            environment.ExecutionLockPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        var attributionAttempts = 0;
+        var killAttempts = 0;
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        LockAttribution.AttributeForTests = (path, _) =>
+        {
+            attributionAttempts++;
+            return new BuildLockAttribution(
+                path,
+                [new BuildLockHolder(987654323, "testhost", "dotnet test --artifacts-path slot-0", true)],
+                "test");
+        };
+        WorkerProcessJobs.TryKillPidTree = _ =>
+        {
+            killAttempts++;
+            return true;
+        };
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+            Assert.Equal(environment.LeaseId, busy.WantedBy);
+            Assert.Equal(0, attributionAttempts);
+            Assert.Equal(0, killAttempts);
+            Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_detects_stale_locks_and_rotates_goal_lease")]
     public void DotnetBuildEnvironmentManagerDetectsStaleLocksAndRotatesGoalLease()
     {
@@ -336,6 +532,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             var waits = new List<DotnetBuildStableSlotWait>();
             DotnetBuildLeaseAcquisition? result = null;
+            LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
             var output = AsyncLocalConsoleRouter.Capture(() =>
             {
                 result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
@@ -359,6 +556,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             {
                 lease.Dispose();
             }
+
+            LockAttribution.AttributeForTests = null;
         }
     }
 
