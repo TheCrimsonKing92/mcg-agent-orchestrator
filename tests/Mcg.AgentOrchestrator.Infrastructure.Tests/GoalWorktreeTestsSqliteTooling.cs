@@ -12,7 +12,7 @@ using Microsoft.Data.Sqlite;
 
 
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
-public sealed class GoalWorktreeSqliteToolingTests : GoalWorktreeTestBase
+public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "InvokeRepoScript_runs_FindOrchestratorLocks_without_synthetic_argument")]
     public void InvokeRepoScriptRunsFindOrchestratorLocksWithoutSyntheticArgument()

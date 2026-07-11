@@ -12,7 +12,7 @@ using Microsoft.Data.Sqlite;
 
 
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
-public sealed class GoalWorktreeRemoveCleanupTests : GoalWorktreeTestBase
+public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_resumes_after_unregistered_worktree_leaves_directory")]
     public void GoalWorktreesRemoveResumesAfterUnregisteredWorktreeLeavesDirectory()

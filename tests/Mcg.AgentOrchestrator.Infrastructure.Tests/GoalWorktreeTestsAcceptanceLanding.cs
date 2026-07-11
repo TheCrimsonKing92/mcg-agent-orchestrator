@@ -12,7 +12,7 @@ using Microsoft.Data.Sqlite;
 
 
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
-public sealed class GoalWorktreeAcceptanceLandingTests : GoalWorktreeTestBase
+public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_acceptance_retry_treats_landed_cleaned_missing_worktree_as_accepted")]
     public void CliAcceptanceRetryTreatsLandedCleanedMissingWorktreeAsAccepted()
