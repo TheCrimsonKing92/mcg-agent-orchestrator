@@ -168,8 +168,9 @@ internal static partial class LockAttribution
 
             var pids = processInfo
                 .Take((int)count)
-                .Select(info => info.Process.ProcessId)
-                .Where(pid => pid > 0)
+                .Select(info => TryConvertProcessId(info.Process.ProcessId))
+                .Where(pid => pid.HasValue)
+                .Select(pid => pid!.Value)
                 .Distinct()
                 .Take(16)
                 .ToArray();
@@ -178,16 +179,23 @@ internal static partial class LockAttribution
                 .Take((int)count)
                 .Select(info =>
                 {
-                    var pid = info.Process.ProcessId;
-                    commandLines.TryGetValue(pid, out var commandLine);
+                    var pid = TryConvertProcessId(info.Process.ProcessId);
+                    if (!pid.HasValue)
+                    {
+                        return null;
+                    }
+
+                    commandLines.TryGetValue(pid.Value, out var commandLine);
                     var startTime = FileTimeToDateTimeOffset(info.Process.ProcessStartTime);
                     return new BuildLockHolder(
-                        pid,
-                        string.IsNullOrWhiteSpace(info.ApplicationName) ? TryProcessName(pid) : info.ApplicationName,
+                        pid.Value,
+                        string.IsNullOrWhiteSpace(info.ApplicationName) ? TryProcessName(pid.Value) : info.ApplicationName,
                         commandLine,
                         IsOrchestratorOwned(commandLine, ownershipHint),
                         startTime);
                 })
+                .Where(holder => holder is not null)
+                .Select(holder => holder!)
                 .GroupBy(holder => holder.ProcessId)
                 .Select(group => group.First())
                 .ToArray();
@@ -411,11 +419,14 @@ internal static partial class LockAttribution
         }
     }
 
-    private static DateTimeOffset? FileTimeToDateTimeOffset(long fileTime)
+    private static int? TryConvertProcessId(uint processId) =>
+        processId is > 0 and <= int.MaxValue ? (int)processId : null;
+
+    private static DateTimeOffset? FileTimeToDateTimeOffset(RmFileTime fileTime)
     {
         try
         {
-            return new DateTimeOffset(DateTime.FromFileTimeUtc(fileTime));
+            return new DateTimeOffset(DateTime.FromFileTimeUtc(fileTime.ToInt64()));
         }
         catch
         {
@@ -457,8 +468,17 @@ internal static partial class LockAttribution
     [StructLayout(LayoutKind.Sequential)]
     private struct RmUniqueProcess
     {
-        public int ProcessId;
-        public long ProcessStartTime;
+        public uint ProcessId;
+        public RmFileTime ProcessStartTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RmFileTime
+    {
+        public uint LowDateTime;
+        public uint HighDateTime;
+
+        public readonly long ToInt64() => ((long)HighDateTime << 32) | LowDateTime;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

@@ -79,6 +79,8 @@ public static class DotnetBuildEnvironmentManager
     private const string LandingTestFixtureMarkerFileName = ".mcg-landing-fixture.json";
     private static readonly TimeSpan LandingFixtureMarkerStaleAge = TimeSpan.FromHours(2);
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
+    private const int ArtifactPrepBusyRetryLimit = 3;
+    private static readonly TimeSpan ArtifactPrepBusyRetryDelay = TimeSpan.FromMilliseconds(100);
     private static readonly object CurrentLandingFixtureRootsGate = new();
     private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
     private static int s_nextStableSlotScanStart = -1;
@@ -390,6 +392,7 @@ public static class DotnetBuildEnvironmentManager
         var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? DefaultSlotBusyPollTimeout);
         var attemptedCompilerLockRemediation = false;
         var attemptedOwnedProcessRemediation = false;
+        var artifactPrepBusyAttempts = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -428,13 +431,27 @@ public static class DotnetBuildEnvironmentManager
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (TryRemediateArtifactPrepLock(
+                var remediation = TryRemediateArtifactPrepLock(
                     environment,
                     ex,
                     ref attemptedCompilerLockRemediation,
                     ref attemptedOwnedProcessRemediation,
-                    out var blockedAttribution))
+                    out var blockedAttribution);
+                if (remediation is ArtifactPrepLockRemediation.RetryImmediately)
                 {
+                    continue;
+                }
+
+                if (remediation is ArtifactPrepLockRemediation.SlotBusy)
+                {
+                    artifactPrepBusyAttempts++;
+                    if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
+                        DateTimeOffset.UtcNow >= timeoutAt)
+                    {
+                        return EmitSlotsBusy(environment.LeaseId);
+                    }
+
+                    Thread.Sleep(ArtifactPrepBusyRetryDelay);
                     continue;
                 }
 
@@ -785,14 +802,22 @@ public static class DotnetBuildEnvironmentManager
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (TryRemediateArtifactPrepLock(
+                var remediation = TryRemediateArtifactPrepLock(
                     environment,
                     ex,
                     ref attemptedCompilerLockRemediation,
                     ref attemptedOwnedProcessRemediation,
-                    out blockedAttribution))
+                    out blockedAttribution);
+                if (remediation is ArtifactPrepLockRemediation.RetryImmediately)
                 {
                     continue;
+                }
+
+                if (remediation is ArtifactPrepLockRemediation.SlotBusy)
+                {
+                    blockedAttribution = null;
+                    stream = null!;
+                    return false;
                 }
 
                 stream = null!;
@@ -801,7 +826,7 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static bool TryRemediateArtifactPrepLock(
+    private static ArtifactPrepLockRemediation TryRemediateArtifactPrepLock(
         DotnetBuildEnvironment environment,
         Exception exception,
         ref bool attemptedCompilerLockRemediation,
@@ -812,7 +837,7 @@ public static class DotnetBuildEnvironmentManager
         if (LockAttribution.IsLeaseLockPath(lockedPath))
         {
             attribution = new BuildLockAttribution(lockedPath, [], "lease-lock-refused");
-            return false;
+            return ArtifactPrepLockRemediation.Blocked;
         }
 
         attribution = LockAttribution.Attribute(
@@ -822,19 +847,24 @@ public static class DotnetBuildEnvironmentManager
             "prepare-artifacts");
         if (IsCurrentLeaseSelfHeldArtifactLock(environment, attribution, currentProcessOwnsExecutionLease: true))
         {
-            return true;
+            return ArtifactPrepLockRemediation.RetryImmediately;
+        }
+
+        if (IsMarkedLandingFixtureLock(attribution.Path))
+        {
+            return ArtifactPrepLockRemediation.SlotBusy;
         }
 
         if (!attemptedCompilerLockRemediation && IsCompilerLock(attribution))
         {
             attemptedCompilerLockRemediation = true;
             ShutdownBuildServersBestEffort();
-            return true;
+            return ArtifactPrepLockRemediation.RetryImmediately;
         }
 
         if (attemptedOwnedProcessRemediation)
         {
-            return false;
+            return ArtifactPrepLockRemediation.Blocked;
         }
 
         var killed = false;
@@ -846,7 +876,7 @@ public static class DotnetBuildEnvironmentManager
         }
 
         attemptedOwnedProcessRemediation = killed;
-        return killed;
+        return killed ? ArtifactPrepLockRemediation.RetryImmediately : ArtifactPrepLockRemediation.Blocked;
     }
 
     private static bool IsCompilerLock(BuildLockAttribution attribution) =>
@@ -991,7 +1021,7 @@ public static class DotnetBuildEnvironmentManager
             return false;
         }
 
-        if (landingFixtureDisposition is LandingFixtureLockDisposition.CurrentTransient or LandingFixtureLockDisposition.StaleDebris)
+        if (landingFixtureDisposition is LandingFixtureLockDisposition.StaleDebris)
         {
             return true;
         }
@@ -1014,6 +1044,9 @@ public static class DotnetBuildEnvironmentManager
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         return metadata?.OwnerProcessId == Environment.ProcessId;
     }
+
+    private static bool IsMarkedLandingFixtureLock(string path) =>
+        GetLandingFixtureDisposition(path) is LandingFixtureLockDisposition.CurrentTransient;
 
     internal static void RegisterCurrentLandingTestFixtureRoot(string path)
     {
@@ -1397,6 +1430,13 @@ public static class DotnetBuildEnvironmentManager
         None,
         CurrentTransient,
         StaleDebris
+    }
+
+    private enum ArtifactPrepLockRemediation
+    {
+        Blocked,
+        RetryImmediately,
+        SlotBusy
     }
 
     private sealed class LeaseFileStream : FileStream

@@ -230,9 +230,15 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 "prepare-artifacts");
 
             Assert.Equal("restart-manager", attribution.Source);
-            Assert.Contains(attribution.Holders, holder => holder.ProcessId == Environment.ProcessId);
-            Assert.Contains(attribution.Holders, holder => !string.IsNullOrWhiteSpace(holder.ProcessName));
-            Assert.Contains(attribution.Holders, holder => holder.ProcessStartTime.HasValue);
+            var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == Environment.ProcessId));
+            using var currentProcess = Process.GetCurrentProcess();
+            var expectedStartTime = new DateTimeOffset(currentProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            Assert.False(string.IsNullOrWhiteSpace(holder.ProcessName));
+            Assert.Equal(currentProcess.ProcessName, holder.ProcessName);
+            Assert.True(holder.ProcessStartTime.HasValue);
+            Assert.True(
+                (holder.ProcessStartTime.Value - expectedStartTime).Duration() < TimeSpan.FromSeconds(2),
+                $"Expected RM start time near {expectedStartTime:O}, got {holder.ProcessStartTime:O}.");
         }
         finally
         {
@@ -405,7 +411,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
 
             var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
             acquired.Lease.Dispose();
@@ -451,7 +457,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
 
             var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
             acquired.Lease.Dispose();
@@ -470,6 +476,59 @@ public sealed class DotnetBuildEnvironmentManagerTests
             holder.WaitForExit(5000);
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
+            TryDeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_persistent_marked_landing_fixture_lock_returns_slots_busy_bounded")]
+    public void DotnetBuildEnvironmentManagerPersistentMarkedLandingFixtureLockReturnsSlotsBusyBounded()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        var readyPath = Path.Combine(fixtureRoot, "holder-ready.txt");
+        var releasePath = Path.Combine(fixtureRoot, "holder-release.txt");
+        using var holder = StartFileHolder(lockedPath, readyPath, releasePath);
+        Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "Fixture holder did not signal readiness.");
+        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
+        var prepareAttempts = 0;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath)
+            {
+                Interlocked.Increment(ref prepareAttempts);
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var stopwatch = Stopwatch.StartNew();
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(5)));
+            stopwatch.Stop();
+
+            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+            Assert.Equal(environment.LeaseId, busy.WantedBy);
+            Assert.Equal(3, prepareAttempts);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Expected bounded busy retry, elapsed {stopwatch.Elapsed}.");
+            Assert.False(holder.HasExited);
+            Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.WriteAllText(releasePath, "release");
+            if (!holder.HasExited)
+            {
+                holder.Kill(entireProcessTree: true);
+            }
+
+            holder.WaitForExit(5000);
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             TryDeleteDirectory(fixtureRoot);
         }
     }
@@ -500,7 +559,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
 
             var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
             acquired.Lease.Dispose();
@@ -538,7 +597,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
 
             var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
             acquired.Lease.Dispose();
