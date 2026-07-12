@@ -1022,11 +1022,6 @@ public static class DotnetBuildEnvironmentManager
             return false;
         }
 
-        if (landingFixtureDisposition is LandingFixtureLockDisposition.StaleDebris)
-        {
-            return true;
-        }
-
         if (attribution.Holders.Any(holder => !holder.IsOrchestratorOwned))
         {
             return false;
@@ -1035,6 +1030,11 @@ public static class DotnetBuildEnvironmentManager
         if (attribution.Holders.Any(holder => holder.ProcessId is { } processId && processId != Environment.ProcessId))
         {
             return false;
+        }
+
+        if (landingFixtureDisposition is LandingFixtureLockDisposition.StaleDebris)
+        {
+            return true;
         }
 
         if (currentProcessOwnsExecutionLease)

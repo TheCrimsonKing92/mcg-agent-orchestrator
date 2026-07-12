@@ -215,53 +215,31 @@ public sealed class DotnetBuildEnvironmentManagerTests
             return;
         }
 
-        using var holderProcess = Process.Start(new ProcessStartInfo
+        if (!CanStartRestartManagerForTests())
         {
-            FileName = ResolvePowerShell(),
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            ArgumentList =
-            {
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Start-Sleep -Seconds 60"
-            }
-        })!;
-        Assert.False(holderProcess.HasExited);
-
-        try
-        {
-            var attribution = LockAttribution.Attribute(
-                ResolvePowerShell(),
-                null,
-                "artifact-prep",
-                "prepare-artifacts");
-
-            if (!string.Equals(attribution.Source, "restart-manager", StringComparison.Ordinal))
-            {
-                Assert.Equal("process-snapshot", attribution.Source);
-                return;
-            }
-
-            var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == holderProcess.Id));
-            var expectedStartTime = new DateTimeOffset(holderProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
-            Assert.False(string.IsNullOrWhiteSpace(holder.ProcessName));
-            Assert.Equal(holderProcess.ProcessName, holder.ProcessName);
-            Assert.True(holder.ProcessStartTime.HasValue);
-            Assert.True(
-                (holder.ProcessStartTime.Value - expectedStartTime).Duration() < TimeSpan.FromSeconds(2),
-                $"Expected RM start time near {expectedStartTime:O}, got {holder.ProcessStartTime:O}.");
+            return;
         }
-        finally
-        {
-            if (!holderProcess.HasExited)
-            {
-                holderProcess.Kill(entireProcessTree: true);
-            }
 
-            holderProcess.WaitForExit(5000);
-        }
+        using var currentProcess = Process.GetCurrentProcess();
+        var lockedPath = currentProcess.MainModule?.FileName;
+        Assert.True(File.Exists(lockedPath), $"Current test host path does not exist: {lockedPath}");
+
+        var attribution = LockAttribution.Attribute(
+            lockedPath!,
+            null,
+            "artifact-prep",
+            "prepare-artifacts");
+
+        Assert.Equal("restart-manager", attribution.Source);
+
+        var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == currentProcess.Id));
+        var expectedStartTime = new DateTimeOffset(currentProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        Assert.False(string.IsNullOrWhiteSpace(holder.ProcessName));
+        Assert.Equal(currentProcess.ProcessName, holder.ProcessName);
+        Assert.True(holder.ProcessStartTime.HasValue);
+        Assert.True(
+            (holder.ProcessStartTime.Value - expectedStartTime).Duration() < TimeSpan.FromSeconds(2),
+            $"Expected RM start time near {expectedStartTime:O}, got {holder.ProcessStartTime:O}.");
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_artifact_prep_lock_returns_build_lock_blocked")]
@@ -577,6 +555,54 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal(2, prepareAttempts);
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
             Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+            TryDeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_landing_fixture_marker_with_live_holder_blocks_bounded")]
+    public void DotnetBuildEnvironmentManagerStaleLandingFixtureMarkerWithLiveHolderBlocksBounded()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
+            fixtureRoot,
+            987654320,
+            DateTimeOffset.UtcNow.AddHours(-3));
+        var prepareAttempts = 0;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath)
+            {
+                Interlocked.Increment(ref prepareAttempts);
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(987654321, "dotnet", "live foreign stale fixture holder", false)],
+            "test");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.BuildLockBlocked>(result);
+            Assert.Equal(lockedPath, blocked.Attribution.Path);
+            Assert.Equal(1, prepareAttempts);
+            var holder = Assert.Single(blocked.Attribution.Holders);
+            Assert.Equal(987654321, holder.ProcessId);
+            Assert.False(holder.IsOrchestratorOwned);
+            Assert.Contains("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("SLOTS_BUSY ", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -1697,7 +1723,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 });
                 if (process is not null && process.WaitForExit(5000) && process.ExitCode == 0)
                 {
-                    return name;
+                    return ResolveExecutablePath(name) ?? name;
                 }
             }
             catch
@@ -1706,6 +1732,44 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
 
         return "powershell";
+    }
+
+    private static string? ResolveExecutablePath(string name)
+    {
+        var extensions = Path.HasExtension(name)
+            ? [string.Empty]
+            : (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                continue;
+            }
+
+            foreach (var extension in extensions)
+            {
+                var candidate = Path.Combine(directory.Trim(), name + extension.ToLowerInvariant());
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool CanStartRestartManagerForTests()
+    {
+        uint session = 0;
+        var result = RmStartSessionForTests(out session, 0, Guid.NewGuid().ToString("N"));
+        if (result != 0)
+        {
+            return false;
+        }
+
+        _ = RmEndSessionForTests(session);
+        return true;
     }
 
     private static string EscapePowerShell(string value) => value.Replace("'", "''", StringComparison.Ordinal);
@@ -1838,6 +1902,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
         uint creationDisposition,
         uint flagsAndAttributes,
         IntPtr templateFile);
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode, EntryPoint = "RmStartSession")]
+    private static extern int RmStartSessionForTests(out uint sessionHandle, int sessionFlags, string sessionKey);
+
+    [DllImport("rstrtmgr.dll", EntryPoint = "RmEndSession")]
+    private static extern int RmEndSessionForTests(uint sessionHandle);
 
     private sealed class EnvVarScope : IDisposable
     {
