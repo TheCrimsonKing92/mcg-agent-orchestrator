@@ -1029,26 +1029,7 @@ public static class DotnetBuildEnvironmentManager
 
         lock (CurrentLandingFixtureRootsGate)
         {
-            if (CurrentLandingFixtureRoots.Contains(fixtureRoot))
-            {
-                return true;
-            }
-        }
-
-        if (!Directory.Exists(fixtureRoot) ||
-            TryGetCurrentProcessStartTimeUtc() is not { } processStartTime)
-        {
-            return false;
-        }
-
-        try
-        {
-            var createdAt = new DateTimeOffset(Directory.GetCreationTimeUtc(fixtureRoot), TimeSpan.Zero);
-            return createdAt >= processStartTime.AddSeconds(-5);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
+            return CurrentLandingFixtureRoots.Contains(fixtureRoot);
         }
     }
 
@@ -1087,19 +1068,6 @@ public static class DotnetBuildEnvironmentManager
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return false;
-        }
-    }
-
-    private static DateTimeOffset? TryGetCurrentProcessStartTimeUtc()
-    {
-        try
-        {
-            using var process = Process.GetCurrentProcess();
-            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
-        {
-            return null;
         }
     }
 
