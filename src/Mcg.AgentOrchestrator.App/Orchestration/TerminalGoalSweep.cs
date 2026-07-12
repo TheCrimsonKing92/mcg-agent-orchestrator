@@ -319,6 +319,11 @@ internal static class TerminalGoalSweep
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
 
+            if (HasStandingRetiredDisposition(executionDirectory, goal, branchFacts))
+            {
+                continue;
+            }
+
             if (TryReconcileVerifiedMissingBranchOrWorktree(
                     kernel,
                     executionDirectory,
@@ -329,6 +334,15 @@ internal static class TerminalGoalSweep
             {
                 goal = kernel.GetGoal(originalGoal.Id);
                 branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
+                if (GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id)))
+                {
+                    if (repairs.Count > 0 || blockers.Count > 0)
+                    {
+                        results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                    }
+
+                    continue;
+                }
             }
 
             if (hasTerminalTaskDesync &&
@@ -665,6 +679,13 @@ internal static class TerminalGoalSweep
             "retired"));
         return true;
     }
+
+    private static bool HasStandingRetiredDisposition(
+        string executionDirectory,
+        Goal goal,
+        GoalBranchFacts branchFacts) =>
+        !branchFacts.HasGoalBranchArtifact &&
+        GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id));
 
     private static bool TryBuildReachableCommitEvidence(
         string executionDirectory,

@@ -265,6 +265,107 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_standing_retired_disposition_skips_repair_and_escalation")]
+    public void TerminalGoalSweepStandingRetiredDispositionSkipsRepairAndEscalation()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retired ghost goal", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            goal,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "goal-mark-landed retired ghost goal"));
+
+        var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.Empty(result.Goals);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_suppresses_retired_disposition_output")]
+    public void TerminalGoalSweepConductLoopSuppressesRetiredDispositionOutput()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retired conductor ghost goal", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            goal,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "goal-mark-landed retired ghost goal"));
+
+        var output = CaptureConsole(() =>
+        {
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+            CliPersistentStateRunner.ExecuteCommand(
+                ["conduct", "--loop", "--max-iterations", "1"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        });
+
+        Xunit.Assert.DoesNotContain("SWEEP_REPAIR", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("SWEEP_BLOCKER", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("acceptance " + goal.Id.Value[..8], output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("conduct " + goal.Id.Value[..8] + " --loop", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_branch_reappearance_supersedes_retired_disposition")]
+    public void TerminalGoalSweepBranchReappearanceSupersedesRetiredDisposition()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Retired branch reappears", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                root,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            GoalOperationJournal.RecordTerminalDisposition(
+                root,
+                goal,
+                new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "operator retired missing goal branch"));
+            CommitGoalWork(root, goal.Id, "src/reappeared.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var goalResult = Assert.Single(result.Goals);
+
+            Assert.Contains(goalResult.Repairs, repair => repair.Kind == "completed-branch-normalized");
+            var blocker = Assert.Single(goalResult.Blockers);
+            Assert.Equal("completed-branch-unmerged", blocker.Kind);
+            Assert.Equal($"acceptance {goal.Id.Value[..8]}", blocker.Command);
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_global_stale_terminal_reconciles_human_input_exit_before_exclusion")]
     public void TerminalGoalSweepGlobalStaleTerminalReconcilesHumanInputExitBeforeExclusion()
