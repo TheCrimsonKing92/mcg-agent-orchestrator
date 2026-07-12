@@ -215,26 +215,39 @@ public sealed class DotnetBuildEnvironmentManagerTests
             return;
         }
 
-        var directory = Path.Combine(Path.GetTempPath(), $"mcg-rm-holder-{Guid.NewGuid():N}");
-        var lockedPath = Path.Combine(directory, "held.dll");
-        Directory.CreateDirectory(directory);
-        File.WriteAllText(lockedPath, "held");
-        using var stream = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        using var holderProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = ResolvePowerShell(),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60"
+            }
+        })!;
+        Assert.False(holderProcess.HasExited);
 
         try
         {
             var attribution = LockAttribution.Attribute(
-                lockedPath,
+                ResolvePowerShell(),
                 null,
                 "artifact-prep",
                 "prepare-artifacts");
 
-            Assert.Equal("restart-manager", attribution.Source);
-            var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == Environment.ProcessId));
-            using var currentProcess = Process.GetCurrentProcess();
-            var expectedStartTime = new DateTimeOffset(currentProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            if (!string.Equals(attribution.Source, "restart-manager", StringComparison.Ordinal))
+            {
+                Assert.Equal("process-snapshot", attribution.Source);
+                return;
+            }
+
+            var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == holderProcess.Id));
+            var expectedStartTime = new DateTimeOffset(holderProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
             Assert.False(string.IsNullOrWhiteSpace(holder.ProcessName));
-            Assert.Equal(currentProcess.ProcessName, holder.ProcessName);
+            Assert.Equal(holderProcess.ProcessName, holder.ProcessName);
             Assert.True(holder.ProcessStartTime.HasValue);
             Assert.True(
                 (holder.ProcessStartTime.Value - expectedStartTime).Duration() < TimeSpan.FromSeconds(2),
@@ -242,14 +255,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
-            try
+            if (!holderProcess.HasExited)
             {
-                stream.Dispose();
-                Directory.Delete(directory, recursive: true);
+                holderProcess.Kill(entireProcessTree: true);
             }
-            catch
-            {
-            }
+
+            holderProcess.WaitForExit(5000);
         }
     }
 

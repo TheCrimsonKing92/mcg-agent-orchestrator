@@ -840,6 +840,12 @@ public static class DotnetBuildEnvironmentManager
             return ArtifactPrepLockRemediation.Blocked;
         }
 
+        if (TryCreateCurrentLandingFixtureAttribution(lockedPath, out attribution))
+        {
+            LockAttribution.EmitReceipt(attribution);
+            return ArtifactPrepLockRemediation.SlotBusy;
+        }
+
         attribution = LockAttribution.Attribute(
             lockedPath,
             environment.ArtifactsPath,
@@ -848,11 +854,6 @@ public static class DotnetBuildEnvironmentManager
         if (IsCurrentLeaseSelfHeldArtifactLock(environment, attribution, currentProcessOwnsExecutionLease: true))
         {
             return ArtifactPrepLockRemediation.RetryImmediately;
-        }
-
-        if (IsMarkedLandingFixtureLock(attribution.Path))
-        {
-            return ArtifactPrepLockRemediation.SlotBusy;
         }
 
         if (!attemptedCompilerLockRemediation && IsCompilerLock(attribution))
@@ -1045,8 +1046,84 @@ public static class DotnetBuildEnvironmentManager
         return metadata?.OwnerProcessId == Environment.ProcessId;
     }
 
-    private static bool IsMarkedLandingFixtureLock(string path) =>
-        GetLandingFixtureDisposition(path) is LandingFixtureLockDisposition.CurrentTransient;
+    private static bool TryCreateCurrentLandingFixtureAttribution(
+        string path,
+        out BuildLockAttribution attribution)
+    {
+        attribution = null!;
+        if (!TryGetLandingTestFixtureRoot(path, out var fixtureRoot))
+        {
+            return false;
+        }
+
+        if (TryReadLandingTestFixtureMarker(fixtureRoot) is { } marker)
+        {
+            if (IsLandingFixtureMarkerStale(marker))
+            {
+                return false;
+            }
+
+            attribution = new BuildLockAttribution(
+                path,
+                [CreateLandingFixtureMarkerHolder(marker)],
+                "landing-fixture-marker",
+                "artifact-prep",
+                "prepare-artifacts");
+            return true;
+        }
+
+        lock (CurrentLandingFixtureRootsGate)
+        {
+            if (!CurrentLandingFixtureRoots.Contains(fixtureRoot))
+            {
+                return false;
+            }
+        }
+
+        attribution = new BuildLockAttribution(
+            path,
+            [CreateProcessHolder(Environment.ProcessId, "current landing fixture root", false)],
+            "landing-fixture-registration",
+            "artifact-prep",
+            "prepare-artifacts");
+        return true;
+    }
+
+    private static BuildLockHolder CreateLandingFixtureMarkerHolder(LandingTestFixtureMarker marker) =>
+        CreateProcessHolder(
+            marker.CreatorProcessId,
+            $"landing fixture purpose={marker.Purpose} machine={marker.MachineName} createdAt={marker.CreatedAt:O}",
+            false);
+
+    private static BuildLockHolder CreateProcessHolder(int processId, string commandLine, bool isOrchestratorOwned)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return new BuildLockHolder(
+                processId,
+                process.ProcessName,
+                commandLine,
+                isOrchestratorOwned,
+                TryGetProcessStartTime(process));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return new BuildLockHolder(processId, "unknown", commandLine, isOrchestratorOwned);
+        }
+    }
+
+    private static DateTimeOffset? TryGetProcessStartTime(Process process)
+    {
+        try
+        {
+            return process.StartTime.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
 
     internal static void RegisterCurrentLandingTestFixtureRoot(string path)
     {
