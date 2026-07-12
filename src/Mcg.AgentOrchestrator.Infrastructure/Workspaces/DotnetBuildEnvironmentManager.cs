@@ -77,6 +77,8 @@ public static class DotnetBuildEnvironmentManager
     private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
     private const string LandingTestsRootDirectoryName = "mcg-landing-tests";
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
+    private static readonly object CurrentLandingFixtureRootsGate = new();
+    private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
     private static int s_nextStableSlotScanStart = -1;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
     internal static Action? ShutdownBuildServersForTests { get; set; }
@@ -973,7 +975,7 @@ public static class DotnetBuildEnvironmentManager
         bool currentProcessOwnsExecutionLease)
     {
         if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
-            !PathIsUnderGateLandingTestsRoot(attribution.Path))
+            !PathIsUnderCurrentGateLandingTestFixtureRoot(attribution.Path))
         {
             return false;
         }
@@ -997,10 +999,108 @@ public static class DotnetBuildEnvironmentManager
         return metadata?.OwnerProcessId == Environment.ProcessId;
     }
 
-    private static bool PathIsUnderGateLandingTestsRoot(string path)
+    internal static void RegisterCurrentLandingTestFixtureRootForTests(string path)
     {
-        var landingTestsRoot = Path.Combine(Path.GetTempPath(), LandingTestsRootDirectoryName);
-        return PathIsUnderDirectory(path, landingTestsRoot);
+        if (!TryGetLandingTestFixtureRoot(path, out var fixtureRoot))
+        {
+            return;
+        }
+
+        lock (CurrentLandingFixtureRootsGate)
+        {
+            CurrentLandingFixtureRoots.Add(fixtureRoot);
+        }
+    }
+
+    internal static void ClearCurrentLandingTestFixtureRootsForTests()
+    {
+        lock (CurrentLandingFixtureRootsGate)
+        {
+            CurrentLandingFixtureRoots.Clear();
+        }
+    }
+
+    private static bool PathIsUnderCurrentGateLandingTestFixtureRoot(string path)
+    {
+        if (!TryGetLandingTestFixtureRoot(path, out var fixtureRoot))
+        {
+            return false;
+        }
+
+        lock (CurrentLandingFixtureRootsGate)
+        {
+            if (CurrentLandingFixtureRoots.Contains(fixtureRoot))
+            {
+                return true;
+            }
+        }
+
+        if (!Directory.Exists(fixtureRoot) ||
+            TryGetCurrentProcessStartTimeUtc() is not { } processStartTime)
+        {
+            return false;
+        }
+
+        try
+        {
+            var createdAt = new DateTimeOffset(Directory.GetCreationTimeUtc(fixtureRoot), TimeSpan.Zero);
+            return createdAt >= processStartTime.AddSeconds(-5);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetLandingTestFixtureRoot(string path, out string fixtureRoot)
+    {
+        fixtureRoot = string.Empty;
+        try
+        {
+            var landingTestsRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), LandingTestsRootDirectoryName))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullPath = Path.GetFullPath(path);
+            if (!PathIsUnderDirectory(fullPath, landingTestsRoot))
+            {
+                return false;
+            }
+
+            var relative = Path.GetRelativePath(landingTestsRoot, fullPath);
+            if (relative.StartsWith("..", StringComparison.Ordinal) ||
+                Path.IsPathRooted(relative) ||
+                string.IsNullOrWhiteSpace(relative) ||
+                relative.Equals(".", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var firstSeparator = relative.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
+            var fixtureName = firstSeparator < 0 ? relative : relative[..firstSeparator];
+            if (string.IsNullOrWhiteSpace(fixtureName))
+            {
+                return false;
+            }
+
+            fixtureRoot = Path.Combine(landingTestsRoot, fixtureName);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static DateTimeOffset? TryGetCurrentProcessStartTimeUtc()
+    {
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static bool PathIsUnderDirectory(string path, string directory)
