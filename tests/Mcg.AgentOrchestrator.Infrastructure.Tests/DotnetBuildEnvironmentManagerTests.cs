@@ -311,7 +311,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var (_, lockedPath) = CreateLandingFixtureLockPath();
         var prepareAttempts = 0;
-        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRootForTests(lockedPath);
+        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(lockedPath);
         DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
@@ -339,6 +339,45 @@ public sealed class DotnetBuildEnvironmentManagerTests
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_landing_fixture_creation_path_registers_root")]
+    public void DotnetBuildEnvironmentManagerLandingFixtureCreationPathRegistersRoot()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var fixtureRoot = LandingExecutorTests.CreateGitRepository();
+        var lockedPath = CreateLandingFixtureLockPath(fixtureRoot);
+        var prepareAttempts = 0;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath &&
+                Interlocked.Increment(ref prepareAttempts) == 1)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
+            acquired.Lease.Dispose();
+            Assert.Equal(2, prepareAttempts);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+            TryDeleteDirectory(fixtureRoot);
         }
     }
 
@@ -437,7 +476,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Directory.CreateDirectory(Path.GetDirectoryName(currentLockedPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         Directory.SetCreationTimeUtc(otherFixtureRoot, DateTime.UtcNow.AddDays(-1));
-        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRootForTests(currentLockedPath);
+        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(currentLockedPath);
         DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath)
@@ -1353,6 +1392,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
     private static (string FixtureRoot, string LockedPath) CreateLandingFixtureLockPath()
     {
         var fixtureRoot = Path.Combine(Path.GetTempPath(), "mcg-landing-tests", Guid.NewGuid().ToString("N"));
+        return (fixtureRoot, CreateLandingFixtureLockPath(fixtureRoot));
+    }
+
+    private static string CreateLandingFixtureLockPath(string fixtureRoot)
+    {
         var lockedPath = Path.Combine(
             fixtureRoot,
             ".orchestrator-worktrees",
@@ -1363,7 +1407,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             "Debug",
             "net10.0",
             "Mcg.AgentOrchestrator.Core.dll");
-        return (fixtureRoot, lockedPath);
+        return lockedPath;
     }
 
     private static void TryDeleteDirectory(string path)

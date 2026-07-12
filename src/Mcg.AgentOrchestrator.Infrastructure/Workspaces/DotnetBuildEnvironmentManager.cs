@@ -999,7 +999,7 @@ public static class DotnetBuildEnvironmentManager
         return metadata?.OwnerProcessId == Environment.ProcessId;
     }
 
-    internal static void RegisterCurrentLandingTestFixtureRootForTests(string path)
+    internal static void RegisterCurrentLandingTestFixtureRoot(string path)
     {
         if (!TryGetLandingTestFixtureRoot(path, out var fixtureRoot))
         {

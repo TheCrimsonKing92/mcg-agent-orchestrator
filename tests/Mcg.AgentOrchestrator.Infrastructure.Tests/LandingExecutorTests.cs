@@ -285,10 +285,11 @@ public sealed class LandingExecutorTests
         return (kernel, goal);
     }
 
-    private static string CreateGitRepository()
+    internal static string CreateGitRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-landing-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(root);
         RunGit(root, "init", "-b", "main");
         RunGit(root, "config", "user.email", "tests@example.invalid");
         RunGit(root, "config", "user.name", "Tests");
