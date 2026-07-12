@@ -76,6 +76,8 @@ public static class DotnetBuildEnvironmentManager
     private const string LeaseLockFileName = "lease.lock";
     private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
     private const string LandingTestsRootDirectoryName = "mcg-landing-tests";
+    private const string LandingTestFixtureMarkerFileName = ".mcg-landing-fixture.json";
+    private static readonly TimeSpan LandingFixtureMarkerStaleAge = TimeSpan.FromHours(2);
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
     private static readonly object CurrentLandingFixtureRootsGate = new();
     private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
@@ -813,7 +815,11 @@ public static class DotnetBuildEnvironmentManager
             return false;
         }
 
-        attribution = LockAttribution.Attribute(lockedPath, environment.ArtifactsPath);
+        attribution = LockAttribution.Attribute(
+            lockedPath,
+            environment.ArtifactsPath,
+            "artifact-prep",
+            "prepare-artifacts");
         if (IsCurrentLeaseSelfHeldArtifactLock(environment, attribution, currentProcessOwnsExecutionLease: true))
         {
             return true;
@@ -910,7 +916,11 @@ public static class DotnetBuildEnvironmentManager
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 var lockedPath = LockAttribution.TryExtractLockedPath(ex.ToString()) ?? environment.ArtifactsPath;
-                var attribution = LockAttribution.Attribute(lockedPath, environment.ArtifactsPath);
+                var attribution = LockAttribution.Attribute(
+                    lockedPath,
+                    environment.ArtifactsPath,
+                    "artifact-clean",
+                    "delete-artifacts");
                 if (!IsCurrentLeaseSelfHeldArtifactLock(
                     environment,
                     attribution,
@@ -974,10 +984,16 @@ public static class DotnetBuildEnvironmentManager
         BuildLockAttribution attribution,
         bool currentProcessOwnsExecutionLease)
     {
+        var landingFixtureDisposition = GetLandingFixtureDisposition(attribution.Path);
         if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
-            !PathIsUnderCurrentGateLandingTestFixtureRoot(attribution.Path))
+            landingFixtureDisposition is not LandingFixtureLockDisposition.CurrentTransient and not LandingFixtureLockDisposition.StaleDebris)
         {
             return false;
+        }
+
+        if (landingFixtureDisposition is LandingFixtureLockDisposition.CurrentTransient or LandingFixtureLockDisposition.StaleDebris)
+        {
+            return true;
         }
 
         if (attribution.Holders.Any(holder => !holder.IsOrchestratorOwned))
@@ -1010,6 +1026,8 @@ public static class DotnetBuildEnvironmentManager
         {
             CurrentLandingFixtureRoots.Add(fixtureRoot);
         }
+
+        WriteLandingTestFixtureMarker(fixtureRoot, "landing-test-fixture");
     }
 
     internal static void ClearCurrentLandingTestFixtureRootsForTests()
@@ -1020,18 +1038,78 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static bool PathIsUnderCurrentGateLandingTestFixtureRoot(string path)
+    private static LandingFixtureLockDisposition GetLandingFixtureDisposition(string path)
     {
         if (!TryGetLandingTestFixtureRoot(path, out var fixtureRoot))
         {
-            return false;
+            return LandingFixtureLockDisposition.None;
+        }
+
+        if (TryReadLandingTestFixtureMarker(fixtureRoot) is { } marker)
+        {
+            if (IsLandingFixtureMarkerStale(marker))
+            {
+                return LandingFixtureLockDisposition.StaleDebris;
+            }
+
+            return LandingFixtureLockDisposition.CurrentTransient;
         }
 
         lock (CurrentLandingFixtureRootsGate)
         {
-            return CurrentLandingFixtureRoots.Contains(fixtureRoot);
+            return CurrentLandingFixtureRoots.Contains(fixtureRoot)
+                ? LandingFixtureLockDisposition.CurrentTransient
+                : LandingFixtureLockDisposition.None;
         }
     }
+
+    internal static void WriteLandingTestFixtureMarkerForTests(string fixtureRoot, int? ownerProcessId = null, DateTimeOffset? createdAt = null)
+    {
+        WriteLandingTestFixtureMarker(fixtureRoot, "landing-test-fixture", ownerProcessId, createdAt);
+    }
+
+    private static void WriteLandingTestFixtureMarker(
+        string fixtureRoot,
+        string purpose,
+        int? ownerProcessId = null,
+        DateTimeOffset? createdAt = null)
+    {
+        try
+        {
+            Directory.CreateDirectory(fixtureRoot);
+            var marker = new LandingTestFixtureMarker(
+                1,
+                purpose,
+                ownerProcessId ?? Environment.ProcessId,
+                Environment.MachineName,
+                createdAt ?? DateTimeOffset.UtcNow);
+            File.WriteAllText(
+                Path.Combine(fixtureRoot, LandingTestFixtureMarkerFileName),
+                JsonSerializer.Serialize(marker, JsonOptions));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static LandingTestFixtureMarker? TryReadLandingTestFixtureMarker(string fixtureRoot)
+    {
+        try
+        {
+            var markerPath = Path.Combine(fixtureRoot, LandingTestFixtureMarkerFileName);
+            return File.Exists(markerPath)
+                ? JsonSerializer.Deserialize<LandingTestFixtureMarker>(File.ReadAllText(markerPath), JsonOptions)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsLandingFixtureMarkerStale(LandingTestFixtureMarker marker) =>
+        !IsProcessRunning(marker.CreatorProcessId) &&
+        DateTimeOffset.UtcNow - marker.CreatedAt >= LandingFixtureMarkerStaleAge;
 
     private static bool TryGetLandingTestFixtureRoot(string path, out string fixtureRoot)
     {
@@ -1306,6 +1384,20 @@ public static class DotnetBuildEnvironmentManager
         int OwnerProcessId,
         string? MachineName,
         DateTimeOffset AcquiredAt);
+
+    private sealed record LandingTestFixtureMarker(
+        int Version,
+        string Purpose,
+        int CreatorProcessId,
+        string MachineName,
+        DateTimeOffset CreatedAt);
+
+    private enum LandingFixtureLockDisposition
+    {
+        None,
+        CurrentTransient,
+        StaleDebris
+    }
 
     private sealed class LeaseFileStream : FileStream
     {

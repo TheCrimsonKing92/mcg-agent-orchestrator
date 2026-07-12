@@ -108,6 +108,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
             Assert.Contains("holderPid=2468", output, StringComparison.Ordinal);
             Assert.Contains("holderName=\"VBCSCompiler\"", output, StringComparison.Ordinal);
+            Assert.Contains("phase=\"artifact-prep\"", output, StringComparison.Ordinal);
+            Assert.Contains("operation=\"prepare-artifacts\"", output, StringComparison.Ordinal);
             Assert.Contains("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
             Assert.DoesNotContain("SLOTS_BUSY ", output, StringComparison.Ordinal);
         }
@@ -165,6 +167,83 @@ public sealed class DotnetBuildEnvironmentManagerTests
             WorkerProcessJobs.TryKillPidTree = originalKill;
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LockAttribution_handle_probe_timeout_returns_unknown_without_wedging")]
+    public void LockAttributionHandleProbeTimeoutReturnsUnknownWithoutWedging()
+    {
+        LockAttribution.HandleExecutableForTests = ResolvePowerShell();
+        LockAttribution.HandleProbeTimeoutForTests = TimeSpan.FromMilliseconds(200);
+        LockAttribution.ConfigureHandleProbeForTests = (startInfo, _) =>
+        {
+            startInfo.ArgumentList.Clear();
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add("Start-Sleep -Seconds 60");
+        };
+
+        try
+        {
+            var attribution = LockAttribution.Attribute(
+                Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
+                null,
+                "artifact-prep",
+                "prepare-artifacts");
+
+            var holder = Assert.Single(attribution.Holders);
+            Assert.Equal("handle64-timeout", attribution.Source);
+            Assert.Null(holder.ProcessId);
+            Assert.Equal("unknown-probe-timeout", holder.ProcessName);
+            Assert.Equal("artifact-prep", attribution.Phase);
+            Assert.Equal("prepare-artifacts", attribution.Operation);
+        }
+        finally
+        {
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.HandleProbeTimeoutForTests = null;
+            LockAttribution.ConfigureHandleProbeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LockAttribution_restart_manager_names_file_holder")]
+    public void LockAttributionRestartManagerNamesFileHolder()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), $"mcg-rm-holder-{Guid.NewGuid():N}");
+        var lockedPath = Path.Combine(directory, "held.dll");
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(lockedPath, "held");
+        using var stream = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        try
+        {
+            var attribution = LockAttribution.Attribute(
+                lockedPath,
+                null,
+                "artifact-prep",
+                "prepare-artifacts");
+
+            Assert.Equal("restart-manager", attribution.Source);
+            Assert.Contains(attribution.Holders, holder => holder.ProcessId == Environment.ProcessId);
+            Assert.Contains(attribution.Holders, holder => !string.IsNullOrWhiteSpace(holder.ProcessName));
+            Assert.Contains(attribution.Holders, holder => holder.ProcessStartTime.HasValue);
+        }
+        finally
+        {
+            try
+            {
+                stream.Dispose();
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -339,6 +418,101 @@ public sealed class DotnetBuildEnvironmentManagerTests
             DotnetBuildEnvironmentManager.ClearCurrentLandingTestFixtureRootsForTests();
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_marked_landing_fixture_from_other_process_is_transient")]
+    public void DotnetBuildEnvironmentManagerMarkedLandingFixtureFromOtherProcessIsTransient()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        var readyPath = Path.Combine(fixtureRoot, "holder-ready.txt");
+        var releasePath = Path.Combine(fixtureRoot, "holder-release.txt");
+        using var holder = StartFileHolder(lockedPath, readyPath, releasePath);
+        Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "Fixture holder did not signal readiness.");
+        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
+        var prepareAttempts = 0;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath &&
+                Interlocked.Increment(ref prepareAttempts) == 1)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(holder.Id, holder.ProcessName, "foreign fixture holder", false)],
+            "test");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
+            acquired.Lease.Dispose();
+            Assert.Equal(2, prepareAttempts);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.WriteAllText(releasePath, "release");
+            if (!holder.HasExited)
+            {
+                holder.Kill(entireProcessTree: true);
+            }
+
+            holder.WaitForExit(5000);
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+            TryDeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_landing_fixture_marker_is_debris_not_blocker")]
+    public void DotnetBuildEnvironmentManagerStaleLandingFixtureMarkerIsDebrisNotBlocker()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
+            fixtureRoot,
+            987654320,
+            DateTimeOffset.UtcNow.AddHours(-3));
+        var prepareAttempts = 0;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath &&
+                Interlocked.Increment(ref prepareAttempts) == 1)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
+            acquired.Lease.Dispose();
+            Assert.Equal(2, prepareAttempts);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+            TryDeleteDirectory(fixtureRoot);
         }
     }
 
@@ -1409,6 +1583,62 @@ public sealed class DotnetBuildEnvironmentManagerTests
             "Mcg.AgentOrchestrator.Core.dll");
         return lockedPath;
     }
+
+    private static Process StartFileHolder(string lockedPath, string readyPath, string releasePath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        var script = string.Join(
+            Environment.NewLine,
+            [
+                "$ErrorActionPreference = 'Stop'",
+                $"$stream = [System.IO.File]::Open('{EscapePowerShell(lockedPath)}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)",
+                $"[System.IO.File]::WriteAllText('{EscapePowerShell(readyPath)}', 'ready')",
+                "try {",
+                $"  while (-not [System.IO.File]::Exists('{EscapePowerShell(releasePath)}')) {{ Start-Sleep -Milliseconds 100 }}",
+                "} finally {",
+                "  $stream.Dispose()",
+                "}"
+            ]);
+        return Process.Start(new ProcessStartInfo
+        {
+            FileName = ResolvePowerShell(),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            Arguments = $"-NoProfile -NonInteractive -EncodedCommand {EncodePowerShell(script)}"
+        }) ?? throw new InvalidOperationException("Failed to start fixture holder process.");
+    }
+
+    private static string ResolvePowerShell()
+    {
+        foreach (var name in new[] { "pwsh", "powershell" })
+        {
+            try
+            {
+                using var process = Process.Start(new ProcessStartInfo
+                {
+                    FileName = name,
+                    Arguments = "-NoProfile -NonInteractive -Command \"$PSVersionTable.PSVersion.Major\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                });
+                if (process is not null && process.WaitForExit(5000) && process.ExitCode == 0)
+                {
+                    return name;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return "powershell";
+    }
+
+    private static string EscapePowerShell(string value) => value.Replace("'", "''", StringComparison.Ordinal);
 
     private static void TryDeleteDirectory(string path)
     {

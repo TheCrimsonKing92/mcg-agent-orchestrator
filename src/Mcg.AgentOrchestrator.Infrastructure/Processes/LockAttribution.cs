@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -7,12 +8,15 @@ public sealed record BuildLockHolder(
     int? ProcessId,
     string? ProcessName,
     string? CommandLine,
-    bool IsOrchestratorOwned);
+    bool IsOrchestratorOwned,
+    DateTimeOffset? ProcessStartTime = null);
 
 public sealed record BuildLockAttribution(
     string Path,
     IReadOnlyList<BuildLockHolder> Holders,
-    string Source);
+    string Source,
+    string? Phase = null,
+    string? Operation = null);
 
 public sealed class BuildLockBlockedException : IOException
 {
@@ -41,25 +45,38 @@ internal static partial class LockAttribution
 {
     private static readonly Regex HandlePidPattern = new(@"\bpid:\s*(?<pid>\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HandleNamePattern = new(@"^(?<name>[^:\s]+)\s+pid:\s*\d+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly TimeSpan HandleProbeTimeout = TimeSpan.FromSeconds(10);
 
     internal static Func<string, string?, BuildLockAttribution?>? AttributeForTests { get; set; }
+    internal static string? HandleExecutableForTests { get; set; }
+    internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
+    internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
 
-    public static BuildLockAttribution Attribute(string path, string? ownershipHint = null)
+    public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null)
     {
         if (AttributeForTests?.Invoke(path, ownershipHint) is { } testAttribution)
         {
-            EmitReceipt(testAttribution);
-            return testAttribution;
+            var enriched = Enrich(testAttribution, phase, operation);
+            EmitReceipt(enriched);
+            return enriched;
         }
 
         var fullPath = TryFullPath(path);
-        if (OperatingSystem.IsWindows() && TryAttributeWithHandle(fullPath, ownershipHint) is { } handleAttribution)
+        if (OperatingSystem.IsWindows() && TryAttributeWithRestartManager(fullPath, ownershipHint) is { } restartManagerAttribution)
         {
-            EmitReceipt(handleAttribution);
-            return handleAttribution;
+            var enriched = Enrich(restartManagerAttribution, phase, operation);
+            EmitReceipt(enriched);
+            return enriched;
         }
 
-        var fallback = AttributeFromProcessSnapshot(fullPath, ownershipHint);
+        if (OperatingSystem.IsWindows() && TryAttributeWithHandle(fullPath, ownershipHint) is { } handleAttribution)
+        {
+            var enriched = Enrich(handleAttribution, phase, operation);
+            EmitReceipt(enriched);
+            return enriched;
+        }
+
+        var fallback = Enrich(AttributeFromProcessSnapshot(fullPath, ownershipHint), phase, operation);
         EmitReceipt(fallback);
         return fallback;
     }
@@ -89,7 +106,9 @@ internal static partial class LockAttribution
     {
         if (attribution.Holders.Count == 0)
         {
-            Console.WriteLine($"LOCK path=\"{attribution.Path}\" holderPid=unknown holderName=unknown source={attribution.Source}");
+            Console.WriteLine(
+                $"LOCK path=\"{attribution.Path}\" holderPid=unknown holderName=unknown source={attribution.Source} " +
+                $"phase=\"{Escape(attribution.Phase ?? "unknown")}\" operation=\"{Escape(attribution.Operation ?? "unknown")}\"");
             return;
         }
 
@@ -98,7 +117,89 @@ internal static partial class LockAttribution
             Console.WriteLine(
                 $"LOCK path=\"{attribution.Path}\" holderPid={holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
                 $"holderName=\"{Escape(holder.ProcessName ?? "unknown")}\" owned={holder.IsOrchestratorOwned.ToString().ToLowerInvariant()} " +
-                $"source={attribution.Source} commandLine=\"{Escape(holder.CommandLine ?? string.Empty)}\"");
+                $"source={attribution.Source} phase=\"{Escape(attribution.Phase ?? "unknown")}\" operation=\"{Escape(attribution.Operation ?? "unknown")}\" " +
+                $"holderStartTime=\"{Escape(holder.ProcessStartTime?.ToString("O", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}\" " +
+                $"commandLine=\"{Escape(holder.CommandLine ?? string.Empty)}\"");
+        }
+    }
+
+    private static BuildLockAttribution Enrich(BuildLockAttribution attribution, string? phase, string? operation) =>
+        attribution with
+        {
+            Phase = string.IsNullOrWhiteSpace(attribution.Phase) ? phase : attribution.Phase,
+            Operation = string.IsNullOrWhiteSpace(attribution.Operation) ? operation : attribution.Operation
+        };
+
+    private static BuildLockAttribution? TryAttributeWithRestartManager(string path, string? ownershipHint)
+    {
+        uint session = 0;
+        var sessionKey = Guid.NewGuid().ToString("N");
+        var result = RmStartSession(out session, 0, sessionKey);
+        if (result != 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            string[] resources = [path];
+            result = RmRegisterResources(session, (uint)resources.Length, resources, 0, null, 0, null);
+            if (result != 0)
+            {
+                return null;
+            }
+
+            uint needed = 0;
+            uint count = 0;
+            uint rebootReasons;
+            result = RmGetList(session, out needed, ref count, null, out rebootReasons);
+            if (result != ErrorMoreData || needed == 0)
+            {
+                return null;
+            }
+
+            var processInfo = new RmProcessInfo[needed];
+            count = needed;
+            result = RmGetList(session, out needed, ref count, processInfo, out rebootReasons);
+            if (result != 0)
+            {
+                return null;
+            }
+
+            var pids = processInfo
+                .Take((int)count)
+                .Select(info => info.Process.ProcessId)
+                .Where(pid => pid > 0)
+                .Distinct()
+                .Take(16)
+                .ToArray();
+            var commandLines = ProcessCommandLines.Read(pids);
+            var holders = processInfo
+                .Take((int)count)
+                .Select(info =>
+                {
+                    var pid = info.Process.ProcessId;
+                    commandLines.TryGetValue(pid, out var commandLine);
+                    var startTime = FileTimeToDateTimeOffset(info.Process.ProcessStartTime);
+                    return new BuildLockHolder(
+                        pid,
+                        string.IsNullOrWhiteSpace(info.ApplicationName) ? TryProcessName(pid) : info.ApplicationName,
+                        commandLine,
+                        IsOrchestratorOwned(commandLine, ownershipHint),
+                        startTime);
+                })
+                .GroupBy(holder => holder.ProcessId)
+                .Select(group => group.First())
+                .ToArray();
+            return holders.Length == 0 ? null : new BuildLockAttribution(path, holders, "restart-manager");
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            _ = RmEndSession(session);
         }
     }
 
@@ -124,18 +225,27 @@ internal static partial class LockAttribution
             process.StartInfo.ArgumentList.Add("-accepteula");
             process.StartInfo.ArgumentList.Add("-nobanner");
             process.StartInfo.ArgumentList.Add(path);
+            ConfigureHandleProbeForTests?.Invoke(process.StartInfo, path);
             if (!process.Start())
             {
                 return null;
             }
 
-            var output = process.StandardOutput.ReadToEnd();
-            if (!process.WaitForExit(3000))
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(HandleProbeTimeoutForTests ?? HandleProbeTimeout))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
-                return null;
+                try { process.WaitForExit(1000); } catch { }
+                _ = Task.WhenAny(outputTask, Task.Delay(TimeSpan.FromSeconds(1)));
+                _ = Task.WhenAny(errorTask, Task.Delay(TimeSpan.FromSeconds(1)));
+                return new BuildLockAttribution(
+                    path,
+                    [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+                    "handle64-timeout");
             }
 
+            var output = outputTask.GetAwaiter().GetResult();
             var holders = ParseHandleOutput(output, ownershipHint);
             return holders.Count == 0 ? null : new BuildLockAttribution(path, holders, "handle64");
         }
@@ -150,7 +260,7 @@ internal static partial class LockAttribution
         var snapshot = ProcessCommandLines.Snapshot();
         var holders = snapshot.Read(Process.GetProcesses().Select(process => process.Id))
             .Where(pair => IsOrchestratorOwned(pair.Value, ownershipHint))
-            .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true))
+            .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))
             .Take(8)
             .ToArray();
         return new BuildLockAttribution(path, holders, "process-snapshot");
@@ -184,7 +294,7 @@ internal static partial class LockAttribution
             commandLines.TryGetValue(pid, out var commandLine);
             var nameMatch = HandleNamePattern.Match(line);
             var processName = nameMatch.Success ? nameMatch.Groups["name"].Value : TryProcessName(pid);
-            holders.Add(new BuildLockHolder(pid, processName, commandLine, IsOrchestratorOwned(commandLine, ownershipHint)));
+            holders.Add(new BuildLockHolder(pid, processName, commandLine, IsOrchestratorOwned(commandLine, ownershipHint), TryProcessStartTime(pid)));
         }
 
         return holders
@@ -209,6 +319,11 @@ internal static partial class LockAttribution
 
     private static string? ResolveHandleExecutable()
     {
+        if (!string.IsNullOrWhiteSpace(HandleExecutableForTests))
+        {
+            return HandleExecutableForTests;
+        }
+
         var explicitPath = Environment.GetEnvironmentVariable("MCG_HANDLE64");
         if (!string.IsNullOrWhiteSpace(explicitPath) && File.Exists(explicitPath))
         {
@@ -283,6 +398,81 @@ internal static partial class LockAttribution
         }
     }
 
+    private static DateTimeOffset? TryProcessStartTime(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? FileTimeToDateTimeOffset(long fileTime)
+    {
+        try
+        {
+            return new DateTimeOffset(DateTime.FromFileTimeUtc(fileTime));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static string Escape(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    private const int ErrorMoreData = 234;
+    private const int CchRmMaxAppName = 255;
+    private const int CchRmMaxSvcName = 63;
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    private static extern int RmStartSession(out uint sessionHandle, int sessionFlags, string sessionKey);
+
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+    private static extern int RmRegisterResources(
+        uint sessionHandle,
+        uint fileCount,
+        string[]? fileNames,
+        uint applicationCount,
+        RmUniqueProcess[]? applications,
+        uint serviceCount,
+        string[]? serviceNames);
+
+    [DllImport("rstrtmgr.dll")]
+    private static extern int RmGetList(
+        uint sessionHandle,
+        out uint processInfoNeeded,
+        ref uint processInfo,
+        [In, Out] RmProcessInfo[]? affectedApps,
+        out uint rebootReasons);
+
+    [DllImport("rstrtmgr.dll")]
+    private static extern int RmEndSession(uint sessionHandle);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RmUniqueProcess
+    {
+        public int ProcessId;
+        public long ProcessStartTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct RmProcessInfo
+    {
+        public RmUniqueProcess Process;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CchRmMaxAppName + 1)]
+        public string ApplicationName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CchRmMaxSvcName + 1)]
+        public string ServiceShortName;
+        public int ApplicationType;
+        public uint AppStatus;
+        public uint TssSessionId;
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool Restartable;
+    }
 }
