@@ -75,6 +75,7 @@ public static class DotnetBuildEnvironmentManager
     private const string LeaseMetadataFileName = "lease.json";
     private const string LeaseLockFileName = "lease.lock";
     private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
+    private const string LandingTestsRootDirectoryName = "mcg-landing-tests";
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
     private static int s_nextStableSlotScanStart = -1;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
@@ -811,6 +812,11 @@ public static class DotnetBuildEnvironmentManager
         }
 
         attribution = LockAttribution.Attribute(lockedPath, environment.ArtifactsPath);
+        if (IsCurrentLeaseSelfHeldArtifactLock(environment, attribution, currentProcessOwnsExecutionLease: true))
+        {
+            return true;
+        }
+
         if (!attemptedCompilerLockRemediation && IsCompilerLock(attribution))
         {
             attemptedCompilerLockRemediation = true;
@@ -966,7 +972,8 @@ public static class DotnetBuildEnvironmentManager
         BuildLockAttribution attribution,
         bool currentProcessOwnsExecutionLease)
     {
-        if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath))
+        if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
+            !PathIsUnderGateLandingTestsRoot(attribution.Path))
         {
             return false;
         }
@@ -988,6 +995,12 @@ public static class DotnetBuildEnvironmentManager
 
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         return metadata?.OwnerProcessId == Environment.ProcessId;
+    }
+
+    private static bool PathIsUnderGateLandingTestsRoot(string path)
+    {
+        var landingTestsRoot = Path.Combine(Path.GetTempPath(), LandingTestsRootDirectoryName);
+        return PathIsUnderDirectory(path, landingTestsRoot);
     }
 
     private static bool PathIsUnderDirectory(string path, string directory)
