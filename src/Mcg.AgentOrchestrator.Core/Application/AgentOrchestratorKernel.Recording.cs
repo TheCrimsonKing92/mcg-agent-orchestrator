@@ -49,6 +49,23 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException("Dispatch execution evidence working directory does not match the recorded dispatch working directory.");
         }
 
+        if (task.LatestRetryAt is { } latestRetryAt &&
+            task.LastDispatch.DispatchedAt <= latestRetryAt)
+        {
+            var staleDispatchAt = task.LastDispatch.DispatchedAt;
+            task.ClearLastDispatch();
+            task.ClearLastProcess();
+            task.ClearLatestVerification();
+            task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+            Append(
+                goal,
+                taskId,
+                ProgressKind.TaskNote,
+                $"Ignored stale dispatch execution evidence from {staleDispatchAt:u}; latest retry was {latestRetryAt:u}.");
+            RefreshGoalStatus(goal);
+            return;
+        }
+
         if (providerFailureKind != ProviderFailureKind.Unknown &&
             verification.ProviderFailureKind == ProviderFailureKind.Unknown)
         {
