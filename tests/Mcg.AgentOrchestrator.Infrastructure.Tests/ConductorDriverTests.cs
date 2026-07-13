@@ -256,6 +256,29 @@ public sealed class ConductorDriverTests
         Assert.False(reason.Contains("no assigned or ready tasks", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_ready_blocked_diagnostics_before_generic_reason")]
+    public void ConductorDriverEmptyBatchSurfacesReadyBlockedDiagnosticsBeforeGenericReason()
+    {
+        var taskId = TaskId.New().Value;
+        var plan = new ParallelExecutionPlan([], []);
+        var diagnostic = new ReadyBlockedDiagnostic(
+            "abc12345",
+            1,
+            taskId,
+            "codex-cli",
+            "dirty-worktree",
+            ["blocked: worktree has 1 uncommitted change(s) before dispatch"]);
+
+        var reason = ConductorDriver.DescribeEmptyBatch(plan, [diagnostic]);
+
+        Assert.Contains("assigned tasks were excluded", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(taskId, reason, StringComparison.Ordinal);
+        Assert.Contains("codex-cli", reason, StringComparison.Ordinal);
+        Assert.Contains("dirty-worktree", reason, StringComparison.Ordinal);
+        Assert.Contains("worktree has 1 uncommitted change", reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("no assigned or ready tasks", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_without_approval_blocks_uses_generic_reason")]
     public void ConductorDriverEmptyBatchWithoutApprovalBlocksUsesGenericReason()
     {

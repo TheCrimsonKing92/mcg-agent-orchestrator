@@ -493,7 +493,7 @@ internal sealed class ConductorDriver
         }
 
         var reason = result.Dispatches.Count == 0
-            ? DescribeEmptyBatch(result.ParallelPlan)
+            ? DescribeEmptyBatch(result.ParallelPlan, result.BlockedDiagnostics)
             : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
         return result.Dispatches.Count == 0
             ? DispatchStartOutcome.EmptyBatch(reason)
@@ -864,8 +864,20 @@ internal sealed class ConductorDriver
     // like scripts/ or src/Infrastructure under a non-permissive policy), surface those reasons so
     // the operator knows what to approve — instead of the generic "no ready batch" that hides why
     // nothing dispatched and forces a manual dig (see conductor-high-risk-ownership-gap).
-    internal static string DescribeEmptyBatch(ParallelExecutionPlan plan)
+    internal static string DescribeEmptyBatch(
+        ParallelExecutionPlan plan,
+        IReadOnlyList<ReadyBlockedDiagnostic>? blockedDiagnostics = null)
     {
+        var diagnosticReasons = blockedDiagnostics?
+            .Select(FormatReadyBlockedDiagnostic)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+        if (diagnosticReasons.Count > 0)
+        {
+            return "No tasks dispatched; assigned tasks were excluded from the ready batch: "
+                + string.Join("; ", diagnosticReasons);
+        }
+
         var approvalReasons = plan.Decisions
             .Where(decision => decision.Disposition == ParallelExecutionDisposition.RequiresOperatorApproval)
             .SelectMany(decision => decision.Reasons)
@@ -876,6 +888,17 @@ internal sealed class ConductorDriver
                 + "auto-approves high-risk ownership, or approve manually): "
                 + string.Join("; ", approvalReasons)
             : "No tasks in ready batch; goal may have no assigned or ready tasks";
+    }
+
+    private static string FormatReadyBlockedDiagnostic(ReadyBlockedDiagnostic diagnostic)
+    {
+        var details = diagnostic.Details?
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .ToArray() ?? [];
+        var detail = details.Length > 0
+            ? $": {string.Join(", ", details)}"
+            : string.Empty;
+        return $"task {diagnostic.TaskNumber} {diagnostic.TaskId} provider={diagnostic.Provider} reason={diagnostic.Reason}{detail}";
     }
 
     private static string FormatAssignedTasksBlockedReason(
