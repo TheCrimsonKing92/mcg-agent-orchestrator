@@ -13,13 +13,13 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2);
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2, allowTextFile: true);
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1, allowTextFile: true);
     }
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -30,7 +30,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
-            ? [command, args[1], string.Join(' ', args.Skip(2))]
+            ? NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file")
             : args;
     }
 
@@ -52,7 +52,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     if (command.Equals("answer", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
-            ? [command, args[1], string.Join(' ', args.Skip(2))]
+            ? NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file")
             : args;
     }
 
@@ -75,12 +75,12 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeBacklogTextCommandWithFileFlag(args, "--body-file");
+        return NormalizeTargetTextCommandWithFileFlags(args, 1, "--body-file", "--text-file");
     }
 
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeBacklogTextCommandWithFileFlag(args, "--reason-file");
+        return NormalizeTargetTextCommandWithFileFlags(args, 1, "--reason-file", "--text-file");
     }
 
     if (command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase))
@@ -97,7 +97,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2);
+        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2, allowTextFile: true);
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||
@@ -157,7 +157,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
-            ? [command, args[1], string.Join(' ', args.Skip(2))]
+            ? NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file")
             : args;
     }
 
@@ -199,34 +199,41 @@ private static IReadOnlyList<string> NormalizeAgentArgs(string[] args)
     return parts;
 }
 
-private static IReadOnlyList<string> NormalizeBacklogTextCommandWithFileFlag(string[] args, string fileFlag)
+private static IReadOnlyList<string> NormalizeTargetTextCommandWithFileFlags(string[] args, int targetIndex, params string[] fileFlags)
 {
-    if (args.Length < 3)
+    var textStartIndex = targetIndex + 1;
+    if (args.Length <= textStartIndex)
     {
         return args;
     }
 
-    var flagIndex = Array.FindIndex(args, 2, arg => arg.Equals(fileFlag, StringComparison.OrdinalIgnoreCase));
+    var flagIndex = Array.FindIndex(args, textStartIndex, arg => fileFlags.Any(flag => arg.Equals(flag, StringComparison.OrdinalIgnoreCase)));
     if (flagIndex < 0)
     {
-        return [args[0], args[1], string.Join(' ', args.Skip(2))];
+        return [.. args.Take(textStartIndex), string.Join(' ', args.Skip(textStartIndex))];
     }
 
-    var parts = new List<string> { args[0], args[1] };
-    if (flagIndex > 2)
+    var parts = args.Take(textStartIndex).ToList();
+    if (flagIndex > textStartIndex)
     {
-        parts.Add(string.Join(' ', args.Skip(2).Take(flagIndex - 2)));
+        parts.Add(string.Join(' ', args.Skip(textStartIndex).Take(flagIndex - textStartIndex)));
     }
 
     parts.AddRange(args.Skip(flagIndex));
     return parts;
 }
 
-private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int trailingArgumentCount)
+private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int trailingArgumentCount, bool allowTextFile = false)
 {
-    return args.Length > 1
-        ? SplitTaskTargetCommand(args[0], string.Join(' ', args.Skip(1)), trailingArgumentCount)
-        : args;
+    if (args.Length <= 1)
+    {
+        return args;
+    }
+
+    var remainder = string.Join(' ', args.Skip(1));
+    return allowTextFile
+        ? SplitTaskTargetCommandWithTextFileFlag(args[0], remainder, trailingArgumentCount)
+        : SplitTaskTargetCommand(args[0], remainder, trailingArgumentCount);
 }
 
 private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[] args)

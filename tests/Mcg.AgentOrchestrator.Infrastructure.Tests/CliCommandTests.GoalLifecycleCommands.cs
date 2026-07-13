@@ -2017,6 +2017,61 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_text_file_alias_creates_goal_with_file_content")]
+    public void CliSimpleGoalTextFileAliasCreatesGoalWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Implement a goal from the uniform --text-file alias.\n\nKeep multiline content intact.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "--text-file", briefPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_text_file_rejects_inline_objective")]
+    public void CliSimpleGoalTextFileRejectsInlineObjective()
+    {
+        var root = CreateTempDirectory();
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, "File objective.", System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"simple-goal Inline objective --text-file {briefPath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_status_prints_cleanup_backoff_for_snapshot_visibility")]
     public void CliStatusPrintsCleanupBackoffForSnapshotVisibility()
     {

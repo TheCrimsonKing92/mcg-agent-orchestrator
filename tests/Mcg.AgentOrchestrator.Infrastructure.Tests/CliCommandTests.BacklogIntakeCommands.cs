@@ -563,6 +563,64 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_text_file_alias_creates_item_with_file_content")]
+    public async Task CliBacklogAddTextFileAliasCreatesItemWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var bodyContent = "Add file-backed backlog body support via --text-file.\n\nMulti-line item body.";
+        var bodyPath = Path.Combine(root, "body.md");
+        File.WriteAllText(bodyPath, bodyContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-add", "File-backed item", "--text-file", bodyPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = Xunit.Assert.Single(await store.ListAsync(includeAll: true));
+        Xunit.Assert.Equal("File-backed item", item.Title);
+        Xunit.Assert.Equal(bodyContent, item.Body);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_add_text_file_rejects_inline_body")]
+    public async Task CliBacklogAddTextFileRejectsInlineBody()
+    {
+        var root = CreateTempDirectory();
+        var bodyPath = Path.Combine(root, "body.md");
+        File.WriteAllText(bodyPath, "File body.", System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"backlog-add File-backed-item Inline body --text-file {bodyPath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        Xunit.Assert.Empty(await store.ListAsync(includeAll: true));
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_status_prints_source_backlog_title_as_goal_label")]
     public async Task CliStatusPrintsSourceBacklogTitleAsGoalLabel()
     {

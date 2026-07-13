@@ -42,9 +42,9 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-add":
         {
-            CliArgumentParser.RequirePartCount(parts, 2, "backlog-add <title> [body] | backlog-add <title> --body-file <path>");
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>");
             var title = parts[1];
-            var body = ResolveBacklogTextFile(parts, "--body-file", inlineIndex: 2, defaultValue: "") ?? "";
+            var body = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: "", "--body-file", "--text-file") ?? "";
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = store.AddAsync(title, body).GetAwaiter().GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
@@ -78,7 +78,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
-            var reason = ResolveBacklogTextFile(parts, "--reason-file", inlineIndex: 2, defaultValue: null);
+            var reason = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: null, "--reason-file", "--text-file");
             var closed = store.CloseAsync(item.Id, reason).GetAwaiter().GetResult();
             Console.WriteLine($"Closed: [{closed.Id}] {closed.Title}");
             return false;
@@ -291,23 +291,6 @@ private static string DuplicateKey(string title)
         .Select(ch => char.IsLetterOrDigit(ch) ? ch : ' ')
         .ToArray());
     return string.Join(' ', normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-}
-
-private static string? ResolveBacklogTextFile(IReadOnlyList<string> parts, string flag, int inlineIndex, string? defaultValue)
-{
-    if (parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase)))
-    {
-        var path = GetFlagValue(parts, flag)
-            ?? throw new ArgumentException($"{flag} requires <path>.");
-        if (!File.Exists(path))
-        {
-            throw new InvalidOperationException($"{flag} not found: {path}");
-        }
-
-        return File.ReadAllText(path, System.Text.Encoding.UTF8);
-    }
-
-    return parts.Count > inlineIndex ? parts[inlineIndex] : defaultValue;
 }
 
 internal static string RenderBacklogMarkdown(IReadOnlyList<BacklogItem> items)

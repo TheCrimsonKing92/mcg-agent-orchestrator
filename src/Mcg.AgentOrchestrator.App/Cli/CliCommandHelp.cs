@@ -5,13 +5,20 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] (--simple forces Developer-only)";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] | goal --brief-file <path> | goal --text-file <path>";
+    public const string AddTaskUsage = "Usage: add-task <role> <description> | add-task <role> --text-file <path>";
+    public const string RetryUsage = "Usage: retry <task-number> <message> | retry <goal-prefix> <task-number> <message> | retry --goal <goal-prefix> <task-number> <message> | retry <task-number> --text-file <path>";
+    public const string ProgressUsage = "Usage: progress <task-number> <status> <message> | progress <task-number> <status> --text-file <path>";
+    public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
+    public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
+    public const string AnswerUsage = "Usage: answer <request-id> <answer> | answer <request-id> --text-file <path>";
+    public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path>";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
@@ -41,9 +48,44 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
         "Create a goal.",
-        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--brief-file", "--help", "-h" }
+        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--brief-file", "--text-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
+
+    private static readonly CommandHelpEntry AddTask = new(
+        AddTaskUsage,
+        "Add a task to the current goal.",
+        ["--text-file", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Retry = new(
+        RetryUsage,
+        "Retry a task with operator feedback.",
+        ["--goal", "--text-file", "--autonomy", "--autonomy-policy", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Progress = new(
+        ProgressUsage,
+        "Record task progress.",
+        ["--goal", "--text-file", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry VerifyManual = new(
+        VerifyManualUsage,
+        "Record manual verification evidence for a task.",
+        ["--goal", "--text-file", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Recover = new(
+        RecoverUsage,
+        "Recover stuck goal/task state with an operator note.",
+        ["--text-file", "--autonomy", "--autonomy-policy", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Answer = new(
+        AnswerUsage,
+        "Submit an answer to a human-input request.",
+        ["--text-file", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry AbandonGoal = new(
+        AbandonGoalUsage,
+        "Abandon a goal after preview or confirmation.",
+        ["--text-file", "--confirm-goal-abandon", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
@@ -73,7 +115,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item.",
-        ["--body-file", "--help", "-h"]);
+        ["--body-file", "--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,
@@ -179,6 +221,48 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase))
         {
             entry = Goal;
+            return true;
+        }
+
+        if (args[0].Equals("add-task", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = AddTask;
+            return true;
+        }
+
+        if (args[0].Equals("retry", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Retry;
+            return true;
+        }
+
+        if (args[0].Equals("progress", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Progress;
+            return true;
+        }
+
+        if (args[0].Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = VerifyManual;
+            return true;
+        }
+
+        if (args[0].Equals("recover", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Recover;
+            return true;
+        }
+
+        if (args[0].Equals("answer", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Answer;
+            return true;
+        }
+
+        if (args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = AbandonGoal;
             return true;
         }
 

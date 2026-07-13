@@ -15,23 +15,23 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTaskTargetCommand(command, remainder, 2);
+        return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 2);
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTaskTargetCommand(command, remainder, 1);
+        return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 1);
     }
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("recover", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
     }
 
     if (command.Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase))
@@ -68,8 +68,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
             return SplitTaskTargetCommand(command, remainder, 1);
         }
 
-        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
     }
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
@@ -89,7 +88,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTaskTargetCommand(command, remainder, 2);
+        return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 2);
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||
@@ -113,12 +112,12 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitBacklogTextCommandWithFileFlag(command, remainder, "--body-file");
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--body-file", "--text-file");
     }
 
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitBacklogTextCommandWithFileFlag(command, remainder, "--reason-file");
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--reason-file", "--text-file");
     }
 
     if (command.Equals("goal", StringComparison.OrdinalIgnoreCase))
@@ -185,8 +184,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
     {
-        var rest = remainder.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        return rest.Length == 2 ? [command, rest[0], rest[1]] : [command, .. rest];
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
     }
 
     if (command.Equals("agent", StringComparison.OrdinalIgnoreCase) ||
@@ -248,6 +246,21 @@ private static IReadOnlyList<string> SplitTaskTargetCommand(string command, stri
     return [command, .. legacyRest];
 }
 
+private static IReadOnlyList<string> SplitTaskTargetCommandWithTextFileFlag(string command, string remainder, int trailingArgumentCount)
+{
+    var flagIndex = IndexOfAnyFileFlag(remainder, "--text-file");
+    if (flagIndex < 0)
+    {
+        return SplitTaskTargetCommand(command, remainder, trailingArgumentCount);
+    }
+
+    var beforeFlag = remainder[..flagIndex].Trim();
+    var flags = remainder[flagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    return string.IsNullOrWhiteSpace(beforeFlag)
+        ? [command, .. flags]
+        : [.. SplitTaskTargetCommand(command, beforeFlag, trailingArgumentCount), .. flags];
+}
+
 private static bool LooksLikePositionalGoalTask(string first, string second)
 {
     return !first.StartsWith("--", StringComparison.Ordinal) &&
@@ -255,7 +268,7 @@ private static bool LooksLikePositionalGoalTask(string first, string second)
         int.TryParse(second, out _);
 }
 
-private static IReadOnlyList<string> SplitBacklogTextCommandWithFileFlag(string command, string remainder, string fileFlag)
+private static IReadOnlyList<string> SplitTargetTextCommandWithFileFlags(string command, string remainder, params string[] fileFlags)
 {
     var targetEnd = remainder.IndexOf(' ');
     if (targetEnd < 0)
@@ -265,11 +278,7 @@ private static IReadOnlyList<string> SplitBacklogTextCommandWithFileFlag(string 
 
     var target = remainder[..targetEnd];
     var rest = remainder[(targetEnd + 1)..].Trim();
-    var flagIndex = rest.IndexOf($" {fileFlag}", StringComparison.OrdinalIgnoreCase);
-    if (flagIndex < 0 && rest.StartsWith(fileFlag, StringComparison.OrdinalIgnoreCase))
-    {
-        flagIndex = 0;
-    }
+    var flagIndex = IndexOfAnyFileFlag(rest, fileFlags);
 
     if (flagIndex < 0)
     {
@@ -281,6 +290,30 @@ private static IReadOnlyList<string> SplitBacklogTextCommandWithFileFlag(string 
     return string.IsNullOrWhiteSpace(inlineText)
         ? [command, target, .. flags]
         : [command, target, inlineText, .. flags];
+}
+
+private static int IndexOfAnyFileFlag(string text, params string[] fileFlags)
+{
+    var best = -1;
+    foreach (var fileFlag in fileFlags)
+    {
+        var index = text.IndexOf($" {fileFlag}", StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            index++;
+        }
+        else if (text.StartsWith(fileFlag, StringComparison.OrdinalIgnoreCase))
+        {
+            index = 0;
+        }
+
+        if (index >= 0 && (best < 0 || index < best))
+        {
+            best = index;
+        }
+    }
+
+    return best;
 }
 
 private static IReadOnlyList<string> SplitObjectiveCommandWithFlags(string command, string remainder)

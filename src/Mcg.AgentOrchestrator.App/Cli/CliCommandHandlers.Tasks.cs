@@ -22,9 +22,10 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "add-task":
-            CliArgumentParser.RequirePartCount(parts, 3, "add-task <role> <description>");
+            CliArgumentParser.RequirePartCount(parts, 3, "add-task <role> <description> | add-task <role> --text-file <path>");
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var addedTask = context.Kernel.AddTask(context.CurrentGoal.Id, CliArgumentParser.ParseAgentRole(parts[1]), parts[2], context.Agents);
+            var taskDescription = ResolveTextArgument(parts, inlineIndex: 2, "add-task <role> <description> | add-task <role> --text-file <path>", "--text-file");
+            var addedTask = context.Kernel.AddTask(context.CurrentGoal.Id, CliArgumentParser.ParseAgentRole(parts[1]), taskDescription, context.Agents);
             ConsoleViews.PrintTask(context.CurrentGoal, addedTask);
             return true;
 
@@ -103,12 +104,12 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "retry":
             var retryPolicy = ResolveCliAutonomyPolicy(parts);
-            var retryUsage = "retry <task-number> <message>|retry <goal-prefix> <task-number> <message>|retry --goal <goal-prefix> <task-number> <message>";
+            var retryUsage = "retry <task-number> <message>|retry <goal-prefix> <task-number> <message>|retry --goal <goal-prefix> <task-number> <message>|retry <task-number> --text-file <path>";
             var retryTarget = ResolveCommandTaskTarget(parts, context, retryUsage);
             RequireRemainingArgument(parts, retryTarget.NextIndex, retryUsage);
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, retryPolicy, AutonomyAction.Retry, "retry");
-            var retryMessage = parts[retryTarget.NextIndex];
+            var retryMessage = ResolveTextArgument(parts, retryTarget.NextIndex, retryUsage, "--text-file");
             context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
@@ -179,12 +180,13 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "verify-manual":
-            var manualTarget = ResolveCommandTaskTarget(parts, context, "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>");
-            RequireRemainingArgument(parts, manualTarget.NextIndex + 1, "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>");
+            var manualUsage = "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>|verify-manual <task-number> <passed|failed> --text-file <path>";
+            var manualTarget = ResolveCommandTaskTarget(parts, context, manualUsage);
+            RequireRemainingArgument(parts, manualTarget.NextIndex + 1, manualUsage);
             var manualTask = manualTarget.Task;
             var manualVerification = ManualVerificationRecorder.Create(
                 CliArgumentParser.ParseManualVerificationPassed(parts[manualTarget.NextIndex]),
-                parts[manualTarget.NextIndex + 1],
+                ResolveTextArgument(parts, manualTarget.NextIndex + 1, manualUsage, "--text-file"),
                 context.Workspace.RootDirectory,
                 DateTimeOffset.UtcNow);
             context.Kernel.RecordTaskVerification(context.CurrentGoal!.Id, manualTask.Id, manualVerification);
@@ -197,10 +199,11 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "progress":
-            var progressTarget = ResolveCommandTaskTarget(parts, context, "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>");
-            RequireRemainingArgument(parts, progressTarget.NextIndex + 1, "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>");
+            var progressUsage = "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>|progress <task-number> <status> --text-file <path>";
+            var progressTarget = ResolveCommandTaskTarget(parts, context, progressUsage);
+            RequireRemainingArgument(parts, progressTarget.NextIndex + 1, progressUsage);
             var progressTask = progressTarget.Task;
-            context.Kernel.ReportTaskProgress(context.CurrentGoal!.Id, progressTask.Id, CliArgumentParser.ParseReportableStatus(parts[progressTarget.NextIndex]), parts[progressTarget.NextIndex + 1]);
+            context.Kernel.ReportTaskProgress(context.CurrentGoal!.Id, progressTask.Id, CliArgumentParser.ParseReportableStatus(parts[progressTarget.NextIndex]), ResolveTextArgument(parts, progressTarget.NextIndex + 1, progressUsage, "--text-file"));
             ConsoleViews.PrintGoal(context.CurrentGoal!);
             return true;
 
@@ -222,9 +225,9 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "answer":
-            CliArgumentParser.RequirePartCount(parts, 3, "answer <request-id> <answer>");
+            CliArgumentParser.RequirePartCount(parts, 3, "answer <request-id> <answer> | answer <request-id> --text-file <path>");
             var resolvedRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, parts[1]);
-            context.Kernel.SubmitHumanInput(resolvedRequest.Id, parts[2]);
+            context.Kernel.SubmitHumanInput(resolvedRequest.Id, ResolveTextArgument(parts, inlineIndex: 2, "answer <request-id> <answer> | answer <request-id> --text-file <path>", "--text-file"));
             context.CurrentGoal = context.Kernel.GetGoal(resolvedRequest.GoalId);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
