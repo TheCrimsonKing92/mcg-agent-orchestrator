@@ -160,7 +160,8 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
     {
         FileName = WorkerShell.Executable,
         WorkingDirectory = workingDirectory,
-        UseShellExecute = false
+        UseShellExecute = false,
+        CreateNoWindow = true
     };
     startInfo.Environment.Remove("ANTHROPIC_API_KEY");
     startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");

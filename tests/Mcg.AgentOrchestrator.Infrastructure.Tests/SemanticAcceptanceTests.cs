@@ -909,7 +909,7 @@ public sealed class SemanticAcceptanceTests
         // fix, ReadToEndAsync hangs until the outer 20s CancellationToken fires. With the
         // fix, the 12s drain timeout kills the tree and returns well before 20s.
         var exe = WorkerShell.Executable;
-        var command = $"Write-Output 'verdict'; $psi = [System.Diagnostics.ProcessStartInfo]::new('{exe}', '-NonInteractive -Command Start-Sleep 60'); $psi.UseShellExecute = $false; [System.Diagnostics.Process]::Start($psi) | Out-Null; exit 0";
+        var command = $"Write-Output 'verdict'; $psi = [System.Diagnostics.ProcessStartInfo]::new('{exe}', '-NonInteractive -Command Start-Sleep 60'); $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; [System.Diagnostics.Process]::Start($psi) | Out-Null; exit 0";
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var sw = System.Diagnostics.Stopwatch.StartNew();
