@@ -30,7 +30,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3
-            ? NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file")
+            ? NormalizeGoalDispositionCommand(args)
             : args;
     }
 
@@ -282,6 +282,28 @@ private static IReadOnlyList<string> NormalizeTargetTextCommandWithFileFlags(str
 
     parts.AddRange(args.Skip(flagIndex));
     return parts;
+}
+
+private static IReadOnlyList<string> NormalizeGoalDispositionCommand(string[] args)
+{
+    var parts = NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file");
+    if (parts.Count != 3 ||
+        !TryGetGoalDispositionConfirmationFlag(args[0], out var confirmationFlag))
+    {
+        return parts;
+    }
+
+    var text = parts[2];
+    var confirmationIndex = IndexOfStandaloneFlag(text, confirmationFlag);
+    if (confirmationIndex < 0)
+    {
+        return parts;
+    }
+
+    var reason = text[..confirmationIndex].Trim();
+    return string.IsNullOrWhiteSpace(reason)
+        ? [parts[0], parts[1], confirmationFlag]
+        : [parts[0], parts[1], reason, confirmationFlag];
 }
 
 private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int trailingArgumentCount, bool allowTextFile = false)

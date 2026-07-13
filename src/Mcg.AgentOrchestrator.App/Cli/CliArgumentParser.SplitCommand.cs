@@ -31,7 +31,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
         command.Equals("recover", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
+        return SplitGoalDispositionCommand(command, remainder);
     }
 
     if (command.Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase))
@@ -307,6 +307,70 @@ private static IReadOnlyList<string> SplitTargetTextCommandWithFileFlags(string 
         : [command, target, inlineText, .. flags];
 }
 
+private static IReadOnlyList<string> SplitGoalDispositionCommand(string command, string remainder)
+{
+    var parts = SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
+    if (parts.Count != 3 ||
+        !TryGetGoalDispositionConfirmationFlag(command, out var confirmationFlag))
+    {
+        return parts;
+    }
+
+    var text = parts[2];
+    var confirmationIndex = IndexOfStandaloneFlag(text, confirmationFlag);
+    if (confirmationIndex < 0)
+    {
+        return parts;
+    }
+
+    var reason = text[..confirmationIndex].Trim();
+    return string.IsNullOrWhiteSpace(reason)
+        ? [parts[0], parts[1], confirmationFlag]
+        : [parts[0], parts[1], reason, confirmationFlag];
+}
+
+private static bool TryGetGoalDispositionConfirmationFlag(string command, out string flag)
+{
+    if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        flag = "--confirm-goal-abandon";
+        return true;
+    }
+
+    if (command.Equals("park-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        flag = "--confirm-goal-park";
+        return true;
+    }
+
+    if (command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        flag = "--confirm-goal-rollback";
+        return true;
+    }
+
+    if (command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        flag = "--confirm-goal-stop";
+        return true;
+    }
+
+    flag = "";
+    return false;
+}
+
+private static int IndexOfStandaloneFlag(string text, string flag)
+{
+    var index = text.IndexOf($" {flag}", StringComparison.OrdinalIgnoreCase);
+    if (index >= 0)
+    {
+        return index + 1;
+    }
+
+    return text.StartsWith(flag, StringComparison.OrdinalIgnoreCase) ? 0 : -1;
+}
+
 private static int IndexOfAnyFileFlag(string text, params string[] fileFlags)
 {
     var best = -1;
@@ -333,6 +397,16 @@ private static int IndexOfAnyFileFlag(string text, params string[] fileFlags)
 
 private static IReadOnlyList<string> SplitObjectiveCommandWithFlags(string command, string remainder)
 {
+    var fileFlagIndex = IndexOfAnyFileFlag(remainder, "--brief-file", "--text-file");
+    if (fileFlagIndex >= 0)
+    {
+        var fileObjective = remainder[..fileFlagIndex].Trim();
+        var beforeFileFlag = string.IsNullOrWhiteSpace(fileObjective)
+            ? new[] { command }
+            : [command, fileObjective];
+        return [.. beforeFileFlag, .. remainder[fileFlagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+    }
+
     var flagIndex = remainder.IndexOf(" --", StringComparison.Ordinal);
     if (flagIndex < 0 && remainder.StartsWith("--", StringComparison.Ordinal))
     {

@@ -53,7 +53,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             ["abandon-goal", "abcdef12", "Operator", "chose", "a", "different", "route.", "--confirm-goal-abandon"]);
 
         Xunit.Assert.Equal(
-            ["abandon-goal", "abcdef12", "Operator chose a different route. --confirm-goal-abandon"],
+            ["abandon-goal", "abcdef12", "Operator chose a different route.", "--confirm-goal-abandon"],
             interactive);
         Xunit.Assert.Equal(oneShot, interactive);
     }
@@ -1726,7 +1726,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         CliCommandDispatcher.ExecuteCommand(["park-goal", parkGoal.Id.Value[..8], "--text-file", parkPath, "--confirm-goal-park"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Xunit.Assert.Contains(cancelGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == cancelReason);
-        Xunit.Assert.Contains(supersedeGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == supersedeReason);
+        Xunit.Assert.Contains(supersedeGoal.Timeline, evt => evt.Kind == ProgressKind.GoalSuperseded && evt.Message == supersedeReason);
         Xunit.Assert.Contains(abandonGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == abandonReason);
         Xunit.Assert.Contains(parkGoal.Timeline, evt => evt.Kind == ProgressKind.GoalPolicyDecision && evt.Message == $"Goal parked: {parkReason}");
     }
