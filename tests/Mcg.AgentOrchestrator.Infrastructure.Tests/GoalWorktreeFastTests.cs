@@ -316,7 +316,8 @@ public sealed class GoalWorktreeTests
             Goal goal,
             string? worktreePath,
             AcceptanceVerificationResult? verification,
-            bool verificationSkipped)
+            bool verificationSkipped,
+            string? executionDirectory = null)
         {
             var changedFiles = GetChangedFiles(worktreePath ?? root);
             var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);

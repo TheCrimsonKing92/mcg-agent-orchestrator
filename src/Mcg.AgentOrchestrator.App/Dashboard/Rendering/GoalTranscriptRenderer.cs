@@ -1,5 +1,6 @@
 using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -12,11 +13,12 @@ public static partial class GoalTranscriptRenderer
         AgentOrchestratorKernel kernel,
         Goal goal,
         WorkerProfileCatalog workerProfiles,
-        IReadOnlyList<AgentDefinition>? agents = null)
+        IReadOnlyList<AgentDefinition>? agents = null,
+        string? executionDirectory = null)
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var nextActions = kernel.BuildNextActions(goal.Id);
-        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
         var evidence = kernel.BuildGoalEvidenceSummary(goal.Id);
         var stages = kernel.BuildStageReadinessReport(goal.Id);
         var verificationGate = kernel.BuildVerificationGate(goal.Id);

@@ -58,11 +58,12 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         Goal goal,
         string? worktreePath,
         AcceptanceVerificationResult? verification,
-        bool verificationSkipped)
+        bool verificationSkipped,
+        string? executionDirectory = null)
     {
         var blockers = new List<GoalAcceptanceEvidenceBlocker>();
         var nextCommands = new List<string>();
-        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
         var changedFiles = Array.Empty<string>();
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
         var diffStat = "not available";

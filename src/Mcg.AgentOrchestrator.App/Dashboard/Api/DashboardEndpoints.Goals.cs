@@ -100,7 +100,9 @@ internal static partial class DashboardEndpoints
         var goal = ResolveGoal(current, goalId);
         var agents = services.LoadAgentCatalog().Agents;
         var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
-        return Text(GoalTranscriptRenderer.Render(current, goal, workerProfiles, agents), "text/markdown; charset=utf-8");
+        return Text(
+            GoalTranscriptRenderer.Render(current, goal, workerProfiles, agents, services.Workspace.ExecutionDirectory),
+            "text/markdown; charset=utf-8");
     }
 
     private static async Task<IResult> GetGoalWorkSummaryAsync(string goalId, DashboardEndpointServices services)

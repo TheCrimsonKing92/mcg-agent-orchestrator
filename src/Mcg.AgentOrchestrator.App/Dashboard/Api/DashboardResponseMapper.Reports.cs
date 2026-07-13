@@ -126,7 +126,8 @@ public static GoalAcceptanceSummaryDto ToGoalAcceptanceSummaryDto(
         summary.PassedTasks,
         summary.OpenVerificationCount,
         summary.PendingHumanInputCount,
-        summary.Blockers.Select(blocker => ToGoalAcceptanceBlockerDto(goal, blocker)).ToList());
+        summary.Blockers.Select(blocker => ToGoalAcceptanceBlockerDto(goal, blocker)).ToList(),
+        summary.Outcomes.Select(ToGoalAcceptanceOutcomeDto).ToList());
 }
 
 public static OperatorInboxReportDto ToOperatorInboxReportDto(OperatorInboxReport report)
@@ -173,6 +174,9 @@ public static GoalAcceptanceBlockerDto ToGoalAcceptanceBlockerDto(Goal goal, Goa
         TimelineText(blocker.SuggestedAction),
         ConsoleViews.BuildAcceptanceSuggestedCommand(blocker, taskNumber));
 }
+
+private static GoalAcceptanceOutcomeDto ToGoalAcceptanceOutcomeDto(GoalAcceptanceOutcome outcome) =>
+    new(outcome.Outcome, outcome.IsCurrentCandidate, outcome.OccurredAt, TimelineText(outcome.Message));
 
 public static GoalEvidenceSummaryDto ToGoalEvidenceSummaryDto(Goal goal, GoalEvidenceSummary summary)
 {

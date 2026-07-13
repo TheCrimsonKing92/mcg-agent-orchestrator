@@ -498,7 +498,7 @@ public static partial class DashboardRenderer
 
         // Readiness: goal completion open, others in <details>
         html.AppendLine("<div class=\"goal-readiness-grid\">");
-        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, options.Workspace?.ExecutionDirectory);
         html.AppendLine("<div class=\"goal-panel\">");
         html.AppendLine("<h3>Goal completion</h3>");
         html.AppendLine($"<p class=\"{(acceptance.IsAccepted ? "ok" : "bad")}\">Accepted: {acceptance.IsAccepted} &middot; Tasks passed: {acceptance.PassedTasks}/{acceptance.TotalTasks} &middot; Open verification: {acceptance.OpenVerificationCount} &middot; Pending input: {acceptance.PendingHumanInputCount}</p>");
@@ -518,6 +518,17 @@ public static partial class DashboardRenderer
                 html.AppendLine("</tr>");
             }
             html.AppendLine("</tbody></table>");
+        }
+        if (acceptance.Outcomes.Count > 0)
+        {
+            html.AppendLine("<h4>Acceptance outcomes</h4>");
+            html.AppendLine("<ul>");
+            foreach (var outcome in acceptance.Outcomes)
+            {
+                var scope = outcome.IsCurrentCandidate ? "current" : "historical";
+                html.AppendLine($"<li><strong>{Encode(scope)}</strong>: {Encode(outcome.Message)}</li>");
+            }
+            html.AppendLine("</ul>");
         }
         html.AppendLine("</div>");
 

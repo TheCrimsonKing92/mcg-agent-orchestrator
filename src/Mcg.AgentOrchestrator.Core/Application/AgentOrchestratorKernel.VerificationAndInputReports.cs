@@ -69,11 +69,12 @@ public sealed partial class AgentOrchestratorKernel
         if (goal.LatestAcceptanceFailure is { } failure)
         {
             var failedChecks = string.Join(", ", failure.FailedChecks);
+            var candidate = FormatAcceptanceCandidate(failure);
             blockers.Add(new GoalAcceptanceBlocker(
                 GoalAcceptanceBlockerKind.AcceptanceFailed,
                 null,
                 null,
-                $"Latest acceptance failed at {failure.OccurredAt:u}: {failedChecks}.",
+                $"Latest acceptance failed{candidate} at {failure.OccurredAt:u}: {failedChecks}.",
                 $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the blocker."));
         }
 
@@ -86,7 +87,8 @@ public sealed partial class AgentOrchestratorKernel
             gate.Tasks.Count(task => task.GateStatus == VerificationGateStatus.Passed),
             gate.Tasks.Count(task => task.GateStatus != VerificationGateStatus.Passed),
             pendingInput.Count,
-            blockers);
+            blockers,
+            []);
     }
 
     public GoalHumanInputWorklist BuildHumanInputWorklist(GoalId goalId)
@@ -103,4 +105,19 @@ public sealed partial class AgentOrchestratorKernel
             items.Count,
             items);
     }
+
+    private static string FormatAcceptanceCandidate(AcceptanceFailureSummary failure)
+    {
+        if (string.IsNullOrWhiteSpace(failure.BranchHeadSha) && string.IsNullOrWhiteSpace(failure.MainHeadSha))
+        {
+            return string.Empty;
+        }
+
+        return $" for candidate branch={FormatShortSha(failure.BranchHeadSha)} main={FormatShortSha(failure.MainHeadSha)}";
+    }
+
+    private static string FormatShortSha(string? sha) =>
+        string.IsNullOrWhiteSpace(sha)
+            ? "unknown"
+            : sha.Trim()[..Math.Min(12, sha.Trim().Length)];
 }

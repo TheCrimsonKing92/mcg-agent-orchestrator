@@ -27,7 +27,7 @@ internal sealed class ConductorDriver
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
-    private readonly Action<Goal, IReadOnlyList<string>> _recordAcceptanceFailure;
+    private readonly Action<Goal, IReadOnlyList<string>, string?, string?> _recordAcceptanceFailure;
     private readonly Action<Goal> _clearAcceptanceFailure;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
@@ -237,7 +237,37 @@ internal sealed class ConductorDriver
             var slotSuffix = stableSlotIndex.HasValue ? $" on stable slot {stableSlotIndex.Value}" : string.Empty;
             GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", $"Running acceptance verification{slotSuffix}.");
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
-            var verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
+            var branchHeadSha = TryResolveGitHead(worktreePath);
+            var mainHeadSha = TryResolveGitHead(dir);
+            AcceptanceVerificationResult verification;
+            try
+            {
+                verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
+            }
+            catch (DotnetBuildSlotsBusyException ex)
+            {
+                GoalOperationJournal.AcceptanceBlocked(
+                    dir,
+                    goal,
+                    "conductor:acceptance",
+                    "build-slot",
+                    branchHeadSha,
+                    mainHeadSha,
+                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatSlotsBusy(ex.SlotsBusy)}");
+                throw;
+            }
+            catch (BuildLockBlockedException ex)
+            {
+                GoalOperationJournal.AcceptanceBlocked(
+                    dir,
+                    goal,
+                    "conductor:acceptance",
+                    "build-lock",
+                    branchHeadSha,
+                    mainHeadSha,
+                    $"Acceptance blocked:build-lock for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatBuildLockBlocked(ex.Attribution)}");
+                throw;
+            }
             var unmetCriteria = verification.Checks?
                 .Where(check => !check.Passed)
                 .ToArray() ?? [];
@@ -246,18 +276,20 @@ internal sealed class ConductorDriver
                 .Select(check => check.Name)
                 .ToArray() ?? [];
             if (verification.Passed)
-                GoalOperationJournal.Completed(dir, goal, "conductor:acceptance",
+                GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
-                        ? $"Acceptance passed (exit {verification.ExitCode})."
-                        : $"Acceptance passed (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
+                        ? $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode})."
+                        : $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
             else
-                GoalOperationJournal.Failed(dir, goal, "conductor:acceptance",
-                    $"Acceptance failed (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}");
+                GoalOperationJournal.AcceptanceFailed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
+                    $"Acceptance failed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}");
             return new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
                 verification.Passed ? null : verification.OutputTail,
-                failedChecks);
+                failedChecks,
+                branchHeadSha,
+                mainHeadSha);
         };
 
         _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
@@ -267,7 +299,8 @@ internal sealed class ConductorDriver
         };
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
-        _recordAcceptanceFailure = (goal, failedChecks) => kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+        _recordAcceptanceFailure = (goal, failedChecks, branchHeadSha, mainHeadSha) =>
+            kernel.RecordAcceptanceFailure(goal.Id, failedChecks, branchHeadSha, mainHeadSha);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
@@ -434,7 +467,7 @@ internal sealed class ConductorDriver
         Func<Goal, ChangeRiskTier?> classifyChangeRisk,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
-        Action<Goal, IReadOnlyList<string>>? recordAcceptanceFailure = null,
+        Action<Goal, IReadOnlyList<string>, string?, string?>? recordAcceptanceFailure = null,
         Action<Goal>? clearAcceptanceFailure = null,
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
@@ -458,7 +491,7 @@ internal sealed class ConductorDriver
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
-        _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _) => { });
+        _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _, _, _) => { });
         _clearAcceptanceFailure = clearAcceptanceFailure ?? (_ => { });
         _rebaseOntoMain = rebaseOntoMain;
         _land = land;
@@ -1030,6 +1063,20 @@ internal sealed class ConductorDriver
         return $" Acceptance output tail: {tail}";
     }
 
+    private static string? TryResolveGitHead(string path)
+    {
+        var result = GitCli.Run(path, "rev-parse", "HEAD");
+        return result.Succeeded ? result.Output.Trim() : null;
+    }
+
+    private static string FormatAcceptanceCandidate(string? branchHeadSha, string? mainHeadSha) =>
+        $"branch={FormatShortSha(branchHeadSha)} main={FormatShortSha(mainHeadSha)}";
+
+    private static string FormatShortSha(string? sha) =>
+        string.IsNullOrWhiteSpace(sha)
+            ? "unknown"
+            : sha.Trim()[..Math.Min(12, sha.Trim().Length)];
+
     private static string FormatSlotsBusy(DotnetBuildLeaseAcquisition.SlotsBusy slotsBusy)
     {
         var slots = string.Join(
@@ -1133,7 +1180,7 @@ internal sealed class ConductorDriver
         {
             if (acceptance.FailedChecks is { Count: > 0 })
             {
-                _recordAcceptanceFailure(goal, acceptance.FailedChecks);
+                _recordAcceptanceFailure(goal, acceptance.FailedChecks, acceptance.BranchHeadSha, acceptance.MainHeadSha);
             }
 
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,

@@ -39,7 +39,11 @@ public sealed class Goal
 
     internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
 
-    internal void RecordAcceptanceFailure(IReadOnlyList<string> failedChecks, DateTimeOffset occurredAt)
+    internal void RecordAcceptanceFailure(
+        IReadOnlyList<string> failedChecks,
+        DateTimeOffset occurredAt,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null)
     {
         var checks = failedChecks
             .Select(item => item.Trim())
@@ -48,7 +52,7 @@ public sealed class Goal
             .ToArray();
         LatestAcceptanceFailure = checks.Length == 0
             ? null
-            : new AcceptanceFailureSummary(occurredAt, checks);
+            : new AcceptanceFailureSummary(occurredAt, checks, NormalizeSha(branchHeadSha), NormalizeSha(mainHeadSha));
     }
 
     internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
@@ -84,7 +88,9 @@ public sealed class Goal
                 ? null
                 : new AcceptanceFailureSnapshot(
                     LatestAcceptanceFailure.OccurredAt,
-                    LatestAcceptanceFailure.FailedChecks.ToList()));
+                    LatestAcceptanceFailure.FailedChecks.ToList(),
+                    LatestAcceptanceFailure.BranchHeadSha,
+                    LatestAcceptanceFailure.MainHeadSha));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -122,7 +128,11 @@ public sealed class Goal
 
         if (snapshot.LatestAcceptanceFailure is { } failure)
         {
-            goal.RecordAcceptanceFailure(failure.FailedChecks, failure.OccurredAt);
+            goal.RecordAcceptanceFailure(
+                failure.FailedChecks,
+                failure.OccurredAt,
+                failure.BranchHeadSha,
+                failure.MainHeadSha);
         }
 
         return goal;
@@ -143,8 +153,13 @@ public sealed class Goal
 
         return value.Trim();
     }
+
+    private static string? NormalizeSha(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public sealed record AcceptanceFailureSummary(
     DateTimeOffset OccurredAt,
-    IReadOnlyList<string> FailedChecks);
+    IReadOnlyList<string> FailedChecks,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null);

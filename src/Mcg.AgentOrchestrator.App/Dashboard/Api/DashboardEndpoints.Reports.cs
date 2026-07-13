@@ -20,7 +20,8 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
         var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(services.Workspace, goal));
-        return Json(DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, current.BuildGoalAcceptanceSummary(goal.Id), lifecycle));
+        var summary = GoalAcceptanceStatusProjector.Build(current, goal, services.Workspace.ExecutionDirectory);
+        return Json(DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, summary, lifecycle));
     }
 
     private static async Task<IResult> GetEvidenceAsync(HttpContext context, DashboardEndpointServices services)

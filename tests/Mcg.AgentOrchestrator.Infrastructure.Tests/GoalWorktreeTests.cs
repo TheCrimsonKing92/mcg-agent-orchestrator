@@ -378,13 +378,15 @@ public abstract class GoalWorktreeTestBase
             Goal goal,
             string? worktreePath,
             AcceptanceVerificationResult? verification,
-            bool verificationSkipped) =>
+            bool verificationSkipped,
+            string? executionDirectory = null) =>
             DefaultCliGoalWorktreeService.Instance.BuildAcceptanceEvidence(
                 kernel,
                 goal,
                 worktreePath,
                 verification,
-                verificationSkipped);
+                verificationSkipped,
+                executionDirectory);
     }
 
     private protected sealed class FakeAcceptanceVerifier(

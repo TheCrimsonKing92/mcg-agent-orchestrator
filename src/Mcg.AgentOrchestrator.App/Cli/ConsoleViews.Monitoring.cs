@@ -70,6 +70,16 @@ public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summa
         }
     }
 
+    if (summary.Outcomes.Count > 0)
+    {
+        Console.WriteLine("Acceptance outcomes:");
+        foreach (var outcome in summary.Outcomes)
+        {
+            var scope = outcome.IsCurrentCandidate ? "current" : "historical";
+            Console.WriteLine($"  {scope}: {OutputTextPreview.CreateTimeline(outcome.Message).Text}");
+        }
+    }
+
     Console.WriteLine();
 }
 }

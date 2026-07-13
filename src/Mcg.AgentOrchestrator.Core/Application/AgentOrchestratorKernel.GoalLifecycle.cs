@@ -228,10 +228,14 @@ public sealed partial class AgentOrchestratorKernel
         return task.CriterionRetryCount;
     }
 
-    public void RecordAcceptanceFailure(GoalId goalId, IReadOnlyList<string> failedChecks)
+    public void RecordAcceptanceFailure(
+        GoalId goalId,
+        IReadOnlyList<string> failedChecks,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null)
     {
         var goal = GetGoal(goalId);
-        goal.RecordAcceptanceFailure(failedChecks, _clock.UtcNow);
+        goal.RecordAcceptanceFailure(failedChecks, _clock.UtcNow, branchHeadSha, mainHeadSha);
     }
 
     public void ClearAcceptanceFailure(GoalId goalId)

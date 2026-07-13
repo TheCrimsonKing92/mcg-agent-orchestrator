@@ -2407,6 +2407,9 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("Mcg.AgentOrchestrator.App.dll", output);
         Xunit.Assert.Contains("pid-12345:dotnet", output);
         Xunit.Assert.Contains("goal remains ready", output);
+        Xunit.Assert.Contains("Acceptance outcomes:", output);
+        Xunit.Assert.Contains("current:", output);
+        Xunit.Assert.Contains("blocked:build-lock", output);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
         Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
@@ -2418,5 +2421,202 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("BUILD_LOCK_BLOCKED", conductEvent.Detail, StringComparison.Ordinal);
         Xunit.Assert.Contains("Mcg.AgentOrchestrator.App.dll", conductEvent.Detail, StringComparison.Ordinal);
         Xunit.Assert.Contains("12345", conductEvent.Detail, StringComparison.Ordinal);
+
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:build-lock");
+        Xunit.Assert.NotNull(blockedOutcome);
+        Xunit.Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_slots_busy_journals_blocked_outcome")]
+    public void CliAcceptanceSlotsBusyJournalsBlockedOutcome()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Slots busy acceptance", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+
+        var busy = new DotnetBuildLeaseAcquisition.SlotsBusy(
+            "first-available-stable-slot",
+            [new DotnetBuildStableSlotWait(0, 12345)]);
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: new ProbeAcceptanceVerifier(() => { }),
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+            stableSlotSelector: (_, _) => throw new DotnetBuildSlotsBusyException(busy)));
+
+        Xunit.Assert.Contains("SLOTS_BUSY", output);
+        Xunit.Assert.Contains("goal remains ready", output);
+        Xunit.Assert.Contains("Acceptance outcomes:", output);
+        Xunit.Assert.Contains("current:", output);
+        Xunit.Assert.Contains("blocked:build-slot", output);
+        Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:build-slot");
+        Xunit.Assert.NotNull(blockedOutcome);
+        Xunit.Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_treats_old_candidate_failure_as_historical_after_rebase")]
+    public void CliAcceptanceTreatsOldCandidateFailureAsHistoricalAfterRebase()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Rebased acceptance", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        var oldMain = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var oldBranch = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+        kernel.RecordAcceptanceFailure(goal.Id, ["old acceptance failure"], oldBranch, oldMain);
+        GoalOperationJournal.AcceptanceFailed(root, goal, "acceptance", oldBranch, oldMain, "old acceptance failure");
+        File.WriteAllText(Path.Combine(root, "main-change.txt"), "main moved");
+        RunGitOutput(root, "add", "main-change.txt");
+        RunGitOutput(root, "commit", "-m", "Move main");
+
+        var verifier = new ProbeAcceptanceVerifier(() => { });
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace", "--no-record"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier,
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("superseded failure is historical", output);
+        Xunit.Assert.Contains("Acceptance outcomes:", output);
+        Xunit.Assert.Contains("historical:", output);
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var currentOutcome = journal.Entries.Last(entry => entry.AcceptanceOutcome == "passed");
+        Xunit.Assert.Equal(GoalOperationStatus.Completed, currentOutcome.Status);
+        Xunit.Assert.NotEqual(oldBranch, currentOutcome.BranchHeadSha, StringComparer.OrdinalIgnoreCase);
+        var superseded = GoalOperationJournal.SupersededAcceptanceOutcomes(
+            journal,
+            currentOutcome.BranchHeadSha,
+            currentOutcome.MainHeadSha);
+        Xunit.Assert.Contains(superseded, entry =>
+            entry.AcceptanceOutcome == "failed" &&
+            string.Equals(entry.BranchHeadSha, oldBranch, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(entry.MainHeadSha, oldMain, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_lifecycle_facts_ignore_superseded_candidate_failure")]
+    public void MonitorLifecycleFactsIgnoreSupersededCandidateFailure()
+    {
+        var (root, workspace, kernel, goal) = CreateSupersededAcceptanceFailureProjection();
+
+        var facts = GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, kernel.GetGoal(goal.Id));
+        var lifecycle = GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts);
+
+        Xunit.Assert.False(facts.IsBlocked);
+        Xunit.Assert.Equal(GoalLifecycleState.Verified, lifecycle);
+    }
+
+    [Xunit.Fact(DisplayName = "Dashboard_acceptance_status_ignores_superseded_candidate_failure")]
+    public void DashboardAcceptanceStatusIgnoresSupersededCandidateFailure()
+    {
+        var (root, workspace, kernel, goal) = CreateSupersededAcceptanceFailureProjection();
+        var facts = GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, kernel.GetGoal(goal.Id));
+        var lifecycle = GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts);
+        var summary = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root);
+        var dto = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(kernel.GetGoal(goal.Id), summary, lifecycle);
+
+        Xunit.Assert.Equal(GoalStatus.Verified, dto.Status);
+        Xunit.Assert.True(dto.IsAccepted);
+        Xunit.Assert.DoesNotContain(dto.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed);
+        var historical = Xunit.Assert.Single(dto.Outcomes);
+        Xunit.Assert.Equal("failed", historical.Outcome);
+        Xunit.Assert.False(historical.IsCurrentCandidate);
+        Xunit.Assert.Contains("historical candidate", historical.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Operator_inbox_ignores_superseded_candidate_failure")]
+    public void OperatorInboxIgnoresSupersededCandidateFailure()
+    {
+        var (_, workspace, kernel, goal) = CreateSupersededAcceptanceFailureProjection();
+
+        var inbox = OperatorInbox.Build(
+            kernel,
+            AgentCatalog.Default().Agents,
+            WorkerProfileCatalog.Default(),
+            workspace,
+            goal.Id.Value[..8],
+            includeAcknowledged: false);
+
+        Xunit.Assert.DoesNotContain(inbox.Items, item =>
+            item.Kind == OperatorInboxKind.AcceptanceGate &&
+            (item.Message.Contains("old acceptance failure", StringComparison.OrdinalIgnoreCase) ||
+             item.Title.Contains("blocked", StringComparison.OrdinalIgnoreCase)));
+        Xunit.Assert.Contains(inbox.Items, item =>
+            item.Kind == OperatorInboxKind.AcceptanceGate &&
+            item.Title.Contains("ready for acceptance", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private (
+        string Root,
+        OrchestratorWorkspace Workspace,
+        AgentOrchestratorKernel Kernel,
+        Goal Goal) CreateSupersededAcceptanceFailureProjection()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Rebased acceptance projection", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        var oldMain = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var oldBranch = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+        kernel.RecordAcceptanceFailure(goal.Id, ["old acceptance failure"], oldBranch, oldMain);
+        GoalOperationJournal.AcceptanceFailed(root, goal, "acceptance", oldBranch, oldMain, "old acceptance failure");
+        File.WriteAllText(Path.Combine(root, "main-change.txt"), "main moved");
+        RunGitOutput(root, "add", "main-change.txt");
+        RunGitOutput(root, "commit", "-m", "Move main");
+
+        return (root, workspace, kernel, goal);
     }
 }

@@ -736,11 +736,10 @@ internal static class GoalMonitoringSubscriptionCommand
         var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
         var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
         var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
-        var isBlocked = goal.LatestAcceptanceFailure is not null ||
+        var isBlocked = GoalAcceptanceStatusProjector.HasCurrentBlockingAcceptanceState(goal, executionDirectory, journal) ||
             journal.LatestByOperation.Any(entry =>
                 entry.Status == GoalOperationStatus.Failed &&
-                (entry.Operation.Contains("acceptance", StringComparison.OrdinalIgnoreCase) ||
-                 entry.Operation.Contains("land", StringComparison.OrdinalIgnoreCase) ||
+                (entry.Operation.Contains("land", StringComparison.OrdinalIgnoreCase) ||
                  entry.Operation.Contains("cleanup", StringComparison.OrdinalIgnoreCase) ||
                  entry.Operation.Contains("workspace:remove", StringComparison.OrdinalIgnoreCase)));
         return new GoalLifecycleFacts(workspaceExists, isBlocked, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
