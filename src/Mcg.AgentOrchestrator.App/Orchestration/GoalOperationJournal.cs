@@ -21,7 +21,23 @@ internal sealed record GoalOperationJournalEntry(
     string Operation,
     GoalOperationStatus Status,
     DateTimeOffset At,
-    string? Detail);
+    string? Detail,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null,
+    string? AcceptanceOutcome = null)
+{
+    public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
+        ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
+
+    public bool HasCandidatePair =>
+        !string.IsNullOrWhiteSpace(BranchHeadSha) && !string.IsNullOrWhiteSpace(MainHeadSha);
+
+    private static bool ShaEquals(string? left, string? right) =>
+        string.Equals(Normalize(left), Normalize(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
 
 internal sealed record GoalOperationJournalSummary(
     string Path,
@@ -80,6 +96,13 @@ internal static class GoalOperationJournal
     public static string Key(GoalId goalId, string operation) =>
         $"{goalId.Value}:{operation}".ToLowerInvariant();
 
+    public static string CandidateKey(GoalId goalId, string operation, string? branchHeadSha, string? mainHeadSha)
+    {
+        var branch = NormalizeSha(branchHeadSha) ?? "unknown-branch";
+        var main = NormalizeSha(mainHeadSha) ?? "unknown-main";
+        return $"{Key(goalId, operation)}:{branch}:{main}".ToLowerInvariant();
+    }
+
     public static string LifecycleKey(string commandName, string objective)
     {
         var normalized = $"{commandName.Trim().ToLowerInvariant()}\n{objective.Trim()}";
@@ -128,6 +151,69 @@ internal static class GoalOperationJournal
 
     public static void Failed(string executionDirectory, Goal goal, string operation, string? detail = null) =>
         Append(executionDirectory, goal.Id, operation, GoalOperationStatus.Failed, detail);
+
+    public static void AcceptancePassed(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? detail = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "passed", branchHeadSha, mainHeadSha, detail);
+
+    public static void AcceptanceFailed(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? detail = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail);
+
+    public static void AcceptanceBlocked(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string blockerKind,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? detail = null) =>
+        AppendAcceptanceOutcome(
+            executionDirectory,
+            goal,
+            operation,
+            GoalOperationStatus.Failed,
+            $"blocked:{NormalizeBlockerKind(blockerKind)}",
+            branchHeadSha,
+            mainHeadSha,
+            detail);
+
+    public static GoalOperationJournalEntry? NewestAcceptanceOutcomeForCandidate(
+        GoalOperationJournalSummary journal,
+        string? branchHeadSha,
+        string? mainHeadSha)
+    {
+        return journal.Entries
+            .Where(entry =>
+                !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) &&
+                entry.HasCandidate(branchHeadSha, mainHeadSha))
+            .OrderBy(entry => entry.At)
+            .LastOrDefault();
+    }
+
+    public static IReadOnlyList<GoalOperationJournalEntry> SupersededAcceptanceOutcomes(
+        GoalOperationJournalSummary journal,
+        string? branchHeadSha,
+        string? mainHeadSha)
+    {
+        return journal.Entries
+            .Where(entry =>
+                !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) &&
+                entry.HasCandidatePair &&
+                !entry.HasCandidate(branchHeadSha, mainHeadSha))
+            .OrderBy(entry => entry.At)
+            .ToArray();
+    }
 
     public static void RecordTerminalDisposition(
         string executionDirectory,
@@ -287,6 +373,67 @@ internal static class GoalOperationJournal
         GoalOperationStatus status,
         string? detail)
     {
+        Append(
+            executionDirectory,
+            goalId,
+            Key(goalId, operation),
+            operation,
+            status,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: null,
+            acceptanceOutcome: null);
+    }
+
+    private static void AppendAcceptanceOutcome(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        GoalOperationStatus status,
+        string acceptanceOutcome,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? detail)
+    {
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, operation),
+            operation,
+            status,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: null,
+            acceptanceOutcome);
+
+        if (string.IsNullOrWhiteSpace(branchHeadSha) && string.IsNullOrWhiteSpace(mainHeadSha))
+        {
+            return;
+        }
+
+        Append(
+            executionDirectory,
+            goal.Id,
+            CandidateKey(goal.Id, operation, branchHeadSha, mainHeadSha),
+            operation,
+            status,
+            detail,
+            NormalizeSha(branchHeadSha),
+            NormalizeSha(mainHeadSha),
+            acceptanceOutcome);
+    }
+
+    private static void Append(
+        string executionDirectory,
+        GoalId goalId,
+        string idempotencyKey,
+        string operation,
+        GoalOperationStatus status,
+        string? detail,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? acceptanceOutcome)
+    {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -295,14 +442,26 @@ internal static class GoalOperationJournal
         }
 
         var entry = new GoalOperationJournalEntry(
-            Key(goalId, operation),
+            idempotencyKey,
             goalId,
             operation,
             status,
             DateTimeOffset.UtcNow,
-            detail);
+            detail,
+            branchHeadSha,
+            mainHeadSha,
+            acceptanceOutcome);
         File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
         TryAppendRunEvent(executionDirectory, entry);
+    }
+
+    private static string? NormalizeSha(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string NormalizeBlockerKind(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return string.IsNullOrWhiteSpace(normalized) ? "unknown" : normalized;
     }
 
     private static void TryAppendRunEvent(string executionDirectory, GoalOperationJournalEntry entry)

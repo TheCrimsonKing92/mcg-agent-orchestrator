@@ -17,7 +17,9 @@ public sealed record GoalSnapshot(
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,
-    IReadOnlyList<string> FailedChecks);
+    IReadOnlyList<string> FailedChecks,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,

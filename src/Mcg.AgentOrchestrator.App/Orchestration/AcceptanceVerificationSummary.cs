@@ -6,7 +6,9 @@ internal sealed record AcceptanceVerificationSummary(
     bool Passed,
     IReadOnlyList<AcceptanceCheckResult> UnmetCriteria,
     string? FailureDetail = null,
-    IReadOnlyList<string>? FailedChecks = null)
+    IReadOnlyList<string>? FailedChecks = null,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null)
 {
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

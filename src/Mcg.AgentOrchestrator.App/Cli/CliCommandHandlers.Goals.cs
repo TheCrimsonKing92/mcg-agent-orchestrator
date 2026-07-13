@@ -2526,6 +2526,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
     string? testedWorktreeHead = null;
+    var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
     if (worktreePath is not null)
     {
         var rebaseCheckStarted = System.Diagnostics.Stopwatch.StartNew();
@@ -2553,7 +2554,16 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             if (!rebase.UpdatedBranch)
             {
                 var failedChecks = new[] { $"workspace rebase: {rebase.Status.ToString().ToLowerInvariant()}" };
-                context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+                testedWorktreeHead = TryResolveGitHead(context, worktreePath);
+                testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+                context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
+                GoalOperationJournal.AcceptanceFailed(
+                    context.Workspace.ExecutionDirectory,
+                    goal,
+                    "acceptance",
+                    testedWorktreeHead,
+                    testedMainHead,
+                    $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", failedChecks)}.");
                 context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
                 AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=rebase checks={FormatConductEventChecks(failedChecks)}");
                 Console.WriteLine("Acceptance evidence: blocked; merge blocked");
@@ -2571,6 +2581,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         }
 
         testedWorktreeHead = context.Worktrees.ResolveHead(worktreePath);
+        testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+        if (ClearSupersededAcceptanceFailureForCandidate(context, goal, testedWorktreeHead, testedMainHead))
+        {
+            goal = context.Kernel.GetGoal(goal.Id);
+            context.CurrentGoal = goal;
+            Console.WriteLine($"Acceptance history: superseded failure is historical for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}.");
+        }
+
         var changedFiles = context.Worktrees.GetChangedFiles(worktreePath);
         if (skipVerify)
         {
@@ -2601,12 +2619,28 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 stableSlotLease?.Dispose();
                 Console.WriteLine($"SLOTS_BUSY goal={goal.Id.Value[..8]} wantedBy={ex.SlotsBusy.WantedBy} busySlots={FormatBusySlots(ex.SlotsBusy.BusySlots)}");
                 Console.WriteLine("Acceptance verification: stable dotnet build slots busy; goal remains ready and will retry on a later conduct tick.");
+                GoalOperationJournal.AcceptanceBlocked(
+                    context.Workspace.ExecutionDirectory,
+                    goal,
+                    "acceptance",
+                    "build-slot",
+                    testedWorktreeHead,
+                    testedMainHead,
+                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}.");
                 return false;
             }
             catch (IOException ex)
             {
                 stableSlotLease?.Dispose();
                 Console.WriteLine($"BLOCKER step=verification reason=build-slot-timeout detail=\"{EscapeBlockerDetail(ex.Message)}\" action=\"Wait for a stable dotnet build slot to clear, then rerun acceptance.\"");
+                GoalOperationJournal.AcceptanceBlocked(
+                    context.Workspace.ExecutionDirectory,
+                    goal,
+                    "acceptance",
+                    "build-slot",
+                    testedWorktreeHead,
+                    testedMainHead,
+                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {ex.Message}");
                 throw new InvalidOperationException("acceptance blocked waiting for a stable dotnet build slot.", ex);
             }
 
@@ -2622,6 +2656,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                     Console.WriteLine(blockedLine);
                     AppendConductEvent(context, "lock-blocker", goal.Id, blockedLine);
                     Console.WriteLine("Acceptance verification: build artifact lock blocked progress; goal remains ready and will retry on a later conduct tick.");
+                    GoalOperationJournal.AcceptanceBlocked(
+                        context.Workspace.ExecutionDirectory,
+                        goal,
+                        "acceptance",
+                        "build-lock",
+                        testedWorktreeHead,
+                        testedMainHead,
+                        $"Acceptance blocked:build-lock for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {FormatBuildLockBlocked(ex.Attribution)}");
                     return false;
                 }
             }
@@ -2700,7 +2742,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             .Where(c => !c.Passed && !c.Advisory)
             .Select(c => c.Name)
             .ToList() ?? ["acceptance evidence blocked"];
-        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
+        GoalOperationJournal.AcceptanceFailed(
+            context.Workspace.ExecutionDirectory,
+            goal,
+            "acceptance",
+            testedWorktreeHead,
+            testedMainHead,
+            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", failedChecks)}.");
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks={FormatConductEventChecks(failedChecks)}");
         return false;
@@ -2731,7 +2780,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     Console.WriteLine(hostStop.Message);
     if (!hostStop.Succeeded)
     {
-        context.Kernel.RecordAcceptanceFailure(goal.Id, ["stop-host"]);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, ["stop-host"], testedWorktreeHead, testedMainHead);
+        GoalOperationJournal.AcceptanceFailed(
+            context.Workspace.ExecutionDirectory,
+            goal,
+            "acceptance",
+            testedWorktreeHead,
+            testedMainHead,
+            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: stop-host.");
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["stop-host"]);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks=stop-host");
         return false;
@@ -2772,7 +2828,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     if (mergeCommit.GuardFailure)
     {
         var failedChecks = new[] { mergeCommit.Message ?? "acceptance state changed during acceptance verification" };
-        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
+        GoalOperationJournal.AcceptanceFailed(
+            context.Workspace.ExecutionDirectory,
+            goal,
+            "acceptance",
+            testedWorktreeHead,
+            testedMainHead,
+            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {failedChecks[0]}.");
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=state-guard checks={FormatConductEventChecks(failedChecks)}");
         Console.WriteLine($"BLOCKER step=acceptance-state-guard reason=state-changed detail=\"{EscapeBlockerDetail(failedChecks[0])}\" action=\"Resolve concurrent goal or worktree changes, then rerun acceptance.\"");
@@ -2785,12 +2848,19 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
         {
-            RecordAcceptanceCompleted(context, goal);
+            RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead);
         }
         else
         {
             var failedChecks = new[] { "merge" };
-            context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks);
+            context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
+            GoalOperationJournal.AcceptanceFailed(
+                context.Workspace.ExecutionDirectory,
+                goal,
+                "acceptance",
+                testedWorktreeHead,
+                testedMainHead,
+                $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: merge.");
             context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
             AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=merge checks=merge");
             Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {context.Worktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
@@ -2798,7 +2868,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return mergeCommit.FastForwarded;
     }
 
-    RecordAcceptanceCompleted(context, goal);
+    RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead);
     return true;
 }
 
@@ -2863,13 +2933,15 @@ private static bool TryNormalizePrematureCompletedGoalForAcceptance(
     return true;
 }
 
-private static void RecordAcceptanceCompleted(CliExecutionContext context, Goal goal)
+private static void RecordAcceptanceCompleted(CliExecutionContext context, Goal goal, string? branchHeadSha, string? mainHeadSha)
 {
-    GoalOperationJournal.Completed(
+    GoalOperationJournal.AcceptancePassed(
         context.Workspace.ExecutionDirectory,
         goal,
         "acceptance",
-        "Acceptance passed and merge completed.");
+        branchHeadSha,
+        mainHeadSha,
+        $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} and merge completed.");
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     if (goal.Status == GoalStatus.Verified)
     {
@@ -2894,6 +2966,54 @@ private static void AppendConductEvent(CliExecutionContext context, string event
 
 private static string FormatConductEventChecks(IEnumerable<string> checks) =>
     string.Join(",", checks.Select(check => check.Replace(' ', '_').Replace('\t', '_').Replace('\r', '_').Replace('\n', '_')));
+
+private static string? TryResolveGitHead(CliExecutionContext context, string? path)
+{
+    if (string.IsNullOrWhiteSpace(path))
+    {
+        return null;
+    }
+
+    try
+    {
+        return context.Worktrees.ResolveHead(path);
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+private static string FormatAcceptanceCandidate(string? branchHeadSha, string? mainHeadSha) =>
+    $"branch={FormatShortSha(branchHeadSha)} main={FormatShortSha(mainHeadSha)}";
+
+private static string FormatShortSha(string? sha) =>
+    string.IsNullOrWhiteSpace(sha)
+        ? "unknown"
+        : sha.Trim()[..Math.Min(12, sha.Trim().Length)];
+
+private static bool ClearSupersededAcceptanceFailureForCandidate(
+    CliExecutionContext context,
+    Goal goal,
+    string? branchHeadSha,
+    string? mainHeadSha)
+{
+    if (goal.LatestAcceptanceFailure is not { } failure ||
+        string.IsNullOrWhiteSpace(failure.BranchHeadSha) ||
+        string.IsNullOrWhiteSpace(failure.MainHeadSha))
+    {
+        return false;
+    }
+
+    if (string.Equals(failure.BranchHeadSha, branchHeadSha, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(failure.MainHeadSha, mainHeadSha, StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    context.Kernel.ClearAcceptanceFailure(goal.Id);
+    return true;
+}
 
 private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerificationResult verification)
 {
