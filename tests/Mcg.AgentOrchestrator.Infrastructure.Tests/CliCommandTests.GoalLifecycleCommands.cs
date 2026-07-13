@@ -2176,10 +2176,11 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
                 leaseHeldObserved = true;
             });
 
+            var workspace = CreateRefinedWorkspace(root);
             var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
                 ["acceptance", "--keep-workspace"],
                 kernel,
-                CreateRefinedWorkspace(root),
+                workspace,
                 ref agents,
                 providers,
                 ref profiles,
@@ -2194,6 +2195,12 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             Xunit.Assert.True(leaseHeldObserved);
             Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=verification-suite", output);
             Xunit.Assert.Contains($"slot={selectedSlot}", output);
+
+            var conductEvent = File.ReadAllLines(workspace.ConductEventsLogPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .Single(record => record.EventKind == "acceptance");
+            Xunit.Assert.Equal(goal.Id.Value[..8], conductEvent.GoalId);
+            Xunit.Assert.Contains("result=passed", conductEvent.Detail, StringComparison.Ordinal);
         }
         finally
         {
@@ -2382,11 +2389,12 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             [new BuildLockHolder(12345, "dotnet", "dotnet test --artifacts-path slot-0", true)],
             "test");
         var verifier = new ProbeAcceptanceVerifier(_ => throw new BuildLockBlockedException(attribution));
+        var workspace = CreateRefinedWorkspace(root);
 
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["acceptance", "--keep-workspace"],
             kernel,
-            CreateRefinedWorkspace(root),
+            workspace,
             ref agents,
             providers,
             ref profiles,
@@ -2402,5 +2410,13 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
         Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
+
+        var conductEvent = File.ReadAllLines(workspace.ConductEventsLogPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .Single(record => record.EventKind == "lock-blocker");
+        Xunit.Assert.Equal(goal.Id.Value[..8], conductEvent.GoalId);
+        Xunit.Assert.Contains("BUILD_LOCK_BLOCKED", conductEvent.Detail, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Mcg.AgentOrchestrator.App.dll", conductEvent.Detail, StringComparison.Ordinal);
+        Xunit.Assert.Contains("12345", conductEvent.Detail, StringComparison.Ordinal);
     }
 }

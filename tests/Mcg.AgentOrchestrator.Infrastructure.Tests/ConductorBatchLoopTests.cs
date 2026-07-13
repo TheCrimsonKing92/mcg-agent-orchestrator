@@ -2954,6 +2954,36 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(records, record => record.EventKind == "goal" && record.GoalId is not null);
     }
 
+    [Xunit.Fact(DisplayName = "ConductEvents_shared_stream_records_escalation_reason")]
+    public void ConductEventsSharedStreamRecordsEscalationReason()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-escalation");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var writer = new ConductEventLogWriter(logPath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "escalation event stream goal");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptance: _ => false);
+
+        new ConductorBatchLoop(conductEventLogWriter: writer).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            maxVerifyRetries: 0);
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+
+        Assert.Contains(records, record =>
+            record.EventKind == "goal-escalation" &&
+            record.GoalId == goal.Id.Value[..8] &&
+            record.Detail.Contains("reason=Acceptance_verification_failed", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_rollover_preserves_stable_current_filename")]
     public void ConductEventsRolloverPreservesStableCurrentFilename()
     {
