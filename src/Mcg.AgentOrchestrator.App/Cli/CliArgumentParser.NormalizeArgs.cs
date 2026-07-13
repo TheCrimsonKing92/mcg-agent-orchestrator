@@ -245,7 +245,9 @@ private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[]
     }
 
     var objective = string.Join(' ', args.Skip(1).Take(flagIndex - 1));
-    return [args[0], objective, .. args.Skip(flagIndex)];
+    return string.IsNullOrWhiteSpace(objective)
+        ? [args[0], .. args.Skip(flagIndex)]
+        : [args[0], objective, .. args.Skip(flagIndex)];
 }
 
 private static bool LooksLikeAttentionClarificationId(string value)

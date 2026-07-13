@@ -2017,6 +2017,36 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_goal_brief_file_launcher_path_preserves_file_content_for_simple_alias")]
+    public void CliGoalBriefFileLauncherPathPreservesFileContentForSimpleAlias()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Create the goal from a launcher-style --brief-file command.\n\nThe file content must be the objective byte-for-byte.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"goal --brief-file {briefPath} --simple"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Single(currentGoal!.Tasks);
+        Xunit.Assert.Equal(briefContent, currentGoal.Objective);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_simple_goal_text_file_alias_creates_goal_with_file_content")]
     public void CliSimpleGoalTextFileAliasCreatesGoalWithFileContent()
     {

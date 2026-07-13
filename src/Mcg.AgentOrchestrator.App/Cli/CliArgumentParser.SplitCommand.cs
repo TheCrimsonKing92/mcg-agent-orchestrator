@@ -331,6 +331,8 @@ private static IReadOnlyList<string> SplitObjectiveCommandWithFlags(string comma
 
     var objective = remainder[..flagIndex].Trim();
     var flags = remainder[flagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-    return [command, objective, .. flags];
+    return string.IsNullOrWhiteSpace(objective)
+        ? [command, .. flags]
+        : [command, objective, .. flags];
 }
 }
