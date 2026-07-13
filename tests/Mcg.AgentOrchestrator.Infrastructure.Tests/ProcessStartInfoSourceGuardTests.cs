@@ -44,8 +44,15 @@ public sealed class ProcessStartInfoSourceGuardTests
             || line.Contains("UseShellExecute = $false", StringComparison.Ordinal);
     }
 
-    private static string FindTestRoot()
+    private static string FindTestRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
+        var sourceDirectory = Path.GetDirectoryName(sourceFilePath);
+        if (Directory.Exists(sourceDirectory) &&
+            Path.GetFileName(sourceDirectory).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests", StringComparison.Ordinal))
+        {
+            return sourceDirectory;
+        }
+
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
@@ -58,6 +65,8 @@ public sealed class ProcessStartInfoSourceGuardTests
             directory = directory.Parent;
         }
 
-        throw new InvalidOperationException("Could not locate tests/Mcg.AgentOrchestrator.Infrastructure.Tests.");
+        throw new InvalidOperationException(
+            "Could not locate tests/Mcg.AgentOrchestrator.Infrastructure.Tests. " +
+            "The source guard needs repository sources; CallerFilePath did not resolve to a checked-out test source directory.");
     }
 }
