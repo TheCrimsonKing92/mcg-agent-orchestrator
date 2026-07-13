@@ -2347,12 +2347,16 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
         Xunit.Assert.Contains("Workspace cleanup deferred", output);
         var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(journal));
         var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
             e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
         Xunit.Assert.NotNull(cleanupEntry);
         Xunit.Assert.Contains("Deferred cleanup after goal-mark-landed", cleanupEntry.Detail, StringComparison.Ordinal);
         var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
         Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
+        var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        Xunit.Assert.Empty(sweep.Goals);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
     }
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_build_lock_blocked_stays_ready_without_failure_history")]

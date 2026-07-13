@@ -224,6 +224,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:record", "Recording out-of-band landing to SQLite dogfood log.");
             RecordDogfoodEntry(context.Workspace, landedGoal);
             GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:record", context.Workspace.DogfoodLogStorePath);
+            GoalOperationJournal.RecordTerminalDisposition(
+                landedDir,
+                landedGoal,
+                new GoalTerminalDisposition(
+                    GoalTerminalDispositionKind.Retired,
+                    $"Goal {landedGp} was marked landed out-of-band via goal-mark-landed; retire from future terminal sweeps."));
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
             context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
