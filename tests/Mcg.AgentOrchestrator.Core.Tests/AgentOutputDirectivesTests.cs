@@ -2,6 +2,13 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class AgentOutputDirectivesTests
 {
+    [Xunit.Fact(DisplayName = "WorkerResultTemplate_requires_structured_tests_and_blockers_tokens")]
+    public void WorkerResultTemplateRequiresStructuredTestsAndBlockersTokens()
+    {
+        Assert.Contains("tests: <pass|fail|not-run|deferred - token first, then evidence>", AgentOutputDirectives.WorkerResultTemplateLines);
+        Assert.Contains("blockers: <none|exact-blocker - token first; blank is invalid; put deferred-verification notes in tests>", AgentOutputDirectives.WorkerResultTemplateLines);
+    }
+
     [Xunit.Theory(DisplayName = "TryParseHumanInputRequest_ignores_explicit_no_input_directives")]
     [Xunit.InlineData("Human input: none")]
     [Xunit.InlineData("Human input: no")]

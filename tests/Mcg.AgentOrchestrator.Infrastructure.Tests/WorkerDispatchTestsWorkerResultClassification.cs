@@ -1694,6 +1694,35 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_structured_pass_token_ignores_failed_words_in_tests_prose")]
+    public void BackgroundDispatchRunnerStructuredPassTokenIgnoresFailedWordsInTestsProse()
+{
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        "Committed implementation." + Environment.NewLine + WorkerResultBlock(
+            "src/Feature.cs",
+            ".\\scripts\\Invoke-WorkerBuildCheck.ps1 src\\Feature.csproj",
+            "pass - build check verifies previously failed timeout path",
+            blockers: "none - retry blocker fixed"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            Directory.CreateDirectory(Path.Combine(worktree, "src"));
+            File.WriteAllText(Path.Combine(worktree, "src", "Feature.cs"), "public sealed class Feature {}");
+            RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+            RunGit(worktree, ["commit", "-m", "Feature"], DateTimeOffset.Parse("2026-06-02T12:01:00Z"));
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+}
+
     [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_rejects_no_opener_files_plus_tests_only")]
     public void WorkerResultParserSuccessfulResultRejectsNoOpenerFilesPlusTestsOnly()
 {
@@ -1728,6 +1757,22 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(parsed, diagnostic);
     Assert.Equal("src/Feature.cs", fields["files"]);
     Assert.Equal("none", fields["blockers"]);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_uses_structured_pass_token_not_tests_prose")]
+    public void WorkerResultParserSuccessfulResultUsesStructuredPassTokenNotTestsProse()
+{
+    var output = WorkerResultBlock(
+        "src/Feature.cs",
+        "dotnet test --filter WorkerDispatch",
+        "pass - verified retry path that previously failed and timed out",
+        blockers: "none - no blockers after retry");
+
+    var parsed = WorkerResultParser.TryParseSuccessfulResult(output, out var fields, out var diagnostic);
+
+    Assert.True(parsed, diagnostic);
+    Assert.Equal("pass - verified retry path that previously failed and timed out", fields["tests"]);
+    Assert.Equal("none - no blockers after retry", fields["blockers"]);
 }
 
     [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_treats_blockers_as_advisory_when_tests_pass")]
@@ -2154,7 +2199,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         root,
         AgentRole.Tester,
         "NO_CHANGE: Existing focused test already covers this behavior." + Environment.NewLine +
-            WorkerResultBlock("none", "inspected existing tests", "existing focused test covers behavior", "none"),
+            WorkerResultBlock("none", "inspected existing tests", "pass - existing focused test covers behavior", "none"),
         string.Empty,
         clock);
     WriteHeartbeat(task.LastProcess!, clock.UtcNow, clock.UtcNow, "completed", 128, 0, childPid: null, exitFileExists: true);
