@@ -73,10 +73,22 @@ internal sealed record ConductLoopLaunchResult(
     string StdoutPath,
     string StderrPath);
 
+internal sealed record ConductLoopHandoffVerification(
+    bool ProcessAlive,
+    bool StdoutLogExists,
+    bool LoopStartJournaled,
+    string Detail)
+{
+    public bool Succeeded => ProcessAlive && StdoutLogExists && LoopStartJournaled;
+}
+
 internal static partial class ConductorLoopHandoff
 {
     public const string RenewalCountFlag = "--handoff-renewals";
     public const int DefaultMaxRenewalsWithoutLanding = 6;
+    private const int MaxLaunchAttempts = 2;
+    private static readonly TimeSpan DefaultVerificationTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan VerificationPollInterval = TimeSpan.FromMilliseconds(250);
     private const string BatchNameEnvironmentVariable = "MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME";
     private static readonly Regex TimestampedOperatorLogName = new(
         @"^operator-(?<name>.+)-\d{14}\.(out|err)\.log$",
@@ -84,13 +96,15 @@ internal static partial class ConductorLoopHandoff
 
     public static Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult> Create(
         ConductLoopHandoffOptions options,
-        Func<ConductLoopLaunchRequest, ConductLoopLaunchResult>? launch = null) =>
-        request => TryStartSuccessor(options, request, launch ?? LaunchDetached);
+        Func<ConductLoopLaunchRequest, ConductLoopLaunchResult>? launch = null,
+        Func<ConductLoopLaunchResult, long, ConductLoopHandoffVerification>? verify = null) =>
+        request => TryStartSuccessor(options, request, launch ?? LaunchDetached, verify ?? ((result, eventCursor) => VerifySuccessor(result, options, eventCursor)));
 
     internal static ConductorLoopHandoffResult TryStartSuccessor(
         ConductLoopHandoffOptions options,
         ConductorLoopHandoffRequest request,
-        Func<ConductLoopLaunchRequest, ConductLoopLaunchResult> launch)
+        Func<ConductLoopLaunchRequest, ConductLoopLaunchResult> launch,
+        Func<ConductLoopLaunchResult, long, ConductLoopHandoffVerification>? verify = null)
     {
         if (File.Exists(options.StopFilePath))
         {
@@ -116,10 +130,58 @@ internal static partial class ConductorLoopHandoff
         var launchRequest = new ConductLoopLaunchRequest(successorName, args, stdoutPath, stderrPath, options.ExecutionDirectory);
 
         options.ReleaseCurrentLease();
-        var result = launch(launchRequest);
-        TryRecordHandoffEvent(options.RunEventStorePath, "Started",
-            $"pid={result.ProcessId} stdout={result.StdoutPath} stderr={result.StderrPath}");
-        return ConductorLoopHandoffResult.StartedProcess(result.ProcessId, result.StdoutPath, result.StderrPath);
+        verify ??= (result, eventCursor) => VerifySuccessor(result, options, eventCursor);
+        ConductLoopLaunchResult? lastLaunch = null;
+        ConductLoopHandoffVerification? lastVerification = null;
+        Exception? lastError = null;
+
+        for (var attempt = 1; attempt <= MaxLaunchAttempts; attempt++)
+        {
+            var eventCursor = GetConductEventCursor(options);
+            try
+            {
+                var result = launch(launchRequest);
+                lastLaunch = result;
+                var verification = verify(result, eventCursor);
+                lastVerification = verification;
+                var detail =
+                    $"attempt={attempt} pid={result.ProcessId} stdout={result.StdoutPath} stderr={result.StderrPath} verification={verification.Detail}";
+
+                if (verification.Succeeded)
+                {
+                    TryRecordHandoffEvent(options.RunEventStorePath, "Started", detail);
+                    return ConductorLoopHandoffResult.StartedProcess(
+                        result.ProcessId,
+                        result.StdoutPath,
+                        result.StderrPath,
+                        verification.Detail);
+                }
+
+                TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
+                EmitHandoffFailure(detail);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                var detail =
+                    $"attempt={attempt} stdout={launchRequest.StdoutPath} stderr={launchRequest.StderrPath} error={ex.GetType().Name}:{ex.Message}";
+                TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
+                EmitHandoffFailure(detail);
+            }
+        }
+
+        var failureReason = lastError is null
+            ? "successor-verification-failed"
+            : $"successor-launch-failed {lastError.GetType().Name}:{lastError.Message}";
+        var verificationOutcome = lastVerification?.Detail ?? "not-verified";
+        TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
+            $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={verificationOutcome}");
+        return ConductorLoopHandoffResult.FailedStart(
+            failureReason,
+            stdoutPath,
+            stderrPath,
+            verificationOutcome,
+            lastLaunch?.ProcessId);
     }
 
     internal static int ParseRenewalCount(IReadOnlyList<string> args)
@@ -194,21 +256,21 @@ internal static partial class ConductorLoopHandoff
         }
 
         command.AddRange(request.Args);
+        if (OperatingSystem.IsWindows())
+            return LaunchDetachedWindows(request, command);
+
         var commandLine = string.Join(" ", command.Select(QuoteCommandArgument)) +
             " 1>" + QuoteCommandArgument(request.StdoutPath) +
             " 2>" + QuoteCommandArgument(request.StderrPath);
-        var shell = OperatingSystem.IsWindows()
-            ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
-            : "/bin/sh";
-        var shellArgs = OperatingSystem.IsWindows()
-            ? new[] { "/d", "/c", commandLine }
-            : new[] { "-c", commandLine };
+        var shell = "/bin/sh";
+        var shellArgs = new[] { "-c", commandLine + " & echo $!" };
 
         var startInfo = new ProcessStartInfo(shell)
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = request.WorkingDirectory
+            WorkingDirectory = request.WorkingDirectory,
+            RedirectStandardOutput = true
         };
 
         foreach (var arg in shellArgs)
@@ -218,9 +280,135 @@ internal static partial class ConductorLoopHandoff
         startInfo.Environment["MCG_ORCHESTRATOR_STDERR_LOG_PATH"] = request.StderrPath;
         startInfo.Environment[BatchNameEnvironmentVariable] = request.Name;
 
-        var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
-        return new ConductLoopLaunchResult(process.Id, request.StdoutPath, request.StderrPath);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
+        var pidText = process.StandardOutput.ReadLine();
+        if (!process.WaitForExit(5000) || process.ExitCode != 0)
+            throw new InvalidOperationException("Detached conduct loop launcher did not exit cleanly.");
+        if (!int.TryParse(pidText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
+            throw new InvalidOperationException("Detached conduct loop launcher did not report a successor pid.");
+
+        return new ConductLoopLaunchResult(pid, request.StdoutPath, request.StderrPath);
     }
+
+    private static ConductLoopLaunchResult LaunchDetachedWindows(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
+    {
+        var startInfo = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = request.WorkingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(BuildWindowsStartProcessCommand(request, command));
+        startInfo.Environment["MCG_ORCHESTRATOR_STDOUT_LOG_PATH"] = request.StdoutPath;
+        startInfo.Environment["MCG_ORCHESTRATOR_STDERR_LOG_PATH"] = request.StderrPath;
+        startInfo.Environment[BatchNameEnvironmentVariable] = request.Name;
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
+        var pidText = process.StandardOutput.ReadLine();
+        var launcherError = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(5000) || process.ExitCode != 0)
+            throw new InvalidOperationException($"Detached conduct loop launcher did not exit cleanly: {launcherError.Trim()}");
+        if (!int.TryParse(pidText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
+            throw new InvalidOperationException($"Detached conduct loop launcher did not report a successor pid: {pidText}");
+
+        return new ConductLoopLaunchResult(pid, request.StdoutPath, request.StderrPath);
+    }
+
+    internal static string BuildWindowsStartProcessCommand(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
+    {
+        var filePath = PowerShellLiteral(command[0]);
+        var argumentList = PowerShellLiteral(string.Join(" ", command.Skip(1).Select(QuoteCommandArgument)));
+        return string.Join("; ", new[]
+        {
+            "$ErrorActionPreference = 'Stop'",
+            "$env:MCG_ORCHESTRATOR_STDOUT_LOG_PATH = " + PowerShellLiteral(request.StdoutPath),
+            "$env:MCG_ORCHESTRATOR_STDERR_LOG_PATH = " + PowerShellLiteral(request.StderrPath),
+            $"$env:{BatchNameEnvironmentVariable} = " + PowerShellLiteral(request.Name),
+            "$argsList = " + argumentList,
+            "$p = Start-Process -WindowStyle Hidden -PassThru -FilePath " + filePath +
+                " -WorkingDirectory " + PowerShellLiteral(request.WorkingDirectory) +
+                " -ArgumentList $argsList -RedirectStandardOutput " + PowerShellLiteral(request.StdoutPath) +
+                " -RedirectStandardError " + PowerShellLiteral(request.StderrPath),
+            "[Console]::Out.WriteLine($p.Id)"
+        });
+    }
+
+    private static string PowerShellLiteral(string value) =>
+        "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+
+    private static ConductLoopHandoffVerification VerifySuccessor(
+        ConductLoopLaunchResult result,
+        ConductLoopHandoffOptions options,
+        long eventCursor)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(DefaultVerificationTimeout);
+        var processAlive = false;
+        var stdoutLogExists = false;
+        var loopStartJournaled = false;
+
+        while (DateTimeOffset.UtcNow <= deadline)
+        {
+            processAlive = IsProcessAlive(result.ProcessId);
+            stdoutLogExists = File.Exists(result.StdoutPath);
+            loopStartJournaled = HasLoopStartAfterCursor(options, eventCursor);
+            if (processAlive && stdoutLogExists && loopStartJournaled)
+                break;
+
+            Thread.Sleep(VerificationPollInterval);
+        }
+
+        var detail =
+            $"processAlive={ToLowerInvariant(processAlive)} " +
+            $"stdoutLogExists={ToLowerInvariant(stdoutLogExists)} " +
+            $"loopStartJournaled={ToLowerInvariant(loopStartJournaled)}";
+        return new ConductLoopHandoffVerification(processAlive, stdoutLogExists, loopStartJournaled, detail);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static long GetConductEventCursor(ConductLoopHandoffOptions options)
+    {
+        var path = ConductEventsPath(options);
+        return File.Exists(path) ? new FileInfo(path).Length : 0;
+    }
+
+    private static bool HasLoopStartAfterCursor(ConductLoopHandoffOptions options, long cursor)
+    {
+        var path = ConductEventsPath(options);
+        if (!File.Exists(path))
+            return false;
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (cursor >= 0 && cursor <= stream.Length)
+            stream.Position = cursor;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd().Contains("LOOP_START", StringComparison.Ordinal);
+    }
+
+    private static string ConductEventsPath(ConductLoopHandoffOptions options) =>
+        Path.Combine(options.LogDirectory, ConductEventLogWriter.CurrentFileName);
+
+    private static string ToLowerInvariant(bool value) =>
+        value ? "true" : "false";
 
     private static string QuoteCommandArgument(string value)
     {
@@ -261,6 +449,15 @@ internal static partial class ConductorLoopHandoff
     {
         var line =
             $"LOOP_HANDOFF_JOURNAL_FAILED status={status} store={runEventStorePath} error={ex.GetType().Name}:{ex.Message}";
+        Console.WriteLine(line);
+        Console.Error.WriteLine(line);
+        Console.Out.Flush();
+        Console.Error.Flush();
+    }
+
+    private static void EmitHandoffFailure(string detail)
+    {
+        var line = $"LOOP_HANDOFF_FAILED {detail}";
         Console.WriteLine(line);
         Console.Error.WriteLine(line);
         Console.Out.Flush();

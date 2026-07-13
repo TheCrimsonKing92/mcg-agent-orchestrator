@@ -679,6 +679,11 @@ public sealed class ConductorBatchLoopTests
                 {
                     launchRequest = request;
                     return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
+                },
+                (_, _) =>
+                {
+                    File.WriteAllText(launchRequest!.StdoutPath, "LOOP_START");
+                    return new ConductLoopHandoffVerification(true, true, true, "processAlive=true stdoutLogExists=true loopStartJournaled=true");
                 });
 
             Assert.True(result.Started);
@@ -688,6 +693,17 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(1, launchRequest.Args.Count(arg => arg == ConductorLoopHandoff.RenewalCountFlag));
             Assert.Equal("5", launchRequest.Args.Last());
             Assert.Equal(4567, result.ProcessId);
+            Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
+
+            var records = new SqliteRunEventStore(Path.Combine(root, ".orchestrator", "run-events.db"))
+                .ReadSinceAsync()
+                .GetAwaiter()
+                .GetResult();
+            var handoffEvent = Assert.Single(records.Where(record => record.Operation == "LOOP_HANDOFF"));
+            Assert.Equal("Started", handoffEvent.Status);
+            Assert.Contains(Path.GetFullPath(launchRequest.StdoutPath), handoffEvent.Detail, StringComparison.Ordinal);
+            Assert.Contains(Path.GetFullPath(launchRequest.StderrPath), handoffEvent.Detail, StringComparison.Ordinal);
+            Assert.Contains("loopStartJournaled=true", handoffEvent.Detail, StringComparison.Ordinal);
         }
         finally
         {
@@ -737,6 +753,11 @@ public sealed class ConductorBatchLoopTests
                         {
                             launchRequest = launch;
                             return new ConductLoopLaunchResult(4567, launch.StdoutPath, launch.StderrPath);
+                        },
+                        (_, _) =>
+                        {
+                            File.WriteAllText(launchRequest!.StdoutPath, "LOOP_START");
+                            return new ConductLoopHandoffVerification(true, true, true, "processAlive=true stdoutLogExists=true loopStartJournaled=true");
                         });
                 },
                 utcNow: UtcNow).Run(
@@ -782,6 +803,10 @@ public sealed class ConductorBatchLoopTests
                 {
                     launched = true;
                     return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
+                },
+                (_, _) =>
+                {
+                    return new ConductLoopHandoffVerification(true, true, true, "processAlive=true stdoutLogExists=true loopStartJournaled=true");
                 });
 
             Assert.True(result.Started);
@@ -795,6 +820,117 @@ public sealed class ConductorBatchLoopTests
             Console.SetError(originalError);
             TryDeleteDirectory(root);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_retries_once_and_journals_failed_verification_loudly")]
+    public void ConductorLoopHandoffRetriesOnceAndJournalsFailedVerificationLoudly()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-failed-handoff");
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var outWriter = new StringWriter();
+        using var errorWriter = new StringWriter();
+        try
+        {
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            var attempts = 0;
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(root),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    attempts++;
+                    return new ConductLoopLaunchResult(4500 + attempts, request.StdoutPath, request.StderrPath);
+                },
+                (_, _) => new ConductLoopHandoffVerification(
+                    ProcessAlive: false,
+                    StdoutLogExists: false,
+                    LoopStartJournaled: false,
+                    Detail: "processAlive=false stdoutLogExists=false loopStartJournaled=false"));
+
+            Assert.False(result.Started);
+            Assert.True(result.Failed);
+            Assert.Equal(2, attempts);
+            Assert.Equal("successor-verification-failed", result.Reason);
+            Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+
+            var records = new SqliteRunEventStore(Path.Combine(root, ".orchestrator", "run-events.db"))
+                .ReadSinceAsync()
+                .GetAwaiter()
+                .GetResult();
+            Assert.Equal(2, records.Count(record => record.Operation == "LOOP_HANDOFF" && record.Status == "Failed"));
+            Assert.Contains(records, record =>
+                record.Operation == "LOOP_HANDOFF" &&
+                record.Status == "Escalated" &&
+                record.Detail.Contains("successor-verification-failed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_handoff_failure_emits_failed_event_not_skipped")]
+    public void BatchLoopHandoffFailureEmitsFailedEventNotSkipped()
+    {
+        var (kernel, _) = SimpleGoal();
+        var root = CreateTempDirectory("mcg-conduct-loop-failed-event");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var writer = new ConductEventLogWriter(logPath);
+        try
+        {
+            var summary = new ConductorBatchLoop(
+                handoffOnMaxDuration: _ => ConductorLoopHandoffResult.FailedStart(
+                    "successor-verification-failed",
+                    Path.Combine(root, "successor.out.log"),
+                    Path.Combine(root, "successor.err.log"),
+                    "processAlive=false stdoutLogExists=false loopStartJournaled=false"),
+                conductEventLogWriter: writer)
+                .Run(
+                    kernel,
+                    MakeDriver(),
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxDuration: TimeSpan.Zero);
+
+            Assert.True(summary.Handoff?.Failed);
+            var log = File.ReadAllText(logPath);
+            Assert.Contains("LOOP_HANDOFF_FAILED", log, StringComparison.Ordinal);
+            Assert.Contains("successor.out.log", log, StringComparison.Ordinal);
+            Assert.Contains("loopStartJournaled=false", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_SKIPPED", log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_uses_StartProcess_hidden_with_redirected_logs")]
+    public void ConductorLoopHandoffWindowsLauncherUsesStartProcessHiddenWithRedirectedLogs()
+    {
+        var request = new ConductLoopLaunchRequest(
+            "batch39",
+            ["conduct", "--loop", "--watch"],
+            @"C:\repo\.orchestrator\logs\operator-batch39.out.log",
+            @"C:\repo\.orchestrator\logs\operator-batch39.err.log",
+            @"C:\repo");
+
+        var command = ConductorLoopHandoff.BuildWindowsStartProcessCommand(
+            request,
+            ["dotnet", @"C:\repo\src\Mcg.AgentOrchestrator.App.dll", "conduct", "--loop", "--watch"]);
+
+        Assert.Contains("Start-Process", command, StringComparison.Ordinal);
+        Assert.Contains("-WindowStyle Hidden", command, StringComparison.Ordinal);
+        Assert.Contains("-PassThru", command, StringComparison.Ordinal);
+        Assert.Contains("-RedirectStandardOutput 'C:\\repo\\.orchestrator\\logs\\operator-batch39.out.log'", command, StringComparison.Ordinal);
+        Assert.Contains("-RedirectStandardError 'C:\\repo\\.orchestrator\\logs\\operator-batch39.err.log'", command, StringComparison.Ordinal);
+        Assert.Contains("$env:MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME = 'batch39'", command, StringComparison.Ordinal);
     }
 
     private static void StartProcess(
