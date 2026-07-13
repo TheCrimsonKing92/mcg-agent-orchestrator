@@ -151,6 +151,8 @@ internal sealed record OrchestratorWorkspace(
 
     public string RunEventStorePath => Path.Combine(OrchestratorDirectory, "run-events.db");
 
+    public string ConductEventsLogPath => Path.Combine(LogDirectory, ConductEventLogWriter.CurrentFileName);
+
     public string OperatorChannelPath => Path.Combine(OrchestratorDirectory, "operator-channel.json");
 
     public string DashboardUrlFilePath => Path.Combine(OrchestratorDirectory, ".dashboard-url");
