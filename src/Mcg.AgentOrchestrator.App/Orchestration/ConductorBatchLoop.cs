@@ -21,7 +21,9 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
+    private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
+    private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
 
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
@@ -32,6 +34,7 @@ internal sealed class ConductorBatchLoop
         ConductorWatchProgressReporter? watchProgressReporter = null,
         Func<AgentOrchestratorKernel, TerminalGoalSweepResult?>? measuredSweep = null,
         Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
+        ConductEventLogWriter? conductEventLogWriter = null,
         Func<DateTimeOffset>? utcNow = null)
     {
         _sweep = measuredSweep ?? (kernel =>
@@ -45,6 +48,7 @@ internal sealed class ConductorBatchLoop
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _handoffOnMaxDuration = handoffOnMaxDuration;
+        _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -69,6 +73,10 @@ internal sealed class ConductorBatchLoop
         TimeSpan? stallWarningThreshold = null,
         Action<TimeSpan>? busyWriteDelay = null)
     {
+        var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
+        CurrentConductEventLogWriter.Value = _conductEventLogWriter;
+        try
+        {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -87,6 +95,7 @@ internal sealed class ConductorBatchLoop
         var maxDurationReached = false;
         var started = _utcNow();
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
+        EmitProgress($"LOOP_START policy={Sanitize(policy.Name)} maxIterations={maxIterations?.ToString() ?? "none"} maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}");
 
         while (true)
         {
@@ -486,6 +495,11 @@ internal sealed class ConductorBatchLoop
         }
 
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff);
+        }
+        finally
+        {
+            CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
+        }
     }
 
     private static void EmitHandoffProgress(int tick, ConductorLoopHandoffResult handoff)
@@ -508,6 +522,70 @@ internal sealed class ConductorBatchLoop
         Console.WriteLine(stampedLine);
         Console.Out.Flush();
         accumulator?.Add(stampedLine);
+        TryAppendConductEvent(line);
+    }
+
+    private static void TryAppendConductEvent(string line)
+    {
+        var writer = CurrentConductEventLogWriter.Value;
+        if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
+            return;
+
+        try
+        {
+            writer.Append(kind, goalId, line);
+        }
+        catch
+        {
+            // Shared operator event streaming is advisory; stdout remains the primary conduct log.
+        }
+    }
+
+    private static bool TryClassifyConductEvent(string line, out string kind, out string? goalId)
+    {
+        goalId = TryExtractToken(line, "goal=");
+        var head = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+        kind = head switch
+        {
+            "ACCEPTANCE" => "acceptance",
+            "BUILD_LOCK_BLOCKED" => "lock-blocker",
+            "GOAL" => ClassifyGoalEvent(line),
+            "LOCK" => "lock-blocker",
+            "LOOP_HANDOFF" => "loop-handoff",
+            "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
+            "LOOP_START" => "loop-start",
+            "LOOP_STOP" => "loop-stop",
+            "TICK_WRITE_BUSY" => "lock-blocker",
+            "TICK_WRITE_DEGRADED" => "lock-blocker",
+            "WATCH_TRANSITION" => "watch-transition",
+            _ => string.Empty
+        };
+
+        return kind.Length > 0;
+    }
+
+    private static string ClassifyGoalEvent(string line)
+    {
+        if (line.Contains("result=done", StringComparison.Ordinal) ||
+            line.Contains("result=landed", StringComparison.Ordinal))
+            return "goal-landing";
+        if (line.Contains("result=escalated", StringComparison.Ordinal) ||
+            line.Contains("escalated", StringComparison.Ordinal))
+            return "goal-escalation";
+        if (line.Contains("result=", StringComparison.Ordinal))
+            return "goal";
+        return string.Empty;
+    }
+
+    private static string? TryExtractToken(string line, string prefix)
+    {
+        var start = line.IndexOf(prefix, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+
+        start += prefix.Length;
+        var end = line.IndexOf(' ', start);
+        return end < 0 ? line[start..] : line[start..end];
     }
 
     private static string FormatPhaseTiming(int tick, string phase, TimeSpan elapsed, string detail) =>

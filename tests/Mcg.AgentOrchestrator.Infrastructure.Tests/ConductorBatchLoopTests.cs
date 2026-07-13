@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -2920,6 +2921,60 @@ public sealed class ConductorBatchLoopTests
         Assert.True(lines is not null && lines.Count > 0);
         Assert.True(lines!.Any(l => l.StartsWith("TICK ", StringComparison.Ordinal)));
         Assert.True(lines.Any(l => l.StartsWith("GOAL ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_shared_stream_receives_events_from_sequential_loop_instances")]
+    public void ConductEventsSharedStreamReceivesEventsFromSequentialLoopInstances()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var writer = new ConductEventLogWriter(logPath);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        string output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            var (firstKernel, _) = SimpleGoal("first conduct event stream goal");
+            new ConductorBatchLoop(conductEventLogWriter: writer).Run(
+                firstKernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+
+            var (secondKernel, _) = SimpleGoal("second conduct event stream goal");
+            new ConductorBatchLoop(conductEventLogWriter: writer).Run(
+                secondKernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+        });
+
+        Assert.Contains("GOAL goal=", output, StringComparison.Ordinal);
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+
+        Assert.True(records.Count(record => record.EventKind == "loop-start") >= 2);
+        Assert.Contains(records, record => record.EventKind == "goal" && record.GoalId is not null);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_rollover_preserves_stable_current_filename")]
+    public void ConductEventsRolloverPreservesStableCurrentFilename()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-rollover");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        File.WriteAllText(logPath, new string('x', 128));
+
+        var writer = new ConductEventLogWriter(
+            logPath,
+            maxBytes: 32,
+            utcNow: () => DateTimeOffset.Parse("2026-07-13T02:30:00Z"));
+
+        writer.Append("loop-stop", null, "LOOP_STOP tick=0 reason=test");
+
+        Assert.True(File.Exists(logPath));
+        Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logPath)!, "conduct-events-*.log"));
+        var current = JsonSerializer.Deserialize<ConductEventRecord>(
+            File.ReadAllText(logPath),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal("loop-stop", current.EventKind);
     }
 
     [Xunit.Fact(DisplayName = "ProgressEmission_TickSummaryContainsPhaseTimingLines")]
