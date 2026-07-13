@@ -148,7 +148,7 @@ This is the most important section. Match the **observable symptom** to its caus
 | Goal genuinely dead / wrong, can't proceed | — | `abandon-goal <goal> --text-file <path> --confirm-goal-abandon` (remove its worktree first if a Low-IL `.mcg-sandbox` orphan blocks it). |
 | Worker log shows exit 0 and file changes exist in `.orchestrator-worktrees/<prefix>` but the task is still `[Dispatched]` / reconcile loop shows `held` indefinitely | Orphaned dispatch reconcile — loop crashed after worker exited. The work is safe in the worktree. | `recover <goal> --text-file <path>` resets the stale dispatch → then `acceptance <goal>` (or re-run the loop) to read the worktree commits. |
 | Acceptance build fails with `MSB3491` / "file is being used by another process" after the repo-wide build-server disablement | A non-build-server process such as a running dashboard/test host may still hold an output DLL. Transient; not a code defect. | Stop the exact owning process when known; otherwise `dotnet build-server shutdown` is harmless, then retry: re-run `acceptance <goal>` or let the next loop tick retry. |
-| `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> <text>` for each; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
+| `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> --text-file <path>` for long answers; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
 | You want two or more goals to advance concurrently | Goals with overlapping file scopes contend for the same worktree paths — running them together produces merge conflicts. | Verify non-overlapping file scopes first. Then intake all goals **before** starting a single `conduct --loop --watch --policy Permissive` — one loop tick advances every eligible goal; the slot cap (5 under Permissive) limits concurrent workers. |
 
 ### State-repair quiet window
@@ -199,6 +199,7 @@ If a `conduct --loop --watch ...` is already running, the reassigned tasks are d
 
 Notes that will save you time:
 - `recover <goal> --text-file <path>` takes a long free-text note without tripping command-length caps. Short inline notes still work; avoid `;` and other shell-special characters because the launcher mangles them.
+- `subscription-dispatch <task> --confirm-limit-review --text-file <path>` records a long usage-limit review note without putting it on the command line.
 - A loop **crash** (vs a graceful `.conduct-stop`) does **not** cancel in-flight tasks — they stay reconcilable — but it can leave a goal in `Failed` lifecycle that `recover`/`acceptance` clears.
 - Verification roles (Tester/Reviewer) legitimately change no files; the dispatch gate accepts their `WORKER_RESULT` as evidence. If a verification task still won't pass, `verify-manual <n> passed --text-file <path>` records an operator pass.
 

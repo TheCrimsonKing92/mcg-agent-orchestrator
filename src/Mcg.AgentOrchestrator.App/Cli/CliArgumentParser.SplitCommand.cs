@@ -45,6 +45,16 @@ public static IReadOnlyList<string> SplitCommand(string line)
             var beforeParts = string.IsNullOrWhiteSpace(before)
                 ? []
                 : before.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var fileFlagIndex = IndexOfAnyFileFlag(note, "--text-file");
+            if (fileFlagIndex >= 0)
+            {
+                var inlineNote = note[..fileFlagIndex].Trim();
+                var flags = note[fileFlagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                return string.IsNullOrWhiteSpace(inlineNote)
+                    ? [command, .. beforeParts, limitReviewFlag, .. flags]
+                    : [command, .. beforeParts, limitReviewFlag, inlineNote, .. flags];
+            }
+
             return string.IsNullOrWhiteSpace(note)
                 ? [command, .. beforeParts, limitReviewFlag]
                 : [command, .. beforeParts, limitReviewFlag, note];
@@ -73,6 +83,12 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
     {
+        if (remainder.StartsWith("answer ", StringComparison.OrdinalIgnoreCase) &&
+            IndexOfAnyFileFlag(remainder, "--text-file") >= 0)
+        {
+            return SplitAttentionAnswerWithFileFlag(command, remainder);
+        }
+
         var rest = remainder.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
         return rest.Length >= 4 &&
             rest[0].Equals("answer", StringComparison.OrdinalIgnoreCase) &&
@@ -127,30 +143,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("stop", StringComparison.OrdinalIgnoreCase))
     {
-        // stop <goal-prefix> <reason text> [--as <mode>] [--confirm-*]
-        // First word = goal prefix; reason = text up to first ' --'; rest = flags
-        var stopPrefixEnd = remainder.IndexOf(' ');
-        if (stopPrefixEnd < 0)
-        {
-            return [command, remainder];
-        }
-
-        var stopGoalPrefix = remainder[..stopPrefixEnd];
-        var stopRest = remainder[(stopPrefixEnd + 1)..].Trim();
-        var stopFlagIndex = stopRest.IndexOf(" --", StringComparison.Ordinal);
-        if (stopFlagIndex < 0 && stopRest.StartsWith("--", StringComparison.Ordinal))
-        {
-            stopFlagIndex = 0;
-        }
-
-        if (stopFlagIndex < 0)
-        {
-            return [command, stopGoalPrefix, stopRest];
-        }
-
-        var stopReason = stopRest[..stopFlagIndex].Trim();
-        var stopFlags = stopRest[stopFlagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return [command, stopGoalPrefix, stopReason, .. stopFlags];
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
     }
 
     if (command.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
@@ -201,6 +194,28 @@ public static IReadOnlyList<string> SplitCommand(string line)
     return IsSimpleCommand(command)
         ? SplitSimpleCommandWithFlags(command, remainder)
         : [command, remainder];
+}
+
+private static IReadOnlyList<string> SplitAttentionAnswerWithFileFlag(string command, string remainder)
+{
+    var rest = remainder.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
+    if (rest.Length >= 4 && LooksLikeAttentionClarificationId(rest[2]))
+    {
+        var flagIndex = IndexOfAnyFileFlag(rest[3], "--text-file");
+        if (flagIndex < 0)
+        {
+            return [command, rest[0], rest[1], rest[2], rest[3]];
+        }
+
+        var inlineText = rest[3][..flagIndex].Trim();
+        var flags = rest[3][flagIndex..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.IsNullOrWhiteSpace(inlineText)
+            ? [command, rest[0], rest[1], rest[2], .. flags]
+            : [command, rest[0], rest[1], rest[2], inlineText, .. flags];
+    }
+
+    var globalRemainder = remainder["answer ".Length..].Trim();
+    return [command, "answer", .. SplitTargetTextCommandWithFileFlags("answer", globalRemainder, "--text-file").Skip(1)];
 }
 
 private static IReadOnlyList<string> SplitSimpleCommandWithFlags(string command, string remainder)

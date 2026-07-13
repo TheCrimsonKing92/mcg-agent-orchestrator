@@ -150,9 +150,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "abandon-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var abandonReason = RemoveFlag(
-                ResolveTextArgument(parts, inlineIndex: 2, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]", "--text-file"),
-                "--confirm-goal-abandon");
+            var abandonParts = RemoveStandaloneFlag(parts, "--confirm-goal-abandon");
+            var abandonReason = ResolveTextArgument(abandonParts, inlineIndex: 2, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]", "--text-file");
             if (!HasCliConfirmation(parts, "--confirm-goal-abandon") &&
                 !parts[2].Contains("--confirm-goal-abandon", StringComparison.OrdinalIgnoreCase))
             {
@@ -270,9 +269,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "rollback-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var rollbackReason = RemoveFlag(
-                ResolveTextArgument(parts, inlineIndex: 2, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]", "--text-file"),
-                "--confirm-goal-rollback");
+            var rollbackParts = RemoveStandaloneFlag(parts, "--confirm-goal-rollback");
+            var rollbackReason = ResolveTextArgument(rollbackParts, inlineIndex: 2, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]", "--text-file");
             var rollbackPlan = HasCliConfirmation(parts, "--confirm-goal-rollback") ||
                 parts[2].Contains("--confirm-goal-rollback", StringComparison.OrdinalIgnoreCase)
                 ? GoalRollbackPlanner.Apply(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason)
@@ -2342,6 +2340,17 @@ private static string? ResolveTextArgumentOrDefault(IReadOnlyList<string> parts,
     return File.ReadAllText(path, System.Text.Encoding.UTF8);
 }
 
+private static string? ResolveFlagTextArgumentOrDefault(IReadOnlyList<string> parts, string valueFlag, params string[] fileFlags)
+{
+    var flagIndex = parts.ToList().FindIndex(part => part.Equals(valueFlag, StringComparison.OrdinalIgnoreCase));
+    if (flagIndex < 0)
+    {
+        return null;
+    }
+
+    return ResolveTextArgumentOrDefault(parts, flagIndex + 1, defaultValue: null, fileFlags);
+}
+
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)
 {
     if (HasCliConfirmation(parts, flag))
@@ -2365,9 +2374,8 @@ private static Goal HandleGoalStopCommand(CliExecutionContext context, IReadOnly
         throw new InvalidOperationException($"{parts[0]} requires --confirm-goal-stop for active or non-current goals.");
     }
 
-    var reason = RemoveFlag(
-        ResolveTextArgument(parts, inlineIndex: 2, $"{parts[0]} <goal-id-prefix> <reason> [--confirm-goal-stop] | {parts[0]} <goal-id-prefix> --text-file <path> [--confirm-goal-stop]", "--text-file"),
-        "--confirm-goal-stop");
+    var textParts = RemoveStandaloneFlag(parts, "--confirm-goal-stop");
+    var reason = ResolveTextArgument(textParts, inlineIndex: 2, $"{parts[0]} <goal-id-prefix> <reason> [--confirm-goal-stop] | {parts[0]} <goal-id-prefix> --text-file <path> [--confirm-goal-stop]", "--text-file");
     return supersede
         ? context.Kernel.SupersedeGoal(goal.Id, reason)
         : context.Kernel.CancelGoal(goal.Id, reason);
@@ -2376,9 +2384,8 @@ private static Goal HandleGoalStopCommand(CliExecutionContext context, IReadOnly
 private static Goal HandleGoalParkCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-    var reason = RemoveFlag(
-        ResolveTextArgument(parts, inlineIndex: 2, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]", "--text-file"),
-        "--confirm-goal-park");
+    var textParts = RemoveStandaloneFlag(parts, "--confirm-goal-park");
+    var reason = ResolveTextArgument(textParts, inlineIndex: 2, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]", "--text-file");
     if (string.IsNullOrWhiteSpace(reason))
     {
         throw new ArgumentException("Goal park reason cannot be empty.", nameof(parts));
@@ -2423,8 +2430,8 @@ private static bool HasGoalStopConfirmation(IReadOnlyList<string> parts) =>
     parts.Any(part => part.Equals("--confirm-goal-stop", StringComparison.OrdinalIgnoreCase) ||
         part.Contains("--confirm-goal-stop", StringComparison.OrdinalIgnoreCase));
 
-private static string RemoveFlag(string value, string flag) =>
-    value.Replace(flag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+private static IReadOnlyList<string> RemoveStandaloneFlag(IReadOnlyList<string> parts, string flag) =>
+    parts.Where(part => !part.Equals(flag, StringComparison.OrdinalIgnoreCase)).ToList();
 
 private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<string> parts)
 {

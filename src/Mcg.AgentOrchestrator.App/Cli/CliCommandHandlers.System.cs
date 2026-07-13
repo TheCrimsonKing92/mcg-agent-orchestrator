@@ -275,7 +275,7 @@ internal static partial class CliCommandHandlers
                             Console.WriteLine($"    {clarification.Body}");
                     }
 
-                    Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> (ids are stable; answering one does not renumber the rest)");
+                    Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest)");
                     return changed;
                 }
 
@@ -287,7 +287,7 @@ internal static partial class CliCommandHandlers
                 if (parts.Count > 1 && parts[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (parts.Count < 4)
-                        throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
+                        throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>");
 
                     var globalClarifications = OpenClarifications(store);
                     // Legacy global syntax wins when the first token is an open clarification id, even if
@@ -300,10 +300,14 @@ internal static partial class CliCommandHandlers
                     var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
                     if (scoped && parts.Count < 5)
-                        throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer>");
+                        throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>");
 
                     var id = scoped ? parts[3] : parts[2];
-                    var answer = string.Join(' ', parts.Skip(scoped ? 4 : 3));
+                    var answer = ResolveTextArgument(
+                        parts,
+                        scoped ? 4 : 3,
+                        "attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>",
+                        "--text-file");
                     var clarification = scoped
                         ? ResolveClarificationByShortId(
                             OpenClarificationsForGoal(store, goal!),

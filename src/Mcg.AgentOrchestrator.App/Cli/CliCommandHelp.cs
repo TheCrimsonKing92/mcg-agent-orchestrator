@@ -13,7 +13,13 @@ internal static class CliCommandHelp
     public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> | answer <request-id> --text-file <path>";
+    public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
+    public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
+    public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
+    public const string ParkGoalUsage = "Usage: park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]";
+    public const string StopUsage = "Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede";
+    public const string SubscriptionDispatchUsage = "Usage: subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
@@ -88,10 +94,40 @@ internal static class CliCommandHelp
         "Submit an answer to a human-input request.",
         ["--text-file", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry Attention = new(
+        AttentionUsage,
+        "Show, dismiss, or answer operator attention items.",
+        ["--all", "--include-parked", "--goal", "--text-file", "--help", "-h"]);
+
     private static readonly CommandHelpEntry AbandonGoal = new(
         AbandonGoalUsage,
         "Abandon a goal after preview or confirmation.",
         ["--text-file", "--confirm-goal-abandon", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry CancelGoal = new(
+        CancelGoalUsage,
+        "Cancel a goal.",
+        ["--text-file", "--confirm-goal-stop", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry SupersedeGoal = new(
+        SupersedeGoalUsage,
+        "Supersede a goal.",
+        ["--text-file", "--confirm-goal-stop", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry ParkGoal = new(
+        ParkGoalUsage,
+        "Park a goal.",
+        ["--text-file", "--confirm-goal-park", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Stop = new(
+        StopUsage,
+        "Route a goal stop disposition to cancel, park, abandon, or supersede.",
+        ["--text-file", "--as", "--confirm-goal-stop", "--confirm-goal-park", "--confirm-goal-abandon", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry SubscriptionDispatch = new(
+        SubscriptionDispatchUsage,
+        "Prepare a subscription-backed task dispatch.",
+        ["--goal", "--confirm-limit-review", "--text-file", "--subscription-model", "--subscription", "--subscription-reasoning", "--allow-git-reference", "--confirm-dispatch-start", "--confirm-large-paid-subscription-start", "--autonomy", "--autonomy-policy", "--confirm-readiness-risk", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
@@ -272,9 +308,45 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Attention;
+            return true;
+        }
+
         if (args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase))
         {
             entry = AbandonGoal;
+            return true;
+        }
+
+        if (args[0].Equals("cancel-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CancelGoal;
+            return true;
+        }
+
+        if (args[0].Equals("supersede-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = SupersedeGoal;
+            return true;
+        }
+
+        if (args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ParkGoal;
+            return true;
+        }
+
+        if (args[0].Equals("stop", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Stop;
+            return true;
+        }
+
+        if (args[0].Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = SubscriptionDispatch;
             return true;
         }
 

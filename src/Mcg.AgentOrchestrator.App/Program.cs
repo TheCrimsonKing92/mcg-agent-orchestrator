@@ -240,7 +240,7 @@ Console.WriteLine("  goal <objective> [--simple] [--from-backlog] [--run --confi
 Console.WriteLine("    Create a goal. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
 Console.WriteLine("  accept [goal-id] [--skip-verify] [--autonomy <policy>]");
 Console.WriteLine("    Accept a completed goal: run acceptance checks, merge workspace, and clean up worktree.");
-Console.WriteLine("  stop <goal-id> <reason> --as cancel|park|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-abandon]");
+Console.WriteLine("  stop <goal-id> <reason>|--text-file <path> --as cancel|park|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-abandon]");
 Console.WriteLine("    Stop a goal using the specified disposal mode.");
 Console.WriteLine("  config <agents|profiles|policy|doctor>");
 Console.WriteLine("    View configuration: agents=agent catalog, profiles=worker profiles, policy=autonomy policies, doctor=health check.");

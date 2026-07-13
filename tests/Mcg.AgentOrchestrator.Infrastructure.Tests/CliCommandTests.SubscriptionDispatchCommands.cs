@@ -2688,6 +2688,88 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_confirm_limit_review_accepts_text_file")]
+    public void CliSubscriptionDispatchConfirmLimitReviewAcceptsTextFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Review subscription limit from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec prompt.md",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec attempt",
+            root,
+            1,
+            string.Empty,
+            "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+            DateTimeOffset.UtcNow));
+        var note = "Reviewed from a file.\n\nProfile and timing are acceptable.";
+        var notePath = Path.Combine(root, "limit-review.md");
+        File.WriteAllText(notePath, note, System.Text.Encoding.UTF8);
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"subscription-dispatch 1 --confirm-limit-review --text-file {notePath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(note, task.SubscriptionLimitReviewNote);
+        Xunit.Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_confirm_limit_review_rejects_inline_text_and_file")]
+    public void CliSubscriptionDispatchConfirmLimitReviewRejectsInlineTextAndFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Reject duplicate subscription limit note", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var notePath = Path.Combine(root, "limit-review.md");
+        File.WriteAllText(notePath, "File note.", System.Text.Encoding.UTF8);
+
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1", "--confirm-limit-review", "Inline note.", "--text-file", notePath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_agent_command_creates_agent_with_complex_model_from_flag")]
     public void CliAgentCommandCreatesAgentWithComplexModelFromFlag()
     {

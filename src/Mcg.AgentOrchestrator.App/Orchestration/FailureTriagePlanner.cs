@@ -161,7 +161,7 @@ internal static class FailureTriagePlanner
                 canAutoApply: false,
                 gate: true,
                 "Repeated subscription usage-limit failures require an operator review note before another dispatch.",
-                $"subscription-dispatch {taskNumber} --confirm-limit-review <note>"));
+                $"subscription-dispatch {taskNumber} --confirm-limit-review --text-file <path>"));
             return;
         }
 

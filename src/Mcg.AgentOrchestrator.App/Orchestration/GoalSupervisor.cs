@@ -195,7 +195,7 @@ internal static class GoalSupervisor
                 CanApply: false,
                 RequiresOperatorGate: true,
                 "Repeated subscription usage-limit failures require an operator review note before redispatch.",
-                $"subscription-dispatch {finding.TaskNumber} --confirm-limit-review <note>"));
+                $"subscription-dispatch {finding.TaskNumber} --confirm-limit-review --text-file <path>"));
             return;
         }
 
