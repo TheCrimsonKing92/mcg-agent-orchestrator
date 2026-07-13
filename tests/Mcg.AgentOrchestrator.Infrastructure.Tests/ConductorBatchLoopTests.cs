@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -932,6 +933,168 @@ public sealed class ConductorBatchLoopTests
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
         Assert.Contains("JobObjectLimitBreakawayOk", jobSource, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_successor_survives_parent_job_exit_and_emits_loop_start")]
+    public void ConductorLoopHandoffSuccessorSurvivesParentJobExitAndEmitsLoopStart()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            // The production failure mode is Windows job-object kill-on-close inheritance.
+            return;
+        }
+
+        var root = CreateTempDirectory("mcg-conduct-loop-runtime-handoff");
+        var appAssembly = typeof(ConductorBatchLoop).Assembly.Location;
+        Process? parent = null;
+        int? successorPid = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo("dotnet")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = root
+            };
+            startInfo.ArgumentList.Add(appAssembly);
+            startInfo.ArgumentList.Add("conduct");
+            startInfo.ArgumentList.Add("--loop");
+            startInfo.ArgumentList.Add("--daemon");
+            startInfo.ArgumentList.Add("--poll-seconds");
+            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add("--max-duration");
+            startInfo.ArgumentList.Add("3");
+            startInfo.ArgumentList.Add("--quiet");
+            startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = root;
+            startInfo.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(root, "project-registry");
+            startInfo.Environment["MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME"] = "batch98";
+
+            parent = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start parent conductor process.");
+            var stdoutTask = parent.StandardOutput.ReadToEndAsync();
+            var stderrTask = parent.StandardError.ReadToEndAsync();
+            using (var parentJob = OwnedProcessGroup.Attach(parent))
+            {
+                Assert.True(parent.WaitForExit(30000), "Parent conductor did not reach max-duration handoff.");
+                parentJob.Dispose();
+            }
+
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
+            Assert.Equal(0, parent.ExitCode);
+            successorPid = ParseHandoffProcessId(stdout);
+
+            Assert.True(IsProcessRunning(successorPid.Value), $"Successor pid {successorPid.Value} did not survive parent job close. stdout={stdout} stderr={stderr}");
+
+            var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+            var conductEventsPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
+            Assert.True(WaitUntil(() =>
+                File.Exists(conductEventsPath) &&
+                File.ReadAllText(conductEventsPath).Contains("LOOP_START", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5)), $"Successor did not journal LOOP_START. stdout={stdout} stderr={stderr}");
+
+            Assert.NotEmpty(Directory.GetFiles(logDirectory, "operator-batch99-*.out.log"));
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(root, ConductorBatchLoop.StopFileName), "stop");
+            if (successorPid is { } pid && !WaitUntil(() => !IsProcessRunning(pid), TimeSpan.FromSeconds(10)))
+            {
+                TryKillProcess(pid);
+            }
+
+            if (parent is not null)
+            {
+                TryKillProcess(parent.Id);
+                parent.Dispose();
+            }
+
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private static int ParseHandoffProcessId(string output)
+    {
+        foreach (var line in output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!line.Contains("LOOP_HANDOFF tick=", StringComparison.Ordinal) ||
+                !TryReadTokenValue(line, "pid=", out var pidText) ||
+                !int.TryParse(pidText, out var pid))
+            {
+                continue;
+            }
+
+            return pid;
+        }
+
+        throw new InvalidOperationException("Parent conductor output did not include a LOOP_HANDOFF pid.");
+    }
+
+    private static bool TryReadTokenValue(string line, string token, out string value)
+    {
+        var start = line.IndexOf(token, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            value = string.Empty;
+            return false;
+        }
+
+        start += token.Length;
+        var end = line.IndexOf(' ', start);
+        value = end < 0 ? line[start..] : line[start..end];
+        return value.Length > 0;
+    }
+
+    private static bool WaitUntil(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (predicate())
+            {
+                return true;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return predicate();
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (ArgumentException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private static void StartProcess(
