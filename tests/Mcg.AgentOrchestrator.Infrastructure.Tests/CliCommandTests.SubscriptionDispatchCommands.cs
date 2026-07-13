@@ -2174,19 +2174,23 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var verifyText = "Manual verification from file.\n\nModel fit: fake adequate.";
         var addTaskText = "Added task from file.\n\nPreserve the full description.";
         var answerText = "Answer from file.\n\nUse the longer clarification response.";
+        var noteText = "Note from file.\n\nKeep the full neutral operator receipt.";
         var retryPath = Path.Combine(root, "retry.md");
         var progressPath = Path.Combine(root, "progress.md");
         var verifyPath = Path.Combine(root, "verify.md");
         var addTaskPath = Path.Combine(root, "add-task.md");
         var answerPath = Path.Combine(root, "answer.md");
+        var notePath = Path.Combine(root, "note.md");
         File.WriteAllText(retryPath, retryText, System.Text.Encoding.UTF8);
         File.WriteAllText(progressPath, progressText, System.Text.Encoding.UTF8);
         File.WriteAllText(verifyPath, verifyText, System.Text.Encoding.UTF8);
         File.WriteAllText(addTaskPath, addTaskText, System.Text.Encoding.UTF8);
         File.WriteAllText(answerPath, answerText, System.Text.Encoding.UTF8);
+        File.WriteAllText(notePath, noteText, System.Text.Encoding.UTF8);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Initial failure.");
 
         CliCommandDispatcher.ExecuteCommand(["retry", "1", "--text-file", retryPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["note", "1", "--text-file", notePath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["progress", "1", "running", "--text-file", progressPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["verify-manual", "1", "passed", "--text-file", verifyPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["add-task", "Tester", "--text-file", addTaskPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
@@ -2194,6 +2198,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         CliCommandDispatcher.ExecuteCommand(["answer", request.Id.Value[..8], "--text-file", answerPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == retryText);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskNote && evt.Message == noteText);
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == progressText);
         Xunit.Assert.Equal(verifyText, task.LastVerification!.StandardOutput);
         Xunit.Assert.Contains(goal.Tasks, candidate => candidate.Description == addTaskText);
@@ -2396,10 +2401,32 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             providers,
             ref profiles,
             ref currentGoal));
+        var notePath = Path.Combine(root, "note.md");
+        File.WriteAllText(notePath, "File note.", System.Text.Encoding.UTF8);
+        var inlineAndFile = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"note 1 Inline note --text-file {notePath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var missingPath = Path.Combine(root, "missing-note.md");
+        var missingFile = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "1", "--text-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
 
         Xunit.Assert.Contains("Usage: note <task-number>", missingMessage.Message);
         Xunit.Assert.Contains("Task note message cannot be empty.", emptyMessage.Message);
         Xunit.Assert.Contains("99", unknownTask.Message);
+        Xunit.Assert.Contains("either inline text or --text-file", inlineAndFile.Message);
+        Xunit.Assert.Contains("--text-file not found", missingFile.Message);
+        Xunit.Assert.Contains(missingPath, missingFile.Message);
     }
 
 

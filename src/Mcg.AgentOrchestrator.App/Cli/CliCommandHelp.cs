@@ -8,6 +8,7 @@ internal static class CliCommandHelp
     public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] | goal --brief-file <path> | goal --text-file <path>";
     public const string AddTaskUsage = "Usage: add-task <role> <description> | add-task <role> --text-file <path>";
     public const string RetryUsage = "Usage: retry <task-number> <message> | retry <goal-prefix> <task-number> <message> | retry --goal <goal-prefix> <task-number> <message> | retry <task-number> --text-file <path>";
+    public const string NoteUsage = "Usage: note <task-number> <message> | note <goal-prefix> <task-number> <message> | note --goal <goal-prefix> <task-number> <message> | note <task-number> --text-file <path>";
     public const string ProgressUsage = "Usage: progress <task-number> <status> <message> | progress <task-number> <status> --text-file <path>";
     public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
@@ -20,7 +21,7 @@ internal static class CliCommandHelp
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
-    public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>";
+    public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
@@ -61,6 +62,11 @@ internal static class CliCommandHelp
         RetryUsage,
         "Retry a task with operator feedback.",
         ["--goal", "--text-file", "--autonomy", "--autonomy-policy", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Note = new(
+        NoteUsage,
+        "Record a status-neutral task note.",
+        ["--goal", "--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Progress = new(
         ProgressUsage,
@@ -125,7 +131,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogClose = new(
         BacklogCloseUsage,
         "Close a backlog item by id prefix.",
-        ["--reason-file", "--help", "-h"]);
+        ["--reason-file", "--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogReopen = new(
         BacklogReopenUsage,
@@ -233,6 +239,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("retry", StringComparison.OrdinalIgnoreCase))
         {
             entry = Retry;
+            return true;
+        }
+
+        if (args[0].Equals("note", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Note;
             return true;
         }
 

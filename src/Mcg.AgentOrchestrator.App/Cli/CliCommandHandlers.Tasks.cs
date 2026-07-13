@@ -145,10 +145,11 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "note":
-            var noteTarget = ResolveCommandTaskTarget(parts, context, "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>");
-            RequireRemainingArgument(parts, noteTarget.NextIndex, "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>");
+            var noteUsage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>|note <task-number> --text-file <path>";
+            var noteTarget = ResolveCommandTaskTarget(parts, context, noteUsage);
+            RequireRemainingArgument(parts, noteTarget.NextIndex, noteUsage);
             var noteTask = noteTarget.Task;
-            context.Kernel.RecordTaskNote(context.CurrentGoal!.Id, noteTask.Id, parts[noteTarget.NextIndex]);
+            context.Kernel.RecordTaskNote(context.CurrentGoal!.Id, noteTask.Id, ResolveTextArgument(parts, noteTarget.NextIndex, noteUsage, "--text-file"));
             Console.WriteLine($"Note added to task {noteTask.Id}");
             return true;
 

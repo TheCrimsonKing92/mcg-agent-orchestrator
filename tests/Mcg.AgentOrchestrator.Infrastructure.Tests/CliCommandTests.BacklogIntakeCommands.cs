@@ -707,6 +707,68 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_close_text_file_rejects_inline_reason")]
+    public async Task CliBacklogCloseTextFileRejectsInlineReason()
+    {
+        var root = CreateTempDirectory();
+        var reasonPath = Path.Combine(root, "reason.md");
+        File.WriteAllText(reasonPath, "File reason.", System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Close duplicate reason");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"backlog-close {item.Id[..8]} Inline reason --text-file {reasonPath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+        var open = await store.GetByExactIdAsync(item.Id);
+        Xunit.Assert.NotNull(open);
+        Xunit.Assert.Equal(BacklogItemStatus.Open, open!.Status);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_close_text_file_missing_gives_clear_error")]
+    public async Task CliBacklogCloseTextFileMissingGivesClearError()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Close missing reason");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var missingPath = Path.Combine(root, "does-not-exist.md");
+
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-close", item.Id[..8], "--text-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("--text-file not found", ex.Message);
+        Xunit.Assert.Contains(missingPath, ex.Message);
+        var open = await store.GetByExactIdAsync(item.Id);
+        Xunit.Assert.NotNull(open);
+        Xunit.Assert.Equal(BacklogItemStatus.Open, open!.Status);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_backlog_close_reason_file_closes_item_with_file_content")]
     public async Task CliBacklogCloseReasonFileClosesItemWithFileContent()
     {
@@ -725,6 +787,39 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["backlog-close", item.Id[..8], "--reason-file", reasonPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var closed = await store.GetByExactIdAsync(item.Id);
+        Xunit.Assert.NotNull(closed);
+        Xunit.Assert.Equal(BacklogItemStatus.Done, closed!.Status);
+        Xunit.Assert.Contains("Original body", closed.Body);
+        Xunit.Assert.Contains(reasonContent, closed.Body);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_close_text_file_alias_closes_item_with_file_content")]
+    public async Task CliBacklogCloseTextFileAliasClosesItemWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var reasonContent = "Resolved by the uniform --text-file backlog close path.\n\nIncludes the long operator receipt.";
+        var reasonPath = Path.Combine(root, "reason.md");
+        File.WriteAllText(reasonPath, reasonContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Close from text file", "Original body");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-close", item.Id[..8], "--text-file", reasonPath],
             kernel,
             workspace,
             ref agents,
