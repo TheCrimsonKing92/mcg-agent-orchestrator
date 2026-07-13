@@ -1484,7 +1484,9 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.DoesNotContain("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.DoesNotContain("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
-    Assert.Contains("i/goals/infra-partition/lease/lease.json", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
+    Assert.False(GitCli.IsWorktreeDirty(worktree));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "goals", "infra-partition", "lease", "lease.json")));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "slots", "slot-0", "lease.execution.lock")));
     Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD"]));
 }
 
@@ -2171,7 +2173,9 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var status = ReadGit(worktree, ["status", "--short"]);
     Assert.DoesNotContain("seed.txt", status, StringComparison.Ordinal);
-    Assert.Contains("i/goals/infra-partition/lease/lease.json", status, StringComparison.Ordinal);
+    Assert.False(GitCli.IsWorktreeDirty(worktree));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "goals", "infra-partition", "lease", "lease.json")));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "slots", "slot-0", "lease.execution.lock")));
     Assert.Equal("seed.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]));
     Assert.DoesNotContain("i/goals", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
 }

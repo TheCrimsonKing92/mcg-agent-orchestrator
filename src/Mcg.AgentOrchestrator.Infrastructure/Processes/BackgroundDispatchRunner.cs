@@ -1301,7 +1301,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         var head = GitCli.Run(workingDirectory, "rev-parse", "--short", "HEAD");
-        var status = GitCli.Run(workingDirectory, "status", "--short");
+        var status = GitCli.Run(workingDirectory, "status", "--short", "--untracked-files=all");
         var dispatch = GitCli.Run(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
         var changedPaths = GitCli.Run(workingDirectory, "log", "--name-only", "--format=", $"--since={dispatchedAt:O}");
         var commitsAfterDispatch = 0;

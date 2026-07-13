@@ -94,7 +94,7 @@ internal static class GitCli
     // unverified state).
     public static bool IsWorktreeDirty(string workingDirectory)
     {
-        var result = Run(workingDirectory, "status", "--porcelain");
+        var result = Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
         return result.ExitCode != 0 || !string.IsNullOrWhiteSpace(FilterCommitWorthyStatus(result.Output));
     }
 
