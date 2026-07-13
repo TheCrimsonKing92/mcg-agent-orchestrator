@@ -156,11 +156,12 @@ public sealed partial class AgentOrchestratorKernel
             EnsureNoRunningDownstreamTasks(goal, task);
         }
 
-        ResetTaskForRetry(task);
+        var retryAt = _clock.UtcNow;
+        ResetTaskForRetry(task, retryAt);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
         {
-            InvalidateDownstreamTasks(goal, task);
+            InvalidateDownstreamTasks(goal, task, retryAt);
         }
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Retry reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
@@ -212,6 +213,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
+        task.RecordRetry(_clock.UtcNow);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Interrupted dispatch recovery reopened goal because task {task.Id.Value[..8]} is dispatchable.");
@@ -462,13 +464,14 @@ public sealed partial class AgentOrchestratorKernel
         RefreshGoalStatus(goal);
     }
 
-    private static void ResetTaskForRetry(TaskSpec task)
+    private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt)
     {
         task.ClearLatestVerification();
         task.ClearLastExecution();
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
+        task.RecordRetry(retryAt);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }
 
@@ -485,7 +488,7 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    private void InvalidateDownstreamTasks(Goal goal, TaskSpec retriedTask)
+    private void InvalidateDownstreamTasks(Goal goal, TaskSpec retriedTask, DateTimeOffset retryAt)
     {
         foreach (var downstream in goal.Tasks.Where(task => IsDownstreamRole(retriedTask.RequiredRole, task.RequiredRole)))
         {
@@ -499,7 +502,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            ResetTaskForRetry(downstream);
+            ResetTaskForRetry(downstream, retryAt);
             Append(
                 goal,
                 downstream.Id,

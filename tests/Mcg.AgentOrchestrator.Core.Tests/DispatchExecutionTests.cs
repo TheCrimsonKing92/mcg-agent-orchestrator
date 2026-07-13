@@ -65,6 +65,93 @@ public sealed class DispatchExecutionTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_ignores_dispatch_started_before_latest_retry")]
+    public void RecordDispatchExecutionResultIgnoresDispatchStartedBeforeLatestRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Ignore stale retry dispatch");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec prompt";
+    var staleDispatchAt = clock.UtcNow;
+    var stdout = WorkerResultStdout("src/Foo.cs", "pass", "none");
+
+    clock.Advance();
+    kernel.RetryTask(goal.Id, task.Id, "Retry after acceptance failure.");
+    var latestRetryAt = task.LatestRetryAt;
+
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", command, "C:\\repo", staleDispatchAt, WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            command,
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(latestRetryAt, task.LatestRetryAt);
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastVerification);
+    Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Ignored stale dispatch execution evidence", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_dispatch_started_after_latest_retry")]
+    public void RecordDispatchExecutionResultCompletesDispatchStartedAfterLatestRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Honor fresh retry dispatch");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec prompt";
+    var stdout = WorkerResultStdout("src/Foo.cs", "pass", "none");
+
+    kernel.RetryTask(goal.Id, task.Id, "Retry with stronger instructions.");
+    clock.Advance();
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            command,
+            "C:\\repo",
+            0,
+            stdout,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_completes_after_task_output_committed_worker_result")]
     public void RecordDispatchExecutionResultCompletesAfterTaskOutputCommittedWorkerResult()
 {
