@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -292,57 +295,83 @@ internal static partial class ConductorLoopHandoff
 
     private static ConductLoopLaunchResult LaunchDetachedWindows(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
     {
-        var startInfo = new ProcessStartInfo("powershell.exe")
+        var cmd = Environment.GetEnvironmentVariable("ComSpec");
+        if (string.IsNullOrWhiteSpace(cmd))
+            cmd = "cmd.exe";
+
+        var commandLine = new StringBuilder(BuildWindowsBreakawayCommandLine(cmd, command, request.StdoutPath, request.StderrPath));
+        var environment = BuildWindowsEnvironmentBlock(request);
+        var startupInfo = new WindowsProcessStartupInfo
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = request.WorkingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
+            cb = Marshal.SizeOf<WindowsProcessStartupInfo>()
         };
 
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add(BuildWindowsStartProcessCommand(request, command));
-        startInfo.Environment["MCG_ORCHESTRATOR_STDOUT_LOG_PATH"] = request.StdoutPath;
-        startInfo.Environment["MCG_ORCHESTRATOR_STDERR_LOG_PATH"] = request.StderrPath;
-        startInfo.Environment[BatchNameEnvironmentVariable] = request.Name;
-
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
-        var pidText = process.StandardOutput.ReadLine();
-        var launcherError = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(5000) || process.ExitCode != 0)
-            throw new InvalidOperationException($"Detached conduct loop launcher did not exit cleanly: {launcherError.Trim()}");
-        if (!int.TryParse(pidText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
-            throw new InvalidOperationException($"Detached conduct loop launcher did not report a successor pid: {pidText}");
-
-        return new ConductLoopLaunchResult(pid, request.StdoutPath, request.StderrPath);
-    }
-
-    internal static string BuildWindowsStartProcessCommand(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
-    {
-        var filePath = PowerShellLiteral(command[0]);
-        var argumentList = PowerShellLiteral(string.Join(" ", command.Skip(1).Select(QuoteCommandArgument)));
-        return string.Join("; ", new[]
+        if (!CreateProcessW(
+                lpApplicationName: cmd,
+                lpCommandLine: commandLine,
+                lpProcessAttributes: IntPtr.Zero,
+                lpThreadAttributes: IntPtr.Zero,
+                bInheritHandles: false,
+                dwCreationFlags: WindowsCreationFlags.CreateBreakawayFromJob |
+                    WindowsCreationFlags.CreateNewProcessGroup |
+                    WindowsCreationFlags.CreateNoWindow |
+                    WindowsCreationFlags.DetachedProcess |
+                    WindowsCreationFlags.CreateUnicodeEnvironment,
+                lpEnvironment: environment,
+                lpCurrentDirectory: request.WorkingDirectory,
+                lpStartupInfo: ref startupInfo,
+                lpProcessInformation: out var processInformation))
         {
-            "$ErrorActionPreference = 'Stop'",
-            "$env:MCG_ORCHESTRATOR_STDOUT_LOG_PATH = " + PowerShellLiteral(request.StdoutPath),
-            "$env:MCG_ORCHESTRATOR_STDERR_LOG_PATH = " + PowerShellLiteral(request.StderrPath),
-            $"$env:{BatchNameEnvironmentVariable} = " + PowerShellLiteral(request.Name),
-            "$argsList = " + argumentList,
-            "$p = Start-Process -WindowStyle Hidden -PassThru -FilePath " + filePath +
-                " -WorkingDirectory " + PowerShellLiteral(request.WorkingDirectory) +
-                " -ArgumentList $argsList -RedirectStandardOutput " + PowerShellLiteral(request.StdoutPath) +
-                " -RedirectStandardError " + PowerShellLiteral(request.StderrPath),
-            "[Console]::Out.WriteLine($p.Id)"
-        });
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start breakaway conduct loop successor.");
+        }
+
+        try
+        {
+            return new ConductLoopLaunchResult((int)processInformation.dwProcessId, request.StdoutPath, request.StderrPath);
+        }
+        finally
+        {
+            CloseHandle(processInformation.hThread);
+            CloseHandle(processInformation.hProcess);
+        }
     }
 
-    private static string PowerShellLiteral(string value) =>
-        "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+    internal static string BuildWindowsBreakawayCommandLine(
+        string cmdPath,
+        IReadOnlyList<string> command,
+        string stdoutPath,
+        string stderrPath)
+    {
+        var innerCommand = string.Join(" ", command.Select(QuoteCommandArgument)) +
+            " 1>" + QuoteCommandArgument(stdoutPath) +
+            " 2>" + QuoteCommandArgument(stderrPath);
+        return QuoteCommandArgument(cmdPath) + " /d /s /c \"" + innerCommand + "\"";
+    }
+
+    private static string BuildWindowsEnvironmentBlock(ConductLoopLaunchRequest request)
+    {
+        var values = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .ToDictionary(
+                entry => (string)entry.Key,
+                entry => (string?)entry.Value ?? string.Empty,
+                StringComparer.OrdinalIgnoreCase);
+        values["MCG_ORCHESTRATOR_STDOUT_LOG_PATH"] = request.StdoutPath;
+        values["MCG_ORCHESTRATOR_STDERR_LOG_PATH"] = request.StderrPath;
+        values[BatchNameEnvironmentVariable] = request.Name;
+
+        var builder = new StringBuilder();
+        foreach (var pair in values.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            builder.Append(pair.Key);
+            builder.Append('=');
+            builder.Append(pair.Value);
+            builder.Append('\0');
+        }
+
+        builder.Append('\0');
+        return builder.ToString();
+    }
 
     private static ConductLoopHandoffVerification VerifySuccessor(
         ConductLoopLaunchResult result,
@@ -413,7 +442,41 @@ internal static partial class ConductorLoopHandoff
     private static string QuoteCommandArgument(string value)
     {
         if (OperatingSystem.IsWindows())
-            return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+        {
+            var quoted = new StringBuilder();
+            quoted.Append('"');
+            var backslashes = 0;
+            foreach (var character in value)
+            {
+                if (character == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+
+                if (character == '"')
+                {
+                    quoted.Append('\\', (backslashes * 2) + 1);
+                    quoted.Append('"');
+                    backslashes = 0;
+                    continue;
+                }
+
+                if (backslashes > 0)
+                {
+                    quoted.Append('\\', backslashes);
+                    backslashes = 0;
+                }
+
+                quoted.Append(character);
+            }
+
+            if (backslashes > 0)
+                quoted.Append('\\', backslashes * 2);
+
+            quoted.Append('"');
+            return quoted.ToString();
+        }
 
         return "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
     }
@@ -470,4 +533,62 @@ internal static partial class ConductorLoopHandoff
         var safe = new string(chars).Trim('-');
         return string.IsNullOrWhiteSpace(safe) ? "conduct-loop" : safe;
     }
+
+    [Flags]
+    private enum WindowsCreationFlags : uint
+    {
+        CreateNewProcessGroup = 0x00000200,
+        CreateUnicodeEnvironment = 0x00000400,
+        CreateBreakawayFromJob = 0x01000000,
+        DetachedProcess = 0x00000008,
+        CreateNoWindow = 0x08000000
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WindowsProcessStartupInfo
+    {
+        public int cb;
+        public string? lpReserved;
+        public string? lpDesktop;
+        public string? lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsProcessInformation
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public uint dwProcessId;
+        public uint dwThreadId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcessW(
+        string? lpApplicationName,
+        StringBuilder lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        bool bInheritHandles,
+        WindowsCreationFlags dwCreationFlags,
+        string? lpEnvironment,
+        string? lpCurrentDirectory,
+        ref WindowsProcessStartupInfo lpStartupInfo,
+        out WindowsProcessInformation lpProcessInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
 }

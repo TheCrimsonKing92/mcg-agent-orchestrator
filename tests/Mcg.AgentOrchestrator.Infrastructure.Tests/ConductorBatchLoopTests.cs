@@ -911,26 +911,27 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_uses_StartProcess_hidden_with_redirected_logs")]
-    public void ConductorLoopHandoffWindowsLauncherUsesStartProcessHiddenWithRedirectedLogs()
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_uses_cmd_redirection_for_no_handle_inheritance")]
+    public void ConductorLoopHandoffWindowsLauncherUsesCmdRedirectionForNoHandleInheritance()
     {
-        var request = new ConductLoopLaunchRequest(
-            "batch39",
-            ["conduct", "--loop", "--watch"],
+        var commandLine = ConductorLoopHandoff.BuildWindowsBreakawayCommandLine(
+            @"C:\Windows\System32\cmd.exe",
+            ["dotnet", @"C:\repo\src\Mcg.AgentOrchestrator.App.dll", "conduct", "--loop", "--watch"],
             @"C:\repo\.orchestrator\logs\operator-batch39.out.log",
-            @"C:\repo\.orchestrator\logs\operator-batch39.err.log",
-            @"C:\repo");
+            @"C:\repo\.orchestrator\logs\operator-batch39.err.log");
 
-        var command = ConductorLoopHandoff.BuildWindowsStartProcessCommand(
-            request,
-            ["dotnet", @"C:\repo\src\Mcg.AgentOrchestrator.App.dll", "conduct", "--loop", "--watch"]);
+        Assert.StartsWith(@"""C:\Windows\System32\cmd.exe"" /d /s /c ", commandLine, StringComparison.Ordinal);
+        Assert.Contains(@"""dotnet"" ""C:\repo\src\Mcg.AgentOrchestrator.App.dll"" ""conduct"" ""--loop"" ""--watch""", commandLine, StringComparison.Ordinal);
+        Assert.Contains(@"1>""C:\repo\.orchestrator\logs\operator-batch39.out.log""", commandLine, StringComparison.Ordinal);
+        Assert.Contains(@"2>""C:\repo\.orchestrator\logs\operator-batch39.err.log""", commandLine, StringComparison.Ordinal);
+        Assert.DoesNotContain("Start-Process", commandLine, StringComparison.Ordinal);
 
-        Assert.Contains("Start-Process", command, StringComparison.Ordinal);
-        Assert.Contains("-WindowStyle Hidden", command, StringComparison.Ordinal);
-        Assert.Contains("-PassThru", command, StringComparison.Ordinal);
-        Assert.Contains("-RedirectStandardOutput 'C:\\repo\\.orchestrator\\logs\\operator-batch39.out.log'", command, StringComparison.Ordinal);
-        Assert.Contains("-RedirectStandardError 'C:\\repo\\.orchestrator\\logs\\operator-batch39.err.log'", command, StringComparison.Ordinal);
-        Assert.Contains("$env:MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME = 'batch39'", command, StringComparison.Ordinal);
+        var source = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ConductorLoopHandoff.cs"));
+        Assert.Contains("CreateBreakawayFromJob", source, StringComparison.Ordinal);
+        Assert.Contains("bInheritHandles: false", source, StringComparison.Ordinal);
+
+        var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
+        Assert.Contains("JobObjectLimitBreakawayOk", jobSource, StringComparison.Ordinal);
     }
 
     private static void StartProcess(

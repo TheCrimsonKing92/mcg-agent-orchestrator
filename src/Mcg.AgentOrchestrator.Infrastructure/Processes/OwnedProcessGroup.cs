@@ -171,6 +171,7 @@ internal sealed class OwnedProcessGroup : IDisposable
         private const int JobObjectBasicAccountingInformation = 1;
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+        private const uint JobObjectLimitBreakawayOk = 0x00000800;
         private const uint DuplicateSameAccess = 0x00000002;
 
         public static SafeFileHandle CreateKillOnCloseJob()
@@ -185,7 +186,7 @@ internal sealed class OwnedProcessGroup : IDisposable
             {
                 BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
                 {
-                    LimitFlags = JobObjectLimitKillOnJobClose
+                    LimitFlags = JobObjectLimitKillOnJobClose | JobObjectLimitBreakawayOk
                 }
             };
 
