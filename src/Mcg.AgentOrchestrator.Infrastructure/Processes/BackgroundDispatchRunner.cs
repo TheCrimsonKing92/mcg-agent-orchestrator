@@ -1274,6 +1274,7 @@ public sealed class BackgroundDispatchRunner
         GoalWorktreeDispatchEvidence worktreeEvidence)
     {
         return gitFailureDiagnostic + " " +
+            "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
             "Commit-on-behalf failure is retryable; worktree preserved. " +
             "operator_action=inspect the preserved worktree, resolve the named git failure, then rerun refresh-dispatch for this task; " +
             $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +

@@ -2217,9 +2217,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         task.LastVerification.StandardError,
         StringComparison.Ordinal);
     Assert.Contains("operation=commit", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("Developer/Tester dispatch exited 0 but left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("Commit-on-behalf failure is retryable; worktree preserved.", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("operator_action=inspect the preserved worktree, resolve the named git failure, then rerun refresh-dispatch for this task", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.DoesNotContain("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
     Assert.Contains("status_short=M seed.txt", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Contains("seed.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
