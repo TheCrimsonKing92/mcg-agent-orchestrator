@@ -87,7 +87,8 @@ public sealed partial class AgentOrchestratorKernel
             gate.Tasks.Count(task => task.GateStatus == VerificationGateStatus.Passed),
             gate.Tasks.Count(task => task.GateStatus != VerificationGateStatus.Passed),
             pendingInput.Count,
-            blockers);
+            blockers,
+            []);
     }
 
     public GoalHumanInputWorklist BuildHumanInputWorklist(GoalId goalId)

@@ -149,6 +149,18 @@ public sealed class ConductorDriverTests
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
     }
 
+    private sealed class ThrowingAcceptanceVerifier(Exception exception) : IGoalAcceptanceVerifier
+    {
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<AcceptanceVerificationResult>(exception);
+    }
+
     private sealed class CountingModelProvider(string providerName, string text) : IModelProvider
     {
         public string ProviderName { get; } = providerName;
@@ -234,6 +246,49 @@ public sealed class ConductorDriverTests
         Assert.NotNull(record);
         Assert.Contains("Record refresh goal", record!.RenderedMarkdown);
         Assert.False(File.Exists(Path.Combine(root, "DOGFOOD_LOG.md")));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_slots_busy_journals_blocked_outcome")]
+    public void ConductorDriverAcceptanceSlotsBusyJournalsBlockedOutcome()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Slots busy conductor goal");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");
+        RunGit(worktree, "add", "feature.txt");
+        RunGit(worktree, "commit", "-m", "goal work");
+        var busy = new DotnetBuildLeaseAcquisition.SlotsBusy(
+            "goal-slots-busy",
+            [new DotnetBuildStableSlotWait(0, 12345)]);
+
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new ThrowingAcceptanceVerifier(new DotnetBuildSlotsBusyException(busy)),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("slots busy", held.Reason, StringComparison.OrdinalIgnoreCase);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:build-slot");
+        Assert.NotNull(blockedOutcome);
+        Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
+        Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
+        Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_operator_approval_reasons")]

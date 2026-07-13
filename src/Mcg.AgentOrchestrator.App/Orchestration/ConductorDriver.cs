@@ -244,6 +244,18 @@ internal sealed class ConductorDriver
             {
                 verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
             }
+            catch (DotnetBuildSlotsBusyException ex)
+            {
+                GoalOperationJournal.AcceptanceBlocked(
+                    dir,
+                    goal,
+                    "conductor:acceptance",
+                    "build-slot",
+                    branchHeadSha,
+                    mainHeadSha,
+                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatSlotsBusy(ex.SlotsBusy)}");
+                throw;
+            }
             catch (BuildLockBlockedException ex)
             {
                 GoalOperationJournal.AcceptanceBlocked(

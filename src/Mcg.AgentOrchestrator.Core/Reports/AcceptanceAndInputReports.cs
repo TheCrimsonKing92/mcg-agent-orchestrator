@@ -9,7 +9,14 @@ public sealed record GoalAcceptanceSummary(
     int PassedTasks,
     int OpenVerificationCount,
     int PendingHumanInputCount,
-    IReadOnlyList<GoalAcceptanceBlocker> Blockers);
+    IReadOnlyList<GoalAcceptanceBlocker> Blockers,
+    IReadOnlyList<GoalAcceptanceOutcome> Outcomes);
+
+public sealed record GoalAcceptanceOutcome(
+    string Outcome,
+    bool IsCurrentCandidate,
+    DateTimeOffset OccurredAt,
+    string Message);
 
 public sealed record GoalAcceptanceBlocker(
     GoalAcceptanceBlockerKind Kind,

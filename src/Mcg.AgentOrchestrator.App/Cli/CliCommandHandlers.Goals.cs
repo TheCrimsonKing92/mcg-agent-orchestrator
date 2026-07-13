@@ -498,7 +498,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
-            ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
+            ConsoleViews.PrintAcceptanceSummary(
+                context.CurrentGoal,
+                GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
             return false;
 
         case "workspace":
@@ -2839,7 +2841,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=state-guard checks={FormatConductEventChecks(failedChecks)}");
         Console.WriteLine($"BLOCKER step=acceptance-state-guard reason=state-changed detail=\"{EscapeBlockerDetail(failedChecks[0])}\" action=\"Resolve concurrent goal or worktree changes, then rerun acceptance.\"");
-        ConsoleViews.PrintAcceptanceSummary(goal, context.Kernel.BuildGoalAcceptanceSummary(goal.Id));
+        ConsoleViews.PrintAcceptanceSummary(
+            goal,
+            GoalAcceptanceStatusProjector.Build(context.Kernel, goal, context.Workspace.ExecutionDirectory));
         throw new InvalidOperationException(failedChecks[0]);
     }
 

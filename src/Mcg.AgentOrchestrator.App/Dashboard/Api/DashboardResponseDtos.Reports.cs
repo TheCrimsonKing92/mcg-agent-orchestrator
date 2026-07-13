@@ -159,7 +159,14 @@ internal sealed record GoalAcceptanceSummaryDto(
     int PassedTasks,
     int OpenVerificationCount,
     int PendingHumanInputCount,
-    IReadOnlyList<GoalAcceptanceBlockerDto> Blockers);
+    IReadOnlyList<GoalAcceptanceBlockerDto> Blockers,
+    IReadOnlyList<GoalAcceptanceOutcomeDto> Outcomes);
+
+internal sealed record GoalAcceptanceOutcomeDto(
+    string Outcome,
+    bool IsCurrentCandidate,
+    DateTimeOffset OccurredAt,
+    string Message);
 
 internal sealed record GoalAcceptanceBlockerDto(
     GoalAcceptanceBlockerKind Kind,

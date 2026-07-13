@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -32,7 +33,9 @@ private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionC
     context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPart);
     EnsurePolicyAllows(context, context.CurrentGoal, policy, AutonomyAction.Acceptance, "accept");
     AutoVerifyFromGitEvidence(context, context.CurrentGoal);
-    ConsoleViews.PrintAcceptanceSummary(context.CurrentGoal, context.Kernel.BuildGoalAcceptanceSummary(context.CurrentGoal.Id));
+    ConsoleViews.PrintAcceptanceSummary(
+        context.CurrentGoal,
+        GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
     if (!RunAcceptanceWorkspaceMerge(context, skipVerify))
     {
         return false;
