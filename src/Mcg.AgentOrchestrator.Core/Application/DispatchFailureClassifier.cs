@@ -136,9 +136,9 @@ public static class DispatchFailureClassifier
     private static readonly Regex ResetsInPattern = new(
         @"\bresets?\s+in\s*:?\s*(?:(?<hours>\d+)\s*h(?:ours?)?)?\s*(?:(?<minutes>\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(?<seconds>\d+)\s*s(?:ec(?:ond)?s?)?)?",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex StandaloneHttp429Pattern = new(
-        @"(?<!\d)429(?!\d)",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex Http429StatusPattern = new(
+        @"\b(?:429\s+Too\s+Many\s+Requests|HTTP(?:/\d(?:\.\d)?)?\s+429|(?:http(?:\s+status)?|status(?:\s+code)?|response(?:\s+status)?|error(?:\s+code)?)\s*[:=]?\s*429)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
@@ -160,9 +160,10 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        if (verification.ProviderFailureKind == ProviderFailureKind.RateLimit)
+        if (TryGetProviderAuthenticationLine(verification, out _) ||
+            TryGetProviderConnectivityLine(verification, out _))
         {
-            return true;
+            return false;
         }
 
         return TryGetRecoverableSubscriptionLimitLine(verification, out _);
@@ -309,7 +310,7 @@ public static class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification)));
+                BuildProviderModelRejectionEvidenceSummary(verification)));
         }
 
         if (HasGreenCommittedWorkerResultEvidence(verification, workerResultPresent, hasCommittedChanges))
@@ -385,9 +386,7 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
-        if (providerFailureKind != ProviderFailureKind.Unknown &&
-            !(providerFailureKind == ProviderFailureKind.RateLimit &&
-              HasWorkerEvidenceThatOutranksSubscriptionLimit(verification, workerResultPresent, hasCommittedChanges)))
+        if (providerFailureKind == ProviderFailureKind.Sandbox1312)
         {
             var providerOutcome = ClassifyProviderFailure(
                 providerFailureKind,
@@ -404,6 +403,42 @@ public static class DispatchFailureClassifier
                     hasCommittedChanges,
                     providerOutcome.Kind)
             };
+        }
+
+        if (IsRecoverableProviderAuthenticationFailure(verification))
+        {
+            return BuildOutcome(
+                "provider-authentication",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderAuthentication,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildProviderAuthenticationEvidenceSummary(verification)));
+        }
+
+        if (IsRecoverableProviderConnectivityFailure(verification))
+        {
+            return BuildOutcome(
+                "provider-connectivity",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderConnectivity,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildProviderConnectivityEvidenceSummary(verification)));
         }
 
         if (IsSubscriptionProviderCliDispatch(task) &&
@@ -429,7 +464,7 @@ public static class DispatchFailureClassifier
                 retryAfter,
                 null,
                 retryAfter.HasValue ? RecoveryRecommendation.Deferred : RecoveryRecommendation.AutoRetry,
-                BuildEvidenceSummary(verification)));
+                BuildRecoverableSubscriptionLimitEvidenceSummary(verification)));
         }
 
         if (IsPreflightFailure(verification))
@@ -448,24 +483,6 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.OperatorNeeded,
                 BuildPreflightFailureEvidenceSummary(verification)));
-        }
-
-        if (IsRecoverableProviderAuthenticationFailure(verification))
-        {
-            return BuildOutcome(
-                "provider-authentication",
-                task,
-                verification,
-                workerResultPresent,
-                hasCommittedChanges,
-                new DispatchOutcome(
-                DispatchOutcomeKind.ProviderAuthentication,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification)));
         }
 
         if (IsTransientEmptyOutputDispatchFlake(verification))
@@ -522,22 +539,24 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
-        if (IsRecoverableProviderConnectivityFailure(verification))
+        if (providerFailureKind == ProviderFailureKind.RateLimit &&
+            !HasWorkerEvidenceThatOutranksSubscriptionLimit(verification, workerResultPresent, hasCommittedChanges) &&
+            TryGetRecoverableSubscriptionLimitLine(verification, out _))
         {
             return BuildOutcome(
-                "provider-connectivity",
+                "provider-rate-limit",
                 task,
                 verification,
                 workerResultPresent,
                 hasCommittedChanges,
                 new DispatchOutcome(
-                DispatchOutcomeKind.ProviderConnectivity,
+                DispatchOutcomeKind.RecoverableSubscriptionLimit,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
                 RecoveryRecommendation.AutoRetry,
-                BuildEvidenceSummary(verification)));
+                BuildRecoverableSubscriptionLimitEvidenceSummary(verification)));
         }
 
         if (IsRecoverableProviderModelRejectionFailure(verification))
@@ -583,16 +602,37 @@ public static class DispatchFailureClassifier
         DispatchOutcome outcome) =>
         outcome with
         {
-            ClassifierReceipt = BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind)
+            ClassifierReceipt = AppendProviderEvidenceReceipt(
+                BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
+                outcome)
         };
 
     private static DispatchOutcome WithClassifierReceipt(string rule, DispatchOutcome outcome, int exitCode) =>
         outcome with
         {
-            ClassifierReceipt = $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
+            ClassifierReceipt = AppendProviderEvidenceReceipt(
+                $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
                 "stdout_bytes=unknown; stderr_bytes=unknown; heartbeat_stdout_bytes=unknown; " +
-                $"worker_result=absent; commit=none; verdict={outcome.Kind}"
+                $"worker_result=absent; commit=none; verdict={outcome.Kind}",
+                outcome)
         };
+
+    private static string AppendProviderEvidenceReceipt(string receipt, DispatchOutcome outcome)
+    {
+        if (!IsProviderFailureVerdict(outcome.Kind) ||
+            string.IsNullOrWhiteSpace(outcome.EvidenceSummary))
+        {
+            return receipt;
+        }
+
+        return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary)}";
+    }
+
+    private static bool IsProviderFailureVerdict(DispatchOutcomeKind kind) =>
+        kind is DispatchOutcomeKind.RecoverableSubscriptionLimit or
+            DispatchOutcomeKind.ProviderAuthentication or
+            DispatchOutcomeKind.ProviderConnectivity or
+            DispatchOutcomeKind.ProviderModelRejection;
 
     private static string BuildClassifierReceipt(
         string rule,
@@ -812,14 +852,19 @@ public static class DispatchFailureClassifier
             return BuildPreflightFailureEvidenceSummary(preflightLine);
         }
 
-        if (TryGetRecoverableSubscriptionLimitLine(verification, out var providerLimitLine))
-        {
-            return TruncateEvidence(providerLimitLine);
-        }
-
         if (TryGetProviderAuthenticationLine(verification, out var providerAuthLine))
         {
             return TruncateEvidence(providerAuthLine);
+        }
+
+        if (TryGetProviderConnectivityLine(verification, out var providerConnectivityLine))
+        {
+            return TruncateEvidence(providerConnectivityLine);
+        }
+
+        if (TryGetRecoverableSubscriptionLimitLine(verification, out var providerLimitLine))
+        {
+            return TruncateEvidence(providerLimitLine);
         }
 
         if (!HasVerificationEvidence(verification.StandardOutput, verification.StandardError))
@@ -841,6 +886,26 @@ public static class DispatchFailureClassifier
 
     private static string TruncateEvidence(string evidence) =>
         evidence.Length > 200 ? evidence[..200] : evidence;
+
+    private static string BuildRecoverableSubscriptionLimitEvidenceSummary(TaskVerificationRecord verification) =>
+        TryGetRecoverableSubscriptionLimitLine(verification, out var line)
+            ? TruncateEvidence(line)
+            : BuildEvidenceSummary(verification);
+
+    private static string BuildProviderAuthenticationEvidenceSummary(TaskVerificationRecord verification) =>
+        TryGetProviderAuthenticationLine(verification, out var line)
+            ? $"provider-authentication: {TruncateEvidence(line)}; remediation=codex login / provider re-auth"
+            : "provider-authentication; remediation=codex login / provider re-auth";
+
+    private static string BuildProviderConnectivityEvidenceSummary(TaskVerificationRecord verification) =>
+        TryGetProviderConnectivityLine(verification, out var line)
+            ? TruncateEvidence(line)
+            : BuildEvidenceSummary(verification);
+
+    private static string BuildProviderModelRejectionEvidenceSummary(TaskVerificationRecord verification) =>
+        TryGetProviderModelRejectionLine(verification, out var line)
+            ? TruncateEvidence(line)
+            : BuildEvidenceSummary(verification);
 
     public static bool IsPreflightFailure(TaskVerificationRecord verification)
     {
@@ -1159,12 +1224,7 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        var output = string.Join(
-            Environment.NewLine,
-            verification.StandardOutput,
-            verification.StandardError);
-
-        return ContainsProviderAuthenticationText(output) &&
+        return TryGetProviderAuthenticationLine(verification, out _) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -1175,17 +1235,7 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        if (verification.ProviderFailureKind == ProviderFailureKind.Connectivity)
-        {
-            return true;
-        }
-
-        var output = string.Join(
-            Environment.NewLine,
-            verification.StandardOutput,
-            verification.StandardError);
-
-        return ContainsRecoverableProviderConnectivityText(output) &&
+        return TryGetProviderConnectivityLine(verification, out _) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -1373,10 +1423,7 @@ public static class DispatchFailureClassifier
             text.Contains("rate limit exceeded", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("rate limit reached", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("http 429", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
-            StandaloneHttp429Pattern.IsMatch(text) ||
+            Http429StatusPattern.IsMatch(text) ||
             text.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||
@@ -1481,8 +1528,15 @@ public static class DispatchFailureClassifier
         return text.Contains("Failed to authenticate", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("API Error 401", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("401 Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("403 Forbidden", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("access token could not be refreshed", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("refresh token was already used", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("refresh_token_reused", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("sign in again", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("log out and sign in", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("authentication failed", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("authorization failed", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("invalid api key", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -1599,6 +1653,38 @@ public static class DispatchFailureClassifier
         return false;
     }
 
+    private static bool TryGetProviderConnectivityLine(TaskVerificationRecord verification, out string line)
+    {
+        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = rawLine.Trim();
+            if (ContainsRecoverableProviderConnectivityText(candidate))
+            {
+                line = candidate;
+                return true;
+            }
+        }
+
+        line = string.Empty;
+        return false;
+    }
+
+    private static bool TryGetProviderModelRejectionLine(TaskVerificationRecord verification, out string line)
+    {
+        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = rawLine.Trim();
+            if (ContainsProviderModelRejectionText(candidate))
+            {
+                line = candidate;
+                return true;
+            }
+        }
+
+        line = string.Empty;
+        return false;
+    }
+
     private static bool IsBareProviderLimitSignalLine(string line) =>
         line.StartsWith("You've hit your usage limit", StringComparison.OrdinalIgnoreCase) ||
         line.StartsWith("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
@@ -1609,10 +1695,7 @@ public static class DispatchFailureClassifier
         line.Contains("ratelimit", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("exceeded retry limit", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("429 Too Many Requests", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("http 429", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("status: 429", StringComparison.OrdinalIgnoreCase) ||
-        StandaloneHttp429Pattern.IsMatch(line) ||
+        Http429StatusPattern.IsMatch(line) ||
         line.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
         line.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||

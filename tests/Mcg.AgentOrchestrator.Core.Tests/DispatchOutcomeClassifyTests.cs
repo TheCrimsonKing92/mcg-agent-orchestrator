@@ -419,17 +419,69 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("verdict=ProviderConnectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider rate limit stdout")]
-    public void ClassifyRecoverableSubscriptionLimitFromStdout()
+    [Xunit.Fact(DisplayName = "Classify returns RecoverableSubscriptionLimit for provider HTTP 429 stdout")]
+    public void ClassifyRecoverableSubscriptionLimitFromHttp429Stdout()
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "Error: provider returned 429."));
+            Verification(1, "Error: provider returned 429 Too Many Requests."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Xunit.Assert.Null(outcome.RetryAfter);
-        Xunit.Assert.Contains("provider returned 429", outcome.EvidenceSummary);
+        Xunit.Assert.Contains("429 Too Many Requests", outcome.EvidenceSummary);
+        Xunit.Assert.Contains("evidence=Error: provider returned 429 Too Many Requests.", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify does not treat bare 429 duration as rate limit")]
+    public void ClassifyDoesNotTreatBare429DurationAsRateLimit()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SubscriptionTask(),
+            Verification(1, "", "Worker process exited after 429ms without provider HTTP status context."));
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.DoesNotContain("provider-rate-limit", outcome.ClassifierReceipt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify auth evidence before connectivity or rate limit")]
+    public void ClassifyAuthEvidenceBeforeConnectivityOrRateLimit()
+    {
+        const string stderr =
+            "Your access token could not be refreshed because your refresh token was already used.\n" +
+            "websocket closed with HTTP 401 while connecting to provider endpoint.\n" +
+            "status: 429";
+
+        var first = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
+        var second = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, first.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, first.RecoveryRecommendation);
+        Xunit.Assert.NotEqual(RecoveryRecommendation.AutoRetry, first.RecoveryRecommendation);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, first.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderConnectivity, first.Kind);
+        Xunit.Assert.Equal(first.Kind, second.Kind);
+        Xunit.Assert.Equal(first.RecoveryRecommendation, second.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=provider-authentication", first.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("evidence=provider-authentication: Your access token could not be refreshed", first.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("remediation=codex login / provider re-auth", first.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify ignores typed connectivity without explicit connectivity evidence")]
+    public void ClassifyIgnoresTypedConnectivityWithoutExplicitConnectivityEvidence()
+    {
+        const string stderr =
+            "Your access token could not be refreshed because your refresh token was already used.\n" +
+            "websocket closed with HTTP 401 while connecting to provider endpoint.";
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.Connectivity };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.DoesNotContain("rule=provider-connectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=provider-authentication", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("refresh token was already used", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify defaults recoverable subscription limit retry when duration is absent")]
