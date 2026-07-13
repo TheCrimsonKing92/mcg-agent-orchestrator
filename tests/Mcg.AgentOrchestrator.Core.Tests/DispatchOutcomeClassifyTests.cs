@@ -467,6 +467,23 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("remediation=codex login / provider re-auth", first.EvidenceSummary, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify ignores typed connectivity without explicit connectivity evidence")]
+    public void ClassifyIgnoresTypedConnectivityWithoutExplicitConnectivityEvidence()
+    {
+        const string stderr =
+            "Your access token could not be refreshed because your refresh token was already used.\n" +
+            "websocket closed with HTTP 401 while connecting to provider endpoint.";
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.Connectivity };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.DoesNotContain("rule=provider-connectivity", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=provider-authentication", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("refresh token was already used", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify defaults recoverable subscription limit retry when duration is absent")]
     public void ClassifyRecoverableSubscriptionLimitDefaultsWhenDurationAbsent()
     {

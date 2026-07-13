@@ -423,8 +423,7 @@ public static class DispatchFailureClassifier
                 BuildProviderAuthenticationEvidenceSummary(verification)));
         }
 
-        if (providerFailureKind == ProviderFailureKind.Connectivity ||
-            IsRecoverableProviderConnectivityFailure(verification))
+        if (IsRecoverableProviderConnectivityFailure(verification))
         {
             return BuildOutcome(
                 "provider-connectivity",
