@@ -70,7 +70,7 @@ internal static class LandingExecutor
 
         var changedFiles = GetChangedFiles(executionDirectory, goalBranch);
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
-        var acceptancePassed = kernel.BuildGoalAcceptanceSummary(goal.Id).IsAccepted;
+        var acceptancePassed = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory).IsAccepted;
         var cleanFastForward = IsIntegrationFastForwardableIntoMain(executionDirectory);
         var failureCount = CountFailedVerifications(goal);
 

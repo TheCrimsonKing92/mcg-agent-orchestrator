@@ -83,7 +83,7 @@ internal static class OperatorInbox
             AddHumanInputItems(items, kernel, goal, acknowledgements);
             AddMonitorItems(items, kernel, goal, acknowledgements);
             AddReadinessItems(items, goal, agents, workerProfiles, workspace, acknowledgements);
-            AddAcceptanceItems(items, kernel, goal, acknowledgements);
+            AddAcceptanceItems(items, kernel, goal, workspace, acknowledgements);
             AddSupervisorItems(items, kernel, goal, agents, workspace, acknowledgements);
             AddSubscriptionRouteItems(items, goal, agents, workerProfiles, acknowledgements);
             AddBudgetItems(items, goal, agents, workerProfiles, acknowledgements);
@@ -215,6 +215,7 @@ internal static class OperatorInbox
         Dictionary<string, OperatorInboxItem> items,
         AgentOrchestratorKernel kernel,
         Goal goal,
+        OrchestratorWorkspace workspace,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
         if (goal.Status != GoalStatus.Verified)
@@ -222,7 +223,7 @@ internal static class OperatorInbox
             return;
         }
 
-        var summary = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var summary = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
         if (summary.IsAccepted)
         {
             Add(items, BuildItem(

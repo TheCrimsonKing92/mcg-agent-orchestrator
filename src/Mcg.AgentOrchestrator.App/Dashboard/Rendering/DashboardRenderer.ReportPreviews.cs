@@ -18,7 +18,7 @@ public static partial class DashboardRenderer
         var monitor = kernel.BuildMonitor(goal.Id);
         var nextActions = kernel.BuildNextActions(goal.Id);
         var actionRecommendations = BuildDashboardActionRecommendations(kernel, goal, options);
-        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, options.Workspace?.ExecutionDirectory);
         var evidence = kernel.BuildGoalEvidenceSummary(goal.Id);
         var stages = kernel.BuildStageReadinessReport(goal.Id);
         var verificationGate = kernel.BuildVerificationGate(goal.Id);

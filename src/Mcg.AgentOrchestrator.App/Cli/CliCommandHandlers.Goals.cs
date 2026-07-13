@@ -2716,7 +2716,13 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
-    var evidence = context.Worktrees.BuildAcceptanceEvidence(context.Kernel, goal, worktreePath, verification, skipVerify);
+    var evidence = context.Worktrees.BuildAcceptanceEvidence(
+        context.Kernel,
+        goal,
+        worktreePath,
+        verification,
+        skipVerify,
+        context.Workspace.ExecutionDirectory);
     ConsoleViews.PrintAcceptanceEvidenceBundle(evidence);
 
     if (!evidence.Passed)
