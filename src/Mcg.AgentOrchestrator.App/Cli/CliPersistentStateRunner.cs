@@ -418,6 +418,7 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
+        using var conductLoopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
         var kernel = LoadConductLoopKernel(stateRepository);
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         var sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
@@ -477,7 +478,8 @@ internal static class CliPersistentStateRunner
             channel,
             () => LoadConductLoopKernel(stateRepository),
             Persist,
-            persistGoalKernel: PersistGoals);
+            persistGoalKernel: PersistGoals,
+            releaseConductLoopLease: conductLoopLease.Dispose);
 
         // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
         Persist(kernel);

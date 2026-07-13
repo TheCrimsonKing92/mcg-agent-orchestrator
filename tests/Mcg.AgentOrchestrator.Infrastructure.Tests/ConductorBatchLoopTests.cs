@@ -453,6 +453,25 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
+    private static ConductLoopHandoffOptions HandoffOptions(
+        string root,
+        IReadOnlyList<string>? args = null,
+        string? stopFilePath = null,
+        string? runEventStorePath = null,
+        int renewalCount = 0,
+        int maxRenewals = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
+        Action? release = null) =>
+        new(
+            Args: args ?? ["conduct", "--loop", "--watch", "--max-duration", "14400"],
+            ExecutionDirectory: root,
+            OrchestratorDirectory: Path.Combine(root, ".orchestrator"),
+            LogDirectory: Path.Combine(root, ".orchestrator", "logs"),
+            RunEventStorePath: runEventStorePath ?? Path.Combine(root, ".orchestrator", "run-events.db"),
+            StopFilePath: stopFilePath ?? Path.Combine(root, ConductorBatchLoop.StopFileName),
+            RenewalCount: renewalCount,
+            MaxRenewals: maxRenewals,
+            ReleaseCurrentLease: release ?? (() => { }));
+
     private static void RunGit(string workingDirectory, params string[] args)
     {
         var result = GitCli.Run(workingDirectory, args);
@@ -486,6 +505,295 @@ public sealed class ConductorBatchLoopTests
                 role,
                 new ModelProfile("OpenAI", "test", capability, SubscriptionMode.ApiKey)))
             .ToArray();
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_max_duration_starts_handoff")]
+    public void BatchLoopMaxDurationStartsHandoff()
+    {
+        var (kernel, _) = SimpleGoal();
+        ConductorLoopHandoffRequest? request = null;
+        var summary = new ConductorBatchLoop(
+            handoffOnMaxDuration: handoffRequest =>
+            {
+                request = handoffRequest;
+                return ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log");
+            }).Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxDuration: TimeSpan.Zero);
+
+        Assert.NotNull(request);
+        Assert.True(summary.Handoff?.Started);
+        Assert.Equal(1234, summary.Handoff.ProcessId);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_file_does_not_handoff")]
+    public void BatchLoopStopFileDoesNotHandoff()
+    {
+        var (kernel, _) = SimpleGoal();
+        var called = false;
+
+        var summary = new ConductorBatchLoop(
+            handoffOnMaxDuration: _ =>
+            {
+                called = true;
+                return ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log");
+            }).Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            ExistingStopPath(),
+            maxDuration: TimeSpan.FromSeconds(1));
+
+        Assert.True(summary.StopRequested);
+        Assert.False(called);
+        Assert.Null(summary.Handoff);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_no_progress_exit_does_not_handoff")]
+    public void BatchLoopNoProgressExitDoesNotHandoff()
+    {
+        var (kernel, _) = SimpleGoal();
+        var called = false;
+
+        new ConductorBatchLoop(
+            handoffOnMaxDuration: _ =>
+            {
+                called = true;
+                return ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log");
+            }).Run(
+            kernel,
+            MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath());
+
+        Assert.False(called);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_max_duration_detaches_running_dispatches_before_handoff")]
+    public void BatchLoopMaxDurationDetachesRunningDispatchesBeforeHandoff()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        StartProcess(kernel, goal, task, DateTimeOffset.UtcNow, "base");
+        var detached = 0;
+        var cancelled = 0;
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (_, _) => cancelled++,
+            detachGoalRunningDispatches: (_, _) => detached++,
+            handoffOnMaxDuration: _ => ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log")).Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxDuration: TimeSpan.Zero);
+
+        Assert.True(summary.Handoff?.Started);
+        Assert.Equal(1, detached);
+        Assert.Equal(0, cancelled);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopLease_refuses_second_loop")]
+    public void ConductorLoopLeaseRefusesSecondLoop()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-lease");
+        try
+        {
+            var orchestrator = Path.Combine(root, ".orchestrator");
+            using var lease = ConductorLoopLease.Acquire(orchestrator);
+
+            Assert.Throws<InvalidOperationException>(() => ConductorLoopLease.Acquire(orchestrator));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_stop_file_suppresses_successor")]
+    public void ConductorLoopHandoffStopFileSuppressesSuccessor()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-stop-handoff");
+        try
+        {
+            var stopFile = Path.Combine(root, ConductorBatchLoop.StopFileName);
+            File.WriteAllText(stopFile, "stop");
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(root, stopFilePath: stopFile),
+                new ConductorLoopHandoffRequest(0, TimeSpan.Zero, 0),
+                _ => throw new InvalidOperationException("launch should not run"));
+
+            Assert.False(result.Started);
+            Assert.Equal("stop-file", result.Reason);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_stops_at_renewal_cap_without_landing")]
+    public void ConductorLoopHandoffStopsAtRenewalCapWithoutLanding()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-renewal-cap");
+        try
+        {
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(root, renewalCount: 6, maxRenewals: 6),
+                new ConductorLoopHandoffRequest(0, TimeSpan.Zero, 0),
+                _ => throw new InvalidOperationException("launch should not run"));
+
+            Assert.False(result.Started);
+            Assert.Contains("renewal-cap", result.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_launches_successor_with_incremented_batch_fresh_logs_and_renewal_arg")]
+    public void ConductorLoopHandoffLaunchesSuccessorWithIncrementedBatchFreshLogsAndRenewalArg()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-happy-handoff");
+        var previousName = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", "batch25");
+            var released = false;
+            ConductLoopLaunchRequest? launchRequest = null;
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(
+                    root,
+                    args: ["conduct", "--loop", "--watch", "--max-duration", "14400", ConductorLoopHandoff.RenewalCountFlag, "4"],
+                    renewalCount: 4,
+                    release: () => released = true),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    launchRequest = request;
+                    return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
+                });
+
+            Assert.True(result.Started);
+            Assert.True(released);
+            Assert.Equal("batch26", launchRequest!.Name);
+            Assert.Contains("operator-batch26-", Path.GetFileName(launchRequest.StdoutPath), StringComparison.Ordinal);
+            Assert.Equal(1, launchRequest.Args.Count(arg => arg == ConductorLoopHandoff.RenewalCountFlag));
+            Assert.Equal("5", launchRequest.Args.Last());
+            Assert.Equal(4567, result.ProcessId);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", previousName);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_handoff_renewal_cap_resets_for_landing_adopted_by_reconcile")]
+    public void BatchLoopHandoffRenewalCapResetsForLandingAdoptedByReconcile()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-adopted-landing");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, "Adopted landing");
+            var start = DateTimeOffset.Parse("2026-07-11T00:00:00Z");
+            var nowCalls = 0;
+            DateTimeOffset UtcNow() => nowCalls++ switch
+            {
+                0 => start,
+                1 => start,
+                _ => start.AddSeconds(2)
+            };
+
+            var reconciled = false;
+            ConductLoopLaunchRequest? launchRequest = null;
+            ConductorLoopHandoffRequest? handoffRequest = null;
+            var summary = new ConductorBatchLoop(
+                measuredSweep: loopKernel =>
+                {
+                    if (!reconciled)
+                    {
+                        reconciled = true;
+                        loopKernel.CompleteGoal(goal.Id, "Test fixture: landing adopted during first reconcile.");
+                    }
+
+                    return null;
+                },
+                handoffOnMaxDuration: request =>
+                {
+                    handoffRequest = request;
+                    return ConductorLoopHandoff.TryStartSuccessor(
+                        HandoffOptions(root, renewalCount: 6, maxRenewals: 6),
+                        request,
+                        launch =>
+                        {
+                            launchRequest = launch;
+                            return new ConductLoopLaunchResult(4567, launch.StdoutPath, launch.StderrPath);
+                        });
+                },
+                utcNow: UtcNow).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                Path.Combine(root, ConductorBatchLoop.StopFileName),
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ => false,
+                maxDuration: TimeSpan.FromSeconds(1),
+                keepAliveWhenIdle: true);
+
+            Assert.True(summary.Handoff?.Started);
+            Assert.NotNull(handoffRequest);
+            Assert.Equal(0, handoffRequest!.Done);
+            Assert.Equal(1, handoffRequest.LandedGoalDelta);
+            Assert.Equal("0", launchRequest!.Args.Last());
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_journal_failure_is_loud_and_still_launches_successor")]
+    public void ConductorLoopHandoffJournalFailureIsLoudAndStillLaunchesSuccessor()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-journal-failure");
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var outWriter = new StringWriter();
+        using var errorWriter = new StringWriter();
+        try
+        {
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            var launched = false;
+
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(root, runEventStorePath: root),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    launched = true;
+                    return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
+                });
+
+            Assert.True(result.Started);
+            Assert.True(launched);
+            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", outWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+            TryDeleteDirectory(root);
+        }
     }
 
     private static void StartProcess(

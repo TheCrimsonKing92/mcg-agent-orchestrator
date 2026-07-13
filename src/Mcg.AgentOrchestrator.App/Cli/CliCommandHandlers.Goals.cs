@@ -763,6 +763,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Providers,
                     context.PersistGoalCheckpoint);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                var handoff = ConductorLoopHandoff.Create(new ConductLoopHandoffOptions(
+                    Args: parts.ToArray(),
+                    ExecutionDirectory: context.Workspace.ExecutionDirectory,
+                    OrchestratorDirectory: context.Workspace.OrchestratorDirectory,
+                    LogDirectory: context.Workspace.LogDirectory,
+                    RunEventStorePath: context.Workspace.RunEventStorePath,
+                    StopFilePath: stopFilePath,
+                    RenewalCount: ConductorLoopHandoff.ParseRenewalCount(parts),
+                    MaxRenewals: ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
+                    ReleaseCurrentLease: context.ReleaseConductLoopLease));
 
                 // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
                 // start of every tick. Without this the loop holds a goal at Running forever — the worker
@@ -807,7 +817,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
-                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }).Run(
+                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); },
+                    handoffOnMaxDuration: handoff).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
