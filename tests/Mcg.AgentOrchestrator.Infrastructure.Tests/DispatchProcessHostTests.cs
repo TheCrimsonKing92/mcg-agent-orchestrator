@@ -294,6 +294,7 @@ public sealed class DispatchProcessHostTests
             var startInfo = new ProcessStartInfo
             {
                 UseShellExecute = false,
+                CreateNoWindow = true,
                 WorkingDirectory = worktree
             };
             startInfo.ArgumentList.Add("Write-Output ok");
@@ -603,7 +604,7 @@ public sealed class DispatchProcessHostTests
         WriteMarkerShim(Path.Combine(sandboxBin, "dotnet.cmd"), marker, "dotnet");
         try
         {
-            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
             startInfo.Environment["PATH"] = sandboxBin;
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output ok",
@@ -644,7 +645,7 @@ public sealed class DispatchProcessHostTests
         WriteEnvironmentMarkerShim(Path.Combine(sandboxBin, "dotnet.cmd"), marker, "dotnet");
         try
         {
-            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
             startInfo.Environment["PATH"] = sandboxBin;
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             var parameters = new DispatchProcessHost.DispatchRunParameters(
@@ -685,7 +686,7 @@ public sealed class DispatchProcessHostTests
         File.WriteAllText(Path.Combine(sandboxBin, "dotnet.cmd"), "@echo off\r\nexit /b 0\r\n");
         try
         {
-            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
             startInfo.Environment["PATH"] = sandboxBin;
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output ok",
@@ -721,7 +722,7 @@ public sealed class DispatchProcessHostTests
             // drain and write the exit-code file rather than blocking forever.
             var hangCommand = OperatingSystem.IsWindows()
                 ? "$psi = [System.Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 30 127.0.0.1'); $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; [void][System.Diagnostics.Process]::Start($psi); Write-Output 'done'; exit 0"
-                : "$psi = [System.Diagnostics.ProcessStartInfo]::new('sleep', '60'); $psi.UseShellExecute = $false; [void][System.Diagnostics.Process]::Start($psi); Write-Output 'done'; exit 0";
+                : "$psi = [System.Diagnostics.ProcessStartInfo]::new('sleep', '60'); $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; [void][System.Diagnostics.Process]::Start($psi); Write-Output 'done'; exit 0";
 
             var parametersPath = Path.Combine(dir, "dispatch.json");
             var stdoutPath = Path.Combine(dir, "out.log");
@@ -1035,6 +1036,7 @@ public sealed class DispatchProcessHostTests
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
+            CreateNoWindow = true,
             WorkingDirectory = worktree
         };
         startInfo.ArgumentList.Add("Write-Output ok");
