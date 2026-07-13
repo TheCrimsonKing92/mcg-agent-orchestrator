@@ -64,10 +64,35 @@ internal static class GoalAcceptanceStatusProjector
 
         return summary with
         {
-            IsAccepted = summary.IsAccepted && blockers.Count == 0,
+            IsAccepted = summary.OpenVerificationCount == 0 &&
+                summary.PendingHumanInputCount == 0 &&
+                blockers.Count == 0,
             Blockers = blockers,
             Outcomes = outcomes
         };
+    }
+
+    internal static bool HasCurrentBlockingAcceptanceState(
+        Goal goal,
+        string executionDirectory,
+        GoalOperationJournalSummary? journal = null)
+    {
+        journal ??= GoalOperationJournal.Read(executionDirectory, goal.Id);
+        if (TryResolveCurrentCandidate(executionDirectory, goal.Id) is not { } candidate)
+        {
+            return goal.LatestAcceptanceFailure is not null ||
+                journal.LatestByOperation.Any(entry =>
+                    entry.Status == GoalOperationStatus.Failed &&
+                    entry.Operation.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var current = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(
+            journal,
+            candidate.BranchHeadSha,
+            candidate.MainHeadSha);
+        return current is not null
+            ? IsBlockingOutcome(current.AcceptanceOutcome)
+            : IsCurrentFailure(goal.LatestAcceptanceFailure, candidate);
     }
 
     private static bool IsCurrentFailure(AcceptanceFailureSummary? failure, AcceptanceCandidate candidate) =>

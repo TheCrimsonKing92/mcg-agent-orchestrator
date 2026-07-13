@@ -2535,4 +2535,46 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             string.Equals(entry.BranchHeadSha, oldBranch, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(entry.MainHeadSha, oldMain, StringComparison.OrdinalIgnoreCase));
     }
+
+    [Xunit.Fact(DisplayName = "Monitor_and_acceptance_status_ignore_superseded_candidate_failure")]
+    public void MonitorAndAcceptanceStatusIgnoreSupersededCandidateFailure()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Rebased acceptance projection", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual",
+            root,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        var oldMain = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var oldBranch = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+        kernel.RecordAcceptanceFailure(goal.Id, ["old acceptance failure"], oldBranch, oldMain);
+        GoalOperationJournal.AcceptanceFailed(root, goal, "acceptance", oldBranch, oldMain, "old acceptance failure");
+        File.WriteAllText(Path.Combine(root, "main-change.txt"), "main moved");
+        RunGitOutput(root, "add", "main-change.txt");
+        RunGitOutput(root, "commit", "-m", "Move main");
+
+        var facts = GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, kernel.GetGoal(goal.Id));
+        var lifecycle = GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts);
+        var summary = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root);
+        var dto = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(kernel.GetGoal(goal.Id), summary, lifecycle);
+
+        Xunit.Assert.False(facts.IsBlocked);
+        Xunit.Assert.Equal(GoalLifecycleState.Verified, lifecycle);
+        Xunit.Assert.Equal(GoalStatus.Verified, dto.Status);
+        Xunit.Assert.True(dto.IsAccepted);
+        Xunit.Assert.DoesNotContain(dto.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed);
+        var historical = Xunit.Assert.Single(dto.Outcomes);
+        Xunit.Assert.Equal("failed", historical.Outcome);
+        Xunit.Assert.False(historical.IsCurrentCandidate);
+        Xunit.Assert.Contains("historical candidate", historical.Message, StringComparison.Ordinal);
+    }
 }
