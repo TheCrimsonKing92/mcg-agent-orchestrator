@@ -506,8 +506,15 @@ internal sealed class ConductorBatchLoop
     {
         if (handoff.Started)
         {
-            EmitProgress($"LOOP_HANDOFF tick={tick} pid={handoff.ProcessId} stdout={Sanitize(handoff.StdoutPath ?? "")} stderr={Sanitize(handoff.StderrPath ?? "")}");
+            EmitProgress($"LOOP_HANDOFF tick={tick} pid={handoff.ProcessId} stdout={SanitizeHandoffDetail(handoff.StdoutPath ?? "")} stderr={SanitizeHandoffDetail(handoff.StderrPath ?? "")} verification={SanitizeHandoffDetail(handoff.VerificationOutcome ?? "unknown")}");
             Console.WriteLine($"[conduct --loop] Handoff started successor pid={handoff.ProcessId} log={handoff.StdoutPath}");
+            return;
+        }
+
+        if (handoff.Failed)
+        {
+            EmitProgress($"LOOP_HANDOFF_FAILED tick={tick} reason={SanitizeHandoffDetail(handoff.Reason ?? "unknown")} stdout={SanitizeHandoffDetail(handoff.StdoutPath ?? "")} stderr={SanitizeHandoffDetail(handoff.StderrPath ?? "")} verification={SanitizeHandoffDetail(handoff.VerificationOutcome ?? "unknown")}");
+            Console.WriteLine($"[conduct --loop] Handoff failed: {handoff.Reason ?? "unknown"}");
             return;
         }
 
@@ -552,6 +559,7 @@ internal sealed class ConductorBatchLoop
             "GOAL" => ClassifyGoalEvent(line),
             "LOCK" => "lock-blocker",
             "LOOP_HANDOFF" => "loop-handoff",
+            "LOOP_HANDOFF_FAILED" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
@@ -859,6 +867,9 @@ internal sealed class ConductorBatchLoop
         var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
         return s.Length > 40 ? s[..40] : s;
     }
+
+    private static string SanitizeHandoffDetail(string value) =>
+        value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     private static IReadOnlyDictionary<string, ParallelLandingOutcome> RunParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
@@ -1540,13 +1551,27 @@ public sealed record ConductorLoopHandoffResult(
     int? ProcessId,
     string? StdoutPath,
     string? StderrPath,
-    string? Reason)
+    string? Reason,
+    bool Failed = false,
+    string? VerificationOutcome = null)
 {
-    public static ConductorLoopHandoffResult StartedProcess(int processId, string stdoutPath, string stderrPath) =>
-        new(true, processId, stdoutPath, stderrPath, null);
+    public static ConductorLoopHandoffResult StartedProcess(
+        int processId,
+        string stdoutPath,
+        string stderrPath,
+        string? verificationOutcome = null) =>
+        new(true, processId, stdoutPath, stderrPath, null, Failed: false, verificationOutcome);
 
     public static ConductorLoopHandoffResult Skipped(string reason) =>
         new(false, null, null, null, reason);
+
+    public static ConductorLoopHandoffResult FailedStart(
+        string reason,
+        string? stdoutPath,
+        string? stderrPath,
+        string? verificationOutcome = null,
+        int? processId = null) =>
+        new(false, processId, stdoutPath, stderrPath, reason, Failed: true, verificationOutcome);
 }
 
 public sealed record BatchTickSummary(

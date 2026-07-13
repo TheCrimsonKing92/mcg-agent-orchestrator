@@ -1463,6 +1463,33 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(string.Empty, ReadGit(worktree, ["ls-files", "--", WorkerSandboxPreparer.ReceiptFileName]));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_isolation_lease_only_dirty_worktree_is_clean_for_commit")]
+    public void BackgroundDispatchRunnerIsolationLeaseOnlyDirtyWorktreeIsCleanForCommit()
+{
+    using var isolatedDotnetRoot = UseFixtureIsolatedDotnetRoot();
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Tester,
+        "NO_CHANGE: Existing implementation already satisfies the request.",
+        string.Empty,
+        clock,
+        WriteIsolationLeaseArtifacts);
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.DoesNotContain("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.DoesNotContain("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    Assert.False(GitCli.IsWorktreeDirty(worktree));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "goals", "infra-partition", "lease", "lease.json")));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "slots", "slot-0", "lease.execution.lock")));
+    Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD"]));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_dirty_unverified_stays_failed")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitDirtyUnverifiedStaysFailed()
 {
@@ -2109,6 +2136,50 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal("seed.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]));
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_commit_on_behalf_stages_real_files_not_isolation_leases")]
+    public void BackgroundDispatchRunnerCommitOnBehalfStagesRealFilesNotIsolationLeases()
+{
+    using var isolatedDotnetRoot = UseFixtureIsolatedDotnetRoot();
+    var root = CreateSeededDispatchRepository();
+    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        root,
+        AgentRole.Developer,
+        string.Join(
+            "\n",
+            "WORKER_RESULT:",
+            "files: seed.txt",
+            "commands: focused regression",
+            "tests: pass - focused regression",
+            "commit: none",
+            "blockers: none",
+            "model_fit: test - adequate - commit-on-behalf",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT"),
+        string.Empty,
+        clock,
+        worktree =>
+        {
+            File.AppendAllText(Path.Combine(worktree, "seed.txt"), "real worker edit");
+            WriteIsolationLeaseArtifacts(worktree);
+        });
+
+    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Contains("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var status = ReadGit(worktree, ["status", "--short"]);
+    Assert.DoesNotContain("seed.txt", status, StringComparison.Ordinal);
+    Assert.False(GitCli.IsWorktreeDirty(worktree));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "goals", "infra-partition", "lease", "lease.json")));
+    Assert.True(File.Exists(Path.Combine(worktree, "i", "slots", "slot-0", "lease.execution.lock")));
+    Assert.Equal("seed.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]));
+    Assert.DoesNotContain("i/goals", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]), StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_residual_commit_failure_surfaces_git_error_and_dirty_summary")]
     public void BackgroundDispatchRunnerFileRoleResidualCommitFailureSurfacesGitErrorAndDirtySummary()
 {
@@ -2152,7 +2223,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         task.LastVerification.StandardError,
         StringComparison.Ordinal);
     Assert.Contains("operation=commit", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("Developer/Tester dispatch exited 0 but left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("Commit-on-behalf failure is retryable; worktree preserved.", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("operator_action=inspect the preserved worktree, resolve the named git failure, then rerun refresh-dispatch for this task", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
     Assert.Contains("status_short=M seed.txt", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Contains("seed.txt", ReadGit(worktree, ["status", "--short"]), StringComparison.Ordinal);
@@ -2542,6 +2616,55 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains(latestPrefix, allResult.StandardOutput);
     Assert.Contains("older stdout tail", allResult.StandardOutput);
     Assert.Contains("latest stdout tail", allResult.StandardOutput);
+}
+
+private static void WriteIsolationLeaseArtifacts(string worktree)
+{
+    var goalLease = Path.Combine(worktree, "i", "goals", "infra-partition", "lease");
+    Directory.CreateDirectory(goalLease);
+    File.WriteAllText(Path.Combine(goalLease, "lease.json"), "{}");
+    File.WriteAllText(Path.Combine(goalLease, "lease.lock"), "locked");
+
+    var slot = Path.Combine(worktree, "i", "slots", "slot-0");
+    Directory.CreateDirectory(slot);
+    File.WriteAllText(Path.Combine(slot, "lease.execution.lock"), "locked");
+}
+
+private static FixtureIsolatedDotnetRootScope UseFixtureIsolatedDotnetRoot()
+{
+    return new FixtureIsolatedDotnetRootScope(
+        Path.Combine(
+            Path.GetTempPath(),
+            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-commit-on-behalf-{Guid.NewGuid():N}"));
+}
+
+private sealed class FixtureIsolatedDotnetRootScope : IDisposable
+{
+    private readonly string? _previousValue;
+    private readonly string _root;
+
+    public FixtureIsolatedDotnetRootScope(string root)
+    {
+        _root = root;
+        _previousValue = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previousValue);
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort; failed tests may leave files open for inspection.
+        }
+    }
 }
 
 }

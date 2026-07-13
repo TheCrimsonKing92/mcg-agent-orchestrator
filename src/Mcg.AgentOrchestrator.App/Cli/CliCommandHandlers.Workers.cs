@@ -141,7 +141,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             }
 
         case "subscription-dispatch":
-            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]");
+            var subscriptionTask = ResolveDispatchCommandTask(parts, context, "subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]");
             AcknowledgeSubscriptionLimitReviewFromCli(context, subscriptionTask, parts);
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal!);
             try
@@ -457,7 +457,7 @@ private static bool IsLogStreamKeyword(string value) =>
 private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContext context, TaskSpec task, IReadOnlyList<string> parts)
 {
     const string flag = "--confirm-limit-review";
-    var note = GetFlagValue(parts, flag);
+    var note = ResolveFlagTextArgumentOrDefault(parts, flag, "--text-file");
     if (note is not null)
     {
         context.Kernel.AcknowledgeSubscriptionLimitReview(context.CurrentGoal!.Id, task.Id, note);
@@ -466,7 +466,7 @@ private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContex
 
     if (HasCliConfirmation(parts, flag))
     {
-        throw new ArgumentException("Usage: subscription-dispatch <task-number> [--confirm-limit-review <note>]");
+        throw new ArgumentException("Usage: subscription-dispatch <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>]");
     }
 
     if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task) &&
@@ -474,7 +474,7 @@ private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContex
     {
         var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
         throw new InvalidOperationException(
-            $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing, then rerun subscription-dispatch with --confirm-limit-review <note>.");
+            $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); inspect model, profile, or timing, then rerun subscription-dispatch with --confirm-limit-review <note> or --confirm-limit-review --text-file <path>.");
     }
 }
 

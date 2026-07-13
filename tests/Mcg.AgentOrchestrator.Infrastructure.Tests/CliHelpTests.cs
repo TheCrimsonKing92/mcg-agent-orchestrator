@@ -8,10 +8,19 @@ public sealed class CliHelpTests
 {
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
-    [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
+    [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
-    [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--reason-file")]
+    [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-reopen", "--help" }, "backlog-reopen", "-h")]
+    [Xunit.InlineData(new[] { "retry", "--help" }, "retry", "--text-file")]
+    [Xunit.InlineData(new[] { "note", "--help" }, "note", "--text-file")]
+    [Xunit.InlineData(new[] { "progress", "--help" }, "progress", "--text-file")]
+    [Xunit.InlineData(new[] { "verify-manual", "--help" }, "verify-manual", "--text-file")]
+    [Xunit.InlineData(new[] { "recover", "--help" }, "recover", "--text-file")]
+    [Xunit.InlineData(new[] { "answer", "--help" }, "answer", "--text-file")]
+    [Xunit.InlineData(new[] { "add-task", "--help" }, "add-task", "--text-file")]
+    [Xunit.InlineData(new[] { "abandon-goal", "--help" }, "abandon-goal", "--text-file")]
+    [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--text-file")]
     [Xunit.InlineData(new[] { "conduct", "--help" }, "conduct", "--loop")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
@@ -199,9 +208,9 @@ public sealed class CliHelpTests
     }
 
     [Xunit.Theory(DisplayName = "Cli_help_startup_exits_zero_before_state_creation")]
-    [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--simple")]
+    [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
-    [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--body-file")]
+    [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
     public void CliHelpStartupExitsZeroBeforeStateCreation(string[] args, string synopsisToken, string optionToken)
     {
         var root = CreateTempDirectory();

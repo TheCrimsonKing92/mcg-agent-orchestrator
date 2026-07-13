@@ -67,6 +67,51 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Persistent_runner_park_goal_text_file_records_file_reason")]
+    public async Task PersistentRunnerParkGoalTextFileRecordsFileReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Park from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var wait = kernel.RequestHumanInput(goal.Id, null, "Need operator decision.", HumanWaitKind.RiskReview);
+        await repository.SaveAsync(kernel);
+        var reason = "Operator parked from a text file.\n\nPreserve the full disposition receipt.";
+        var reasonPath = Path.Combine(root, "park-reason.md");
+        File.WriteAllText(reasonPath, reason, System.Text.Encoding.UTF8);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand($"park-goal {goal.Id.Value[..8]} --text-file {reasonPath} --confirm-goal-park"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        var restored = await repository.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var restoredWait = restored.HumanInputRequests.Single(request => request.Id == wait.Id);
+        Xunit.Assert.Equal(GoalStatus.Parked, restoredGoal.Status);
+        Xunit.Assert.Contains(restoredGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message == $"Goal parked: {reason}");
+        Xunit.Assert.True(restoredWait.IsCompleted);
+        Xunit.Assert.Equal($"Goal parked: {reason}", restoredWait.Answer);
+        Xunit.Assert.Contains("Goal parked", output);
+    }
+
+
     [Xunit.Fact(DisplayName = "Persistent_runner_lifecycle_disposition_audit_routes_side_effect_verbs_outside_generic_transaction")]
     public void PersistentRunnerLifecycleDispositionAuditRoutesSideEffectVerbsOutsideGenericTransaction()
     {

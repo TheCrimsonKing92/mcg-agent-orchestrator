@@ -100,6 +100,51 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_goal_prefix_accepts_text_file")]
+    public async Task CliAttentionAnswerGoalPrefixAcceptsTextFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Target goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, target.Id.Value, "Target clarification", "Target body", $"spec-clarification:{target.Id.Value}:scope:12345678");
+        var answer = "Use the file-backed answer.\n\nPreserve the complete response.";
+        var answerPath = Path.Combine(root, "attention-answer.md");
+        File.WriteAllText(answerPath, answer, System.Text.Encoding.UTF8);
+
+        var output = ExecuteCliAndCapture(
+            CliArgumentParser.SplitCommand($"attention answer {target.Id.Value[..8]} 12345678 --text-file {answerPath}"),
+            kernel,
+            workspace);
+        var resolved = (await store.ListAsync()).Single(item => item.CorrelationKey == $"spec-clarification:{target.Id.Value}:scope:12345678");
+
+        Xunit.Assert.Equal($"Answered clarification '12345678' for goal '{target.Id.Value[..8]}'.{Environment.NewLine}", output);
+        Xunit.Assert.Equal(answer, resolved.Resolution);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_rejects_inline_text_and_file")]
+    public void CliAttentionAnswerRejectsInlineTextAndFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("abc20000aaaaaaaaaaaaaaaaaaaaaaaa"), "Target goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = store.RaiseAsync(CollaborationItemType.Clarification, target.Id.Value, "Target clarification", "Target body", $"spec-clarification:{target.Id.Value}:scope:12345678").GetAwaiter().GetResult();
+        var answerPath = Path.Combine(root, "attention-answer.md");
+        File.WriteAllText(answerPath, "File answer.", System.Text.Encoding.UTF8);
+
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() => ExecuteCliAndCapture(
+            CliArgumentParser.SplitCommand($"attention answer {target.Id.Value[..8]} 12345678 Inline answer --text-file {answerPath}"),
+            kernel,
+            workspace));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_attention_answer_goal_prefix_rejects_wrong_clarification_id")]
     public async Task CliAttentionAnswerGoalPrefixRejectsWrongClarificationId()
     {

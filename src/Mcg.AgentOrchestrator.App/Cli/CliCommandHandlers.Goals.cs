@@ -43,9 +43,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
             {
-                var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple");
+                var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple | goal --text-file <path> --simple");
                 var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
-                AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file");
+                AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file", "--text-file");
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
             }
             // --from-backlog: delegate to backlog-intake (objective used as heading filter)
@@ -62,7 +62,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --run: create 5-role goal then delegate to run-goal
             if (HasCliConfirmation(parts, "--run"))
             {
-                var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run");
+                var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run | goal --text-file <path> --run");
                 var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
@@ -70,10 +70,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective, context.Workspace, context.Providers, context.EventWriter);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file");
+                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
-            var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path>");
+            var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path> | goal --text-file <path>");
             var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
@@ -83,7 +83,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
 
         case "simple-goal":
-            var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path>");
+            var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path> | simple-goal --text-file <path>");
             var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
@@ -142,15 +142,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "cancel-goal":
         case "supersede-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, $"{command} <goal-id-prefix> <reason> [--confirm-goal-stop]");
+            CliArgumentParser.RequirePartCount(parts, 3, $"{command} <goal-id-prefix> <reason> [--confirm-goal-stop] | {command} <goal-id-prefix> --text-file <path> [--confirm-goal-stop]");
             context.CurrentGoal = HandleGoalStopCommand(context, parts, command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase));
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
         case "abandon-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon]");
+            CliArgumentParser.RequirePartCount(parts, 3, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var abandonReason = RemoveFlag(parts[2], "--confirm-goal-abandon");
+            var abandonParts = RemoveStandaloneFlag(parts, "--confirm-goal-abandon");
+            var abandonReason = ResolveTextArgument(abandonParts, inlineIndex: 2, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]", "--text-file");
             if (!HasCliConfirmation(parts, "--confirm-goal-abandon") &&
                 !parts[2].Contains("--confirm-goal-abandon", StringComparison.OrdinalIgnoreCase))
             {
@@ -260,15 +261,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         }
 
         case "park-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park]");
+            CliArgumentParser.RequirePartCount(parts, 3, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]");
             context.CurrentGoal = HandleGoalParkCommand(context, parts);
             return HasCliConfirmation(parts, "--confirm-goal-park") ||
                 parts[2].Contains("--confirm-goal-park", StringComparison.OrdinalIgnoreCase);
 
         case "rollback-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback]");
+            CliArgumentParser.RequirePartCount(parts, 3, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var rollbackReason = RemoveFlag(parts[2], "--confirm-goal-rollback");
+            var rollbackParts = RemoveStandaloneFlag(parts, "--confirm-goal-rollback");
+            var rollbackReason = ResolveTextArgument(rollbackParts, inlineIndex: 2, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]", "--text-file");
             var rollbackPlan = HasCliConfirmation(parts, "--confirm-goal-rollback") ||
                 parts[2].Contains("--confirm-goal-rollback", StringComparison.OrdinalIgnoreCase)
                 ? GoalRollbackPlanner.Apply(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason)
@@ -2292,17 +2294,61 @@ private static bool IsCliValueFlag(string part)
 
 private static string ResolveBriefObjective(IReadOnlyList<string> parts, string usage)
 {
-    var briefFilePath = GetFlagValue(parts, "--brief-file");
-    if (briefFilePath is not null)
+    return ResolveTextArgument(parts, inlineIndex: 1, usage, "--brief-file", "--text-file");
+}
+
+private static string ResolveTextArgument(IReadOnlyList<string> parts, int inlineIndex, string usage, params string[] fileFlags)
+{
+    var value = ResolveTextArgumentOrDefault(parts, inlineIndex, defaultValue: null, fileFlags);
+    if (value is null)
     {
-        if (!File.Exists(briefFilePath))
-        {
-            throw new InvalidOperationException($"--brief-file not found: {briefFilePath}");
-        }
-        return File.ReadAllText(briefFilePath, System.Text.Encoding.UTF8);
+        throw new ArgumentException($"Usage: {usage}");
     }
-    CliArgumentParser.RequirePartCount(parts, 2, usage);
-    return parts[1];
+
+    return value;
+}
+
+private static string? ResolveTextArgumentOrDefault(IReadOnlyList<string> parts, int inlineIndex, string? defaultValue, params string[] fileFlags)
+{
+    var presentFlags = fileFlags
+        .Where(flag => parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase)))
+        .ToArray();
+    var hasInlineText = parts.Count > inlineIndex && !parts[inlineIndex].StartsWith("--", StringComparison.Ordinal);
+    if (presentFlags.Length == 0)
+    {
+        return hasInlineText ? parts[inlineIndex] : defaultValue;
+    }
+
+    if (hasInlineText)
+    {
+        throw new ArgumentException($"Provide either inline text or {presentFlags[0]} <path>, not both.");
+    }
+
+    if (presentFlags.Length > 1)
+    {
+        throw new ArgumentException($"Provide only one text file option: {string.Join(", ", presentFlags)}.");
+    }
+
+    var flag = presentFlags[0];
+    var path = GetFlagValue(parts, flag)
+        ?? throw new ArgumentException($"{flag} requires <path>.");
+    if (!File.Exists(path))
+    {
+        throw new InvalidOperationException($"{flag} not found: {path}");
+    }
+
+    return File.ReadAllText(path, System.Text.Encoding.UTF8);
+}
+
+private static string? ResolveFlagTextArgumentOrDefault(IReadOnlyList<string> parts, string valueFlag, params string[] fileFlags)
+{
+    var flagIndex = parts.ToList().FindIndex(part => part.Equals(valueFlag, StringComparison.OrdinalIgnoreCase));
+    if (flagIndex < 0)
+    {
+        return null;
+    }
+
+    return ResolveTextArgumentOrDefault(parts, flagIndex + 1, defaultValue: null, fileFlags);
 }
 
 private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string flag, string message)
@@ -2328,7 +2374,8 @@ private static Goal HandleGoalStopCommand(CliExecutionContext context, IReadOnly
         throw new InvalidOperationException($"{parts[0]} requires --confirm-goal-stop for active or non-current goals.");
     }
 
-    var reason = RemoveFlag(parts[2], "--confirm-goal-stop");
+    var textParts = RemoveStandaloneFlag(parts, "--confirm-goal-stop");
+    var reason = ResolveTextArgument(textParts, inlineIndex: 2, $"{parts[0]} <goal-id-prefix> <reason> [--confirm-goal-stop] | {parts[0]} <goal-id-prefix> --text-file <path> [--confirm-goal-stop]", "--text-file");
     return supersede
         ? context.Kernel.SupersedeGoal(goal.Id, reason)
         : context.Kernel.CancelGoal(goal.Id, reason);
@@ -2337,7 +2384,8 @@ private static Goal HandleGoalStopCommand(CliExecutionContext context, IReadOnly
 private static Goal HandleGoalParkCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-    var reason = RemoveFlag(parts[2], "--confirm-goal-park");
+    var textParts = RemoveStandaloneFlag(parts, "--confirm-goal-park");
+    var reason = ResolveTextArgument(textParts, inlineIndex: 2, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]", "--text-file");
     if (string.IsNullOrWhiteSpace(reason))
     {
         throw new ArgumentException("Goal park reason cannot be empty.", nameof(parts));
@@ -2382,8 +2430,8 @@ private static bool HasGoalStopConfirmation(IReadOnlyList<string> parts) =>
     parts.Any(part => part.Equals("--confirm-goal-stop", StringComparison.OrdinalIgnoreCase) ||
         part.Contains("--confirm-goal-stop", StringComparison.OrdinalIgnoreCase));
 
-private static string RemoveFlag(string value, string flag) =>
-    value.Replace(flag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+private static IReadOnlyList<string> RemoveStandaloneFlag(IReadOnlyList<string> parts, string flag) =>
+    parts.Where(part => !part.Equals(flag, StringComparison.OrdinalIgnoreCase)).ToList();
 
 private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<string> parts)
 {
@@ -3217,13 +3265,13 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 {
     if (parts.Count < 3)
     {
-        throw new ArgumentException("Usage: recover <goal-prefix> <note>");
+        throw new ArgumentException("Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>");
     }
 
     var policy = ResolveCliAutonomyPolicy(parts);
     context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
     var goal = context.CurrentGoal;
-    var note = parts[2];
+    var note = ResolveTextArgument(parts, inlineIndex: 2, "recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>", "--text-file");
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
 
     var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);

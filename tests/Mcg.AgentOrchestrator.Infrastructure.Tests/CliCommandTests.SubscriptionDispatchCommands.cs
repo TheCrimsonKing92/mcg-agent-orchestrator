@@ -2149,6 +2149,93 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_text_file_task_commands_record_file_content")]
+    public void CliTextFileTaskCommandsRecordFileContent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Use file-backed task command text", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        var retryText = "Retry with file-backed feedback.\n\nInclude the full operator receipt.";
+        var progressText = "Progress from file.\n\nWorker is running with evidence.";
+        var verifyText = "Manual verification from file.\n\nModel fit: fake adequate.";
+        var addTaskText = "Added task from file.\n\nPreserve the full description.";
+        var answerText = "Answer from file.\n\nUse the longer clarification response.";
+        var noteText = "Note from file.\n\nKeep the full neutral operator receipt.";
+        var retryPath = Path.Combine(root, "retry.md");
+        var progressPath = Path.Combine(root, "progress.md");
+        var verifyPath = Path.Combine(root, "verify.md");
+        var addTaskPath = Path.Combine(root, "add-task.md");
+        var answerPath = Path.Combine(root, "answer.md");
+        var notePath = Path.Combine(root, "note.md");
+        File.WriteAllText(retryPath, retryText, System.Text.Encoding.UTF8);
+        File.WriteAllText(progressPath, progressText, System.Text.Encoding.UTF8);
+        File.WriteAllText(verifyPath, verifyText, System.Text.Encoding.UTF8);
+        File.WriteAllText(addTaskPath, addTaskText, System.Text.Encoding.UTF8);
+        File.WriteAllText(answerPath, answerText, System.Text.Encoding.UTF8);
+        File.WriteAllText(notePath, noteText, System.Text.Encoding.UTF8);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Initial failure.");
+
+        CliCommandDispatcher.ExecuteCommand(["retry", "1", "--text-file", retryPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["note", "1", "--text-file", notePath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["progress", "1", "running", "--text-file", progressPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["verify-manual", "1", "passed", "--text-file", verifyPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["add-task", "Tester", "--text-file", addTaskPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Need a longer answer.");
+        CliCommandDispatcher.ExecuteCommand(["answer", request.Id.Value[..8], "--text-file", answerPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == retryText);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskNote && evt.Message == noteText);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == progressText);
+        Xunit.Assert.Equal(verifyText, task.LastVerification!.StandardOutput);
+        Xunit.Assert.Contains(goal.Tasks, candidate => candidate.Description == addTaskText);
+        Xunit.Assert.Equal(answerText.Trim(), request.Answer);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_text_file_task_commands_reject_inline_text_and_file")]
+    public void CliTextFileTaskCommandsRejectInlineTextAndFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var path = Path.Combine(root, "retry.md");
+        File.WriteAllText(path, "File feedback.", System.Text.Encoding.UTF8);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Reject duplicate retry text", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Initial failure.");
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"retry 1 Inline feedback --text-file {path}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_note_preserves_task_and_allows_subscription_dispatch_and_retry")]
     public void CliNotePreservesTaskAndAllowsSubscriptionDispatchAndRetry()
     {
@@ -2314,10 +2401,32 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             providers,
             ref profiles,
             ref currentGoal));
+        var notePath = Path.Combine(root, "note.md");
+        File.WriteAllText(notePath, "File note.", System.Text.Encoding.UTF8);
+        var inlineAndFile = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"note 1 Inline note --text-file {notePath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var missingPath = Path.Combine(root, "missing-note.md");
+        var missingFile = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["note", "1", "--text-file", missingPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
 
         Xunit.Assert.Contains("Usage: note <task-number>", missingMessage.Message);
         Xunit.Assert.Contains("Task note message cannot be empty.", emptyMessage.Message);
         Xunit.Assert.Contains("99", unknownTask.Message);
+        Xunit.Assert.Contains("either inline text or --text-file", inlineAndFile.Message);
+        Xunit.Assert.Contains("--text-file not found", missingFile.Message);
+        Xunit.Assert.Contains(missingPath, missingFile.Message);
     }
 
 
@@ -2579,6 +2688,88 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_confirm_limit_review_accepts_text_file")]
+    public void CliSubscriptionDispatchConfirmLimitReviewAcceptsTextFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Review subscription limit from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents =
+        [
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli"))
+        ];
+        var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec prompt.md",
+            root,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec attempt",
+            root,
+            1,
+            string.Empty,
+            "ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again later.",
+            DateTimeOffset.UtcNow));
+        var note = "Reviewed from a file.\n\nProfile and timing are acceptable.";
+        var notePath = Path.Combine(root, "limit-review.md");
+        File.WriteAllText(notePath, note, System.Text.Encoding.UTF8);
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"subscription-dispatch 1 --confirm-limit-review --text-file {notePath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(note, task.SubscriptionLimitReviewNote);
+        Xunit.Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_subscription_dispatch_confirm_limit_review_rejects_inline_text_and_file")]
+    public void CliSubscriptionDispatchConfirmLimitReviewRejectsInlineTextAndFile()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Reject duplicate subscription limit note", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var notePath = Path.Combine(root, "limit-review.md");
+        File.WriteAllText(notePath, "File note.", System.Text.Encoding.UTF8);
+
+        var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1", "--confirm-limit-review", "Inline note.", "--text-file", notePath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_agent_command_creates_agent_with_complex_model_from_flag")]
     public void CliAgentCommandCreatesAgentWithComplexModelFromFlag()
     {
@@ -2737,12 +2928,15 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ["retry", "--goal", goalPrefix, "1", "Retry", "older", "goal."]);
         var progress = CliArgumentParser.NormalizeArgs(
             ["progress", goalPrefix, "1", "running", "Still", "working."]);
+        var progressFile = CliArgumentParser.NormalizeArgs(
+            ["progress", goalPrefix, "1", "running", "--text-file", "progress.md"]);
         var dispatch = CliArgumentParser.NormalizeArgs(
             ["dispatch", goalPrefix, "1", "local", "dotnet", "test", "--no-build"]);
 
         Xunit.Assert.Equal(["verify-manual", goalPrefix, "1", "passed", "Operator verified older goal."], manual);
         Xunit.Assert.Equal(["retry", "--goal", goalPrefix, "1", "Retry older goal."], retry);
         Xunit.Assert.Equal(["progress", goalPrefix, "1", "running", "Still working."], progress);
+        Xunit.Assert.Equal(["progress", goalPrefix, "1", "running", "--text-file", "progress.md"], progressFile);
         Xunit.Assert.Equal(["dispatch", goalPrefix, "1", "local", "dotnet test --no-build"], dispatch);
     }
 
@@ -2754,9 +2948,11 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         // arg, so HandleRecover saw < 3 parts and rejected every one-shot invocation via the launcher.
         var single = CliArgumentParser.NormalizeArgs(["recover", "abc123ef", "reconcile"]);
         var multi = CliArgumentParser.NormalizeArgs(["recover", "abc123ef", "reconcile", "after", "crash"]);
+        var file = CliArgumentParser.NormalizeArgs(["recover", "abc123ef", "--text-file", "recover.md"]);
 
         Xunit.Assert.Equal(["recover", "abc123ef", "reconcile"], single);
         Xunit.Assert.Equal(["recover", "abc123ef", "reconcile after crash"], multi);
+        Xunit.Assert.Equal(["recover", "abc123ef", "--text-file", "recover.md"], file);
     }
 
 

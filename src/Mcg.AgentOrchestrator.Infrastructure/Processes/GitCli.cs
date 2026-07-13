@@ -94,7 +94,7 @@ internal static class GitCli
     // unverified state).
     public static bool IsWorktreeDirty(string workingDirectory)
     {
-        var result = Run(workingDirectory, "status", "--porcelain");
+        var result = Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
         return result.ExitCode != 0 || !string.IsNullOrWhiteSpace(FilterCommitWorthyStatus(result.Output));
     }
 
@@ -170,6 +170,7 @@ internal static class GitCli
             normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) ||
+            IsIsolationLeaseArtifactPath(normalized) ||
             normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) ||
             normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) ||
@@ -181,5 +182,15 @@ internal static class GitCli
             normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) ||
             normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsIsolationLeaseArtifactPath(string normalizedPath)
+    {
+        return
+            (normalizedPath.StartsWith("i/goals/", StringComparison.OrdinalIgnoreCase) &&
+             (normalizedPath.EndsWith("/lease/lease.json", StringComparison.OrdinalIgnoreCase) ||
+              normalizedPath.EndsWith("/lease/lease.lock", StringComparison.OrdinalIgnoreCase))) ||
+            (normalizedPath.StartsWith("i/slots/", StringComparison.OrdinalIgnoreCase) &&
+             normalizedPath.EndsWith("/lease.execution.lock", StringComparison.OrdinalIgnoreCase));
     }
 }

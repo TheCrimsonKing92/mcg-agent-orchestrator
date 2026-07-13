@@ -584,6 +584,27 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal(1, restoredTask.CriterionRetryCount);
     Assert.True(restoredTask.CriterionRetryFeedback.Any(item => item.Contains("docs/usage.md", StringComparison.Ordinal)));
 }
+
+    [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_latest_retry_epoch")]
+    public void SnapshotRoundtripPreservesLatestRetryEpoch()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Persist retry epoch");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    clock.Advance();
+    kernel.RetryTask(goal.Id, task.Id, "Retry after failed acceptance.");
+    var latestRetryAt = task.LatestRetryAt;
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+
+    Assert.Equal(latestRetryAt, restoredTask.LatestRetryAt);
+    Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
+}
+
     [Xunit.Fact(DisplayName = "CancelGoal_marks_active_assigned_goal_cancelled_with_reason")]
     public void CancelGoalMarksActiveAssignedGoalCancelledWithReason()
 {

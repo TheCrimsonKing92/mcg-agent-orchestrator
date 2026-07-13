@@ -53,7 +53,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             ["abandon-goal", "abcdef12", "Operator", "chose", "a", "different", "route.", "--confirm-goal-abandon"]);
 
         Xunit.Assert.Equal(
-            ["abandon-goal", "abcdef12", "Operator chose a different route. --confirm-goal-abandon"],
+            ["abandon-goal", "abcdef12", "Operator chose a different route.", "--confirm-goal-abandon"],
             interactive);
         Xunit.Assert.Equal(oneShot, interactive);
     }
@@ -1689,6 +1689,80 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_goal_disposition_text_file_preserves_literal_confirmation_flags")]
+    public void CliGoalDispositionTextFilePreservesLiteralConfirmationFlags()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var cancelGoal = kernel.CreateGoal("Cancel with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var supersedeGoal = kernel.CreateGoal("Supersede with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var abandonGoal = kernel.CreateGoal("Abandon with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var parkGoal = kernel.CreateGoal("Park with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = cancelGoal;
+        kernel.ActivateGoal(cancelGoal.Id, agents);
+        kernel.ActivateGoal(supersedeGoal.Id, agents);
+        kernel.ActivateGoal(abandonGoal.Id, agents);
+        kernel.ActivateGoal(parkGoal.Id, agents);
+        var cancelReason = "Operator note mentions --confirm-goal-stop literally.";
+        var supersedeReason = "Operator note also mentions --confirm-goal-stop literally.";
+        var abandonReason = "Operator note mentions --confirm-goal-abandon literally.";
+        var parkReason = "Operator note mentions --confirm-goal-park literally.";
+        var cancelPath = Path.Combine(root, "cancel.md");
+        var supersedePath = Path.Combine(root, "supersede.md");
+        var abandonPath = Path.Combine(root, "abandon.md");
+        var parkPath = Path.Combine(root, "park.md");
+        File.WriteAllText(cancelPath, cancelReason, System.Text.Encoding.UTF8);
+        File.WriteAllText(supersedePath, supersedeReason, System.Text.Encoding.UTF8);
+        File.WriteAllText(abandonPath, abandonReason, System.Text.Encoding.UTF8);
+        File.WriteAllText(parkPath, parkReason, System.Text.Encoding.UTF8);
+
+        CliCommandDispatcher.ExecuteCommand(["cancel-goal", cancelGoal.Id.Value[..8], "--text-file", cancelPath, "--confirm-goal-stop"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["supersede-goal", supersedeGoal.Id.Value[..8], "--text-file", supersedePath, "--confirm-goal-stop"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["abandon-goal", abandonGoal.Id.Value[..8], "--text-file", abandonPath, "--confirm-goal-abandon"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["park-goal", parkGoal.Id.Value[..8], "--text-file", parkPath, "--confirm-goal-park"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Xunit.Assert.Contains(cancelGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == cancelReason);
+        Xunit.Assert.Contains(supersedeGoal.Timeline, evt => evt.Kind == ProgressKind.GoalSuperseded && evt.Message == supersedeReason);
+        Xunit.Assert.Contains(abandonGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == abandonReason);
+        Xunit.Assert.Contains(parkGoal.Timeline, evt => evt.Kind == ProgressKind.GoalPolicyDecision && evt.Message == $"Goal parked: {parkReason}");
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_stop_alias_accepts_text_file_reason")]
+    public void CliStopAliasAcceptsTextFileReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Stop alias from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var reason = "Stop alias reason from file.\n\nPreserve the long operator note.";
+        var reasonPath = Path.Combine(root, "stop.md");
+        File.WriteAllText(reasonPath, reason, System.Text.Encoding.UTF8);
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"stop {goal.Id.Value[..8]} --text-file {reasonPath} --as cancel --confirm-goal-stop"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(GoalStatus.Cancelled, goal.Status);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == reason);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_abandon_goal_prints_dry_run_without_mutating_state")]
     public void CliAbandonGoalPrintsDryRunWithoutMutatingState()
     {
@@ -2014,6 +2088,91 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Single(kernel.Goals);
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_goal_brief_file_launcher_path_preserves_file_content_for_simple_alias")]
+    public void CliGoalBriefFileLauncherPathPreservesFileContentForSimpleAlias()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Create the goal from a launcher-style --brief-file command.\n\nThe file content must be the objective byte-for-byte.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"goal --brief-file {briefPath} --simple"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Single(currentGoal!.Tasks);
+        Xunit.Assert.Equal(briefContent, currentGoal.Objective);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_text_file_alias_creates_goal_with_file_content")]
+    public void CliSimpleGoalTextFileAliasCreatesGoalWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Implement a goal from the uniform --text-file alias.\n\nKeep multiline content intact.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "--text-file", briefPath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_simple_goal_text_file_rejects_inline_objective")]
+    public void CliSimpleGoalTextFileRejectsInlineObjective()
+    {
+        var root = CreateTempDirectory();
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, "File objective.", System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"simple-goal Inline objective --text-file {briefPath}"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
+        Xunit.Assert.Empty(kernel.Goals);
     }
 
 

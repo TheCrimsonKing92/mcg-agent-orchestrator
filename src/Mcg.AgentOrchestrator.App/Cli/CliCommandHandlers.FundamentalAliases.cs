@@ -50,13 +50,13 @@ private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionC
     return true;
 }
 
-// stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede [--confirm-*]
+// stop <goal-id-prefix> <reason>|--text-file <path> --as cancel|park|abandon|supersede [--confirm-*]
 // Delegates to the appropriate disposal command based on --as mode.
 private static bool HandleStopAlias(IReadOnlyList<string> parts, CliExecutionContext context)
 {
     if (parts.Count < 3)
     {
-        throw new ArgumentException("Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede");
+        throw new ArgumentException("Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede");
     }
 
     var asMode = GetFlagValue(parts, "--as");
@@ -66,7 +66,7 @@ private static bool HandleStopAlias(IReadOnlyList<string> parts, CliExecutionCon
     }
 
     var goalPart = parts[1];
-    var reason = parts[2];
+    var reason = ResolveTextArgument(parts, 2, "stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede", "--text-file");
 
     switch (asMode.ToLowerInvariant())
     {
