@@ -1466,6 +1466,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_isolation_lease_only_dirty_worktree_is_clean_for_commit")]
     public void BackgroundDispatchRunnerIsolationLeaseOnlyDirtyWorktreeIsCleanForCommit()
 {
+    using var isolatedDotnetRoot = UseFixtureIsolatedDotnetRoot();
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
@@ -2136,6 +2137,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_commit_on_behalf_stages_real_files_not_isolation_leases")]
     public void BackgroundDispatchRunnerCommitOnBehalfStagesRealFilesNotIsolationLeases()
 {
+    using var isolatedDotnetRoot = UseFixtureIsolatedDotnetRoot();
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
@@ -2622,6 +2624,43 @@ private static void WriteIsolationLeaseArtifacts(string worktree)
     var slot = Path.Combine(worktree, "i", "slots", "slot-0");
     Directory.CreateDirectory(slot);
     File.WriteAllText(Path.Combine(slot, "lease.execution.lock"), "locked");
+}
+
+private static FixtureIsolatedDotnetRootScope UseFixtureIsolatedDotnetRoot()
+{
+    return new FixtureIsolatedDotnetRootScope(
+        Path.Combine(
+            Path.GetTempPath(),
+            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-commit-on-behalf-{Guid.NewGuid():N}"));
+}
+
+private sealed class FixtureIsolatedDotnetRootScope : IDisposable
+{
+    private readonly string? _previousValue;
+    private readonly string _root;
+
+    public FixtureIsolatedDotnetRootScope(string root)
+    {
+        _root = root;
+        _previousValue = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previousValue);
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort; failed tests may leave files open for inspection.
+        }
+    }
 }
 
 }
