@@ -31,9 +31,9 @@ Run long-lived work as background tasks with completion notifications when possi
 
 Issue single bare shell commands so Claude permission allowlist prefixes match predictably. Avoid chaining, env-prefix wrappers, and incidental pipes in ordinary commands. When the task truly is a live monitor, use one deliberate persistent Monitor command rather than repeated ad-hoc polling.
 
-For conductor loop monitoring, prefer a persistent Monitor such as `tail -f <loop-output> | grep --line-buffered -E "<event patterns>"` so task completion, human-input, failure, and landing events wake the session without sleep loops.
+For conductor loop monitoring, prefer a persistent Monitor on the stable structured stream: `tail -F .orchestrator/logs/conduct-events.log | grep --line-buffered -E "<event patterns>"`. It is JSON lines with `eventKind` and survives rotation; per-batch loop output is fallback evidence only.
 
-For graceful conductor restarts, create `.conduct-stop`, wait for the loop to stop without canceling in-flight workers, remove `.conduct-stop`, then relaunch. Relaunching while the stop file remains in place immediately stops the next loop.
+For graceful conductor stops, create `.conduct-stop`, wait for `LOOP_STOP` in `conduct-events.log`, then remove `.conduct-stop` before any new loop. Bounded loops self-renew on `--max-duration`; relaunch manually only after `LOOP_HANDOFF_FAILED`, deliberate stop/Ctrl-C, code/config changes, or an all-done stop followed by new goals.
 
 Use dashboard cancel/refresh controls or exact known process ids for stuck workers. Never run broad process cleanup.
 

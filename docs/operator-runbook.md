@@ -14,7 +14,7 @@ The conductor drives a goal through its **entire** lifecycle. You almost never c
 # 1. Create a goal
 mcg-orchestrator.cmd goal "<objective>"                 # five-role SDLC pipeline
 mcg-orchestrator.cmd simple-goal "<objective>"          # single Developer task
-mcg-orchestrator.cmd goal --text-file <path>            # long objective via throwaway file (then delete the file)
+mcg-orchestrator.cmd goal --brief-file <path>           # long objective via throwaway file (then delete the file)
 
 # 2. (If the refiner raised clarifications) clear them so the goal can flow
 mcg-orchestrator.cmd attention dismiss <goal-prefix>    # proceed with the brief as written
@@ -26,7 +26,7 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
 
-`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`).
+`conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`). When a bounded run reaches `--max-duration`, landed code attempts a successor loop handoff instead of requiring a ritual relaunch; watch for `LOOP_HANDOFF` or `LOOP_HANDOFF_FAILED` in the conduct event stream.
 
 You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, or `accept` by hand. A single non-loop `conduct <goal-prefix>` advances exactly one step (useful for stepping/inspection).
 
@@ -41,7 +41,7 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 | `--daemon` | persistent mode for controlled active-goal intake; stays alive on an empty backlog and picks up goals submitted after the loop starts |
 | `--dashboard-url <url>` | attach to a running dashboard |
 
-**Stop a loop** by creating a `.conduct-stop` file in the repo root (graceful) or Ctrl-C. The loop is now interrupt-safe — a stop no longer cancels in-flight worker tasks.
+**Stop a loop** by creating a `.conduct-stop` file in the repo root (graceful) or Ctrl-C. The loop is now interrupt-safe — a stop no longer cancels in-flight worker tasks. Remove `.conduct-stop` before starting a new loop.
 
 ---
 
@@ -88,7 +88,13 @@ acceptance suite output → git diff / commits in the worktree → verification 
 | `durations` | role/complexity runtime medians plus attempts-per-task; use it to spot slow lanes and retry redundancy before changing worker mix or loop policy |
 | `durations --by-model` | the same duration report sliced by model/provider; use it when a role looks slow but provider choice may be the real variable |
 
-Read the loop's own output too — `TICK`, `held`, `escalated`, `LOOP_STOP` lines tell you exactly what each goal did. `PHASE_TIMING` receipts in loop logs are the tick latency profile: `sweep`, `prewalk`, `per-goal-walk`, and `dispatch-prep` show where the conductor spent the tick. Use them when ticks feel slow before blaming a worker.
+Read the stable conduct event stream first:
+
+```bash
+tail -F .orchestrator/logs/conduct-events.log
+```
+
+It is JSON lines with `timestamp`, `eventKind`, `goalId`, and `detail`; `tail -F` follows the stable path across rotation. Key `eventKind` values include `loop-start`, `loop-stop`, `loop-handoff`, `watch-transition`, `acceptance`, and `lock-blocker`. The `detail` field preserves the compact loop line (`TICK`, `held`, `escalated`, `LOOP_STOP`, `LOOP_HANDOFF`, `LOOP_HANDOFF_FAILED`, `PHASE_TIMING`). `PHASE_TIMING` receipts are the tick latency profile: `sweep`, `prewalk`, `per-goal-walk`, and `dispatch-prep` show where the conductor spent the tick. Use them when ticks feel slow before blaming a worker.
 
 Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
 
@@ -102,14 +108,14 @@ For focused goal inspection, prefer the repo helpers over broad `.orchestrator` 
 
 `Get-GoalDispatchInventory.ps1` is the ground truth for round status: it lists each dispatch generation with exit and heartbeat evidence. Use it when `status` says Running/Dispatched but the round may have died. `Get-GoalTaskSummary.ps1` shows each task's status, last failure, and blockers; use it before repair commands. `Get-WorkerResultTail.ps1` prints the newest `WORKER_RESULT`; add `[task-prefix]` when several tasks have recent results, and `-Chars` when the default tail is too short.
 
-For persistent monitoring from a shell that can keep running:
+Per-batch loop stdout/stderr logs are fallback evidence, not the canonical event source. Use them only when the JSONL stream is missing or you need raw stdout around a specific batch:
 
 ```bash
 scripts/watch-goal-pulse.sh <goal-prefix> [goal-prefix...]
 scripts/watch-loop-events.sh <goal-prefix> [goal-prefix...]
 ```
 
-`watch-goal-pulse.sh` is the lightweight goal pulse while workers run. `watch-loop-events.sh` follows terminal events for the named goals and auto-selects the newest loop log, so use it after launching a conductor loop without hunting for the log path.
+`watch-goal-pulse.sh` is the lightweight goal pulse while workers run. `watch-loop-events.sh` follows terminal events for the named goals from per-batch logs; prefer `conduct-events.log` when it is available.
 
 For long-running conductor/acceptance commands, keep the operator seat free by launching a bounded background command and polling:
 
@@ -151,16 +157,23 @@ This is the most important section. Match the **observable symptom** to its caus
 | `escalated at AwaitingClarification` and you want to provide real answers, not dismiss | Spec-refiner raised design questions with stable short IDs. | `attention show <goal>` (lists questions with stable IDs), then `attention answer <goal> <id> --text-file <path>` for long answers; then re-run the loop. Answers are injected into the refined spec before the next dispatch. |
 | You want two or more goals to advance concurrently | Goals with overlapping file scopes contend for the same worktree paths — running them together produces merge conflicts. | Verify non-overlapping file scopes first. Then intake all goals **before** starting a single `conduct --loop --watch --policy Permissive` — one loop tick advances every eligible goal; the slot cap (5 under Permissive) limits concurrent workers. |
 
+Additional recovery notes:
+
+- If a retry is swallowed because the same completed dispatch exit artifact keeps being reconciled, stop the loop, identify the exact stale `.exit.txt` from `task <goal> <n>` or `Get-GoalDispatchInventory.ps1`, move that single exit artifact aside with a `.retired` suffix, then run `recover <goal> --text-file <path>` and `retry <goal> <task-number> --text-file <path>`. Do not delete broad log sets; preserve stdout/stderr for evidence.
+- `recover` can over-reset tasks that had already passed. Bridge those back with explicit receipts: `progress <goal> <task-number> completed --text-file <path>` followed by `verify-manual <goal> <task-number> passed --text-file <path>`.
+- A lingering goal-level `Failed` display while retryable tasks are already in flight is expected noise during recovery. Judge the live state by the task process, dispatch inventory, and event stream before applying another repair.
+- Classifier and recovery notes include the rule and matched evidence that triggered them. Read that evidence before retrying; it usually distinguishes provider limits, empty-output flakes, dirty worktree recovery, sandbox commit blocks, and real test failures.
+
 ### State-repair quiet window
 
 State-repair writes must happen only while no conductor loop is mid-tick. A running tick can clobber concurrent state writes by saving its older in-memory snapshot after your repair (backlog `c7344bf2`). Use this sequence for SQLite repair commands and artifact retirement:
 
 ```powershell
 New-Item -ItemType File .conduct-stop
-# wait for LOOP_STOP in the loop log
+# wait for LOOP_STOP in .orchestrator/logs/conduct-events.log
 .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 requeue-task --task-number <n> --note "<why>" <goal>
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-GoalTaskSummary.ps1 <goal>
-# let one next tick prove the goal is still stuck or now dispatchable, then relaunch the loop
+# let one next tick prove the goal is still stuck or now dispatchable
 .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
 ```
 
@@ -198,7 +211,7 @@ If the output includes `ERR_CLAUDE_AUTH_UNAVAILABLE`, the "no ready batch" is ma
 If a `conduct --loop --watch ...` is already running, the reassigned tasks are dispatchable on the next tick; otherwise run `conduct <goal-prefix>` or restart the loop.
 
 Notes that will save you time:
-- `recover <goal> --text-file <path>` takes a long free-text note without tripping command-length caps. Short inline notes still work; avoid `;` and other shell-special characters because the launcher mangles them.
+- Long text belongs in throwaway files: `retry`, `note`, `progress`, `verify-manual`, `recover`, `answer`, and `add-task` all accept `--text-file <path>`; `goal` accepts `--brief-file <path>` (also `--text-file`); `backlog-add` accepts `--body-file <path>` (also `--text-file`). Delete the scratch input after the command succeeds.
 - `subscription-dispatch <task> --confirm-limit-review --text-file <path>` records a long usage-limit review note without putting it on the command line.
 - A loop **crash** (vs a graceful `.conduct-stop`) does **not** cancel in-flight tasks — they stay reconcilable — but it can leave a goal in `Failed` lifecycle that `recover`/`acceptance` clears.
 - Verification roles (Tester/Reviewer) legitimately change no files; the dispatch gate accepts their `WORKER_RESULT` as evidence. If a verification task still won't pass, `verify-manual <n> passed --text-file <path>` records an operator pass.
@@ -227,7 +240,7 @@ Created
 
 Off-path states you will see in escalations: `AwaitingClarification` (refiner raised questions), `AwaitingHumanInput` (conductor needs an operator decision), `Failed` (a task exhausted retries), `Blocked` (operator hold). These stop the normal sequence; use §5 to clear them.
 
-**Loop-exit condition.** A plain `conduct --loop` batch run halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* a plain loop started are **not** picked up — restart `conduct --loop` to process them. Use `conduct --loop --daemon` only for controlled active-goal intake: it stays alive on an empty backlog and picks up goals submitted later, but it is not a safe "drain the backlog" mode.
+**Loop-exit and handoff conditions.** A plain `conduct --loop` batch run halts automatically and prints `LOOP_STOP reason=all-done-or-escalated` when every active goal has reached a terminal state (`CleanedUp`, `Failed`, `Blocked`) or been escalated. Goals created *after* a plain loop started are **not** picked up after that terminal stop — start a new `conduct --loop` to process them. When `--max-duration` expires while active work remains, landed code attempts a successor loop and emits `LOOP_HANDOFF` on success or `LOOP_HANDOFF_FAILED` on failure. Manual relaunch is still needed after `LOOP_HANDOFF_FAILED`, after a deliberate `.conduct-stop`/Ctrl-C, after changing code or operator configuration, or after creating new goals following an all-done stop. Use `conduct --loop --daemon` only for controlled active-goal intake: it stays alive on an empty backlog and picks up goals submitted later, but it is not a safe "drain the backlog" mode.
 
 ### 6.2 Orchestrator-commit-on-behalf + merge to main
 
@@ -249,11 +262,15 @@ Security-risk and build-system goals may intentionally stop at the landing gate 
 ```powershell
 git -C .orchestrator-worktrees/<goal-prefix> diff --stat main...HEAD
 git -C .orchestrator-worktrees/<goal-prefix> diff main...HEAD
+git switch -c verify/<goal-prefix> main
+git merge --no-ff goal/<goal-prefix>
+# run the goal's own new test classes here, on the scratch branch
+git switch main
 git merge --no-ff goal/<goal-prefix>
 .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 goal-mark-landed <goal-prefix> --confirm-goal-mark-landed
 ```
 
-Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. `goal-mark-landed` records the out-of-band merge and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
+Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. Pre-landing verification merges happen on a scratch branch such as `verify/<prefix>`, never on `main`; `main` moves only at the actual landing step. Until the c0624af9 verification fix lands, a goal can reach `Verified` without executed self-tests, so before any hand-landing run the goal's own new/changed test classes and keep the receipts. `goal-mark-landed` records the out-of-band merge, writes a durable retired terminal disposition, and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
 
 ### 6.3 Concurrency caps
 
@@ -276,11 +293,12 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
 | `.orchestrator/agents.json` | the agent catalog (which model each role uses) |
+| `.orchestrator/logs/conduct-events.log` | canonical structured conduct event stream (JSON lines with `eventKind`; stable path, rotated by size) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
 | `.orchestrator-worktrees/<goal-prefix>` | the goal's isolated git worktree on branch `goal/<prefix>` |
 | `.orchestrator-context/<goal-id>` | worker context artifacts for a goal |
 
-`--text-file` is the uniform throwaway vehicle to pass long text past the command-length cap; `--brief-file` and `--body-file` remain aliases for existing scripts. The durable copy becomes the goal objective, task note, verification receipt, answer, or backlog item, so **delete the scratch input** afterward.
+`--text-file` is the uniform throwaway vehicle to pass long text past the command-length cap for `retry`, `note`, `progress`, `verify-manual`, `recover`, `answer`, and `add-task`. `goal --brief-file <path>` and `backlog-add --body-file <path>` are the preferred command-specific forms, with `--text-file` aliases still accepted by current CLI help. The durable copy becomes the goal objective, task note, verification receipt, answer, or backlog item, so **delete the scratch input** afterward.
 
 Dogfood goal-boundary evidence is durable SQLite state, not a tracked markdown append log.
 
@@ -300,13 +318,14 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
 - **Backlog is candidate input, not an automatic queue.** A stale/open backlog can contain obsolete, overlapping, or underspecified work. Before daemon mode, curate a small active set with `backlog-list` + filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal`; avoid unfiltered `goal-plan --create-*` or multi-filter batch creation unless you have reviewed dependencies and file scopes. Keep daemon runs bounded with `--max-duration` until the active set is proven healthy.
-- **Keep long waits out of the foreground.** Use `scripts\Start-OrchestratorCommand.ps1` through `scripts\Invoke-RepoScript.ps1` for long acceptance/conductor runs, then poll `next <goal> --full`, `Find-OrchestratorLocks.ps1`, and `Show-OrchestratorLogArtifacts.ps1`. Avoid raw `Start-Sleep` loops and broad `.orchestrator` filesystem commands.
-- **State writes vs a running loop.** Light writes (`attention answer`, `backlog-add` — the latter on a separate `backlog.db`) are safe concurrent with the loop. But a burst of HEAVY state-`db` writes — `goal --text-file`, `abandon-goal`, `park-goal` (each does a whole-kernel load+save) — racing a write-heavy tick can exhaust the SQLite busy-retry and **crash** the loop (observed twice, 2026-06-25). Serialize those *between* loop runs (stop → mutate → restart). Read-only inspection (`status`, `next`, git on worktrees, loop output) is always free.
+- **Keep long waits out of the foreground.** Use `scripts\Start-OrchestratorCommand.ps1` through `scripts\Invoke-RepoScript.ps1` for long acceptance/conductor runs, then watch `.orchestrator/logs/conduct-events.log` and poll `next <goal> --full` or `Find-OrchestratorLocks.ps1` when you need state. Use `Show-OrchestratorLogArtifacts.ps1` for per-dispatch fallback logs. Avoid raw `Start-Sleep` loops and broad `.orchestrator` filesystem commands.
+- **State writes vs a running loop.** Light writes (`attention answer`, `backlog-add` — the latter on a separate `backlog.db`) are safe concurrent with the loop. But a burst of HEAVY state-`db` writes — `goal --brief-file`, `abandon-goal`, `park-goal` (each does a whole-kernel load+save) — racing a write-heavy tick can exhaust the SQLite busy-retry and **crash** the loop (observed twice, 2026-06-25). Serialize those *between* loop runs (stop → mutate → restart). Read-only inspection (`status`, `next`, git on worktrees, loop output) is always free.
 - **Scope the test suite to the changed project**, not the whole solution; run it foreground (or poll). Use `scripts/Invoke-TestSummary.ps1 -Target <project>` for compact results.
 - **Provider requirements:** `claude-cli` needs a valid model id (`claude-sonnet-4-6`/`sonnet`/`haiku`/`opus`) **and** a permission mode (the default profile carries both). `codex-cli` on a ChatGPT account accepts `gpt-5.5`. API runs (`run`/`api-run`) have **no file access** — embed needed data in the task description.
 - **The brief is the unverified root of trust.** The gates verify "output matched the spec," never "was the spec right." A sloppy brief lands a plausible-but-wrong implementation on green tests. Specify external contracts (happy *and* unhappy path), observable success, ownership/lifecycle, and the verification class before dispatch.
 - **Shared-service changes ripple to integration tests.** A brief that changes a widely-consumed service (the failure classifier, the binding resolver, a kernel API) must require the worker to find that service's consumers (a call-site / reverse-dependency search) and run the **dependent integration tests** (e.g. `RunGoalService_*`) in self-verify — not just the changed file's own unit tests. Otherwise the ripple is caught only by the full-suite acceptance gate, costing a Developer-retry cycle. Observed 2026-06-25: two lanes changing `DispatchFailureClassifier` and the binding resolver both escalated at acceptance on `RunGoalService_*` because their briefs scoped self-verify too narrowly.
 - **Reproduce before you theorize.** When an external CLI/model/tool fails, run the smallest reproducing command before concluding a cause.
+- **Retire terminal ghosts durably.** `goal-mark-landed` now writes a retired terminal disposition after out-of-band landing, and terminal sweeps suppress standing retired dispositions. Once 4f970f1d lands, `abandon-goal` will do the same for abandoned goals; until then, treat abandon retirement as in progress rather than guaranteed.
 
 ---
 
