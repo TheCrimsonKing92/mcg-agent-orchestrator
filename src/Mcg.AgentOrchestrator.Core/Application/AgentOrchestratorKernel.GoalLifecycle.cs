@@ -246,6 +246,36 @@ public sealed partial class AgentOrchestratorKernel
         goal.ClearAcceptanceFailure();
     }
 
+    public void RecordExecutedTestReceipt(
+        GoalId goalId,
+        string runContext,
+        IReadOnlyList<string> changedFiles,
+        IReadOnlyList<string> coveredChecks,
+        int passedCount,
+        int failedCount,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null,
+        IReadOnlyList<string>? failedChecks = null)
+    {
+        var goal = GetGoal(goalId);
+        goal.RecordExecutedTestReceipt(
+            runContext,
+            changedFiles,
+            coveredChecks,
+            passedCount,
+            failedCount,
+            _clock.UtcNow,
+            branchHeadSha,
+            mainHeadSha,
+            failedChecks);
+        Append(
+            goal,
+            null,
+            ProgressKind.TaskVerificationRecorded,
+            $"Executed test receipt recorded ({passedCount} passed, {failedCount} failed): {runContext}");
+        RefreshGoalStatus(goal);
+    }
+
     public void ClearCriterionRetryFeedback(GoalId goalId, TaskId taskId)
     {
         var goal = GetGoal(goalId);

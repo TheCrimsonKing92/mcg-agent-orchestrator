@@ -28,6 +28,15 @@ public sealed class ConductorDriverTests
         DispatchTask(kernel, goal, task);
         var verification = new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "ok", "", DateTimeOffset.UtcNow);
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+        kernel.RecordExecutedTestReceipt(
+            goal.Id,
+            "focused tests",
+            ["src/Foo.cs"],
+            ["Focused tests"],
+            passedCount: 1,
+            failedCount: 0,
+            branchHeadSha: "branch",
+            mainHeadSha: "main");
     }
 
     private static void FailVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
@@ -100,6 +109,9 @@ public sealed class ConductorDriverTests
         Func<Goal, ChangeRiskTier?>? classifyRisk = null,
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
+        Action<Goal, IReadOnlyList<string>, string?, string?>? recordAcceptanceFailure = null,
+        Action<Goal>? clearAcceptanceFailure = null,
+        Action<Goal, AcceptanceVerificationSummary>? recordExecutedTestReceipt = null,
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
@@ -131,6 +143,9 @@ public sealed class ConductorDriverTests
             classifyRisk ?? (_ => null),
             emptyOutputBackoffDelay,
             evaluateReadiness,
+            recordAcceptanceFailure: recordAcceptanceFailure,
+            clearAcceptanceFailure: clearAcceptanceFailure,
+            recordExecutedTestReceipt: recordExecutedTestReceipt,
             completeGoal: completeGoal,
             normalizeLifecycleState: normalizeLifecycleState,
             recoverSandboxPrep: recoverSandboxPrep,
@@ -560,6 +575,92 @@ public sealed class ConductorDriverTests
 
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
         Assert.Equal(GoalLifecycleState.AwaitingVerification, ((ConductorAdvanceOutcome.Held)result.Outcome).State);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_runs_focused_acceptance_and_records_receipt")]
+    public void ConductorDriverAwaitingVerificationRunsFocusedAcceptanceAndRecordsReceipt()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("build-check", "C:\\tmp", 0, "passed", "", DateTimeOffset.UtcNow));
+        var acceptanceCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ =>
+            {
+                acceptanceCalled = true;
+                return new AcceptanceVerificationSummary(
+                    true,
+                    [],
+                    ChangedFiles: ["tests/FooTests.cs"],
+                    CoveredChecks: ["FooTests"],
+                    PassedCount: 1,
+                    FailedCount: 0,
+                    BranchHeadSha: "branch",
+                    MainHeadSha: "main");
+            },
+            recordExecutedTestReceipt: (g, summary) => kernel.RecordExecutedTestReceipt(
+                g.Id,
+                summary.RunContext,
+                summary.ChangedFiles ?? [],
+                summary.CoveredChecks ?? [],
+                summary.PassedCount,
+                summary.FailedCount,
+                summary.BranchHeadSha,
+                summary.MainHeadSha,
+                summary.FailedChecks));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(acceptanceCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.NotNull(goal.LatestExecutedTestReceipt);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_red_focused_acceptance_blocks_promotion")]
+    public void ConductorDriverAwaitingVerificationRedFocusedAcceptanceBlocksPromotion()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("build-check", "C:\\tmp", 0, "passed", "", DateTimeOffset.UtcNow));
+        string? escalationReason = null;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                false,
+                [],
+                FailureDetail: "[FAIL] FooTests.Fails",
+                FailedChecks: ["FooTests"],
+                ChangedFiles: ["tests/FooTests.cs"],
+                CoveredChecks: ["FooTests"],
+                PassedCount: 0,
+                FailedCount: 1),
+            recordExecutedTestReceipt: (g, summary) => kernel.RecordExecutedTestReceipt(
+                g.Id,
+                summary.RunContext,
+                summary.ChangedFiles ?? [],
+                summary.CoveredChecks ?? [],
+                summary.PassedCount,
+                summary.FailedCount,
+                summary.BranchHeadSha,
+                summary.MainHeadSha,
+                summary.FailedChecks),
+            recordAcceptanceFailure: (g, failedChecks, branch, main) => kernel.RecordAcceptanceFailure(g.Id, failedChecks, branch, main),
+            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Equal(GoalStatus.Active, goal.Status);
+        Assert.Contains("Focused acceptance verification failed", escalationReason!, StringComparison.Ordinal);
+        Assert.Equal(["FooTests"], goal.LatestAcceptanceFailure!.FailedChecks);
     }
 
     // ── Verified state ────────────────────────────────────────────────────

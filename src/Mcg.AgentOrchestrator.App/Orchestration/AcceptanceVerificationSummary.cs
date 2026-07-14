@@ -8,7 +8,12 @@ internal sealed record AcceptanceVerificationSummary(
     string? FailureDetail = null,
     IReadOnlyList<string>? FailedChecks = null,
     string? BranchHeadSha = null,
-    string? MainHeadSha = null)
+    string? MainHeadSha = null,
+    IReadOnlyList<string>? ChangedFiles = null,
+    IReadOnlyList<string>? CoveredChecks = null,
+    int PassedCount = 0,
+    int FailedCount = 0,
+    string RunContext = "goal acceptance verifier")
 {
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

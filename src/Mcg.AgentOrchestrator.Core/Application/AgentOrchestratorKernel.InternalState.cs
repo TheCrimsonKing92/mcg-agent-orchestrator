@@ -20,7 +20,8 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed) &&
+            HasPassingExecutedTestReceipt(goal))
         {
             goal.SetStatus(GoalStatus.Verified);
             return;
@@ -112,6 +113,9 @@ public sealed partial class AgentOrchestratorKernel
             $"Verified by {task.LastVerification.Command} at {task.LastVerification.CompletedAt:u}.",
             VerificationGateReason.Passed);
     }
+
+    private static bool HasPassingExecutedTestReceipt(Goal goal) =>
+        goal.LatestExecutedTestReceipt is { Passed: true };
 
     private static bool HasOutputTokenLimitHit(TaskExecutionRecord? execution)
     {

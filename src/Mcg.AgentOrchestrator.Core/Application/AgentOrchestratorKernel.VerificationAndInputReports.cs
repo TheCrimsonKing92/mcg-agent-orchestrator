@@ -11,8 +11,15 @@ public sealed partial class AgentOrchestratorKernel
             goal.Id,
             goal.Objective,
             goal.Status,
-            gates.All(gate => gate.GateStatus == VerificationGateStatus.Passed),
-            gates);
+            gates.All(gate => gate.GateStatus == VerificationGateStatus.Passed) &&
+                goal.LatestExecutedTestReceipt is { Passed: true },
+            gates,
+            goal.LatestExecutedTestReceipt is { Passed: true }
+                ? VerificationGateReason.Passed
+                : VerificationGateReason.MissingExecutedTestReceipt,
+            goal.LatestExecutedTestReceipt is { Passed: true }
+                ? "Goal has an executed test receipt covering the changed test surface."
+                : "Goal is missing an executed test receipt covering the changed test surface.");
     }
 
     public GoalVerificationWorklist BuildVerificationWorklist(GoalId goalId)
@@ -64,6 +71,17 @@ public sealed partial class AgentOrchestratorKernel
                 null,
                 taskGate.Message,
                 BuildVerificationSuggestedAction(taskGate)));
+        }
+
+        if (gate.Tasks.All(task => task.GateStatus == VerificationGateStatus.Passed) &&
+            gate.Reason == VerificationGateReason.MissingExecutedTestReceipt)
+        {
+            blockers.Add(new GoalAcceptanceBlocker(
+                GoalAcceptanceBlockerKind.VerificationMissing,
+                null,
+                null,
+                gate.Message,
+                "Run focused goal acceptance verification and record the executed test receipt."));
         }
 
         if (goal.LatestAcceptanceFailure is { } failure)
