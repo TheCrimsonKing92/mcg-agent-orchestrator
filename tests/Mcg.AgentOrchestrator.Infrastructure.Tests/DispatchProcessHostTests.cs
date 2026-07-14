@@ -493,12 +493,59 @@ public sealed class DispatchProcessHostTests
             Assert.Contains("prepare-roots", phases);
             Assert.Contains("receipt-fast-path", phases);
             Assert.Contains("materialize-sandbox", phases);
-            Assert.DoesNotContain("protect-workspace-boundary", phases);
-            Assert.DoesNotContain("protect-git-metadata", phases);
+            Assert.DoesNotContain(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, phases);
+            Assert.DoesNotContain(WorkerSandboxPreparer.ProtectGitMetadataPhase, phases);
             Assert.True(File.Exists(Path.Combine(sandboxRoot, "drop-to-low.ps1")));
             Assert.True(File.Exists(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
             Assert.Equal(Path.Combine(sandboxRoot, DispatchProcessHost.WorkerCaBundleFileName), startInfo.Environment["SSL_CERT_FILE"]);
             Assert.Equal(File.ReadAllText(sourceBundle), File.ReadAllText(startInfo.Environment["SSL_CERT_FILE"]));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_receipt_missing_phase_does_not_skip_that_phase")]
+    public void ApplyWorkerSandboxReceiptMissingPhaseDoesNotSkipThatPhase()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-partial-receipt-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        try
+        {
+            Directory.CreateDirectory(sandboxRoot);
+            var coveredPhases = new[] { WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase };
+            WorkerSandboxPreparer.WritePreparationFiles(worktree, worktree, sandboxRoot, coveredPhases);
+            WorkerSandboxPreparer.WritePreparationFiles(sandboxRoot, worktree, sandboxRoot, coveredPhases);
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
+            var phases = new List<string>();
+            var protectedPhases = new List<string>();
+
+            var result = DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(labeler),
+                (phase, _, _) => phases.Add(phase),
+                _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase),
+                _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase));
+
+            Assert.True(result.PrepReceiptHit);
+            Assert.True(result.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase));
+            Assert.False(result.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase));
+            Assert.Empty(labeler.SetCalls);
+            Assert.DoesNotContain(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, protectedPhases);
+            Assert.Contains(WorkerSandboxPreparer.ProtectGitMetadataPhase, protectedPhases);
+            Assert.DoesNotContain(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, phases);
+            Assert.Contains(WorkerSandboxPreparer.ProtectGitMetadataPhase, phases);
         }
         finally
         {

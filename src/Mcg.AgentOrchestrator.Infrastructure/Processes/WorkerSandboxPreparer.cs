@@ -29,9 +29,14 @@ internal sealed record WorkerSandboxPreparationResult(
     bool WorktreeRecursiveRelabel,
     bool SandboxRecursiveRelabel,
     WorkerSandboxPrepRecoverableAction? RecoveryAction = null,
-    bool PrepReceiptHit = false)
+    bool PrepReceiptHit = false,
+    string[]? ReceiptSkippedProtectionPhases = null)
 {
     public bool RequiresRecovery => RecoveryAction is not null;
+
+    public bool ReceiptCoversProtectionPhase(string phase) =>
+        ReceiptSkippedProtectionPhases is not null &&
+        ReceiptSkippedProtectionPhases.Contains(phase, StringComparer.Ordinal);
 }
 
 internal interface IWorkerIntegrityLabeler
@@ -48,6 +53,21 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
     internal const string MarkerFileName = ".mcg-low-integrity-v1";
     internal const string ReceiptFileName = ".mcg-sandbox-prep-receipt-v1.json";
     internal const string LowInheritableLevel = "(OI)(CI)L";
+    internal const string ProtectWorkspaceBoundaryPhase = "protect-workspace-boundary";
+    internal const string ProtectGitMetadataPhase = "protect-git-metadata";
+    private static readonly string[] DefaultSkippedProtectionPhases =
+    [
+        ProtectWorkspaceBoundaryPhase,
+        ProtectGitMetadataPhase
+    ];
+    private static readonly string[] ReceiptVerificationBasis =
+    [
+        "receipt-schema-v1",
+        "path-worktree-sandboxRoot-contentHash",
+        "directory-creation-time",
+        "low-integrity-marker",
+        "low-inheritable-label"
+    ];
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -73,7 +93,10 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             : new WorkerSandboxPreparationResult(
                 worktreeResult.WorktreeRecursiveRelabel,
                 sandboxResult.SandboxRecursiveRelabel,
-                PrepReceiptHit: worktreeResult.PrepReceiptHit && sandboxResult.PrepReceiptHit);
+                PrepReceiptHit: worktreeResult.PrepReceiptHit && sandboxResult.PrepReceiptHit,
+                ReceiptSkippedProtectionPhases: IntersectProtectionPhases(
+                    worktreeResult.ReceiptSkippedProtectionPhases,
+                    sandboxResult.ReceiptSkippedProtectionPhases));
     }
 
     private WorkerSandboxPreparationResult EnsureLowIntegrityRoot(
@@ -82,10 +105,14 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         bool allowRecursiveMigration,
         bool reusedWorktree)
     {
-        var receiptHit = HasValidReceipt(path, sandboxRoot) && IsPrepared(path);
-        if (receiptHit)
+        var receipt = TryReadValidReceipt(path, sandboxRoot);
+        if (receipt.Valid && IsPrepared(path))
         {
-            return new WorkerSandboxPreparationResult(false, false, PrepReceiptHit: true);
+            return new WorkerSandboxPreparationResult(
+                false,
+                false,
+                PrepReceiptHit: true,
+                ReceiptSkippedProtectionPhases: receipt.SkippedProtectionPhases);
         }
 
         var recursive = allowRecursiveMigration;
@@ -151,17 +178,24 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
     }
 
     internal static void WritePreparationFiles(string path, string worktree, string sandboxRoot)
+        => WritePreparationFiles(path, worktree, sandboxRoot, DefaultSkippedProtectionPhases);
+
+    internal static void WritePreparationFiles(
+        string path,
+        string worktree,
+        string sandboxRoot,
+        IReadOnlyCollection<string> skippedProtectionPhases)
     {
         WriteMarker(path);
-        WriteReceipt(path, worktree, sandboxRoot);
+        WriteReceipt(path, worktree, sandboxRoot, skippedProtectionPhases);
     }
 
-    private bool HasValidReceipt(string path, string sandboxRoot)
+    private static ReceiptValidation TryReadValidReceipt(string path, string sandboxRoot)
     {
         var receiptPath = ReceiptPath(path);
         if (!File.Exists(receiptPath))
         {
-            return false;
+            return ReceiptValidation.Invalid;
         }
 
         try
@@ -174,58 +208,145 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
                 !TryGetString(root, "path", out var recordedPath) ||
                 !TryGetString(root, "worktree", out var recordedWorktree) ||
                 !TryGetString(root, "sandboxRoot", out var recordedSandboxRoot) ||
-                !TryGetString(root, "contentHash", out var recordedHash))
+                !TryGetString(root, "contentHash", out var recordedHash) ||
+                !TryGetStringArray(root, "skippedProtectionPhases", out var skippedProtectionPhases) ||
+                !TryGetStringArray(root, "verificationBasis", out var verificationBasis))
             {
-                return false;
+                return ReceiptValidation.Invalid;
             }
 
             var worktree = path == sandboxRoot
                 ? Path.GetDirectoryName(sandboxRoot) ?? sandboxRoot
                 : path;
-            return PathsEqual(recordedPath, path) &&
-                PathsEqual(recordedWorktree, worktree) &&
-                PathsEqual(recordedSandboxRoot, sandboxRoot) &&
-                string.Equals(recordedHash, ComputeReceiptContentHash(path, worktree, sandboxRoot), StringComparison.Ordinal);
+            if (!PathsEqual(recordedPath, path) ||
+                !PathsEqual(recordedWorktree, worktree) ||
+                !PathsEqual(recordedSandboxRoot, sandboxRoot) ||
+                !HasRequiredVerificationBasis(verificationBasis) ||
+                !string.Equals(
+                    recordedHash,
+                    ComputeReceiptContentHash(path, worktree, sandboxRoot, skippedProtectionPhases),
+                    StringComparison.Ordinal))
+            {
+                return ReceiptValidation.Invalid;
+            }
+
+            var supportedProtectionPhases = skippedProtectionPhases
+                .Where(IsSupportedProtectionPhase)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return new ReceiptValidation(true, supportedProtectionPhases);
         }
         catch (IOException)
         {
-            return false;
+            return ReceiptValidation.Invalid;
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return ReceiptValidation.Invalid;
         }
         catch (JsonException)
         {
-            return false;
+            return ReceiptValidation.Invalid;
         }
     }
 
-    private static void WriteReceipt(string path, string worktree, string sandboxRoot)
+    private static string[] IntersectProtectionPhases(string[]? left, string[]? right)
     {
+        if (left is null || right is null)
+        {
+            return [];
+        }
+
+        return left.Intersect(right, StringComparer.Ordinal).ToArray();
+    }
+
+    private static bool IsSupportedProtectionPhase(string phase) =>
+        string.Equals(phase, ProtectWorkspaceBoundaryPhase, StringComparison.Ordinal) ||
+        string.Equals(phase, ProtectGitMetadataPhase, StringComparison.Ordinal);
+
+    private static bool HasRequiredVerificationBasis(string[] verificationBasis) =>
+        ReceiptVerificationBasis.All(required => verificationBasis.Contains(required, StringComparer.Ordinal));
+
+    private static void WriteReceipt(
+        string path,
+        string worktree,
+        string sandboxRoot,
+        IReadOnlyCollection<string> skippedProtectionPhases)
+    {
+        var phases = skippedProtectionPhases
+            .Where(IsSupportedProtectionPhase)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
         var receipt = new
         {
             version = 1,
             path = Path.GetFullPath(path),
             worktree = Path.GetFullPath(worktree),
             sandboxRoot = Path.GetFullPath(sandboxRoot),
-            contentHash = ComputeReceiptContentHash(path, worktree, sandboxRoot),
+            skippedProtectionPhases = phases,
+            verificationBasis = ReceiptVerificationBasis,
+            contentHash = ComputeReceiptContentHash(path, worktree, sandboxRoot, phases),
             preparedAt = DateTimeOffset.UtcNow.ToString("o")
         };
         File.WriteAllText(ReceiptPath(path), JsonSerializer.Serialize(receipt, JsonOptions) + Environment.NewLine);
     }
 
-    private static string ComputeReceiptContentHash(string path, string worktree, string sandboxRoot)
+    private static string ComputeReceiptContentHash(
+        string path,
+        string worktree,
+        string sandboxRoot,
+        IReadOnlyCollection<string> skippedProtectionPhases)
     {
+        var phases = skippedProtectionPhases
+            .Where(IsSupportedProtectionPhase)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal);
         var payload = string.Join(
             "\n",
             "v1",
             NormalizePath(path),
             NormalizePath(worktree),
             NormalizePath(sandboxRoot),
+            string.Join(",", phases),
+            string.Join(",", ReceiptVerificationBasis),
             Directory.GetCreationTimeUtc(worktree).Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Directory.GetCreationTimeUtc(path).Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+    }
+
+    private static bool TryGetStringArray(JsonElement root, string propertyName, out string[] value)
+    {
+        value = [];
+        if (!root.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var values = new List<string>();
+        foreach (var element in property.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var item = element.GetString();
+            if (string.IsNullOrWhiteSpace(item))
+            {
+                return false;
+            }
+
+            values.Add(item);
+        }
+
+        value = values.ToArray();
+        return true;
+    }
+
+    private sealed record ReceiptValidation(bool Valid, string[] SkippedProtectionPhases)
+    {
+        public static ReceiptValidation Invalid { get; } = new(false, []);
     }
 
     private static bool TryGetString(JsonElement root, string propertyName, out string value)

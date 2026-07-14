@@ -75,7 +75,9 @@ public static class DispatchProcessHost
         ProcessStartInfo startInfo,
         DispatchRunParameters parameters,
         WorkerSandboxPreparer preparer,
-        Action<string, DateTimeOffset, TimeSpan>? recordStep = null)
+        Action<string, DateTimeOffset, TimeSpan>? recordStep = null,
+        Action<string>? protectWorkspaceBoundary = null,
+        Action<string>? protectGitMetadata = null)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
@@ -121,16 +123,24 @@ public static class DispatchProcessHost
             throw new InvalidOperationException(recoveryAction.Reason);
         }
 
-        if (!preparation.PrepReceiptHit)
+        protectWorkspaceBoundary ??= ProtectWorkspaceBoundary;
+        protectGitMetadata ??= ProtectGitMetadata;
+
+        if (!preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase))
         {
-            TrackAction("protect-workspace-boundary", () => ProtectWorkspaceBoundary(parameters.WorkingDirectory));
-            TrackAction("protect-git-metadata", () => ProtectGitMetadata(parameters.WorkingDirectory));
+            TrackAction(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, () => protectWorkspaceBoundary(parameters.WorkingDirectory));
         }
-        else
+
+        if (!preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase))
         {
-            // The receipt verifies the prepared root identity, schema, and Low inheritable integrity.
-            // Re-running the medium-integrity protection calls here can block for the full icacls
-            // timeout, which was the fixed ~120s tax observed on receipt hits.
+            TrackAction(WorkerSandboxPreparer.ProtectGitMetadataPhase, () => protectGitMetadata(parameters.WorkingDirectory));
+        }
+
+        if (preparation.PrepReceiptHit)
+        {
+            // The receipt verifies the prepared root identity, schema, Low inheritable integrity, and
+            // explicit protection-phase coverage. Covered phases skip the medium-integrity icacls calls
+            // that caused the fixed ~120s tax observed on receipt hits.
             recordStep?.Invoke("receipt-fast-path", DateTimeOffset.UtcNow, TimeSpan.Zero);
         }
 
