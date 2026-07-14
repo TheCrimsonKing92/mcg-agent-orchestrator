@@ -1552,9 +1552,11 @@ internal sealed class ConductorDriver
         foreach (var check in checks)
         {
             var counts = ParseDotnetTestCounts(check.ResultSummary);
-            passed += counts.Passed ?? (check.Passed ? 1 : 0);
-            failed += counts.Failed ?? (check.Passed ? 0 : 1);
-            total += counts.Total ?? ((counts.Passed ?? (check.Passed ? 1 : 0)) + (counts.Failed ?? (check.Passed ? 0 : 1)));
+            var parsedPassed = counts.Passed ?? 0;
+            var parsedFailed = counts.Failed ?? 0;
+            passed += parsedPassed;
+            failed += parsedFailed;
+            total += counts.Total ?? (parsedPassed + parsedFailed);
         }
 
         return (passed, failed, total);

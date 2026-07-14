@@ -663,6 +663,17 @@ public sealed class ConductorDriverTests
         Assert.Equal(12, counts.Passed);
         Assert.Equal(0, counts.Failed);
         Assert.Equal(12, counts.Total);
+
+        var unparseableExecutedCheck = dotnetTest with
+        {
+            Name = "unparseable test wrapper",
+            ResultSummary = "dotnet test completed without a count summary"
+        };
+        var countsWithUnparseableCheck = ConductorDriver.SummarizeExecutedDotnetTestCounts([dotnetTest, unparseableExecutedCheck]);
+
+        Assert.Equal(12, countsWithUnparseableCheck.Passed);
+        Assert.Equal(0, countsWithUnparseableCheck.Failed);
+        Assert.Equal(12, countsWithUnparseableCheck.Total);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingVerification_red_focused_acceptance_blocks_promotion")]
