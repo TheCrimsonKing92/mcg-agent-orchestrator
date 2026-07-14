@@ -234,7 +234,7 @@ Console.WriteLine("Fundamentals:");
 Console.WriteLine("  next [goal-id] [--full] [--autonomy <policy>]");
 Console.WriteLine("    Show recommended next action and print the exact command to run it.");
 Console.WriteLine("    --full: also surfaces status, monitor, readiness, evidence, stages, gates, verify-needed,");
-Console.WriteLine("            input-needed, subscription-plan, model-outcomes, durations, loop-health, failure-triage,");
+Console.WriteLine("            input-needed, subscription-plan, model-outcomes, durations, dispatch-value, loop-health, failure-triage,");
 Console.WriteLine("            goal-recovery, supervisor, and operator-inbox detail in one output.");
 Console.WriteLine("  goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start]");
 Console.WriteLine("    Create a goal. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
@@ -251,7 +251,7 @@ Console.WriteLine("    Render static dashboard HTML or launch a hosted dashboard
 Console.WriteLine();
 Console.WriteLine("Advanced/Internal (used by automation, tests, and advanced workflows):");
 Console.WriteLine("  Inspection verbs folded into 'next --full': status, monitor, readiness, evidence, stages, gates,");
-Console.WriteLine("    verify-needed, input-needed, subscription-plan, model-outcomes, durations, loop-health, failure-triage,");
+Console.WriteLine("    verify-needed, input-needed, subscription-plan, model-outcomes, durations, dispatch-value, loop-health, failure-triage,");
 Console.WriteLine("    goal-recovery, supervisor, operator-inbox. All still work standalone.");
 Console.WriteLine("  doctor, architecture, tenant, project");
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");

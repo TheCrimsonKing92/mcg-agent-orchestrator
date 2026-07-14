@@ -451,6 +451,13 @@ internal static partial class CliCommandHandlers
                 return false;
             }
 
+            case "dispatch-value":
+            {
+                var since = ParseDurationsSince(GetFlagValue(parts, "--since"));
+                ConsoleViews.PrintDispatchValueReport(context.Kernel.BuildDispatchValueReport(since));
+                return false;
+            }
+
             case "loop-health":
             {
                 int? lastN = null;
