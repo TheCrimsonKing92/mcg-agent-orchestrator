@@ -1243,7 +1243,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
         {
             var lockedPath = TryExtractPathFromException(ex) ?? environment.ArtifactsPath;
-            var attribution = LockAttribution.Attribute(lockedPath, worktreePath);
+            var attribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-check", check.Name);
             var (result, _) = await RemediateBuildLockAndRetryAsync(
                 arguments,
                 worktreePath,
@@ -1353,7 +1353,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-            retryAttribution = LockAttribution.Attribute(lockedPath, worktreePath);
+            retryAttribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-retry", check.Name);
         }
 
         if (retry is not null && !IsBuildLockFailure(retry, retryEnvironment, out retryAttribution))
@@ -1394,7 +1394,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? killRetryEnvironment.ArtifactsPath;
-            throw new BuildLockBlockedException(LockAttribution.Attribute(lockedPath, worktreePath));
+            throw new BuildLockBlockedException(LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-kill-retry", check.Name));
         }
 
         if (IsBuildLockFailure(killRetry, killRetryEnvironment, out var killRetryAttribution))
@@ -1436,7 +1436,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        attribution = LockAttribution.Attribute(lockedPath ?? environment.ArtifactsPath, environment.ArtifactsPath);
+        attribution = LockAttribution.Attribute(
+            lockedPath ?? environment.ArtifactsPath,
+            environment.ArtifactsPath,
+            "acceptance-output",
+            "classify-build-lock");
         return true;
     }
 
