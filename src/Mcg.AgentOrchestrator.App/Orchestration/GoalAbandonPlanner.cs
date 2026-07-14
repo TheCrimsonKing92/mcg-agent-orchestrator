@@ -167,6 +167,13 @@ internal static class GoalAbandonPlanner
             _ = kernel.CancelGoal(goal.Id, before.Reason);
         }
 
+        GoalOperationJournal.RecordTerminalDisposition(
+            workspace.ExecutionDirectory,
+            goal,
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Retired,
+                $"Goal {goal.Id.Value[..8]} was abandoned by operator and is terminal: {before.Reason}"));
+
         if (GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) is not null)
         {
             _ = GoalWorktrees.Remove(workspace.ExecutionDirectory, goal.Id, kernel);

@@ -1899,6 +1899,16 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalCancelled &&
             evt.Message == "Operator chose a different route.");
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(journal));
+
+        var firstSweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var secondSweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.Empty(firstSweep.Goals);
+        Xunit.Assert.Empty(secondSweep.Goals);
+        Xunit.Assert.Equal(GoalStatus.Cancelled, goal.Status);
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status));
     }
 
 

@@ -318,6 +318,7 @@ internal static class TerminalGoalSweep
             var branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
+            var hasDurableLandingIntent = HasDurableLandingIntentForCleanup(executionDirectory, goal);
 
             if (HasStandingRetiredDisposition(executionDirectory, goal, branchFacts))
             {
@@ -356,22 +357,32 @@ internal static class TerminalGoalSweep
             }
             else if (branchFacts.BranchAlreadyLanded)
             {
-                foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
+                if (hasDurableLandingIntent)
                 {
-                    var staleStatus = task.Status;
-                    kernel.ReportTaskProgress(
-                        goal.Id,
-                        task.Id,
-                        WorkTaskStatus.Cancelled,
-                        "Terminal stale-goal sweep cancelled stale task because the goal branch is already landed.");
-                    repairs.Add(new TerminalGoalSweepRepair(
-                        "landed-task-desync",
-                        $"landed goal had stale {staleStatus} task {task.Id.Value[..8]}",
-                        $"workspace remove {prefix}"));
-                }
+                    foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
+                    {
+                        var staleStatus = task.Status;
+                        kernel.ReportTaskProgress(
+                            goal.Id,
+                            task.Id,
+                            WorkTaskStatus.Cancelled,
+                            "Terminal stale-goal sweep cancelled stale task because the goal branch is already landed.");
+                        repairs.Add(new TerminalGoalSweepRepair(
+                            "landed-task-desync",
+                            $"landed goal had stale {staleStatus} task {task.Id.Value[..8]}",
+                            $"workspace remove {prefix}"));
+                    }
 
-                goal = kernel.GetGoal(originalGoal.Id);
-                branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
+                    goal = kernel.GetGoal(originalGoal.Id);
+                    branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
+                }
+                else
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "merged-branch-without-landing-intent",
+                        $"goal branch {GoalWorktrees.BranchName(goal.Id)} appears merged, but no durable landing intent was recorded",
+                        $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
+                }
             }
 
             if (!blockedByDirtyWorktree &&
@@ -433,6 +444,7 @@ internal static class TerminalGoalSweep
             }
 
             if (!blockedByDirtyWorktree &&
+                hasDurableLandingIntent &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
                 var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
@@ -684,8 +696,12 @@ internal static class TerminalGoalSweep
         string executionDirectory,
         Goal goal,
         GoalBranchFacts branchFacts) =>
-        !branchFacts.HasGoalBranchArtifact &&
+        (goal.Status == GoalStatus.Cancelled || !branchFacts.HasGoalBranchArtifact) &&
         GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id));
+
+    private static bool HasDurableLandingIntentForCleanup(string executionDirectory, Goal goal) =>
+        goal.Status != GoalStatus.Cancelled &&
+        GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(executionDirectory, goal.Id));
 
     private static bool TryBuildReachableCommitEvidence(
         string executionDirectory,
