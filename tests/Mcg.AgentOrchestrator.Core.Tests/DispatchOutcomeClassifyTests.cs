@@ -389,7 +389,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "", "Rate limit reached for gpt-5.5. Please try again in 42s."));
+            Verification(1, "", "ERROR: Rate limit reached for gpt-5.5. Please try again in 42s."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
@@ -424,13 +424,13 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "Error: provider returned 429 Too Many Requests."));
+            Verification(1, "ERROR: provider returned 429 Too Many Requests."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Xunit.Assert.Null(outcome.RetryAfter);
         Xunit.Assert.Contains("429 Too Many Requests", outcome.EvidenceSummary);
-        Xunit.Assert.Contains("evidence=Error: provider returned 429 Too Many Requests.", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("evidence=ERROR: provider returned 429 Too Many Requests.", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify does not treat bare 429 duration as rate limit")]
@@ -489,7 +489,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "", "Provider quota exceeded for this account."));
+            Verification(1, "", "ERROR: Provider quota exceeded for this account."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
@@ -503,7 +503,9 @@ public sealed class DispatchOutcomeClassifyTests
         const string stderr =
             "183: catch (UnauthorizedAccessException ex)\n" +
             "184: var status = \"429 Too Many Requests\";\n" +
-            "185 | logger.LogError(\"stream disconnected\");";
+            "185 | logger.LogError(\"stream disconnected\");\n" +
+            "    rate limit reached; retry after 42s\n" +
+            "    quota exceeded while reading fixture text";
 
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
 
@@ -613,7 +615,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(),
-            Verification(1, "Connecting to API...", "Error: 401 Unauthorized. Invalid API key."));
+            Verification(1, "Connecting to API...", "ERROR: 401 Unauthorized. Invalid API key."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
@@ -624,7 +626,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(),
-            Verification(1, "Connecting to API...", "Error: Unable to connect to API. ECONNREFUSED 127.0.0.1:443"));
+            Verification(1, "Connecting to API...", "ERROR: Unable to connect to API. ECONNREFUSED 127.0.0.1:443"));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
