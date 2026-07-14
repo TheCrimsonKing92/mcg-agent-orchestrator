@@ -62,7 +62,8 @@ internal sealed record ConductLoopHandoffOptions(
     string StopFilePath,
     int RenewalCount,
     int MaxRenewals,
-    Action ReleaseCurrentLease);
+    Action ReleaseCurrentLease,
+    TimeSpan VerificationTimeout = default);
 
 internal sealed record ConductLoopLaunchRequest(
     string Name,
@@ -91,8 +92,8 @@ internal static partial class ConductorLoopHandoff
 {
     public const string RenewalCountFlag = "--handoff-renewals";
     public const int DefaultMaxRenewalsWithoutLanding = 6;
+    public static readonly TimeSpan DefaultVerificationTimeout = TimeSpan.FromSeconds(120);
     private const int MaxLaunchAttempts = 2;
-    private static readonly TimeSpan DefaultVerificationTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan VerificationPollInterval = TimeSpan.FromMilliseconds(250);
     private const string BatchNameEnvironmentVariable = "MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME";
     private const string RenewalCountEnvironmentVariable = "MCG_ORCHESTRATOR_HANDOFF_RENEWALS";
@@ -140,6 +141,7 @@ internal static partial class ConductorLoopHandoff
         verify ??= (result, eventCursor) => VerifySuccessor(result, options, eventCursor);
         ConductLoopLaunchResult? lastLaunch = null;
         ConductLoopHandoffVerification? lastVerification = null;
+        string? lastAttemptDetail = null;
         Exception? lastError = null;
 
         for (var attempt = 1; attempt <= MaxLaunchAttempts; attempt++)
@@ -157,6 +159,7 @@ internal static partial class ConductorLoopHandoff
                 var handoffDetail = $"{guardDetail} {launchDetail} verification={verification.Detail}";
                 var detail =
                     $"attempt={attempt} pid={result.ProcessId} stdout={result.StdoutPath} stderr={result.StderrPath} {handoffDetail}";
+                lastAttemptDetail = detail;
 
                 if (verification.Succeeded)
                 {
@@ -170,6 +173,8 @@ internal static partial class ConductorLoopHandoff
 
                 TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
                 EmitHandoffFailure(detail);
+                if (verification.ProcessAlive)
+                    break;
             }
             catch (Exception ex)
             {
@@ -177,6 +182,7 @@ internal static partial class ConductorLoopHandoff
                 var launchDetail = DefaultFailedLaunchDetail();
                 var detail =
                     $"attempt={attempt} stdout={launchRequest.StdoutPath} stderr={launchRequest.StderrPath} {guardDetail} {launchDetail} error={ex.GetType().Name}:{ex.Message}";
+                lastAttemptDetail = detail;
                 TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
                 EmitHandoffFailure(detail);
             }
@@ -187,7 +193,8 @@ internal static partial class ConductorLoopHandoff
             : $"successor-launch-failed {lastError.GetType().Name}:{lastError.Message}";
         var verificationOutcome = lastVerification is null
             ? "not-verified"
-            : $"{guardDetail} {(string.IsNullOrWhiteSpace(lastLaunch?.LaunchDetail) ? "spawnPath=injected breakawayRequested=false breakawaySucceeded=not-applicable" : lastLaunch.LaunchDetail)} verification={lastVerification.Detail}";
+            : lastAttemptDetail ??
+                $"{guardDetail} {(string.IsNullOrWhiteSpace(lastLaunch?.LaunchDetail) ? "spawnPath=injected breakawayRequested=false breakawaySucceeded=not-applicable" : lastLaunch.LaunchDetail)} verification={lastVerification.Detail}";
         TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
             $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={verificationOutcome}");
         return ConductorLoopHandoffResult.FailedStart(
@@ -321,7 +328,7 @@ internal static partial class ConductorLoopHandoff
             "spawnPath=posix-shell-detached breakawayRequested=false breakawaySucceeded=not-applicable");
     }
 
-    private static ConductLoopLaunchResult LaunchDetachedWindows(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
+    internal static ConductLoopLaunchResult LaunchDetachedWindows(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
     {
         var commandLine = new StringBuilder(BuildWindowsProcessCommandLine(command));
         var environment = BuildWindowsEnvironmentBlock(request);
@@ -345,10 +352,9 @@ internal static partial class ConductorLoopHandoff
                     lpCommandLine: commandLine,
                     lpProcessAttributes: IntPtr.Zero,
                     lpThreadAttributes: IntPtr.Zero,
-                    bInheritHandles: false,
+                    bInheritHandles: true,
                     dwCreationFlags: WindowsCreationFlags.CreateBreakawayFromJob |
                         WindowsCreationFlags.CreateNewProcessGroup |
-                        WindowsCreationFlags.CreateNoWindow |
                         WindowsCreationFlags.DetachedProcess |
                         WindowsCreationFlags.CreateUnicodeEnvironment,
                     lpEnvironment: environment,
@@ -466,7 +472,10 @@ internal static partial class ConductorLoopHandoff
         ConductLoopHandoffOptions options,
         long eventCursor)
     {
-        var deadline = DateTimeOffset.UtcNow.Add(DefaultVerificationTimeout);
+        var timeout = options.VerificationTimeout <= TimeSpan.Zero
+            ? DefaultVerificationTimeout
+            : options.VerificationTimeout;
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
         var processAlive = false;
         var stdoutLogExists = false;
         var loopStartJournaled = false;
@@ -477,6 +486,8 @@ internal static partial class ConductorLoopHandoff
             stdoutLogExists = File.Exists(result.StdoutPath);
             loopStartJournaled = HasLoopStartAfterCursor(options, eventCursor);
             if (processAlive && stdoutLogExists && loopStartJournaled)
+                break;
+            if (!processAlive)
                 break;
 
             Thread.Sleep(VerificationPollInterval);
@@ -628,8 +639,7 @@ internal static partial class ConductorLoopHandoff
         CreateNewProcessGroup = 0x00000200,
         CreateUnicodeEnvironment = 0x00000400,
         CreateBreakawayFromJob = 0x01000000,
-        DetachedProcess = 0x00000008,
-        CreateNoWindow = 0x08000000
+        DetachedProcess = 0x00000008
     }
 
     [Flags]
