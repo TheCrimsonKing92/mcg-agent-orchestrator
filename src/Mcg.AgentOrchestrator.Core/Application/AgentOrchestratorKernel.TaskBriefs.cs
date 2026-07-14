@@ -6,6 +6,7 @@ public sealed partial class AgentOrchestratorKernel
 {
     private const int FailureReceiptMaxChars = 2000;
     private const int FailureReceiptStreamTailChars = 700;
+    private const int ReviewerExecutedTestEvidenceMaxLines = 12;
     private static readonly JsonSerializerOptions GoalOperationJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -246,6 +247,12 @@ public sealed partial class AgentOrchestratorKernel
                 CollapsePriority: 40));
         }
 
+        var reviewerExecutedTestEvidence = BuildReviewerExecutedTestEvidenceBriefBlock(goal, task);
+        if (reviewerExecutedTestEvidence.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(reviewerExecutedTestEvidence));
+        }
+
         var priorEvidence = usesFileAccessContext
             ? PromptContextFormatter.BuildPriorTaskEvidencePointerLines(goal.Tasks, taskId)
             : PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
@@ -482,6 +489,188 @@ public sealed partial class AgentOrchestratorKernel
             : modelFitTarget.Trim();
         return $"Include a final model-selection note: {ModelFitEvidence.BuildNoteTemplate(target)}.";
     }
+
+    private static IReadOnlyList<string> BuildReviewerExecutedTestEvidenceBriefBlock(Goal goal, TaskSpec task)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            return [];
+        }
+
+        var receipts = goal.Tasks
+            .Where(candidate => candidate.Id != task.Id)
+            .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
+            {
+                Task = candidate,
+                Verification = verification
+            }))
+            .OrderByDescending(item => item.Verification.CompletedAt)
+            .ToList();
+
+        var lines = new List<string>
+        {
+            "## Executed Test Evidence",
+            $"Reviewer is read-only; use these existing verification receipts before asking for reruns. Newest first; capped at {ReviewerExecutedTestEvidenceMaxLines} receipt line(s)."
+        };
+
+        if (receipts.Count == 0)
+        {
+            lines.Add("No executed test evidence exists for this goal yet.");
+            lines.Add(string.Empty);
+            return lines;
+        }
+
+        var emitted = 0;
+        foreach (var receipt in receipts)
+        {
+            if (emitted >= ReviewerExecutedTestEvidenceMaxLines)
+            {
+                break;
+            }
+
+            lines.Add(FormatReviewerVerificationReceipt(goal, receipt.Task, receipt.Verification));
+            emitted++;
+
+            if (emitted >= ReviewerExecutedTestEvidenceMaxLines)
+            {
+                break;
+            }
+
+            if (WorkerResultBlockers.TryFindTests(receipt.Verification, out var tests))
+            {
+                lines.Add(FormatReviewerWorkerResultTestsReceipt(goal, receipt.Task, receipt.Verification, tests));
+                emitted++;
+            }
+        }
+
+        if (receipts.Count > 0 && emitted >= ReviewerExecutedTestEvidenceMaxLines)
+        {
+            var omitted = receipts.Sum(item => WorkerResultBlockers.TryFindTests(item.Verification, out _) ? 2 : 1) - emitted;
+            if (omitted > 0)
+            {
+                lines.Add($"- Omitted {omitted} older executed-test evidence line(s).");
+            }
+        }
+
+        lines.Add(string.Empty);
+        return lines;
+    }
+
+    private static string FormatReviewerVerificationReceipt(
+        Goal goal,
+        TaskSpec task,
+        TaskVerificationRecord verification)
+    {
+        var status = verification.Succeeded ? "pass" : "fail";
+        var freshness = DescribeVerificationFreshness(task, verification);
+        var paths = DescribeVerificationArtifactPaths(verification);
+        var evidence = DescribeVerificationOutputEvidence(verification);
+        return $"- {verification.CompletedAt:u}; provenance: Task {TaskDisplayNumber.Resolve(goal, task.Id)} {task.RequiredRole} verification; result: {status} (exit {verification.ExitCode}); command/run context: {PromptContextFormatter.TrimPromptBlock(verification.Command)} @ {PromptContextFormatter.TrimPromptBlock(verification.WorkingDirectory)}; freshness: {freshness}{paths}{evidence}";
+    }
+
+    private static string FormatReviewerWorkerResultTestsReceipt(
+        Goal goal,
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        string tests)
+    {
+        return $"- {verification.CompletedAt:u}; provenance: Task {TaskDisplayNumber.Resolve(goal, task.Id)} {task.RequiredRole} WORKER_RESULT tests; tests: {PromptContextFormatter.TrimPromptBlock(tests)}; freshness: {DescribeVerificationFreshness(task, verification)}";
+    }
+
+    private static string DescribeVerificationFreshness(TaskSpec task, TaskVerificationRecord verification)
+    {
+        if (TryGetWorkerResultField(verification, "commit", out var workerResultCommit) &&
+            !IsNoneValue(workerResultCommit))
+        {
+            return $"verified commit {workerResultCommit}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.LastDispatch?.ResultCommit))
+        {
+            return $"verified commit {task.LastDispatch.ResultCommit.Trim()}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit))
+        {
+            return $"base commit {task.LastDispatch.BaseCommit.Trim()}";
+        }
+
+        return "unknown commit";
+    }
+
+    private static string DescribeVerificationArtifactPaths(TaskVerificationRecord verification)
+    {
+        var paths = new List<string>();
+        if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath))
+        {
+            paths.Add($"stdout {verification.StandardOutputPath.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(verification.StandardErrorPath))
+        {
+            paths.Add($"stderr {verification.StandardErrorPath.Trim()}");
+        }
+
+        return paths.Count == 0
+            ? string.Empty
+            : $"; artifacts: {string.Join(", ", paths)}";
+    }
+
+    private static string DescribeVerificationOutputEvidence(TaskVerificationRecord verification)
+    {
+        var summaries = new List<string>();
+        if (!string.IsNullOrWhiteSpace(verification.StandardOutput))
+        {
+            summaries.Add($"stdout {TailPreferredSingleLine(verification.StandardOutput, 240)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(verification.StandardError))
+        {
+            summaries.Add($"stderr {TailPreferredSingleLine(verification.StandardError, 240)}");
+        }
+
+        return summaries.Count == 0
+            ? string.Empty
+            : $"; evidence: {string.Join(" | ", summaries)}";
+    }
+
+    private static string TailPreferredSingleLine(string text, int maxChars)
+    {
+        var normalized = text.Trim().ReplaceLineEndings(" ");
+        if (normalized.Length <= maxChars)
+        {
+            return normalized;
+        }
+
+        return $"...[truncated {normalized.Length - maxChars} chars before evidence tail]...{normalized[^maxChars..]}";
+    }
+
+    private static bool TryGetWorkerResultField(TaskVerificationRecord verification, string fieldName, out string value)
+    {
+        foreach (var line in (verification.StandardOutput + Environment.NewLine + verification.StandardError)
+            .Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            var trimmed = line.Trim();
+            var separator = trimmed.IndexOf(':');
+            if (separator <= 0)
+            {
+                continue;
+            }
+
+            var key = trimmed[..separator].TrimStart('-', ' ').Trim();
+            if (string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = trimmed[(separator + 1)..].Trim();
+                return value.Length > 0;
+            }
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static bool IsNoneValue(string value) =>
+        string.Equals(value.Trim(), "none", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<string> BuildRecentRetryFeedbackBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
     {
