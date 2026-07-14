@@ -133,6 +133,7 @@ public static class WorkerProfileDispatcher
         string? reasoningEffort = null,
         TaskComplexity? taskComplexity = null,
         bool usesComplexModel = false,
+        string? reasoningEffortReason = null,
         IReadOnlyList<string>? preflightFindings = null,
         bool allowPendingRecordedDispatchRefresh = false)
     {
@@ -171,7 +172,8 @@ public static class WorkerProfileDispatcher
             preparation.PromptCharacterCount,
             usesComplexModel,
             PromptPath: preparation.PromptPath,
-            WorkerProviderKind: workerProviderKind),
+            WorkerProviderKind: workerProviderKind,
+            ReasoningEffortReason: reasoningEffortReason),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -212,6 +214,7 @@ public static class WorkerProfileDispatcher
 
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
         var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+        roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
             : ResolveSubscriptionProfile(agent, roleSelection.Model, profiles);
@@ -221,12 +224,15 @@ public static class WorkerProfileDispatcher
         var resolvedReasoning = modelOverride?.ReasoningEffort is not null
             ? modelOverride.ReasoningEffort
             : ResolveEffectiveSubscriptionReasoningEffort(agent, roleSelection);
+        var reasoningEffortReason = modelOverride?.ReasoningEffort is not null
+            ? "override"
+            : roleSelection.ReasoningEffortReason;
         var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
         var variables = BuildSubscriptionTemplateVariables(agent, roleSelection);
         if (modelOverride?.ModelName is { Length: > 0 })
             variables["subscriptionModelName"] = resolvedModelName;
-        if (modelOverride?.ReasoningEffort is not null)
-            variables["subscriptionReasoningEffort"] = resolvedReasoning;
+        variables["subscriptionReasoningEffort"] = resolvedReasoning;
+        variables["reasoningEffortSelectionReason"] = reasoningEffortReason;
         var preflight = PreflightSubscriptionTask(
             goal,
             task,
@@ -254,6 +260,7 @@ public static class WorkerProfileDispatcher
             resolvedReasoning,
             roleSelection.Complexity,
             roleSelection.UsesComplexModel,
+            reasoningEffortReason,
             preflight.Findings);
     }
 
@@ -277,6 +284,7 @@ public static class WorkerProfileDispatcher
             EnsureTaskNeedsExecution(task);
             var agent = ResolveAssignedAgent(null, goal, task, agents);
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+            roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
                 : ResolveSubscriptionProfileName(agent, roleSelection.Model);
@@ -305,6 +313,10 @@ public static class WorkerProfileDispatcher
             var reasoningEffort = modelOverride?.ReasoningEffort is not null
                 ? modelOverride.ReasoningEffort
                 : ResolveEffectiveSubscriptionReasoningEffort(agent, roleSelection);
+            var reasoningEffortReason = modelOverride?.ReasoningEffort is not null
+                ? "override"
+                : roleSelection.ReasoningEffortReason;
+            findings.Add($"reasoning-effort: {reasoningEffort ?? "none"} ({reasoningEffortReason})");
             AddProfileFinding(
                 findings,
                 RequiresSubscriptionReasoningPlaceholder(roleSelection.Model.ProviderName, reasoningEffort) &&
@@ -606,8 +618,11 @@ public static class WorkerProfileDispatcher
         foreach (var selection in selections)
         {
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task, profiles: profiles, commandExists: commandExists);
+            roleSelection = ApplyReasoningEffortPolicy(selection.Agent, goal, selection.Task, roleSelection);
             var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection.Model, profiles);
-            var reasoningEffort = ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection);
+            var reasoningEffortSelection = new EffectiveReasoningEffortSelection(
+                ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection),
+                roleSelection.ReasoningEffortReason);
             var preflight = PreflightSubscriptionTask(
                 goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
                 allowGitReference: sandboxConfinesWrites,
@@ -636,9 +651,10 @@ public static class WorkerProfileDispatcher
                 BuildSubscriptionTemplateVariables(selection.Agent, roleSelection),
                 dispatchProviderName,
                 ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection),
-                reasoningEffort,
+                reasoningEffortSelection.Effort,
                 roleSelection.Complexity,
                 roleSelection.UsesComplexModel,
+                reasoningEffortSelection.Reason,
                 preflight.Findings));
         }
 
@@ -819,7 +835,8 @@ public static class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task)
     {
-        return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task));
+        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task);
+        return BuildSubscriptionTemplateVariables(agent, ApplyReasoningEffortPolicy(agent, goal, task, selection));
     }
 
     public static IReadOnlyDictionary<string, string?> BuildSubscriptionTemplateVariables(
@@ -828,7 +845,8 @@ public static class WorkerProfileDispatcher
         TaskSpec task,
         WorkerProfileCatalog profiles)
     {
-        return BuildSubscriptionTemplateVariables(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles));
+        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles);
+        return BuildSubscriptionTemplateVariables(agent, ApplyReasoningEffortPolicy(agent, goal, task, selection));
     }
 
     private static Dictionary<string, string?> BuildSubscriptionTemplateVariables(
@@ -842,6 +860,7 @@ public static class WorkerProfileDispatcher
             ["apiReasoningEffort"] = selection.Model.ReasoningEffort,
             ["subscriptionModelName"] = ResolveEffectiveSubscriptionModelName(agent, selection),
             ["subscriptionReasoningEffort"] = ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
+            ["reasoningEffortSelectionReason"] = selection.ReasoningEffortReason,
             ["taskComplexity"] = selection.Complexity.ToString(),
             ["modelSelectionReason"] = selection.Reason,
             ["executionPolicy"] = agent.ExecutionPolicy.ToString()
@@ -859,11 +878,96 @@ public static class WorkerProfileDispatcher
 
     private static string? ResolveEffectiveSubscriptionReasoningEffort(AgentDefinition agent, SubscriptionModelSelection selection)
     {
+        if (selection.ReasoningEffortOverride is not null)
+        {
+            return selection.ReasoningEffortOverride;
+        }
+
         return selection.UsesComplexModel
             ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
             : !selection.UsesSubscriptionLaunchProfile
                 ? selection.Model.ReasoningEffort
             : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
+    }
+
+    private static EffectiveReasoningEffortSelection ResolveEffectiveSubscriptionReasoningEffortSelection(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task,
+        SubscriptionModelSelection selection)
+    {
+        if (!selection.UsesSubscriptionLaunchProfile)
+        {
+            return new EffectiveReasoningEffortSelection(ResolveEffectiveSubscriptionReasoningEffort(agent, selection), "base");
+        }
+
+        var baseEffort = selection.UsesComplexModel
+            ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
+            : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
+        var policy = agent.ReasoningEffortPolicy ?? new ReasoningEffortPolicy();
+
+        if (HasClassFindingRetryFeedback(task))
+        {
+            return new EffectiveReasoningEffortSelection(policy.ClassFindingEffort ?? baseEffort, "class-finding");
+        }
+
+        if (policy.RetryDepthThreshold > 0 && task.CriterionRetryCount + 1 >= policy.RetryDepthThreshold)
+        {
+            return new EffectiveReasoningEffortSelection(policy.RetryDepthEffort ?? baseEffort, "retry-depth");
+        }
+
+        if (IsComplexOrHighRiskGoal(goal, agent.Role))
+        {
+            return new EffectiveReasoningEffortSelection(policy.ComplexityEffort ?? baseEffort, "complexity");
+        }
+
+        return new EffectiveReasoningEffortSelection(baseEffort, "base");
+    }
+
+    private static SubscriptionModelSelection ApplyReasoningEffortPolicy(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task,
+        SubscriptionModelSelection selection)
+    {
+        var effortSelection = ResolveEffectiveSubscriptionReasoningEffortSelection(agent, goal, task, selection);
+        return selection with
+        {
+            ReasoningEffortOverride = effortSelection.Effort,
+            ReasoningEffortReason = effortSelection.Reason
+        };
+    }
+
+    private static bool IsComplexOrHighRiskGoal(Goal goal, AgentRole role)
+    {
+        if (TaskComplexityEstimator.Estimate(goal.Objective, goal.Objective, role) == TaskComplexity.Complex)
+        {
+            return true;
+        }
+
+        var objective = goal.Objective;
+        return objective.Contains("high-risk", StringComparison.OrdinalIgnoreCase) ||
+            objective.Contains("security-risk", StringComparison.OrdinalIgnoreCase) ||
+            objective.Contains("state-and-worktree-mutation", StringComparison.OrdinalIgnoreCase) ||
+            objective.Contains("subscription-cost", StringComparison.OrdinalIgnoreCase) ||
+            objective.Contains("multi-scope", StringComparison.OrdinalIgnoreCase) ||
+            objective.Contains("concurrency", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasClassFindingRetryFeedback(TaskSpec task)
+    {
+        return task.CriterionRetryFeedback.Any(feedback =>
+            feedback.Contains("every call site", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("all call sites", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("all persist paths", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("every persist path", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("all paths", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("every path", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("all instances", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("every instance", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("all occurrences", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("every occurrence", StringComparison.OrdinalIgnoreCase) ||
+            feedback.Contains("siblings", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string? BuildModelFitTarget(string? providerName, string? modelName)
@@ -1124,7 +1228,11 @@ public static class WorkerProfileDispatcher
         ModelProfile Model,
         bool UsesComplexModel,
         bool UsesSubscriptionLaunchProfile = true,
-        string Reason = "full-profile: default subscription model selection");
+        string Reason = "full-profile: default subscription model selection",
+        string? ReasoningEffortOverride = null,
+        string ReasoningEffortReason = "base");
+
+    private sealed record EffectiveReasoningEffortSelection(string? Effort, string Reason);
 
     private sealed record TargetContext(string? BranchName, string? HeadCommit);
 

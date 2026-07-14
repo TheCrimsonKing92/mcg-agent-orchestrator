@@ -13,6 +13,12 @@ public sealed record SubscriptionLaunchProfile(
     string? ModelAlias = null,
     string? ReasoningEffort = null);
 
+public sealed record ReasoningEffortPolicy(
+    int RetryDepthThreshold = 3,
+    string? RetryDepthEffort = "high",
+    string? ComplexityEffort = "high",
+    string? ClassFindingEffort = "high");
+
 public sealed record AgentDefinition(
     AgentId Id,
     string Name,
@@ -21,7 +27,8 @@ public sealed record AgentDefinition(
     AgentStatus Status = AgentStatus.Available,
     AgentExecutionPolicy ExecutionPolicy = AgentExecutionPolicy.ApiOnly,
     SubscriptionLaunchProfile? Subscription = null,
-    ModelProfile? ComplexModel = null);
+    ModelProfile? ComplexModel = null,
+    ReasoningEffortPolicy? ReasoningEffortPolicy = null);
 
 public static class AgentExecutionPolicies
 {
