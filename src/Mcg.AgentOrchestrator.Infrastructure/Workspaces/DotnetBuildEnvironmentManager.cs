@@ -911,7 +911,9 @@ public static class DotnetBuildEnvironmentManager
         if (TryCreateCurrentLandingFixtureAttribution(lockedPath, out attribution))
         {
             LockAttribution.EmitReceipt(attribution);
-            return ArtifactPrepLockRemediation.SlotBusy;
+            return attribution.Source is "landing-fixture-marker"
+                ? ArtifactPrepLockRemediation.SlotBusy
+                : ArtifactPrepLockRemediation.RetryImmediately;
         }
 
         if (TryFindActiveSlotArtifactConsumer(environment) is { } activeSlotArtifactConsumer)
@@ -1268,8 +1270,6 @@ public static class DotnetBuildEnvironmentManager
         {
             CurrentLandingFixtureRoots.Add(fixtureRoot);
         }
-
-        WriteLandingTestFixtureMarker(fixtureRoot, "landing-test-fixture");
     }
 
     internal static void ClearCurrentLandingTestFixtureRootsForTests()

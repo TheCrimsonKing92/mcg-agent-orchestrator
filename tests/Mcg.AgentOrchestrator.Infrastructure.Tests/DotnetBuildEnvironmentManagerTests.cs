@@ -445,9 +445,10 @@ public sealed class DotnetBuildEnvironmentManagerTests
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
-        var (_, lockedPath) = CreateLandingFixtureLockPath();
+        var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         var prepareAttempts = 0;
         DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(lockedPath);
+        DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot);
         DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
         {
             if (current.ExecutionLockPath == environment.ExecutionLockPath &&
