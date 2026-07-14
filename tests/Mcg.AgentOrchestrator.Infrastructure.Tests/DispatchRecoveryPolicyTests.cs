@@ -106,7 +106,7 @@ public sealed class DispatchRecoveryPolicyTests
         File.WriteAllText(stdout, string.Empty);
         File.WriteAllText(stderr, string.Empty);
         var clock = new TestClock(Now);
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Mark stale no exit");
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
@@ -134,7 +134,7 @@ public sealed class DispatchRecoveryPolicyTests
         File.WriteAllText(stdout, string.Empty);
         File.WriteAllText(stderr, string.Empty);
         var clock = new TestClock(Now);
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Mark stale no exit");
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);

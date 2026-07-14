@@ -267,7 +267,7 @@ internal static class SubscriptionPlanBuilder
                     ResolveWorkerProviderForPlan(profile.Name, effectiveProviderName));
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
             var now = DateTimeOffset.UtcNow;
-            var retryDeferred = DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter);
+            var retryDeferred = WorkerProfileDispatcher.IsTaskRetryDeferred(task, now, out var retryAfter);
             var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
             var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
             var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);

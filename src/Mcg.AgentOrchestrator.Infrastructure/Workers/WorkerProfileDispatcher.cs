@@ -323,7 +323,7 @@ public static class WorkerProfileDispatcher
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
             AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
 
-            if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+            if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
                 findings.Add($"blocked: subscription retry deferred until {retryAfter:u}");
             }
@@ -680,6 +680,18 @@ public static class WorkerProfileDispatcher
             return "missing-skill";
 
         return "preflight-blocked";
+    }
+
+    public static bool IsTaskRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)
+    {
+        if (task.SubscriptionRetryAfter is { } taskRetryAfter &&
+            taskRetryAfter > now)
+        {
+            retryAfter = taskRetryAfter;
+            return true;
+        }
+
+        return DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out retryAfter);
     }
 
     private static void EnsureWorktreeForFileRole(AgentRole role, string workingDirectory)
