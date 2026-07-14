@@ -33,6 +33,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "repo-process-info",
     "repo-process-stop",
     "stable-slot-dotnet",
+    "gate-status",
     "acceptance-queue",
     "drain-goals",
     "acceptance",

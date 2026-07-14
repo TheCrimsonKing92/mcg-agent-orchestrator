@@ -523,6 +523,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--loop", "--help"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "--help"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "create", "-h"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["gate-status"]));
 
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
@@ -530,6 +531,48 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["serve-dashboard"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState([]));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_gate_status_lists_stable_slot_heartbeats")]
+    public void CliGateStatusListsStableSlotHeartbeats()
+    {
+        var root = CreateTempDirectory();
+        var isolatedRoot = Path.Combine(root, "isolated-dotnet");
+        var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+            GateHeartbeatArtifacts.Write(
+                GateHeartbeatArtifacts.GetStableSlotPath(1),
+                new GateHeartbeatSnapshot(
+                    "abcdef12abcdef12abcdef12abcdef12",
+                    "verification-check",
+                    "WorkerDispatchTests",
+                    1,
+                    111,
+                    222,
+                    "running",
+                    DateTimeOffset.UtcNow.AddSeconds(-20),
+                    DateTimeOffset.UtcNow.AddSeconds(-1),
+                    DateTimeOffset.UtcNow.AddSeconds(-10),
+                    12,
+                    3,
+                    15,
+                    "dotnet test"));
+            var workspace = CreateRefinedWorkspace(root);
+            var output = ExecuteCliAndCapture(["gate-status"], new AgentOrchestratorKernel(), workspace);
+
+            Xunit.Assert.Contains("Gate status:", output);
+            Xunit.Assert.Contains("slot-1: goal=abcdef12 phase=verification-check state=running", output);
+            Xunit.Assert.Contains("target=WorkerDispatchTests", output);
+            Xunit.Assert.Contains("child_pid=222", output);
+            Xunit.Assert.Contains("output_bytes=15", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
 

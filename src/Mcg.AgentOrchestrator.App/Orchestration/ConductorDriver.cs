@@ -242,6 +242,8 @@ internal sealed class ConductorDriver
             AcceptanceVerificationResult verification;
             try
             {
+                using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
+                    AppendGateProgressEvent(dir, goal.Id, progress));
                 verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
             }
             catch (DotnetBuildSlotsBusyException ex)
@@ -877,6 +879,29 @@ internal sealed class ConductorDriver
                 $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
         }
     }
+
+    private static void AppendGateProgressEvent(string executionDirectory, GoalId goalId, AcceptanceGateProgress progress)
+    {
+        try
+        {
+            var path = Path.Combine(executionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+            new ConductEventLogWriter(path).Append("gate-progress", goalId.Value[..8], FormatGateProgressConductEvent(progress));
+        }
+        catch
+        {
+        }
+    }
+
+    private static string FormatGateProgressConductEvent(AcceptanceGateProgress progress) =>
+        $"PHASE_PROGRESS goal={progress.GoalId?[..Math.Min(8, progress.GoalId.Length)] ?? "unknown"} phase={progress.Phase} " +
+        $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
+        $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+        $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}";
+
+    private static string FormatConductToken(string value) =>
+        value.IndexOfAny([' ', '\t', '\r', '\n', '"']) < 0
+            ? value
+            : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 
     private static int CountAssignedTasks(Goal goal) =>
         goal.Tasks.Count(task => task.Status == WorkTaskStatus.Assigned);
