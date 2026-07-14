@@ -861,6 +861,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             CommitGoalWork(root, goal.Id, "src/merged.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
 
             var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
             var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
@@ -870,6 +871,40 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
             Xunit.Assert.Empty(second.Goals);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_merged_branch_without_landing_intent_does_not_cleanup")]
+    public void TerminalGoalSweepMergedBranchWithoutLandingIntentDoesNotCleanup()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Merged without durable landing", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/transient-merged.txt", "goal work");
+            RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+
+            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            var blocker = Assert.Single(first.Goals.Single().Blockers);
+            Assert.Equal("merged-branch-without-landing-intent", blocker.Kind);
+            Assert.Equal($"goal-mark-landed {goal.Id.Value[..8]} --confirm-goal-mark-landed", blocker.Command);
+            Assert.Empty(first.Goals.Single().Repairs);
+            Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+            Assert.Contains(GoalWorktrees.BranchName(goal.Id), RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)), StringComparison.Ordinal);
+            Assert.Contains(second.Goals.Single().Blockers, item => item.Kind == "merged-branch-without-landing-intent");
         }
         finally
         {
@@ -896,6 +931,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             var worktree = CommitGoalWork(root, goal.Id, "src/leftover.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             File.Delete(Path.Combine(worktree, ".git"));
             RunGit(root, "worktree", "prune");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
@@ -939,6 +975,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             CommitGoalWork(root, goal.Id, "src/landed.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
             var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
