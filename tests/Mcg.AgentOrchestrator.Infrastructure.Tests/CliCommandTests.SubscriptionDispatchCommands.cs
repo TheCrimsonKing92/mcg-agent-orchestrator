@@ -2717,7 +2717,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             DateTimeOffset.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
-            "codex exec attempt",
+            "codex exec prompt.md",
             root,
             1,
             string.Empty,

@@ -2317,7 +2317,15 @@ private static string? ResolveTextArgumentOrDefault(IReadOnlyList<string> parts,
     var hasInlineText = parts.Count > inlineIndex && !parts[inlineIndex].StartsWith("--", StringComparison.Ordinal);
     if (presentFlags.Length == 0)
     {
-        return hasInlineText ? parts[inlineIndex] : defaultValue;
+        if (!hasInlineText)
+        {
+            return defaultValue;
+        }
+
+        var inlineParts = parts
+            .Skip(inlineIndex)
+            .TakeWhile(part => !part.StartsWith("--", StringComparison.Ordinal));
+        return string.Join(' ', inlineParts);
     }
 
     if (hasInlineText)
