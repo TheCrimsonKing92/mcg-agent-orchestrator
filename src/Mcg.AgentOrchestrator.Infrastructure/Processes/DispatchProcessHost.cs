@@ -136,6 +136,8 @@ public static class DispatchProcessHost
             TrackAction(WorkerSandboxPreparer.ProtectGitMetadataPhase, () => protectGitMetadata(parameters.WorkingDirectory));
         }
 
+        WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
+
         if (preparation.PrepReceiptHit)
         {
             // The receipt verifies the prepared root identity, schema, Low inheritable integrity, and

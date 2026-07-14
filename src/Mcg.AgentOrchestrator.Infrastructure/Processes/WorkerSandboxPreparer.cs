@@ -52,6 +52,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
     internal const string MarkerFileName = ".mcg-low-integrity-v1";
     internal const string ReceiptFileName = ".mcg-sandbox-prep-receipt-v1.json";
+    private const int ReceiptSchemaVersion = 2;
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const string ProtectWorkspaceBoundaryPhase = "protect-workspace-boundary";
     internal const string ProtectGitMetadataPhase = "protect-git-metadata";
@@ -62,7 +63,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
     ];
     private static readonly string[] ReceiptVerificationBasis =
     [
-        "receipt-schema-v1",
+        "receipt-schema-v2",
         "path-worktree-sandboxRoot-contentHash",
         "directory-creation-time",
         "low-integrity-marker",
@@ -178,7 +179,13 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
     }
 
     internal static void WritePreparationFiles(string path, string worktree, string sandboxRoot)
-        => WritePreparationFiles(path, worktree, sandboxRoot, DefaultSkippedProtectionPhases);
+        => WritePreparationFiles(path, worktree, sandboxRoot, []);
+
+    internal static void WriteCompletedProtectionReceipts(string worktree, string sandboxRoot)
+    {
+        WritePreparationFiles(worktree, worktree, sandboxRoot, DefaultSkippedProtectionPhases);
+        WritePreparationFiles(sandboxRoot, worktree, sandboxRoot, DefaultSkippedProtectionPhases);
+    }
 
     internal static void WritePreparationFiles(
         string path,
@@ -204,7 +211,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             var root = document.RootElement;
             if (!root.TryGetProperty("version", out var version) ||
                 !version.TryGetInt32(out var versionValue) ||
-                versionValue != 1 ||
+                versionValue != ReceiptSchemaVersion ||
                 !TryGetString(root, "path", out var recordedPath) ||
                 !TryGetString(root, "worktree", out var recordedWorktree) ||
                 !TryGetString(root, "sandboxRoot", out var recordedSandboxRoot) ||
@@ -280,7 +287,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             .ToArray();
         var receipt = new
         {
-            version = 1,
+            version = ReceiptSchemaVersion,
             path = Path.GetFullPath(path),
             worktree = Path.GetFullPath(worktree),
             sandboxRoot = Path.GetFullPath(sandboxRoot),
@@ -304,7 +311,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             .Order(StringComparer.Ordinal);
         var payload = string.Join(
             "\n",
-            "v1",
+            $"v{ReceiptSchemaVersion}",
             NormalizePath(path),
             NormalizePath(worktree),
             NormalizePath(sandboxRoot),
