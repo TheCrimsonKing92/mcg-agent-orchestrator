@@ -69,13 +69,14 @@ internal static class ProcessCommandLines
                 return [];
             }
 
-            var output = process.StandardOutput.ReadToEnd();
+            var outputTask = process.StandardOutput.ReadToEndAsync();
             if (!process.WaitForExit(3000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return [];
             }
 
+            var output = outputTask.GetAwaiter().GetResult();
             return GoalWorktrees.ParseWmicListOutput(output);
         }
         catch
@@ -105,13 +106,14 @@ internal static class ProcessCommandLines
                 return [];
             }
 
-            var output = process.StandardOutput.ReadToEnd();
+            var outputTask = process.StandardOutput.ReadToEndAsync();
             if (!process.WaitForExit(3000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return [];
             }
 
+            var output = outputTask.GetAwaiter().GetResult();
             return GoalWorktrees.ParseWmicListOutput(output);
         }
         catch

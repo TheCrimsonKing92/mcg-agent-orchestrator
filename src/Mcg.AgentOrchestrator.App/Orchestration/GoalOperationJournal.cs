@@ -261,14 +261,27 @@ internal static class GoalOperationJournal
 
     public static bool HasRetiredTerminalDisposition(GoalOperationJournalSummary journal)
     {
-        var latestTerminalDisposition = journal.LatestByOperation
-            .LastOrDefault(entry => entry.Operation.Equals(TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase));
-        if (latestTerminalDisposition is not null)
+        if (TryGetLatestTerminalDisposition(journal) is { } latestTerminalDisposition)
         {
-            return IsRetiredTerminalDispositionEntry(latestTerminalDisposition);
+            return latestTerminalDisposition.Kind == GoalTerminalDispositionKind.Retired;
         }
 
         return journal.LatestByOperation.Any(IsLegacyRetiredTerminalDispositionEntry);
+    }
+
+    public static bool HasDurableLandingIntent(GoalOperationJournalSummary journal)
+    {
+        if (TryGetLatestTerminalDisposition(journal) is { } latestTerminalDisposition)
+        {
+            return latestTerminalDisposition.Kind == GoalTerminalDispositionKind.Landed ||
+                latestTerminalDisposition.Detail.Contains("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return journal.LatestByOperation.Any(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)) &&
+            !IsLegacyRetiredTerminalDispositionEntry(entry));
     }
 
     public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(string executionDirectory) =>
@@ -364,6 +377,15 @@ internal static class GoalOperationJournal
         {
             return null;
         }
+    }
+
+    private static GoalTerminalDisposition? TryGetLatestTerminalDisposition(GoalOperationJournalSummary journal)
+    {
+        var latestTerminalDisposition = journal.LatestByOperation
+            .LastOrDefault(entry => entry.Operation.Equals(TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase));
+        return latestTerminalDisposition is null || latestTerminalDisposition.Status != GoalOperationStatus.Completed
+            ? null
+            : TryDeserializeTerminalDisposition(latestTerminalDisposition.Detail);
     }
 
     private static void Append(

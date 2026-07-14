@@ -464,9 +464,20 @@ public static class GoalWorktrees
             GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "prune");
         }
 
-        GitCli.GitResult? branchRemoval = hasBranch
-            ? GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch)
-            : null;
+        GitCli.GitResult? branchRemoval = null;
+        if (hasBranch)
+        {
+            if (!IsBranchAncestorOfHead(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
+            {
+                return new GoalWorktreeRemoveResult(
+                    $"Workspace cleanup aborted; branch {branch} kept because it has unmerged commits at deletion time.",
+                    path,
+                    Directory.Exists(path) ? FindLockHoldersForCleanup(path) : [],
+                    ConductorRetryCommand(goalId));
+            }
+
+            branchRemoval = GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "branch", "-d", branch);
+        }
 
         if (Directory.Exists(path))
         {
@@ -699,7 +710,7 @@ public static class GoalWorktrees
 
         var branch = BranchName(goalId);
         return !BranchExists(executionDirectory, branch) ||
-            GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", branch, "HEAD").ExitCode == 0;
+            IsBranchAncestorOfHead(executionDirectory, branch, GitCli.DefaultTimeoutMilliseconds);
     }
 
     public static bool HasBranch(string executionDirectory, GoalId goalId)
@@ -707,6 +718,9 @@ public static class GoalWorktrees
         RequireGitWorkTree(executionDirectory);
         return BranchExists(executionDirectory, BranchName(goalId));
     }
+
+    private static bool IsBranchAncestorOfHead(string executionDirectory, string branch, int timeoutMilliseconds) =>
+        GitCli.Run(executionDirectory, timeoutMilliseconds, "merge-base", "--is-ancestor", branch, "HEAD").ExitCode == 0;
 
     public static GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)
     {

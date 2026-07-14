@@ -38,6 +38,8 @@ if ($DotnetArguments.Count -eq 0) {
     throw "Usage: .\scripts\Invoke-IsolatedDotnet.ps1 [-GoalPrefix <goal-prefix>] test Mcg.AgentOrchestrator.sln --verbosity minimal"
 }
 
+$RepositoryRoot = (Get-Location).Path
+
 if ($env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "1" -or
     $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "true") {
     throw "Worker-side .NET self-verification is disabled. Report tests: not-run - orchestrator acceptance gate verifies via stable slots."
@@ -99,24 +101,18 @@ function Get-IsolatedRootBase {
 
 function Get-HostTempBase {
     $candidate = [System.IO.Path]::GetTempPath()
-    $repositoryRoot = (Get-Location).Path
-    $worktreeMarker = "$([System.IO.Path]::DirectorySeparatorChar).orchestrator-worktrees$([System.IO.Path]::DirectorySeparatorChar)"
-    $worktreeIndex = $repositoryRoot.IndexOf($worktreeMarker, [System.StringComparison]::OrdinalIgnoreCase)
-    if ($worktreeIndex -ge 0) {
-        return (Join-Path (Get-IsolatedRootBase) "temp")
-    }
-
+    $repositoryRoot = $script:RepositoryRoot
     if ($candidate.StartsWith($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
         -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         $localTemp = Join-Path $env:LOCALAPPDATA "Temp"
         try {
-            $probe = Join-Path $localTemp "mcg-dotnet-probe"
+            $probe = Join-Path $localTemp "mcg-dotnet-probe-$PID"
             New-Item -ItemType Directory -Force -Path $probe | Out-Null
             Remove-Item -LiteralPath $probe -Force -Recurse
             return $localTemp
         }
         catch {
-            return (Join-Path (Get-IsolatedRootBase) "temp")
+            return $candidate
         }
     }
 
@@ -169,7 +165,7 @@ function Initialize-ArtifactsDirectory {
 }
 
 function Update-AppDllGitHeadMarker {
-    $repositoryRoot = (Get-Location).Path
+    $repositoryRoot = $script:RepositoryRoot
     $appOutput = Join-Path $repositoryRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0"
     $appDll = Join-Path $appOutput "Mcg.AgentOrchestrator.App.dll"
     if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
@@ -187,7 +183,7 @@ function Update-AppDllGitHeadMarker {
 }
 
 function Get-AppDllSnapshot {
-    $repositoryRoot = (Get-Location).Path
+    $repositoryRoot = $script:RepositoryRoot
     $appDll = Join-Path $repositoryRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
     if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
         return [pscustomobject]@{
@@ -278,9 +274,11 @@ $isolatedArguments = @(
 )
 
 $processTempPath = Join-Path (Join-Path $hostTempBase "pt\$ownerToken") "$PID"
+New-Item -ItemType Directory -Force -Path (Join-Path $hostTempBase "pt") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $hostTempBase "pt\$ownerToken") | Out-Null
 New-Item -ItemType Directory -Force -Path $processTempPath | Out-Null
 
-$env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
+$env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = $RepositoryRoot
 $env:TEMP = $processTempPath
 $env:TMP = $processTempPath
 Remove-Item Env:MCG_WORKER_SANDBOX -ErrorAction SilentlyContinue

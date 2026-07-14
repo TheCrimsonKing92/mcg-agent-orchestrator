@@ -86,6 +86,7 @@ public static class DotnetBuildEnvironmentManager
     private static int s_nextStableSlotScanStart = -1;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
     internal static Action? ShutdownBuildServersForTests { get; set; }
+    internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -198,6 +199,11 @@ public static class DotnetBuildEnvironmentManager
             {
                 var slot = (scanStart + offset) % StableSlotCount;
                 var environment = CreateStableSlotEnvironment(slot);
+                if (IsSlotArtifactsBusy(environment))
+                {
+                    continue;
+                }
+
                 if (TryOpenLeaseExecutionLock(environment, out var stream, out var blockedAttribution))
                 {
                     return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
@@ -208,11 +214,6 @@ public static class DotnetBuildEnvironmentManager
                 }
             }
 
-            if (DateTimeOffset.UtcNow >= timeoutAt)
-            {
-                return EmitSlotsBusy("first-available-stable-slot");
-            }
-
             var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
             if (!waitingReported)
             {
@@ -220,7 +221,18 @@ public static class DotnetBuildEnvironmentManager
                 waitingReported = true;
             }
 
+            if (DateTimeOffset.UtcNow >= timeoutAt)
+            {
+                return EmitSlotsBusy("first-available-stable-slot");
+            }
+
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
+            if (IsSlotArtifactsBusy(target))
+            {
+                Thread.Sleep(100);
+                continue;
+            }
+
             if (TryOpenLeaseExecutionLock(target, out var targetStream, out var targetBlockedAttribution))
             {
                 return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(target, targetStream));
@@ -393,6 +405,7 @@ public static class DotnetBuildEnvironmentManager
         var attemptedCompilerLockRemediation = false;
         var attemptedOwnedProcessRemediation = false;
         var artifactPrepBusyAttempts = 0;
+        BuildLockAttribution? selfHeldLandingFixtureAttribution = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -400,6 +413,18 @@ public static class DotnetBuildEnvironmentManager
             var reclaimed = TryReclaimStaleExecutionLease(environment);
             try
             {
+                if (selfHeldLandingFixtureAttribution is null &&
+                    IsSlotArtifactsBusy(environment))
+                {
+                    if (DateTimeOffset.UtcNow >= timeoutAt)
+                    {
+                        return EmitSlotsBusy(environment.LeaseId);
+                    }
+
+                    Thread.Sleep(100);
+                    continue;
+                }
+
                 stream = OpenExecutionLeaseStream(environment);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -415,6 +440,31 @@ public static class DotnetBuildEnvironmentManager
 
             try
             {
+                if (selfHeldLandingFixtureAttribution is not null)
+                {
+                    try
+                    {
+                        PrepareArtifactsDirectoryForTests?.Invoke(environment);
+                    }
+                    catch
+                    {
+                        stream.Dispose();
+                        throw;
+                    }
+
+                    stream.Dispose();
+                    LockAttribution.EmitReceipt(selfHeldLandingFixtureAttribution);
+                    artifactPrepBusyAttempts++;
+                    if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
+                        DateTimeOffset.UtcNow >= timeoutAt)
+                    {
+                        return EmitSlotsBusy(environment.LeaseId);
+                    }
+
+                    Thread.Sleep(ArtifactPrepBusyRetryDelay);
+                    continue;
+                }
+
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
@@ -445,6 +495,11 @@ public static class DotnetBuildEnvironmentManager
                 if (remediation is ArtifactPrepLockRemediation.SlotBusy)
                 {
                     artifactPrepBusyAttempts++;
+                    if (IsCurrentProcessLandingFixtureAttribution(blockedAttribution))
+                    {
+                        selfHeldLandingFixtureAttribution = blockedAttribution;
+                    }
+
                     if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
                         DateTimeOffset.UtcNow >= timeoutAt)
                     {
@@ -568,7 +623,7 @@ public static class DotnetBuildEnvironmentManager
     {
         if (reused &&
             TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName &&
-            IsStableSlotExecutionLockAvailable(existingSlotName))
+            IsStableSlotAvailable(existingSlotName))
         {
             return existingSlotName;
         }
@@ -577,7 +632,7 @@ public static class DotnetBuildEnvironmentManager
         for (var offset = 0; offset < StableSlotCount; offset++)
         {
             var slotName = $"slot-{(scanStart + offset) % StableSlotCount}";
-            if (IsStableSlotExecutionLockAvailable(slotName))
+            if (IsStableSlotAvailable(slotName))
             {
                 return slotName;
             }
@@ -623,15 +678,22 @@ public static class DotnetBuildEnvironmentManager
         return IsStableSlotName(slotName) ? slotName : null;
     }
 
-    private static bool IsStableSlotExecutionLockAvailable(string slotName)
+    private static bool IsStableSlotAvailable(string slotName)
     {
+        if (IsSlotArtifactsBusy(CreateStableSlotEnvironment(ParseStableSlotIndex(slotName))))
+        {
+            return false;
+        }
+
         var executionLockPath = StableSlotExecutionLockPath(slotName);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
         var createdByProbe = !File.Exists(executionLockPath);
         try
         {
-            using (new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            using (var stream = new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
             {
+                stream.Lock(0, 1);
+                stream.Unlock(0, 1);
             }
 
             if (createdByProbe && IsEmptyFile(executionLockPath))
@@ -670,6 +732,9 @@ public static class DotnetBuildEnvironmentManager
 
         return slotIndex >= 0 && slotIndex < StableSlotCount;
     }
+
+    private static int ParseStableSlotIndex(string slotName) =>
+        int.Parse(slotName["slot-".Length..], System.Globalization.CultureInfo.InvariantCulture);
 
     private static DotnetBuildEnvironment CreateStableSlotEnvironment(int slotIndex)
     {
@@ -751,8 +816,11 @@ public static class DotnetBuildEnvironmentManager
 
     private static int? TryReadStableSlotExecutionOwner(int slotIndex)
     {
-        var metadata = TryReadExecutionLeaseMetadata(StableSlotExecutionLockPath($"slot-{slotIndex}"));
-        return metadata?.OwnerProcessId ?? TryReadStableSlotOwnerMarker(slotIndex)?.OwnerProcessId;
+        var environment = CreateStableSlotEnvironment(slotIndex);
+        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+        return TryFindActiveSlotArtifactConsumer(environment)?.ProcessId ??
+            metadata?.OwnerProcessId ??
+            TryReadStableSlotOwnerMarker(slotIndex)?.OwnerProcessId;
     }
 
     private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
@@ -843,6 +911,20 @@ public static class DotnetBuildEnvironmentManager
         if (TryCreateCurrentLandingFixtureAttribution(lockedPath, out attribution))
         {
             LockAttribution.EmitReceipt(attribution);
+            return attribution.Source is "landing-fixture-marker"
+                ? ArtifactPrepLockRemediation.SlotBusy
+                : ArtifactPrepLockRemediation.RetryImmediately;
+        }
+
+        if (TryFindActiveSlotArtifactConsumer(environment) is { } activeSlotArtifactConsumer)
+        {
+            attribution = new BuildLockAttribution(
+                lockedPath,
+                [activeSlotArtifactConsumer],
+                "slot-artifact-consumer",
+                "artifact-prep",
+                "prepare-artifacts");
+            LockAttribution.EmitReceipt(attribution);
             return ArtifactPrepLockRemediation.SlotBusy;
         }
 
@@ -880,10 +962,60 @@ public static class DotnetBuildEnvironmentManager
         return killed ? ArtifactPrepLockRemediation.RetryImmediately : ArtifactPrepLockRemediation.Blocked;
     }
 
+    private static bool IsCurrentProcessLandingFixtureAttribution(BuildLockAttribution attribution) =>
+        attribution.Source is "landing-fixture-marker" or "landing-fixture-registration" &&
+        attribution.Holders.Any(holder => holder.ProcessId == Environment.ProcessId);
+
     private static bool IsCompilerLock(BuildLockAttribution attribution) =>
         attribution.Holders.Any(holder =>
             ContainsCompilerLockSignal(holder.ProcessName) ||
             ContainsCompilerLockSignal(holder.CommandLine));
+
+    private static bool IsSlotArtifactsBusy(DotnetBuildEnvironment environment) =>
+        TryFindActiveSlotArtifactConsumer(environment) is not null;
+
+    private static BuildLockHolder? TryFindActiveSlotArtifactConsumer(DotnetBuildEnvironment environment)
+    {
+        var artifactsPath = NormalizeForCommandLineMatch(environment.ArtifactsPath);
+        if (string.IsNullOrWhiteSpace(artifactsPath))
+        {
+            return null;
+        }
+
+        var snapshot = ProcessCommandLineSnapshotForTests?.Invoke() ?? ProcessCommandLines.Snapshot();
+        foreach (var pair in snapshot.Read(Process.GetProcesses().Select(process => process.Id)))
+        {
+            if (pair.Key == Environment.ProcessId ||
+                !IsProcessRunning(pair.Key) ||
+                !CommandLineUsesSlotArtifacts(pair.Value, artifactsPath))
+            {
+                continue;
+            }
+
+            return CreateProcessHolder(pair.Key, pair.Value, isOrchestratorOwned: true);
+        }
+
+        return null;
+    }
+
+    private static bool CommandLineUsesSlotArtifacts(string commandLine, string artifactsPath)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine) ||
+            !NormalizeForCommandLineMatch(commandLine).Contains(artifactsPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return commandLine.Contains("testhost", StringComparison.OrdinalIgnoreCase) ||
+            commandLine.Contains("vstest.console", StringComparison.OrdinalIgnoreCase) ||
+            commandLine.Contains("datacollector", StringComparison.OrdinalIgnoreCase) ||
+            (commandLine.Contains("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                commandLine.Contains(" test ", StringComparison.OrdinalIgnoreCase)) ||
+            commandLine.Contains("--artifacts-path", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeForCommandLineMatch(string value) =>
+        value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
 
     private static bool ContainsCompilerLockSignal(string? value)
     {
@@ -912,8 +1044,9 @@ public static class DotnetBuildEnvironmentManager
 
     private static LeaseFileStream OpenExecutionLeaseStream(DotnetBuildEnvironment environment)
     {
-        // Holding the file open exclusively IS the lease lock. A process crash closes the OS
-        // handle, so the durable file is advisory metadata rather than ownership.
+        // All slot lease participants use the same protocol: the file is share-opened and
+        // byte 0 is the exclusion primitive. A process crash closes the OS handle, so the
+        // durable file is advisory metadata rather than ownership.
         return new LeaseFileStream(environment);
     }
 
@@ -1090,8 +1223,9 @@ public static class DotnetBuildEnvironmentManager
     }
 
     private static BuildLockHolder CreateLandingFixtureMarkerHolder(LandingTestFixtureMarker marker) =>
-        CreateProcessHolder(
+        new(
             marker.CreatorProcessId,
+            "landing-test-fixture",
             $"landing fixture purpose={marker.Purpose} machine={marker.MachineName} createdAt={marker.CreatedAt:O}",
             false);
 
@@ -1136,8 +1270,6 @@ public static class DotnetBuildEnvironmentManager
         {
             CurrentLandingFixtureRoots.Add(fixtureRoot);
         }
-
-        WriteLandingTestFixtureMarker(fixtureRoot, "landing-test-fixture");
     }
 
     internal static void ClearCurrentLandingTestFixtureRootsForTests()
@@ -1218,8 +1350,8 @@ public static class DotnetBuildEnvironmentManager
     }
 
     private static bool IsLandingFixtureMarkerStale(LandingTestFixtureMarker marker) =>
-        !IsProcessRunning(marker.CreatorProcessId) &&
-        DateTimeOffset.UtcNow - marker.CreatedAt >= LandingFixtureMarkerStaleAge;
+        DateTimeOffset.UtcNow - marker.CreatedAt >= LandingFixtureMarkerStaleAge &&
+        !IsProcessRunning(marker.CreatorProcessId);
 
     private static bool TryGetLandingTestFixtureRoot(string path, out string fixtureRoot)
     {
@@ -1519,22 +1651,44 @@ public static class DotnetBuildEnvironmentManager
     private sealed class LeaseFileStream : FileStream
     {
         private readonly DotnetBuildEnvironment _environment;
+        private bool _rangeLocked;
         private int _released;
 
         internal LeaseFileStream(DotnetBuildEnvironment environment)
-            : base(environment.ExecutionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
+            : base(environment.ExecutionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite)
         {
             _environment = environment;
+            try
+            {
+                Lock(0, 1);
+                _rangeLocked = true;
+            }
+            catch
+            {
+                base.Dispose(true);
+                throw;
+            }
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && Interlocked.Exchange(ref _released, 1) == 0)
+            try
             {
-                EmitLeaseReceipt("LEASE_RELEASE", _environment);
-            }
+                if (disposing && Interlocked.Exchange(ref _released, 1) == 0)
+                {
+                    if (_rangeLocked)
+                    {
+                        Unlock(0, 1);
+                        _rangeLocked = false;
+                    }
 
-            base.Dispose(disposing);
+                    EmitLeaseReceipt("LEASE_RELEASE", _environment);
+                }
+            }
+            finally
+            {
+                base.Dispose(disposing);
+            }
         }
     }
 }

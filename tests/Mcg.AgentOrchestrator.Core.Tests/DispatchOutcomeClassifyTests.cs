@@ -389,7 +389,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "", "Rate limit reached for gpt-5.5. Please try again in 42s."));
+            Verification(1, "", "ERROR: Rate limit reached for gpt-5.5. Please try again in 42s."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
@@ -424,13 +424,13 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "Error: provider returned 429 Too Many Requests."));
+            Verification(1, "ERROR: provider returned 429 Too Many Requests."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Xunit.Assert.Null(outcome.RetryAfter);
         Xunit.Assert.Contains("429 Too Many Requests", outcome.EvidenceSummary);
-        Xunit.Assert.Contains("evidence=Error: provider returned 429 Too Many Requests.", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("evidence=ERROR: provider returned 429 Too Many Requests.", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify does not treat bare 429 duration as rate limit")]
@@ -448,9 +448,9 @@ public sealed class DispatchOutcomeClassifyTests
     public void ClassifyAuthEvidenceBeforeConnectivityOrRateLimit()
     {
         const string stderr =
-            "Your access token could not be refreshed because your refresh token was already used.\n" +
-            "websocket closed with HTTP 401 while connecting to provider endpoint.\n" +
-            "status: 429";
+            "ERROR: Your access token could not be refreshed because your refresh token was already used.\n" +
+            "ERROR: websocket closed with HTTP 401 while connecting to provider endpoint.\n" +
+            "ERROR: status: 429";
 
         var first = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
         var second = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
@@ -463,7 +463,7 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(first.Kind, second.Kind);
         Xunit.Assert.Equal(first.RecoveryRecommendation, second.RecoveryRecommendation);
         Xunit.Assert.Contains("rule=provider-authentication", first.ClassifierReceipt, StringComparison.Ordinal);
-        Xunit.Assert.Contains("evidence=provider-authentication: Your access token could not be refreshed", first.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("evidence=provider-authentication: ERROR: Your access token could not be refreshed", first.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("remediation=codex login / provider re-auth", first.EvidenceSummary, StringComparison.Ordinal);
     }
 
@@ -471,8 +471,8 @@ public sealed class DispatchOutcomeClassifyTests
     public void ClassifyIgnoresTypedConnectivityWithoutExplicitConnectivityEvidence()
     {
         const string stderr =
-            "Your access token could not be refreshed because your refresh token was already used.\n" +
-            "websocket closed with HTTP 401 while connecting to provider endpoint.";
+            "ERROR: Your access token could not be refreshed because your refresh token was already used.\n" +
+            "ERROR: websocket closed with HTTP 401 while connecting to provider endpoint.";
         var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.Connectivity };
 
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
@@ -489,12 +489,54 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "", "Provider quota exceeded for this account."));
+            Verification(1, "", "ERROR: Provider quota exceeded for this account."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Xunit.Assert.Null(outcome.RetryAfter);
         Xunit.Assert.Contains("quota exceeded", outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify ignores provider signatures inside worker displayed source lines")]
+    public void ClassifyIgnoresProviderSignaturesInsideWorkerDisplayedSourceLines()
+    {
+        const string stderr =
+            "183: catch (UnauthorizedAccessException ex)\n" +
+            "184: var status = \"429 Too Many Requests\";\n" +
+            "185 | logger.LogError(\"stream disconnected\");\n" +
+            "    rate limit reached; retry after 42s\n" +
+            "    quota exceeded while reading fixture text";
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
+        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+    }
+
+    [Xunit.Theory(DisplayName = "Classify preserves genuine CLI provider diagnostics with evidence")]
+    [Xunit.InlineData(
+        "ERROR: 401 Unauthorized. Invalid API key.",
+        DispatchOutcomeKind.ProviderAuthentication,
+        "evidence=provider-authentication: ERROR: 401 Unauthorized. Invalid API key.")]
+    [Xunit.InlineData(
+        "ERROR: provider returned 429 Too Many Requests.",
+        DispatchOutcomeKind.RecoverableSubscriptionLimit,
+        "evidence=ERROR: provider returned 429 Too Many Requests.")]
+    [Xunit.InlineData(
+        "2026-07-14T13:15:00Z ERROR codex_core: stream disconnected while reading response.",
+        DispatchOutcomeKind.ProviderConnectivity,
+        "evidence=2026-07-14T13:15:00Z ERROR codex_core: stream disconnected")]
+    public void ClassifyPreservesGenuineCliProviderDiagnosticsWithEvidence(
+        string stderr,
+        DispatchOutcomeKind expectedKind,
+        string expectedEvidence)
+    {
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
+
+        Xunit.Assert.Equal(expectedKind, outcome.Kind);
+        Xunit.Assert.Contains(expectedEvidence, outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify returns PreflightFailure for sandbox preflight evidence")]
@@ -573,7 +615,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(),
-            Verification(1, "Connecting to API...", "Error: 401 Unauthorized. Invalid API key."));
+            Verification(1, "Connecting to API...", "ERROR: 401 Unauthorized. Invalid API key."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
@@ -584,7 +626,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(),
-            Verification(1, "Connecting to API...", "Error: Unable to connect to API. ECONNREFUSED 127.0.0.1:443"));
+            Verification(1, "Connecting to API...", "ERROR: Unable to connect to API. ECONNREFUSED 127.0.0.1:443"));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);

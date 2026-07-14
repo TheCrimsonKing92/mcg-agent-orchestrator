@@ -51,6 +51,7 @@ internal static partial class LockAttribution
     internal static string? HandleExecutableForTests { get; set; }
     internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
     internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
+    internal static bool DisableRestartManagerForTests { get; set; }
 
     public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null)
     {
@@ -62,7 +63,9 @@ internal static partial class LockAttribution
         }
 
         var fullPath = TryFullPath(path);
-        if (OperatingSystem.IsWindows() && TryAttributeWithRestartManager(fullPath, ownershipHint) is { } restartManagerAttribution)
+        if (OperatingSystem.IsWindows() &&
+            !DisableRestartManagerForTests &&
+            TryAttributeWithRestartManager(fullPath, ownershipHint) is { } restartManagerAttribution)
         {
             var enriched = Enrich(restartManagerAttribution, phase, operation);
             EmitReceipt(enriched);
@@ -227,6 +230,7 @@ internal static partial class LockAttribution
                 FileName = handle,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -239,6 +243,7 @@ internal static partial class LockAttribution
                 return null;
             }
 
+            try { process.StandardInput.Close(); } catch { }
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();
             if (!process.WaitForExit(HandleProbeTimeoutForTests ?? HandleProbeTimeout))
@@ -253,7 +258,7 @@ internal static partial class LockAttribution
                     "handle64-timeout");
             }
 
-            var output = outputTask.GetAwaiter().GetResult();
+            var output = outputTask.GetAwaiter().GetResult() + Environment.NewLine + errorTask.GetAwaiter().GetResult();
             var holders = ParseHandleOutput(output, ownershipHint);
             return holders.Count == 0 ? null : new BuildLockAttribution(path, holders, "handle64");
         }

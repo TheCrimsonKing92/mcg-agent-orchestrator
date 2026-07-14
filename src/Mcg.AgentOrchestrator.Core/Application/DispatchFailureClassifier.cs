@@ -108,8 +108,8 @@ public static class DispatchFailureClassifier
         };
     }
 
-    private static readonly Regex PowerShellNativeErrorPrefix = new(
-        "^[^:\\r\\n]{1,120}\\s+:\\s+(?<error>ERROR:|Error:|error:)",
+    private static readonly Regex CodexCliDiagnosticPrefix = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?\s+ERROR\s+codex(?:[_:\w.-]*)?\b",
         RegexOptions.CultureInvariant);
     private static readonly Regex PassedCountPattern = new(
         @"\bPassed:\s*[1-9]\d*\b",
@@ -1517,6 +1517,7 @@ public static class DispatchFailureClassifier
             text.Contains("getaddrinfo", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("ENOTFOUND", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("no such host", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("stream disconnected", StringComparison.OrdinalIgnoreCase) ||
             (text.Contains("transport", StringComparison.OrdinalIgnoreCase) &&
              (text.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
               text.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
@@ -1562,30 +1563,6 @@ public static class DispatchFailureClassifier
             output.Contains("Files changed:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IEnumerable<string> GetProviderErrorLines(string output)
-    {
-        foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = rawLine.Trim();
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
-            if (IsProviderErrorLine(line))
-            {
-                yield return line;
-                continue;
-            }
-
-            var powerShellError = PowerShellNativeErrorPrefix.Match(line);
-            if (powerShellError.Success)
-            {
-                yield return line[powerShellError.Groups["error"].Index..];
-            }
-        }
-    }
-
     private static IEnumerable<string> GetProviderSignalLines(params string[] outputs)
     {
         foreach (var output in outputs)
@@ -1593,19 +1570,19 @@ public static class DispatchFailureClassifier
             var inWorkerResultBlock = false;
             foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
             {
-                var line = rawLine.Trim();
-                if (line.Length == 0)
+                var markerLine = rawLine.Trim();
+                if (markerLine.Length == 0)
                 {
                     continue;
                 }
 
-                if (IsWorkerResultOpener(line))
+                if (IsWorkerResultOpener(markerLine))
                 {
                     inWorkerResultBlock = true;
                     continue;
                 }
 
-                if (IsWorkerResultEndMarker(line))
+                if (IsWorkerResultEndMarker(markerLine))
                 {
                     inWorkerResultBlock = false;
                     continue;
@@ -1616,22 +1593,13 @@ public static class DispatchFailureClassifier
                     continue;
                 }
 
-                if (IsProviderErrorLine(line))
+                // Provider verdicts only trust the CLI diagnostic formats observed from Codex:
+                // a raw line-start "ERROR:" diagnostic or an ISO timestamped "ERROR codex_*" line.
+                // Do not trim leading whitespace here; indented worker-echoed source must stay inert.
+                var providerLine = rawLine.TrimEnd();
+                if (IsProviderErrorLine(providerLine))
                 {
-                    yield return line;
-                    continue;
-                }
-
-                var powerShellError = PowerShellNativeErrorPrefix.Match(line);
-                if (powerShellError.Success)
-                {
-                    yield return line[powerShellError.Groups["error"].Index..];
-                    continue;
-                }
-
-                if (IsBareProviderLimitSignalLine(line))
-                {
-                    yield return line;
+                    yield return providerLine;
                 }
             }
         }
@@ -1639,9 +1607,8 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
         {
-            var candidate = rawLine.Trim();
             if (ContainsProviderAuthenticationText(candidate))
             {
                 line = candidate;
@@ -1655,9 +1622,8 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetProviderConnectivityLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
         {
-            var candidate = rawLine.Trim();
             if (ContainsRecoverableProviderConnectivityText(candidate))
             {
                 line = candidate;
@@ -1684,24 +1650,6 @@ public static class DispatchFailureClassifier
         line = string.Empty;
         return false;
     }
-
-    private static bool IsBareProviderLimitSignalLine(string line) =>
-        line.StartsWith("You've hit your usage limit", StringComparison.OrdinalIgnoreCase) ||
-        line.StartsWith("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
-        line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("rate-limit", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("rate-limited", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("ratelimit", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("exceeded retry limit", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
-        Http429StatusPattern.IsMatch(line) ||
-        line.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsWorkerResultOpener(string line)
     {
@@ -1734,8 +1682,7 @@ public static class DispatchFailureClassifier
     private static bool IsProviderErrorLine(string line)
     {
         return line.StartsWith("ERROR:", StringComparison.Ordinal) ||
-            line.StartsWith("Error:", StringComparison.Ordinal) ||
-            line.StartsWith("error:", StringComparison.Ordinal);
+            CodexCliDiagnosticPrefix.IsMatch(line);
     }
 
     private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
