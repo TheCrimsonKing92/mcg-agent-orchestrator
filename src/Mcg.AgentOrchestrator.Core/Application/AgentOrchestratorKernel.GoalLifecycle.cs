@@ -50,6 +50,7 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var task = new TaskSpec(TaskId.New(), description, requiredRole, verificationPlan);
         goal.AddTask(task);
+        goal.ClearExecutedTestReceipt();
         Append(goal, task.Id, ProgressKind.TaskAdded, $"Added {requiredRole} task.");
 
         if (availableAgents is not null)
@@ -157,6 +158,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var retryAt = _clock.UtcNow;
+        goal.ClearExecutedTestReceipt();
         ResetTaskForRetry(task, retryAt);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
@@ -182,7 +184,8 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed) ||
+            !HasPassingExecutedTestReceipt(goal))
         {
             return false;
         }
@@ -208,6 +211,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
 
+        goal.ClearExecutedTestReceipt();
         task.ClearLatestVerification();
         task.ClearLastExecution();
         task.ClearLastDispatch();

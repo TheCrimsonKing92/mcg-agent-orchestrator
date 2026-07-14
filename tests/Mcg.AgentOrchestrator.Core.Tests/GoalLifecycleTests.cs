@@ -359,6 +359,64 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }
 
+    [Xunit.Fact(DisplayName = "RetryTask_after_Verified_requires_fresh_executed_test_receipt_for_changed_commit")]
+    public void RetryTaskAfterVerifiedRequiresFreshExecutedTestReceiptForChangedCommit()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry with changed commit", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", DateTimeOffset.Parse("2026-07-14T12:00:00Z")));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "old-commit");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "old-commit");
+    Assert.Equal(GoalStatus.Verified, goal.Status);
+
+    kernel.RetryTask(goal.Id, task.Id, "Retry after acceptance failure.");
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", "C:\\repo", DateTimeOffset.Parse("2026-07-14T12:05:00Z")));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "new-commit");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done again.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed again", "", DateTimeOffset.UtcNow));
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Null(goal.LatestExecutedTestReceipt);
+    var gate = kernel.BuildVerificationGate(goal.Id);
+    Assert.False(gate.IsSatisfied);
+    Assert.Equal(VerificationGateReason.MissingExecutedTestReceipt, gate.Reason);
+}
+
+    [Xunit.Fact(DisplayName = "NormalizePrematureCompletedGoalToVerified_requires_executed_test_receipt")]
+    public void NormalizePrematureCompletedGoalToVerifiedRequiresExecutedTestReceipt()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Receiptless completed goal", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    var snapshot = kernel.ExportSnapshot();
+    var completed = snapshot.Goals.Single() with
+    {
+        Status = GoalStatus.Completed,
+        LatestExecutedTestReceipt = null
+    };
+    var restored = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [completed] }, clock);
+
+    var normalized = restored.NormalizePrematureCompletedGoalToVerified(goal.Id, "Repair terminal status.");
+
+    Assert.False(normalized);
+    Assert.Equal(GoalStatus.Completed, restored.GetGoal(goal.Id).Status);
+}
+
     [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_completed_tasks_and_current_gate_evidence")]
     public void RetryTaskInvalidatesDownstreamCompletedTasksAndCurrentGateEvidence()
 {

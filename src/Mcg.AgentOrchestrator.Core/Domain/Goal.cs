@@ -59,6 +59,8 @@ public sealed class Goal
 
     internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
 
+    internal void ClearExecutedTestReceipt() => LatestExecutedTestReceipt = null;
+
     internal void RecordExecutedTestReceipt(
         string runContext,
         IReadOnlyList<string> changedFiles,

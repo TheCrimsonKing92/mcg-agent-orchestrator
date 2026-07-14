@@ -114,8 +114,24 @@ public sealed partial class AgentOrchestratorKernel
             VerificationGateReason.Passed);
     }
 
-    private static bool HasPassingExecutedTestReceipt(Goal goal) =>
-        goal.LatestExecutedTestReceipt is { Passed: true };
+    private static bool HasPassingExecutedTestReceipt(Goal goal)
+    {
+        if (goal.LatestExecutedTestReceipt is not { Passed: true } receipt)
+        {
+            return false;
+        }
+
+        var candidateCommit = goal.Tasks
+            .Where(task => task.Status == WorkTaskStatus.Completed)
+            .Select(task => task.LastDispatch)
+            .Where(dispatch => !string.IsNullOrWhiteSpace(dispatch?.ResultCommit))
+            .OrderByDescending(dispatch => dispatch!.DispatchedAt)
+            .Select(dispatch => dispatch!.ResultCommit)
+            .FirstOrDefault();
+
+        return candidateCommit is null ||
+            string.Equals(receipt.BranchHeadSha, candidateCommit, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasOutputTokenLimitHit(TaskExecutionRecord? execution)
     {
