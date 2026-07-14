@@ -24,9 +24,13 @@ public sealed class ConductorDriverTests
         return (kernel, goal);
     }
 
-    private static void DispatchTask(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
+    private static void DispatchTask(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string command = "test.exe")
     {
-        var dispatch = new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow);
+        var dispatch = new TaskDispatchRecord("test-worker", command, "C:\\tmp", DateTimeOffset.UtcNow);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -52,7 +56,7 @@ public sealed class ConductorDriverTests
         string blocker,
         string? stdoutPath = "C:\\tmp\\reviewer.out.log")
     {
-        DispatchTask(kernel, goal, reviewer);
+        DispatchTask(kernel, goal, reviewer, "review");
         var stdout = $"""
             Findings first.
             WORKER_RESULT:
@@ -1288,8 +1292,8 @@ public sealed class ConductorDriverTests
         Assert.True(dispatched);
         Assert.False(escalated);
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
-        Assert.Equal(WorkTaskStatus.Pending, tester.Status);
-        Assert.Equal(WorkTaskStatus.Pending, reviewer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         Assert.Contains("auto-review-retry round 1", retryMessage);
         Assert.Contains(blocker, retryMessage);
         Assert.Contains("C:\\tmp\\reviewer.out.log", retryMessage);
@@ -1373,7 +1377,7 @@ public sealed class ConductorDriverTests
             PassVerification(kernel, goal, task);
         }
 
-        DispatchTask(kernel, goal, reviewer);
+        DispatchTask(kernel, goal, reviewer, "review");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review",
             "C:\\tmp",
