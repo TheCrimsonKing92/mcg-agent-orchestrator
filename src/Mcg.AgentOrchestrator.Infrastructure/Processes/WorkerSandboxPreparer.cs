@@ -46,7 +46,7 @@ internal interface IWorkerIntegrityLabeler
     bool SetIntegrity(string path, string level, bool recursive);
 }
 
-internal sealed record IntegrityLabelState(bool Exists, bool Low, bool Inheritable);
+internal sealed record IntegrityLabelState(bool Exists, bool Low, bool Inheritable, bool Medium = false);
 
 internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
@@ -109,11 +109,14 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
         var receipt = TryReadValidReceipt(path, sandboxRoot);
         if (receipt.Valid && IsPrepared(path))
         {
+            var skippedProtectionPhases = path == sandboxRoot
+                ? receipt.SkippedProtectionPhases
+                : FilterCurrentlyCoveredProtectionPhases(path, receipt.SkippedProtectionPhases);
             return new WorkerSandboxPreparationResult(
                 false,
                 false,
-                PrepReceiptHit: true,
-                ReceiptSkippedProtectionPhases: receipt.SkippedProtectionPhases);
+                PrepReceiptHit: skippedProtectionPhases.Length == receipt.SkippedProtectionPhases.Length,
+                ReceiptSkippedProtectionPhases: skippedProtectionPhases);
         }
 
         var recursive = allowRecursiveMigration;
@@ -150,6 +153,68 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
     {
         var state = labeler.Query(path);
         return state.Exists && state.Low && state.Inheritable;
+    }
+
+    private string[] FilterCurrentlyCoveredProtectionPhases(string worktree, string[] skippedProtectionPhases)
+    {
+        return skippedProtectionPhases
+            .Where(phase => ProtectionPhaseStillCovered(worktree, phase))
+            .ToArray();
+    }
+
+    private bool ProtectionPhaseStillCovered(string worktree, string phase)
+    {
+        return phase switch
+        {
+            ProtectWorkspaceBoundaryPhase => WorkspaceBoundaryStillMedium(worktree),
+            ProtectGitMetadataPhase => GitMetadataStillMedium(worktree),
+            _ => false
+        };
+    }
+
+    private bool WorkspaceBoundaryStillMedium(string worktree)
+    {
+        var parent = Directory.GetParent(worktree);
+        return parent is null || !parent.Exists || IsMedium(parent.FullName);
+    }
+
+    private bool GitMetadataStillMedium(string worktree)
+    {
+        var checkoutGitFile = Path.Combine(worktree, ".git");
+        if ((File.Exists(checkoutGitFile) || Directory.Exists(checkoutGitFile)) && !IsMedium(checkoutGitFile))
+        {
+            return false;
+        }
+
+        var commonDir = TryResolveGitCommonDir(worktree);
+        return commonDir is null || !Directory.Exists(commonDir) || IsMedium(commonDir);
+    }
+
+    private static string? TryResolveGitCommonDir(string worktree)
+    {
+        try
+        {
+            var commonDirResult = GitCli.Run(worktree, "rev-parse", "--git-common-dir");
+            if (!commonDirResult.Succeeded || string.IsNullOrWhiteSpace(commonDirResult.Output))
+            {
+                return null;
+            }
+
+            var commonDirRaw = commonDirResult.Output.Trim();
+            return Path.IsPathRooted(commonDirRaw)
+                ? commonDirRaw
+                : Path.GetFullPath(Path.Combine(worktree, commonDirRaw));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool IsMedium(string path)
+    {
+        var state = labeler.Query(path);
+        return state.Exists && state.Medium;
     }
 
     private bool IsPrepared(string path)
@@ -427,9 +492,10 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
             var low = output.Contains("Low Mandatory Level", StringComparison.OrdinalIgnoreCase) ||
                 output.Contains(":(OI)(CI)(NW)", StringComparison.OrdinalIgnoreCase);
+            var medium = output.Contains("Medium Mandatory Level", StringComparison.OrdinalIgnoreCase);
             var inheritable = output.Contains("(OI)", StringComparison.OrdinalIgnoreCase) &&
                 output.Contains("(CI)", StringComparison.OrdinalIgnoreCase);
-            return new IntegrityLabelState(Exists: true, low, inheritable);
+            return new IntegrityLabelState(Exists: true, low, inheritable, medium);
         }
         catch
         {

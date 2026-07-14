@@ -467,7 +467,7 @@ public sealed class DispatchProcessHostTests
         var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-receipt-hit-test", Guid.NewGuid().ToString("n"));
         var worktree = Path.Combine(root, "worktree");
         var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
-        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true, Medium: true));
         try
         {
             Directory.CreateDirectory(root);
@@ -505,6 +505,7 @@ public sealed class DispatchProcessHostTests
             Assert.True(second.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
             Assert.Empty(protectedPhases);
+            Assert.Equal(4, labeler.QueryCalls.Count);
             Assert.Contains("prepare-roots", phases);
             Assert.Contains("receipt-fast-path", phases);
             Assert.Contains("materialize-sandbox", phases);
@@ -514,6 +515,59 @@ public sealed class DispatchProcessHostTests
             Assert.True(File.Exists(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
             Assert.Equal(Path.Combine(sandboxRoot, DispatchProcessHost.WorkerCaBundleFileName), startInfo.Environment["SSL_CERT_FILE"]);
             Assert.Equal(File.ReadAllText(sourceBundle), File.ReadAllText(startInfo.Environment["SSL_CERT_FILE"]));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_receipt_hit_reprotects_when_boundary_integrity_changed")]
+    public void ApplyWorkerSandboxReceiptHitReprotectsWhenBoundaryIntegrityChanged()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-receipt-integrity-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true, Medium: true));
+        try
+        {
+            Directory.CreateDirectory(root);
+            var preparer = new WorkerSandboxPreparer(labeler);
+            var protectedPhases = new List<string>();
+
+            var first = DispatchProcessHost.ApplyWorkerSandbox(
+                CreateSandboxStartInfo(worktree),
+                CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown),
+                preparer,
+                protectWorkspaceBoundary: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase),
+                protectGitMetadata: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase));
+            Assert.False(first.PrepReceiptHit);
+            Assert.Contains(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, protectedPhases);
+            protectedPhases.Clear();
+            labeler.SetCalls.Clear();
+            labeler.QueryCalls.Clear();
+
+            var receiptBefore = File.ReadAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName));
+            labeler.SetQueryState(root, new IntegrityLabelState(Exists: true, Low: true, Inheritable: true, Medium: false));
+
+            var second = DispatchProcessHost.ApplyWorkerSandbox(
+                CreateSandboxStartInfo(worktree),
+                CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown),
+                preparer,
+                protectWorkspaceBoundary: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase),
+                protectGitMetadata: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase));
+
+            Assert.False(second.PrepReceiptHit);
+            Assert.Empty(labeler.SetCalls);
+            Assert.Contains(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, protectedPhases);
+            Assert.DoesNotContain(WorkerSandboxPreparer.ProtectGitMetadataPhase, protectedPhases);
+            Assert.Equal(4, labeler.QueryCalls.Count);
+            Assert.NotEqual(receiptBefore, File.ReadAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
         }
         finally
         {
@@ -532,7 +586,7 @@ public sealed class DispatchProcessHostTests
         var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-root-only-receipt-test", Guid.NewGuid().ToString("n"));
         var worktree = Path.Combine(root, "worktree");
         var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
-        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true, Medium: true));
         try
         {
             CreateGitRepository(worktree);
@@ -596,7 +650,7 @@ public sealed class DispatchProcessHostTests
         var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-partial-receipt-test", Guid.NewGuid().ToString("n"));
         var worktree = Path.Combine(root, "worktree");
         var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
-        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true, Medium: true));
         try
         {
             Directory.CreateDirectory(sandboxRoot);
@@ -1427,7 +1481,20 @@ public sealed class DispatchProcessHostTests
     {
         public List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
 
-        public IntegrityLabelState Query(string path) => queryState;
+        public List<string> QueryCalls { get; } = [];
+
+        private readonly Dictionary<string, IntegrityLabelState> queryStatesByPath = new(StringComparer.OrdinalIgnoreCase);
+
+        public IntegrityLabelState Query(string path)
+        {
+            QueryCalls.Add(path);
+            return queryStatesByPath.TryGetValue(path, out var state) ? state : queryState;
+        }
+
+        public void SetQueryState(string path, IntegrityLabelState state)
+        {
+            queryStatesByPath[path] = state;
+        }
 
         public bool SetIntegrity(string path, string level, bool recursive)
         {
