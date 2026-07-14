@@ -38,7 +38,9 @@ public sealed record ConductorAutonomyPolicy(
     int MaxEmptyOutputAutoRecoverCycles = 3,
     double EmptyOutputRetryInitialDelaySeconds = 0,
     double EmptyOutputRetryBackoffMultiplier = 2,
-    double EmptyOutputRetryMaxDelaySeconds = 30)
+    double EmptyOutputRetryMaxDelaySeconds = 30,
+    int ReviewAutoRetryWarningRound = 4,
+    int ReviewAutoRetryStopRound = 7)
 {
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
@@ -155,6 +157,15 @@ public sealed record ConductorAutonomyPolicy(
         if (EmptyOutputRetryMaxDelaySeconds < 0)
             errors.Add($"emptyOutputRetryMaxDelaySeconds must be zero or greater (got {EmptyOutputRetryMaxDelaySeconds}).");
 
+        if (ReviewAutoRetryWarningRound <= 0)
+            errors.Add($"reviewAutoRetryWarningRound must be greater than zero (got {ReviewAutoRetryWarningRound}).");
+
+        if (ReviewAutoRetryStopRound <= 0)
+            errors.Add($"reviewAutoRetryStopRound must be greater than zero (got {ReviewAutoRetryStopRound}).");
+
+        if (ReviewAutoRetryStopRound <= ReviewAutoRetryWarningRound)
+            errors.Add($"reviewAutoRetryStopRound ({ReviewAutoRetryStopRound}) must be greater than reviewAutoRetryWarningRound ({ReviewAutoRetryWarningRound}).");
+
         if (PerProviderBudgetCaps is not null)
         {
             foreach (var (provider, cap) in PerProviderBudgetCaps)
@@ -189,6 +200,8 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"emptyOutputRetryInitialDelaySeconds\": {EmptyOutputRetryInitialDelaySeconds},");
         sb.AppendLine($"  \"emptyOutputRetryBackoffMultiplier\": {EmptyOutputRetryBackoffMultiplier},");
         sb.AppendLine($"  \"emptyOutputRetryMaxDelaySeconds\": {EmptyOutputRetryMaxDelaySeconds},");
+        sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
+        sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
 
         if (PerProviderBudgetCaps is { Count: > 0 })
         {
@@ -264,6 +277,12 @@ public sealed record ConductorAutonomyPolicy(
             var emptyOutputRetryMaxDelaySeconds = root.TryGetProperty("emptyOutputRetryMaxDelaySeconds", out _)
                 ? RequireDouble(root, "emptyOutputRetryMaxDelaySeconds", src)
                 : 30;
+            var reviewAutoRetryWarningRound = root.TryGetProperty("reviewAutoRetryWarningRound", out _)
+                ? RequireInt(root, "reviewAutoRetryWarningRound", src)
+                : 4;
+            var reviewAutoRetryStopRound = root.TryGetProperty("reviewAutoRetryStopRound", out _)
+                ? RequireInt(root, "reviewAutoRetryStopRound", src)
+                : 7;
 
             IReadOnlyDictionary<string, decimal>? providerCaps = null;
             if (root.TryGetProperty("perProviderBudgetCaps", out var capsEl)
@@ -326,7 +345,9 @@ public sealed record ConductorAutonomyPolicy(
                 maxEmptyOutputAutoRecoverCycles,
                 emptyOutputRetryInitialDelaySeconds,
                 emptyOutputRetryBackoffMultiplier,
-                emptyOutputRetryMaxDelaySeconds);
+                emptyOutputRetryMaxDelaySeconds,
+                reviewAutoRetryWarningRound,
+                reviewAutoRetryStopRound);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

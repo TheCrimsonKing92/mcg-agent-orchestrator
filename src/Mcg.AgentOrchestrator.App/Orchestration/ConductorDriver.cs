@@ -639,6 +639,22 @@ internal sealed class ConductorDriver
                 // ExecuteDispatchAndStart returns Held (not Escalate) so the goal stays eligible.
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
+
+            if (TryBuildReviewerNeedsWorkAutoRetry(goal, policy, out var autoRetry))
+            {
+                if (autoRetry.ShouldEscalate)
+                {
+                    return Escalate(goal, goalPrefix, policy, state, autoRetry.Message);
+                }
+
+                if (autoRetry.WarningMessage is not null)
+                {
+                    _recordTaskNote(goal.Id, autoRetry.TargetTask!.Id, autoRetry.WarningMessage);
+                }
+
+                _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message);
+                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+            }
         }
 
         // Error states always escalate regardless of policy
@@ -680,6 +696,140 @@ internal sealed class ConductorDriver
     }
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
+
+    private static bool TryBuildReviewerNeedsWorkAutoRetry(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        out ReviewNeedsWorkAutoRetryDecision decision)
+    {
+        decision = ReviewNeedsWorkAutoRetryDecision.None;
+        var reviewerTask = goal.Tasks.FirstOrDefault(t =>
+            t.Status == WorkTaskStatus.Failed &&
+            t.RequiredRole == AgentRole.Reviewer &&
+            WorkerResultBlockers.TryFindNeedsWorkVerdict(t.LastVerification, out _));
+        if (reviewerTask is null ||
+            !WorkerResultBlockers.TryFindNeedsWorkVerdict(reviewerTask.LastVerification, out var blocker))
+        {
+            return false;
+        }
+
+        var reviewArtifact = FormatReviewerOutputArtifact(reviewerTask);
+        if (IsOperatorOwnedReviewBlocker(blocker))
+        {
+            decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {reviewerTask.Id.Value[..8]}. " +
+                $"Findings: {TrimForConductorMessage(blocker)}. Full reviewer output: {reviewArtifact}");
+            return true;
+        }
+
+        var targetRole = InferReviewRetryTargetRole(blocker);
+        var targetTask = goal.Tasks
+            .TakeWhile(t => t.Id != reviewerTask.Id)
+            .LastOrDefault(t => t.RequiredRole == targetRole);
+        if (targetTask is null && targetRole != AgentRole.Developer)
+        {
+            targetRole = AgentRole.Developer;
+            targetTask = goal.Tasks
+                .TakeWhile(t => t.Id != reviewerTask.Id)
+                .LastOrDefault(t => t.RequiredRole == AgentRole.Developer);
+        }
+
+        if (targetTask is null)
+        {
+            decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+                $"Reviewer needs-work blocker could not be routed to an upstream {targetRole} task; operator action required. " +
+                $"Findings: {TrimForConductorMessage(blocker)}. Full reviewer output: {reviewArtifact}");
+            return true;
+        }
+
+        var round = CountPriorAutoReviewRetries(goal, targetTask.Id) + 1;
+        if (round >= policy.ReviewAutoRetryStopRound)
+        {
+            decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+                $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
+                $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(blocker)}. " +
+                $"Full reviewer output: {reviewArtifact}");
+            return true;
+        }
+
+        var message =
+            $"auto-review-retry round {round}: Reviewer task {reviewerTask.Id.Value[..8]} verdict=needs-work; " +
+            $"retry upstream {targetRole} task with findings: {TrimForConductorMessage(blocker)}. " +
+            $"Full reviewer output: {reviewArtifact}";
+        var warning = round >= policy.ReviewAutoRetryWarningRound
+            ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
+                $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
+            : null;
+        decision = ReviewNeedsWorkAutoRetryDecision.Retry(targetTask, message, warning);
+        return true;
+    }
+
+    private static AgentRole InferReviewRetryTargetRole(string blocker)
+    {
+        var text = blocker.ToLowerInvariant();
+        return text.Contains("tester", StringComparison.Ordinal) ||
+            text.Contains("test-execution", StringComparison.Ordinal) ||
+            text.Contains("test execution", StringComparison.Ordinal) ||
+            text.Contains("test receipt", StringComparison.Ordinal) ||
+            text.Contains("verification command", StringComparison.Ordinal)
+            ? AgentRole.Tester
+            : AgentRole.Developer;
+    }
+
+    private static bool IsOperatorOwnedReviewBlocker(string blocker)
+    {
+        var text = blocker.ToLowerInvariant();
+        return text.Contains("operator-owned", StringComparison.Ordinal) ||
+            text.Contains("operator owned", StringComparison.Ordinal) ||
+            text.Contains("operator receipt", StringComparison.Ordinal) ||
+            text.Contains("operator receipts", StringComparison.Ordinal) ||
+            text.Contains("measurement mandate", StringComparison.Ordinal) ||
+            text.Contains("measurement mandates", StringComparison.Ordinal) ||
+            text.Contains("operator evidence", StringComparison.Ordinal) ||
+            text.Contains("human_input", StringComparison.Ordinal) ||
+            text.Contains("human input", StringComparison.Ordinal);
+    }
+
+    private static int CountPriorAutoReviewRetries(Goal goal, TaskId taskId) =>
+        goal.Timeline.Count(evt =>
+            evt.TaskId == taskId &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+
+    private static string FormatReviewerOutputArtifact(TaskSpec reviewerTask)
+    {
+        var verification = reviewerTask.LastVerification;
+        if (!string.IsNullOrWhiteSpace(verification?.StandardOutputPath))
+        {
+            return verification.StandardOutputPath!;
+        }
+
+        return $"reviewer task {reviewerTask.Id.Value[..8]} verification output";
+    }
+
+    private static string TrimForConductorMessage(string value)
+    {
+        var normalized = Regex.Replace(value.Trim(), @"\s+", " ");
+        const int maxLength = 800;
+        return normalized.Length <= maxLength
+            ? normalized
+            : normalized[..maxLength] + "...";
+    }
+
+    private sealed record ReviewNeedsWorkAutoRetryDecision(
+        bool ShouldEscalate,
+        TaskSpec? TargetTask,
+        string Message,
+        string? WarningMessage)
+    {
+        public static ReviewNeedsWorkAutoRetryDecision None { get; } = new(false, null, string.Empty, null);
+
+        public static ReviewNeedsWorkAutoRetryDecision Retry(TaskSpec targetTask, string message, string? warningMessage) =>
+            new(false, targetTask, message, warningMessage);
+
+        public static ReviewNeedsWorkAutoRetryDecision Escalate(string message) =>
+            new(true, null, message, null);
+    }
 
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
         Goal goal,

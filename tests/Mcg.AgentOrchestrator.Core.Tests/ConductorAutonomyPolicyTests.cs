@@ -214,6 +214,8 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Equal(original.EmptyOutputRetryInitialDelaySeconds, restored.EmptyOutputRetryInitialDelaySeconds);
         Assert.Equal(original.EmptyOutputRetryBackoffMultiplier, restored.EmptyOutputRetryBackoffMultiplier);
         Assert.Equal(original.EmptyOutputRetryMaxDelaySeconds, restored.EmptyOutputRetryMaxDelaySeconds);
+        Assert.Equal(original.ReviewAutoRetryWarningRound, restored.ReviewAutoRetryWarningRound);
+        Assert.Equal(original.ReviewAutoRetryStopRound, restored.ReviewAutoRetryStopRound);
         Assert.Equal(original.AutoPromoteRiskThreshold, restored.AutoPromoteRiskThreshold);
         foreach (var state in Enum.GetValues<GoalLifecycleState>())
         {
