@@ -561,6 +561,132 @@ public sealed class DispatchExecutionTests
     Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.VerificationHistory.Single().ProviderFailureKind);
     Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
 }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_provider_connectivity_failure")]
+    public void RecordDispatchExecutionResultReopensTaskOnProviderConnectivityFailure()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry dispatch after provider connectivity");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec attempt 1",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification("codex exec attempt 1", clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Null(task.LastVerification);
+    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+    Assert.Equal(clock.UtcNow, task.LatestRetryAt);
+    Assert.Equal(clock.UtcNow.AddMinutes(1), task.SubscriptionRetryAfter);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("provider connectivity failure", StringComparison.Ordinal) &&
+        evt.Message.Contains("attempt 1/3", StringComparison.Ordinal));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+
+    clock.Advance(TimeSpan.FromMinutes(1));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec attempt 2",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    var stdout = WorkerResultStdout("src/Foo.cs", "pass - focused dispatch recovery policy tests", "none");
+    kernel.RecordDispatchBaseCommit(goal.Id, task.Id, "29edee5c");
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "ce5e35c1");
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec attempt 2",
+        "C:\\repo",
+        0,
+        stdout,
+        string.Empty,
+        clock.UtcNow,
+        WorkerResultPresent: true,
+        HasCommittedChanges: true,
+        HeartbeatStandardOutputBytes: stdout.Length));
+
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    Assert.Equal(2, task.VerificationHistory.Count);
+    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_escalates_provider_connectivity_after_retry_cap")]
+    public void RecordDispatchExecutionResultEscalatesProviderConnectivityAfterRetryCap()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Cap provider connectivity retries");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    for (var attempt = 1; attempt <= 4; attempt++)
+    {
+        var command = $"codex exec attempt {attempt}";
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            command,
+            "C:\\repo",
+            clock.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification(command, clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(attempt));
+    }
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Equal(4, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("attempt 3/3", StringComparison.Ordinal));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("provider connectivity failed after 3 automatic retry attempt", StringComparison.Ordinal) &&
+        evt.Message.Contains("stream disconnected", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_reopen_task_on_provider_authentication_failure")]
+    public void RecordDispatchExecutionResultDoesNotReopenTaskOnProviderAuthenticationFailure()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Escalate provider auth failure");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "codex exec",
+        "C:\\repo",
+        1,
+        string.Empty,
+        "Your access token could not be refreshed. Run codex login.",
+        clock.UtcNow));
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.True(DispatchFailureClassifier.HasRecoverableProviderAuthenticationFailure(task));
+    Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("verdict=ProviderAuthentication", StringComparison.Ordinal));
+}
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_exit_zero_committed_work_records_WORKER_RESULT_blocker_as_advisory")]
     public void RecordDispatchExecutionResultExitZeroCommittedWorkRecordsWorkerResultBlockerAsAdvisory()
 {
@@ -933,6 +1059,7 @@ public sealed class DispatchExecutionTests
             Assert.True(task.LastVerification is null);
             Assert.True(task.SubscriptionRetryAfter is not null);
             kernel.RetryTask(goal.Id, task.Id, $"Manual retry after attempt {attempt}.");
+            clock.Advance();
         }
     }
 
@@ -968,6 +1095,7 @@ public sealed class DispatchExecutionTests
     Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
 
     kernel.RetryTask(goal.Id, task.Id, "Manual retry after attempt 1.");
+    clock.Advance();
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
         "codex-cli",
         "codex exec attempt 2",
@@ -1054,6 +1182,18 @@ private static TaskVerificationRecord SubscriptionLimitVerification(string comma
         string.Empty,
         "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
         completedAt);
+}
+
+private static TaskVerificationRecord ProviderConnectivityVerification(string command, DateTimeOffset completedAt)
+{
+    return new TaskVerificationRecord(
+        command,
+        "C:\\repo",
+        1,
+        string.Empty,
+        "Falling back from WebSockets to HTTPS transport failed. stream disconnected",
+        completedAt,
+        ProviderFailureKind: ProviderFailureKind.Connectivity);
 }
 
 private static string WorkerResultStdout(string files, string tests, string blockers)
@@ -1162,6 +1302,7 @@ private static string WorkerResultStdout(string files, string tests, string bloc
         string.Empty,
         clock.UtcNow));
     kernel.RetryTask(goal.Id, task.Id, "retry empty stdout");
+    clock.Advance();
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
 
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(

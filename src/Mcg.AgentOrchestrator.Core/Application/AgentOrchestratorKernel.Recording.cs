@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    private const int ProviderConnectivityRetryLimit = 3;
+
     public void RecordTaskVerification(GoalId goalId, TaskId taskId, TaskVerificationRecord verification)
     {
         var goal = GetGoal(goalId);
@@ -88,8 +90,8 @@ public sealed partial class AgentOrchestratorKernel
             Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
         }
 
-        var isRecoverableSubscriptionLimit = outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit;
-        if (!verification.Succeeded && isRecoverableSubscriptionLimit)
+        if (!verification.Succeeded &&
+            outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit)
         {
             if (DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
             {
@@ -104,6 +106,33 @@ public sealed partial class AgentOrchestratorKernel
                 : $"Dispatch hit a recoverable subscription usage limit; task is ready to retry later: {task.LastDispatch.Command}";
             Append(goal, taskId, ProgressKind.TaskRetried, message);
             RefreshGoalStatus(goal);
+            return;
+        }
+
+        if (!verification.Succeeded &&
+            outcome.Kind == DispatchOutcomeKind.ProviderConnectivity)
+        {
+            var connectivityFailures = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
+            if (connectivityFailures <= ProviderConnectivityRetryLimit)
+            {
+                task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
+                task.RecordRetry(_clock.UtcNow);
+                task.ClearLatestVerification();
+                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                Append(
+                    goal,
+                    taskId,
+                    ProgressKind.TaskRetried,
+                    $"Dispatch hit provider connectivity failure; task is ready to retry after bounded backoff (attempt {connectivityFailures}/{ProviderConnectivityRetryLimit}): {task.LastDispatch.Command}");
+                RefreshGoalStatus(goal);
+                return;
+            }
+
+            ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Dispatch provider connectivity failed after {ProviderConnectivityRetryLimit} automatic retry attempt(s); evidence: {outcome.EvidenceSummary}: {task.LastDispatch.Command}");
             return;
         }
 
@@ -148,6 +177,11 @@ public sealed partial class AgentOrchestratorKernel
                      task,
                      verification)
                 : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
+    }
+
+    private static TimeSpan BuildProviderConnectivityBackoff(int attempt)
+    {
+        return TimeSpan.FromMinutes(Math.Clamp(attempt, 1, ProviderConnectivityRetryLimit));
     }
 
     private bool TryFailWorkerResultBlocker(
