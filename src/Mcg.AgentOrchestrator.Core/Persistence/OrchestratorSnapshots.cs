@@ -13,26 +13,13 @@ public sealed record GoalSnapshot(
     IReadOnlyList<string>? DependsOn = null,
     string? SourceBacklogItemId = null,
     RefinedSpecSnapshot? RefinedSpec = null,
-    AcceptanceFailureSnapshot? LatestAcceptanceFailure = null,
-    ExecutedTestReceiptSnapshot? LatestExecutedTestReceipt = null);
+    AcceptanceFailureSnapshot? LatestAcceptanceFailure = null);
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,
     IReadOnlyList<string> FailedChecks,
     string? BranchHeadSha = null,
     string? MainHeadSha = null);
-
-public sealed record ExecutedTestReceiptSnapshot(
-    DateTimeOffset OccurredAt,
-    string RunContext,
-    IReadOnlyList<string> ChangedFiles,
-    IReadOnlyList<string> CoveredChecks,
-    int PassedCount,
-    int FailedCount,
-    string? BranchHeadSha = null,
-    string? MainHeadSha = null,
-    IReadOnlyList<string>? FailedChecks = null,
-    int TotalCount = 0);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,

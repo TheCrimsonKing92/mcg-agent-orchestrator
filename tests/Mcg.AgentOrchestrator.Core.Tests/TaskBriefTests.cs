@@ -963,33 +963,6 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains("Read digest.md first", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_executed_test_evidence_includes_goal_receipt")]
-    public void BuildTaskBriefReviewerExecutedTestEvidenceIncludesGoalReceipt()
-{
-    var kernel = new AgentOrchestratorKernel(new FakeClock());
-    var developer = new TaskSpec(TaskId.New(), "Implement the change.", AgentRole.Developer);
-    var reviewer = new TaskSpec(TaskId.New(), "Review the receipt.", AgentRole.Reviewer);
-    var goal = kernel.CreateGoal("Expose goal executed test receipt", [developer, reviewer]);
-    kernel.RecordExecutedTestReceipt(
-        goal.Id,
-        "slot-path focused tests",
-        ["tests/FooTests.cs"],
-        ["FooTests"],
-        passedCount: 12,
-        failedCount: 0,
-        branchHeadSha: "abc123",
-        mainHeadSha: "main123",
-        totalCount: 12);
-
-    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
-
-    Assert.Contains("## Executed Test Evidence", brief, StringComparison.Ordinal);
-    Assert.Contains("provenance: goal executed-test receipt", brief, StringComparison.Ordinal);
-    Assert.Contains("counts: passed 12, failed 0, total 12", brief, StringComparison.Ordinal);
-    Assert.Contains("verified commit abc123", brief, StringComparison.Ordinal);
-    Assert.Contains("slot-path focused tests", brief, StringComparison.Ordinal);
-}
-
     [Xunit.Fact(DisplayName = "BuildTaskBrief_budgets_late_pipeline_file_context_without_dropping_api_evidence")]
     public void BuildTaskBriefBudgetsLatePipelineFileContextWithoutDroppingApiEvidence()
 {

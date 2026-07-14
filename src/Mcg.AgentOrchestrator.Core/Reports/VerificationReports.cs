@@ -9,8 +9,7 @@ public enum VerificationGateReason
     OutputTokenLimit,
     ReviewerWorkerResultBlocker,
     DirtyUsefulRecovery,
-    DirtyUnverifiedRecovery,
-    MissingExecutedTestReceipt
+    DirtyUnverifiedRecovery
 }
 
 public sealed record GoalVerificationGate(
@@ -18,9 +17,7 @@ public sealed record GoalVerificationGate(
     string Objective,
     GoalStatus Status,
     bool IsSatisfied,
-    IReadOnlyList<TaskVerificationGate> Tasks,
-    VerificationGateReason Reason = VerificationGateReason.Passed,
-    string Message = "Goal verification gate passed.");
+    IReadOnlyList<TaskVerificationGate> Tasks);
 
 public sealed record TaskVerificationGate(
     TaskId TaskId,

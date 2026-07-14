@@ -513,12 +513,7 @@ public sealed partial class AgentOrchestratorKernel
             $"Reviewer is read-only; use these existing verification receipts before asking for reruns. Newest first; capped at {ReviewerExecutedTestEvidenceMaxLines} receipt line(s)."
         };
 
-        if (goal.LatestExecutedTestReceipt is { } goalReceipt)
-        {
-            lines.Add(FormatReviewerGoalExecutedTestReceipt(goalReceipt));
-        }
-
-        if (receipts.Count == 0 && goal.LatestExecutedTestReceipt is null)
+        if (receipts.Count == 0)
         {
             lines.Add("No executed test evidence exists for this goal yet.");
             lines.Add(string.Empty);
@@ -571,18 +566,6 @@ public sealed partial class AgentOrchestratorKernel
         var paths = DescribeVerificationArtifactPaths(verification);
         var evidence = DescribeVerificationOutputEvidence(verification);
         return $"- {verification.CompletedAt:u}; provenance: Task {TaskDisplayNumber.Resolve(goal, task.Id)} {task.RequiredRole} verification; result: {status} (exit {verification.ExitCode}); command/run context: {PromptContextFormatter.TrimPromptBlock(verification.Command)} @ {PromptContextFormatter.TrimPromptBlock(verification.WorkingDirectory)}; freshness: {freshness}{paths}{evidence}";
-    }
-
-    private static string FormatReviewerGoalExecutedTestReceipt(ExecutedTestReceiptSummary receipt)
-    {
-        var status = receipt.Passed ? "pass" : "fail";
-        var commit = !string.IsNullOrWhiteSpace(receipt.BranchHeadSha)
-            ? $"verified commit {receipt.BranchHeadSha}"
-            : "unknown commit";
-        var failed = receipt.FailedChecks.Count == 0
-            ? string.Empty
-            : $"; failed checks: {string.Join(", ", receipt.FailedChecks.Select(PromptContextFormatter.TrimPromptBlock))}";
-        return $"- {receipt.OccurredAt:u}; provenance: goal executed-test receipt; result: {status}; counts: passed {receipt.PassedCount}, failed {receipt.FailedCount}, total {receipt.TotalCount}; run context: {PromptContextFormatter.TrimPromptBlock(receipt.RunContext)}; freshness: {commit}{failed}";
     }
 
     private static string FormatReviewerWorkerResultTestsReceipt(
