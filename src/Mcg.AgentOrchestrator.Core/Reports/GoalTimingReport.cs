@@ -33,7 +33,51 @@ public sealed record GoalTimingRoundReport(
     DateTimeOffset? CompletedAt,
     TimeSpan SandboxPrepDuration,
     TimeSpan WorkerRunDuration,
-    TimeSpan HandoffWait);
+    TimeSpan HandoffWait,
+    DispatchOutcomeKind? OutcomeVerdict,
+    DispatchRoundValueClass ValueClass,
+    string ValueEvidence,
+    string WasteSource);
+
+public enum DispatchRoundValueClass
+{
+    Productive,
+    Corrective,
+    WastedEnvironmental,
+    WastedFalseFail,
+    Superseded
+}
+
+public enum GoalTerminalOutcome
+{
+    Active,
+    Landed,
+    Abandoned,
+    Parked
+}
+
+public sealed record DispatchValueReportSnapshot(
+    DateTimeOffset? Since,
+    int GoalCount,
+    int DispatchRoundCount,
+    IReadOnlyList<DispatchValueGoalReport> Goals,
+    IReadOnlyList<DispatchValueWasteSource> TopWasteSources);
+
+public sealed record DispatchValueGoalReport(
+    GoalId GoalId,
+    string Objective,
+    GoalTerminalOutcome TerminalOutcome,
+    int DispatchRoundCount,
+    int ProductiveCount,
+    int CorrectiveCount,
+    int WastedEnvironmentalCount,
+    int WastedFalseFailCount,
+    int SupersededCount,
+    IReadOnlyList<GoalTimingRoundReport> Rounds);
+
+public sealed record DispatchValueWasteSource(
+    string Source,
+    int Count);
 
 public static class GoalTimingReport
 {
@@ -94,6 +138,43 @@ public static class GoalTimingReport
             taskReports);
     }
 
+    public static DispatchValueReportSnapshot BuildDispatchValueReport(
+        IEnumerable<Goal> goals,
+        DateTimeOffset? since = null)
+    {
+        var reports = goals
+            .Select(goal => new { Goal = goal, Timing = Build(goal) })
+            .Select(item => BuildDispatchValueGoalReport(
+                item.Goal,
+                item.Timing,
+                since is null
+                    ? item.Timing.Tasks.SelectMany(task => task.Rounds).ToList()
+                    : item.Timing.Tasks
+                        .SelectMany(task => task.Rounds)
+                        .Where(round => round.DispatchAt >= since.Value)
+                        .ToList()))
+            .Where(report => report.DispatchRoundCount > 0)
+            .OrderBy(report => report.Rounds.Min(round => round.DispatchAt))
+            .ToList();
+
+        var topWasteSources = reports
+            .SelectMany(report => report.Rounds)
+            .Where(round => round.ValueClass is DispatchRoundValueClass.WastedEnvironmental or DispatchRoundValueClass.WastedFalseFail)
+            .GroupBy(round => string.IsNullOrWhiteSpace(round.WasteSource) ? round.ValueClass.ToString() : round.WasteSource)
+            .Select(group => new DispatchValueWasteSource(group.Key, group.Count()))
+            .OrderByDescending(source => source.Count)
+            .ThenBy(source => source.Source, StringComparer.Ordinal)
+            .Take(8)
+            .ToList();
+
+        return new DispatchValueReportSnapshot(
+            since,
+            reports.Count,
+            reports.Sum(report => report.DispatchRoundCount),
+            reports,
+            topWasteSources);
+    }
+
     private static IReadOnlyList<TaskRounds> BuildRounds(Goal goal, IReadOnlyList<ProgressEvent> dispatchEvents)
     {
         var rounds = new List<(TaskId TaskId, GoalTimingRoundReport Round)>();
@@ -116,7 +197,7 @@ public static class GoalTimingReport
             {
                 var dispatch = taskDispatches[index];
                 var nextTaskDispatch = index + 1 < taskDispatches.Count ? taskDispatches[index + 1].OccurredAt : (DateTimeOffset?)null;
-                var verification = FindRoundVerification(verifications, usedVerifications, dispatch.OccurredAt, nextTaskDispatch);
+                var verification = FindRoundVerification(verifications, usedVerifications, dispatch, nextTaskDispatch);
                 if (verification is not null)
                 {
                     usedVerifications.Add(verification);
@@ -128,6 +209,10 @@ public static class GoalTimingReport
                         (nextTaskDispatch is null || evt.OccurredAt < nextTaskDispatch.Value))
                     ?.OccurredAt;
                 var completedAt = ResolveCompletedAt(task, verification, processStartedAt);
+                var laterSuccess = verifications.Any(candidate =>
+                    candidate.CompletedAt > (verification?.CompletedAt ?? dispatch.OccurredAt) &&
+                    DispatchFailureClassifier.Classify(task, candidate).Kind == DispatchOutcomeKind.VerifiedSuccess);
+                var value = ClassifyValue(goal, task, verification, laterSuccess);
                 rounds.Add((task.Id, new GoalTimingRoundReport(
                     task.Id,
                     index + 1,
@@ -136,7 +221,11 @@ public static class GoalTimingReport
                     completedAt,
                     ParseSandboxPrepDuration(verification),
                     PositiveDuration(completedAt, processStartedAt),
-                    TimeSpan.Zero)));
+                    TimeSpan.Zero,
+                    value.OutcomeVerdict,
+                    value.ValueClass,
+                    value.Evidence,
+                    value.WasteSource)));
             }
         }
 
@@ -162,13 +251,33 @@ public static class GoalTimingReport
     private static TaskVerificationRecord? FindRoundVerification(
         IReadOnlyList<TaskVerificationRecord> verifications,
         HashSet<TaskVerificationRecord> usedVerifications,
-        DateTimeOffset dispatchAt,
+        ProgressEvent dispatch,
         DateTimeOffset? nextDispatchAt)
     {
-        return verifications.FirstOrDefault(verification =>
+        var candidates = verifications.Where(verification =>
             !usedVerifications.Contains(verification) &&
-            verification.CompletedAt >= dispatchAt &&
-            (nextDispatchAt is null || verification.CompletedAt < nextDispatchAt.Value));
+            verification.CompletedAt >= dispatch.OccurredAt &&
+            (nextDispatchAt is null || verification.CompletedAt < nextDispatchAt.Value))
+            .ToList();
+
+        var dispatchCommand = ExtractDispatchCommand(dispatch.Message);
+        if (!string.IsNullOrWhiteSpace(dispatchCommand))
+        {
+            var commandMatch = candidates.FirstOrDefault(verification =>
+                string.Equals(verification.Command, dispatchCommand, StringComparison.Ordinal));
+            if (commandMatch is not null)
+            {
+                return commandMatch;
+            }
+        }
+
+        return candidates.FirstOrDefault();
+    }
+
+    private static string? ExtractDispatchCommand(string message)
+    {
+        var separator = message.IndexOf(": ", StringComparison.Ordinal);
+        return separator < 0 ? null : message[(separator + 2)..];
     }
 
     private static DateTimeOffset? ResolveCompletedAt(
@@ -304,6 +413,92 @@ public static class GoalTimingReport
             .FirstOrDefault();
     }
 
+    private static GoalTerminalOutcome ResolveTerminalOutcome(Goal goal) =>
+        goal.Status switch
+        {
+            GoalStatus.Completed or GoalStatus.Verified => GoalTerminalOutcome.Landed,
+            GoalStatus.Parked => GoalTerminalOutcome.Parked,
+            GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded => GoalTerminalOutcome.Abandoned,
+            _ => GoalTerminalOutcome.Active
+        };
+
+    private static DispatchValueGoalReport BuildDispatchValueGoalReport(
+        Goal goal,
+        GoalTimingReportSnapshot timing,
+        IReadOnlyList<GoalTimingRoundReport> rounds)
+    {
+        return new DispatchValueGoalReport(
+            timing.GoalId,
+            timing.Objective,
+            ResolveTerminalOutcome(goal),
+            rounds.Count,
+            rounds.Count(round => round.ValueClass == DispatchRoundValueClass.Productive),
+            rounds.Count(round => round.ValueClass == DispatchRoundValueClass.Corrective),
+            rounds.Count(round => round.ValueClass == DispatchRoundValueClass.WastedEnvironmental),
+            rounds.Count(round => round.ValueClass == DispatchRoundValueClass.WastedFalseFail),
+            rounds.Count(round => round.ValueClass == DispatchRoundValueClass.Superseded),
+            rounds.OrderBy(round => round.DispatchAt).ToList());
+    }
+
+    private static DispatchValueClassification ClassifyValue(
+        Goal goal,
+        TaskSpec task,
+        TaskVerificationRecord? verification,
+        bool laterSuccess)
+    {
+        var terminal = ResolveTerminalOutcome(goal);
+        if (verification is null)
+        {
+            return terminal == GoalTerminalOutcome.Abandoned
+                ? new(null, DispatchRoundValueClass.Superseded, $"goal.Status={goal.Status}; no verification paired to dispatch round", "superseded")
+                : new(null, DispatchRoundValueClass.Corrective, "no verification paired to dispatch round; pending/active work remains auditable from dispatch timeline", "unpaired-dispatch");
+        }
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        var receipt = string.IsNullOrWhiteSpace(outcome.ClassifierReceipt)
+            ? $"classifier={outcome.Kind}"
+            : outcome.ClassifierReceipt;
+        var evidence = $"verification.ExitCode={verification.ExitCode}; verification.CompletedAt={verification.CompletedAt:u}; {receipt}; evidence={outcome.EvidenceSummary}";
+
+        if (IsFalseFailBridge(verification, laterSuccess, terminal))
+        {
+            return new(outcome.Kind, DispatchRoundValueClass.WastedFalseFail, evidence, "false-file-change-guard");
+        }
+
+        if (IsEnvironmentalWaste(outcome.Kind))
+        {
+            return new(outcome.Kind, DispatchRoundValueClass.WastedEnvironmental, evidence, outcome.Kind.ToString());
+        }
+
+        if (terminal == GoalTerminalOutcome.Abandoned)
+        {
+            return new(outcome.Kind, DispatchRoundValueClass.Superseded, $"{evidence}; goal.Status={goal.Status}", "abandoned-or-superseded-goal");
+        }
+
+        if (outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
+        {
+            return new(outcome.Kind, DispatchRoundValueClass.Productive, evidence, string.Empty);
+        }
+
+        return new(outcome.Kind, DispatchRoundValueClass.Corrective, $"{evidence}; laterSuccess={laterSuccess}; goal.Status={goal.Status}", string.Empty);
+    }
+
+    private static bool IsEnvironmentalWaste(DispatchOutcomeKind kind) =>
+        kind is DispatchOutcomeKind.ProviderConnectivity
+            or DispatchOutcomeKind.ProviderAuthentication
+            or DispatchOutcomeKind.ProviderModelRejection
+            or DispatchOutcomeKind.PreflightFailure
+            or DispatchOutcomeKind.EmptyOutputFlake
+            or DispatchOutcomeKind.RecoverableSubscriptionLimit;
+
+    private static bool IsFalseFailBridge(
+        TaskVerificationRecord verification,
+        bool laterSuccess,
+        GoalTerminalOutcome terminal) =>
+        (verification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.OrdinalIgnoreCase) ||
+         verification.StandardError.Contains("did not produce relevant file-change evidence", StringComparison.OrdinalIgnoreCase)) &&
+        (laterSuccess || terminal == GoalTerminalOutcome.Landed);
+
     private static IEnumerable<string> SplitLines(string text) =>
         text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -317,6 +512,12 @@ public static class GoalTimingReport
         var duration = end.Value - start.Value;
         return duration > TimeSpan.Zero ? duration : TimeSpan.Zero;
     }
+
+    private sealed record DispatchValueClassification(
+        DispatchOutcomeKind? OutcomeVerdict,
+        DispatchRoundValueClass ValueClass,
+        string Evidence,
+        string WasteSource);
 
     private sealed record TaskRounds(TaskId TaskId, IReadOnlyList<GoalTimingRoundReport> Rounds);
 }

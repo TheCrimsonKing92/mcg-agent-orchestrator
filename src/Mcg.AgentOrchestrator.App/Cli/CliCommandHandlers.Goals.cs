@@ -1453,6 +1453,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
     Console.WriteLine($"  gates {prefix}");
     Console.WriteLine($"  subscription-plan {prefix}");
     Console.WriteLine($"  model-outcomes");
+    Console.WriteLine($"  dispatch-value [--since <yyyy-mm-dd>]");
     Console.WriteLine($"  loop-health");
     Console.WriteLine($"  failure-triage {prefix}");
     Console.WriteLine($"  goal-recovery {prefix}");
