@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 
@@ -17,6 +19,7 @@ public static class DispatchProcessHost
     public const string SubcommandName = "__dispatch-run";
     public const string StartGatePathVariable = "MCG_DISPATCH_HOST_START_GATE";
     internal const string LowIntegritySetupArtifactName = "low-integrity-setup.json";
+    internal const string WorkerCaBundleFileName = "worker-ca-bundle.pem";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
     private static readonly IcaclsIntegrityLabeler IntegrityLabeler = new();
 
@@ -142,6 +145,7 @@ public static class DispatchProcessHost
             WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
 
             SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
+            SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath);
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
             // the worktree must read as clean after the orchestrator commits the worker's real edits.
@@ -190,6 +194,106 @@ public static class DispatchProcessHost
         if (provider == WorkerSandboxProvider.Claude)
         {
             SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+        }
+    }
+
+    internal static void SeedWorkerCaBundle(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath = null)
+    {
+        var bundlePath = Path.Combine(sandboxRoot, WorkerCaBundleFileName);
+        try
+        {
+            Directory.CreateDirectory(sandboxRoot);
+            if (!HasNonEmptyFile(bundlePath))
+            {
+                var existingBundle = startInfo.Environment.TryGetValue("SSL_CERT_FILE", out var existingPath)
+                    ? existingPath
+                    : Environment.GetEnvironmentVariable("SSL_CERT_FILE");
+                if (!string.IsNullOrWhiteSpace(existingBundle) && File.Exists(existingBundle))
+                {
+                    File.Copy(existingBundle, bundlePath, overwrite: true);
+                }
+                else
+                {
+                    File.WriteAllText(bundlePath, ExportWindowsRootCertificateBundle());
+                }
+            }
+
+            startInfo.Environment["SSL_CERT_FILE"] = bundlePath;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException or InvalidOperationException)
+        {
+            if (!string.IsNullOrWhiteSpace(stderrPath))
+            {
+                AppendDispatchStderrDiagnostic(
+                    stderrPath,
+                    $"Worker sandbox diagnostic: failed to provision SSL_CERT_FILE bundle: {ex.Message}");
+            }
+        }
+    }
+
+    private static bool HasNonEmptyFile(string path)
+    {
+        try
+        {
+            return new FileInfo(path) is { Exists: true, Length: > 0 };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static string BuildPemCertificateBundle(IEnumerable<X509Certificate2> certificates)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var builder = new StringBuilder();
+        foreach (var certificate in certificates)
+        {
+            var hash = Convert.ToHexString(SHA256.HashData(certificate.RawData));
+            if (!seen.Add(hash))
+            {
+                continue;
+            }
+
+            builder.AppendLine(certificate.ExportCertificatePem().TrimEnd());
+        }
+
+        if (builder.Length == 0)
+        {
+            throw new InvalidOperationException("No exportable root CA certificates were available.");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string ExportWindowsRootCertificateBundle()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new InvalidOperationException("Worker CA bundle export is only supported by this sandbox path on Windows.");
+        }
+
+        var certificates = new List<X509Certificate2>();
+        AddCertificates(certificates, StoreLocation.LocalMachine, StoreName.Root);
+        AddCertificates(certificates, StoreLocation.LocalMachine, StoreName.CertificateAuthority);
+        AddCertificates(certificates, StoreLocation.CurrentUser, StoreName.Root);
+        AddCertificates(certificates, StoreLocation.CurrentUser, StoreName.CertificateAuthority);
+        return BuildPemCertificateBundle(certificates);
+    }
+
+    private static void AddCertificates(List<X509Certificate2> certificates, StoreLocation location, StoreName name)
+    {
+        try
+        {
+            using var store = new X509Store(name, location);
+            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+            certificates.AddRange(store.Certificates);
+        }
+        catch (CryptographicException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 

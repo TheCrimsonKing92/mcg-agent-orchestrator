@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -475,6 +476,9 @@ public sealed class DispatchProcessHostTests
             labeler.SetCalls.Clear();
 
             var startInfo = CreateSandboxStartInfo(worktree);
+            var sourceBundle = Path.Combine(root, "source-ca.pem");
+            File.WriteAllText(sourceBundle, "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n");
+            startInfo.Environment["SSL_CERT_FILE"] = sourceBundle;
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
             var phases = new List<string>();
 
@@ -493,11 +497,57 @@ public sealed class DispatchProcessHostTests
             Assert.DoesNotContain("protect-git-metadata", phases);
             Assert.True(File.Exists(Path.Combine(sandboxRoot, "drop-to-low.ps1")));
             Assert.True(File.Exists(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            Assert.Equal(Path.Combine(sandboxRoot, DispatchProcessHost.WorkerCaBundleFileName), startInfo.Environment["SSL_CERT_FILE"]);
+            Assert.Equal(File.ReadAllText(sourceBundle), File.ReadAllText(startInfo.Environment["SSL_CERT_FILE"]));
         }
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_SeedWorkerCaBundle_copies_existing_bundle_into_sandbox")]
+    public void SeedWorkerCaBundleCopiesExistingBundleIntoSandbox()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-ca-bundle-test", Guid.NewGuid().ToString("n"));
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var sourceBundle = Path.Combine(root, "source-ca.pem");
+            var sourcePem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+            File.WriteAllText(sourceBundle, sourcePem);
+            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            startInfo.Environment["SSL_CERT_FILE"] = sourceBundle;
+
+            DispatchProcessHost.SeedWorkerCaBundle(startInfo, sandboxRoot);
+
+            var expectedBundle = Path.Combine(sandboxRoot, DispatchProcessHost.WorkerCaBundleFileName);
+            Assert.Equal(expectedBundle, startInfo.Environment["SSL_CERT_FILE"]);
+            Assert.Equal(sourcePem, File.ReadAllText(expectedBundle));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_BuildPemCertificateBundle_deduplicates_certificates")]
+    public void BuildPemCertificateBundleDeduplicatesCertificates()
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            "CN=mcg-test-root",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+
+        var pem = DispatchProcessHost.BuildPemCertificateBundle([certificate, certificate]);
+
+        Assert.Equal(1, CountOccurrences(pem, "-----BEGIN CERTIFICATE-----"));
+        Assert.Contains("-----END CERTIFICATE-----", pem, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_reprep_succeeds_when_existing_worktree_is_already_labeled")]
@@ -1165,6 +1215,19 @@ public sealed class DispatchProcessHostTests
             echo {commandName} %* dispatch=%{WorkerSandboxOptions.DispatchWorkerVariable}%>>"{escapedMarker}"
             exit /b 0
             """);
+    }
+
+    private static int CountOccurrences(string value, string pattern)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = value.IndexOf(pattern, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += pattern.Length;
+        }
+
+        return count;
     }
 
     private sealed class RecordingIntegrityLabeler(IntegrityLabelState queryState, bool setResult = true) : IWorkerIntegrityLabeler
