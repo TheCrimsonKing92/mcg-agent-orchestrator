@@ -71,11 +71,38 @@ public static class DispatchProcessHost
     internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(
         ProcessStartInfo startInfo,
         DispatchRunParameters parameters,
-        WorkerSandboxPreparer preparer)
+        WorkerSandboxPreparer preparer,
+        Action<string, DateTimeOffset, TimeSpan>? recordStep = null)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
             return new WorkerSandboxPreparationResult(false, false);
+        }
+
+        T Track<T>(string phase, Func<T> action)
+        {
+            var stepStartedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                return action();
+            }
+            finally
+            {
+                recordStep?.Invoke(phase, stepStartedAt, DateTimeOffset.UtcNow - stepStartedAt);
+            }
+        }
+
+        void TrackAction(string phase, Action action)
+        {
+            var stepStartedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                recordStep?.Invoke(phase, stepStartedAt, DateTimeOffset.UtcNow - stepStartedAt);
+            }
         }
 
         // Label ONLY the worktree Low so the Low worker can edit it. The shared git common dir is
@@ -85,43 +112,59 @@ public static class DispatchProcessHost
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
-        ProtectWorkspaceBoundary(parameters.WorkingDirectory);
-        var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
-        if (preparation.RecoveryAction is { } action)
+        var preparation = Track("prepare-roots", () => preparer.Prepare(parameters.WorkingDirectory, sandboxRoot));
+        if (preparation.RecoveryAction is { } recoveryAction)
         {
-            throw new InvalidOperationException(action.Reason);
+            throw new InvalidOperationException(recoveryAction.Reason);
         }
 
-        ProtectGitMetadata(parameters.WorkingDirectory);
-
-        // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
-        // provider-specific home/config directories. The sandbox root is labeled before child paths are
-        // materialized so they inherit Low without a second recursive icacls traversal.
-        var tempDir = Path.Combine(sandboxRoot, "temp");
-        var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
-        Directory.CreateDirectory(tempDir);
-        WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
-
-        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
-
-        // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
-        // the worktree must read as clean after the orchestrator commits the worker's real edits.
-        ExcludeSandboxFromGit(parameters.WorkingDirectory);
-
-        startInfo.Environment["TEMP"] = tempDir;
-        startInfo.Environment["TMP"] = tempDir;
-        startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
-        WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, preparation);
-
-        // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
-        // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
-        var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
-        File.WriteAllText(dropScript, DropToLowScript);
-        var lastIndex = startInfo.ArgumentList.Count - 1;
-        if (lastIndex >= 0)
+        if (!preparation.PrepReceiptHit)
         {
-            startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
+            TrackAction("protect-workspace-boundary", () => ProtectWorkspaceBoundary(parameters.WorkingDirectory));
+            TrackAction("protect-git-metadata", () => ProtectGitMetadata(parameters.WorkingDirectory));
         }
+        else
+        {
+            // The receipt verifies the prepared root identity, schema, and Low inheritable integrity.
+            // Re-running the medium-integrity protection calls here can block for the full icacls
+            // timeout, which was the fixed ~120s tax observed on receipt hits.
+            recordStep?.Invoke("receipt-fast-path", DateTimeOffset.UtcNow, TimeSpan.Zero);
+        }
+
+        TrackAction("materialize-sandbox", () =>
+        {
+            // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
+            // provider-specific home/config directories. The sandbox root is labeled before child paths are
+            // materialized so they inherit Low without a second recursive icacls traversal.
+            var tempDir = Path.Combine(sandboxRoot, "temp");
+            var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
+            Directory.CreateDirectory(tempDir);
+            WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
+
+            SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
+
+            // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
+            // the worktree must read as clean after the orchestrator commits the worker's real edits.
+            if (!preparation.PrepReceiptHit)
+            {
+                ExcludeSandboxFromGit(parameters.WorkingDirectory);
+            }
+
+            startInfo.Environment["TEMP"] = tempDir;
+            startInfo.Environment["TMP"] = tempDir;
+            startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
+            WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, preparation);
+
+            // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
+            // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
+            var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
+            File.WriteAllText(dropScript, DropToLowScript);
+            var lastIndex = startInfo.ArgumentList.Count - 1;
+            if (lastIndex >= 0)
+            {
+                startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
+            }
+        });
 
         return preparation;
     }
@@ -688,7 +731,11 @@ public static void DropToLow() {
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
-            var sandboxPreparation = ApplyWorkerSandbox(startInfo, parameters);
+            var sandboxPreparation = ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                WorkerSandboxPreparer.CreateDefault(),
+                (phase, stepStartedAt, elapsed) => WriteSandboxPrepEvent(parameters, phase, stepStartedAt, elapsed));
             WriteSandboxPrepEvent(
                 parameters,
                 sandboxPreparation.PrepReceiptHit ? "receipt-hit" : "complete",
@@ -696,7 +743,9 @@ public static void DropToLow() {
                 DateTimeOffset.UtcNow - sandboxPrepStartedAt);
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
+            var preflightStartedAt = DateTimeOffset.UtcNow;
             RunLowIntegrityLaunchPreflight(startInfo, parameters);
+            WriteSandboxPrepEvent(parameters, "launch-preflight", preflightStartedAt, DateTimeOffset.UtcNow - preflightStartedAt);
 
             WriteHeartbeat("starting");
             RequireStartGate();

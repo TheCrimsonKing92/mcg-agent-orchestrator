@@ -455,6 +455,51 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_receipt_hit_skips_protection_subphases")]
+    public void ApplyWorkerSandboxReceiptHitSkipsProtectionSubphases()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-receipt-hit-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+        try
+        {
+            var preparer = new WorkerSandboxPreparer(labeler);
+            var first = preparer.Prepare(worktree, sandboxRoot);
+            Assert.False(first.PrepReceiptHit);
+            labeler.SetCalls.Clear();
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown);
+            var phases = new List<string>();
+
+            var second = DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                preparer,
+                (phase, _, _) => phases.Add(phase));
+
+            Assert.True(second.PrepReceiptHit);
+            Assert.Empty(labeler.SetCalls);
+            Assert.Contains("prepare-roots", phases);
+            Assert.Contains("receipt-fast-path", phases);
+            Assert.Contains("materialize-sandbox", phases);
+            Assert.DoesNotContain("protect-workspace-boundary", phases);
+            Assert.DoesNotContain("protect-git-metadata", phases);
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, "drop-to-low.ps1")));
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_reprep_succeeds_when_existing_worktree_is_already_labeled")]
     public void WorkerSandboxPreparerReprepSucceedsWhenExistingWorktreeIsAlreadyLabeled()
     {
