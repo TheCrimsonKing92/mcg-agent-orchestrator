@@ -113,6 +113,7 @@ public sealed class VerificationAndInputWorklistTests
     kernel.RecordTaskVerification(goal.Id, needsInput.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
     kernel.RecordTaskVerification(goal.Id, missing.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
     kernel.RecordTaskVerification(goal.Id, failed.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var accepted = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
@@ -167,6 +168,7 @@ public sealed class VerificationAndInputWorklistTests
         stdout,
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
@@ -220,6 +222,7 @@ public sealed class VerificationAndInputWorklistTests
         stdout,
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
@@ -258,7 +261,7 @@ public sealed class VerificationAndInputWorklistTests
         "**WORKER_RESULT**:",
         "**files**: none",
         "**commands**: none",
-        "**tests**: clean retry",
+        "**tests**: pass - clean retry",
         "**commit**: none",
         "**blockers**: none",
         "**model_fit**: OpenAI/gpt-5.5 - adequate - review",
@@ -274,6 +277,7 @@ public sealed class VerificationAndInputWorklistTests
         stdout,
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
@@ -302,6 +306,7 @@ public sealed class VerificationAndInputWorklistTests
         "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: pass\ncommit: none\nblockers: none - no acceptance blockers\nEND_WORKER_RESULT",
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
@@ -328,6 +333,7 @@ public sealed class VerificationAndInputWorklistTests
         "WORKER_RESULT:\nfiles: src/Foo.cs\ncommands: dotnet test\ntests: pass\ncommit: abc123\nblockers: API rate limit hit; retry later\nEND_WORKER_RESULT",
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
@@ -479,11 +485,41 @@ public sealed class VerificationAndInputWorklistTests
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
 
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
 }
+
+    [Xunit.Fact(DisplayName = "BuildVerificationGate_rejects_passing_executed_test_receipt_from_previous_commit")]
+    public void BuildVerificationGateRejectsPassingExecutedTestReceiptFromPreviousCommit()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reject stale receipt", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "current-commit");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "previous-commit");
+
+    var gate = kernel.BuildVerificationGate(goal.Id);
+
+    Assert.False(gate.IsSatisfied);
+    Assert.Equal(VerificationGateReason.MissingExecutedTestReceipt, gate.Reason);
+    Assert.Equal("Goal is missing an executed test receipt covering the changed test surface.", gate.Message);
+}
+
     [Xunit.Fact(DisplayName = "Answered_human_input_keeps_verified_task_completed")]
     public void AnsweredHumanInputKeepsVerifiedTaskCompleted()
 {
@@ -499,6 +535,7 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
 
     kernel.SubmitHumanInput(request.Id, "Use main.");
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
@@ -582,5 +619,15 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
 }
-}
 
+private static void RecordPassingExecutedTestReceipt(AgentOrchestratorKernel kernel, Goal goal)
+{
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0);
+}
+}

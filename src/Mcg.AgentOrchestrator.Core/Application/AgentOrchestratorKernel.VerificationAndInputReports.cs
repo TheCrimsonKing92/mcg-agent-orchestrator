@@ -6,18 +6,19 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var gates = goal.Tasks.Select(BuildTaskVerificationGate).ToList();
+        var hasPassingExecutedTestReceipt = HasPassingExecutedTestReceipt(goal);
 
         return new GoalVerificationGate(
             goal.Id,
             goal.Objective,
             goal.Status,
             gates.All(gate => gate.GateStatus == VerificationGateStatus.Passed) &&
-                goal.LatestExecutedTestReceipt is { Passed: true },
+                hasPassingExecutedTestReceipt,
             gates,
-            goal.LatestExecutedTestReceipt is { Passed: true }
+            hasPassingExecutedTestReceipt
                 ? VerificationGateReason.Passed
                 : VerificationGateReason.MissingExecutedTestReceipt,
-            goal.LatestExecutedTestReceipt is { Passed: true }
+            hasPassingExecutedTestReceipt
                 ? "Goal has an executed test receipt covering the changed test surface."
                 : "Goal is missing an executed test receipt covering the changed test surface.");
     }
