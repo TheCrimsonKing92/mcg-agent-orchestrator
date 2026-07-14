@@ -203,7 +203,7 @@ function New-OrchestratorStateBackup {
     }
 
     $stagedItems = @(Get-ChildItem -LiteralPath $stagingRoot -Force | ForEach-Object { $_.FullName })
-    Compress-Archive -LiteralPath $stagedItems -DestinationPath $archivePath -CompressionLevel Optimal
+    Compress-Archive -LiteralPath $stagedItems -DestinationPath $archivePath -CompressionLevel Fastest
 
     $receipt = [ordered]@{
         archive = $archivePath
