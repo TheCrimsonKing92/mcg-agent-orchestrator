@@ -405,6 +405,7 @@ public static class DotnetBuildEnvironmentManager
         var attemptedCompilerLockRemediation = false;
         var attemptedOwnedProcessRemediation = false;
         var artifactPrepBusyAttempts = 0;
+        BuildLockAttribution? selfHeldLandingFixtureAttribution = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -412,7 +413,8 @@ public static class DotnetBuildEnvironmentManager
             var reclaimed = TryReclaimStaleExecutionLease(environment);
             try
             {
-                if (IsSlotArtifactsBusy(environment))
+                if (selfHeldLandingFixtureAttribution is null &&
+                    IsSlotArtifactsBusy(environment))
                 {
                     if (DateTimeOffset.UtcNow >= timeoutAt)
                     {
@@ -438,6 +440,31 @@ public static class DotnetBuildEnvironmentManager
 
             try
             {
+                if (selfHeldLandingFixtureAttribution is not null)
+                {
+                    try
+                    {
+                        PrepareArtifactsDirectoryForTests?.Invoke(environment);
+                    }
+                    catch
+                    {
+                        stream.Dispose();
+                        throw;
+                    }
+
+                    stream.Dispose();
+                    LockAttribution.EmitReceipt(selfHeldLandingFixtureAttribution);
+                    artifactPrepBusyAttempts++;
+                    if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
+                        DateTimeOffset.UtcNow >= timeoutAt)
+                    {
+                        return EmitSlotsBusy(environment.LeaseId);
+                    }
+
+                    Thread.Sleep(ArtifactPrepBusyRetryDelay);
+                    continue;
+                }
+
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
@@ -468,6 +495,11 @@ public static class DotnetBuildEnvironmentManager
                 if (remediation is ArtifactPrepLockRemediation.SlotBusy)
                 {
                     artifactPrepBusyAttempts++;
+                    if (IsCurrentProcessLandingFixtureAttribution(blockedAttribution))
+                    {
+                        selfHeldLandingFixtureAttribution = blockedAttribution;
+                    }
+
                     if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
                         DateTimeOffset.UtcNow >= timeoutAt)
                     {
@@ -927,6 +959,10 @@ public static class DotnetBuildEnvironmentManager
         attemptedOwnedProcessRemediation = killed;
         return killed ? ArtifactPrepLockRemediation.RetryImmediately : ArtifactPrepLockRemediation.Blocked;
     }
+
+    private static bool IsCurrentProcessLandingFixtureAttribution(BuildLockAttribution attribution) =>
+        attribution.Source is "landing-fixture-marker" or "landing-fixture-registration" &&
+        attribution.Holders.Any(holder => holder.ProcessId == Environment.ProcessId);
 
     private static bool IsCompilerLock(BuildLockAttribution attribution) =>
         attribution.Holders.Any(holder =>
