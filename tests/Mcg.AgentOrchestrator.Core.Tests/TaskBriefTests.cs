@@ -686,6 +686,110 @@ public sealed class TaskBriefTests
     Assert.True(!reviewerBrief.Contains("first stale retry feedback", StringComparison.Ordinal));
     Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_includes_executed_test_evidence_with_provenance")]
+    public void BuildTaskBriefReviewerIncludesExecutedTestEvidenceWithProvenance()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement receipt propagation.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Verify receipt propagation.", AgentRole.Tester);
+    var reviewer = new TaskSpec(TaskId.New(), "Review receipt propagation.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Attach executed evidence", [developer, tester, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec developer-prompt.md",
+        "C:\\repo",
+        clock.UtcNow,
+        BaseCommit: "base-dev",
+        ResultCommit: "dev-result-sha"));
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "dotnet test --filter TaskBriefReceipt",
+        "C:\\repo",
+        0,
+        "WORKER_RESULT:\nfiles: src/Foo.cs\ncommands: dotnet test --filter TaskBriefReceipt\ntests: pass - TaskBriefReceipt 3/3; trx developer.trx\ncommit: dev-worker-sha\nblockers: none\nEND_WORKER_RESULT",
+        string.Empty,
+        clock.UtcNow,
+        StandardOutputPath: "C:\\repo\\.orchestrator\\logs\\developer.out.log",
+        StandardErrorPath: "C:\\repo\\.orchestrator\\logs\\developer.err.log",
+        WorkerResultPresent: true));
+    clock.Advance();
+    kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+        "manual verification: inspected trx receipts",
+        "C:\\repo",
+        0,
+        "manual verification passed: operator checked tester.trx with Passed=7 Failed=0",
+        string.Empty,
+        clock.UtcNow));
+
+    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+    Assert.Contains("## Executed Test Evidence", brief, StringComparison.Ordinal);
+    Assert.Contains("Reviewer is read-only", brief, StringComparison.Ordinal);
+    Assert.Contains("provenance: Task 1 Developer verification", brief, StringComparison.Ordinal);
+    Assert.Contains("result: pass (exit 0)", brief, StringComparison.Ordinal);
+    Assert.Contains("dotnet test --filter TaskBriefReceipt @ C:\\repo", brief, StringComparison.Ordinal);
+    Assert.Contains("freshness: verified commit dev-worker-sha", brief, StringComparison.Ordinal);
+    Assert.Contains("artifacts: stdout C:\\repo\\.orchestrator\\logs\\developer.out.log, stderr C:\\repo\\.orchestrator\\logs\\developer.err.log", brief, StringComparison.Ordinal);
+    Assert.Contains("provenance: Task 1 Developer WORKER_RESULT tests", brief, StringComparison.Ordinal);
+    Assert.Contains("tests: pass - TaskBriefReceipt 3/3; trx developer.trx", brief, StringComparison.Ordinal);
+    Assert.Contains("provenance: Task 2 Tester verification", brief, StringComparison.Ordinal);
+    Assert.Contains("manual verification: inspected trx receipts @ C:\\repo", brief, StringComparison.Ordinal);
+    Assert.Contains("evidence: stdout manual verification passed: operator checked tester.trx with Passed=7 Failed=0", brief, StringComparison.Ordinal);
+    Assert.Contains("freshness: unknown commit", brief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_without_receipts_says_no_executed_test_evidence_exists")]
+    public void BuildTaskBriefReviewerWithoutReceiptsSaysNoExecutedTestEvidenceExists()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var developer = new TaskSpec(TaskId.New(), "Implement receipt propagation.", AgentRole.Developer);
+    var reviewer = new TaskSpec(TaskId.New(), "Review receipt propagation.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Attach executed evidence", [developer, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+    Assert.Contains("## Executed Test Evidence", brief, StringComparison.Ordinal);
+    Assert.Contains("No executed test evidence exists for this goal yet.", brief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_executed_test_evidence_is_newest_first_and_capped")]
+    public void BuildTaskBriefReviewerExecutedTestEvidenceIsNewestFirstAndCapped()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement receipt propagation.", AgentRole.Developer);
+    var reviewer = new TaskSpec(TaskId.New(), "Review receipt propagation.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Attach executed evidence", [developer, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    for (var index = 1; index <= 14; index++)
+    {
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+            $"dotnet test --filter Receipt{index:00}",
+            "C:\\repo",
+            0,
+            $"receipt-{index:00}",
+            string.Empty,
+            clock.UtcNow));
+        clock.Advance();
+    }
+
+    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+    var evidenceStart = brief.IndexOf("## Executed Test Evidence", StringComparison.Ordinal);
+    var evidenceEnd = brief.IndexOf("## Prior Task Evidence", evidenceStart, StringComparison.Ordinal);
+    var evidence = evidenceEnd < 0 ? brief[evidenceStart..] : brief[evidenceStart..evidenceEnd];
+
+    Assert.Contains("Receipt14", evidence, StringComparison.Ordinal);
+    Assert.Contains("Receipt03", evidence, StringComparison.Ordinal);
+    Assert.True(!evidence.Contains("Receipt02", StringComparison.Ordinal));
+    Assert.True(!evidence.Contains("Receipt01", StringComparison.Ordinal));
+    Assert.True(evidence.IndexOf("Receipt14", StringComparison.Ordinal) < evidence.IndexOf("Receipt13", StringComparison.Ordinal));
+    Assert.Equal(12, evidence.Split(Environment.NewLine).Count(line => line.Contains("provenance: Task 1 Developer verification", StringComparison.Ordinal)));
+    Assert.Contains("Omitted 2 older executed-test evidence line(s).", evidence, StringComparison.Ordinal);
+}
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_verification_plan")]
     public void BuildTaskBriefTrimsNoisyVerificationPlan()
 {
