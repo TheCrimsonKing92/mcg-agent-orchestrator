@@ -111,6 +111,12 @@ public static class DispatchFailureClassifier
     private static readonly Regex PowerShellNativeErrorPrefix = new(
         "^[^:\\r\\n]{1,120}\\s+:\\s+(?<error>ERROR:|Error:|error:)",
         RegexOptions.CultureInvariant);
+    private static readonly Regex CodexCliDiagnosticPrefix = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?\s+ERROR\s+codex(?:[_:\w.-]*)?\b",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex WorkerDisplayedContentPrefix = new(
+        @"^(?:>\s*)?\d+\s*[:|]\s+",
+        RegexOptions.CultureInvariant);
     private static readonly Regex PassedCountPattern = new(
         @"\bPassed:\s*[1-9]\d*\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -1517,6 +1523,7 @@ public static class DispatchFailureClassifier
             text.Contains("getaddrinfo", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("ENOTFOUND", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("no such host", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("stream disconnected", StringComparison.OrdinalIgnoreCase) ||
             (text.Contains("transport", StringComparison.OrdinalIgnoreCase) &&
              (text.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
               text.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
@@ -1616,6 +1623,13 @@ public static class DispatchFailureClassifier
                     continue;
                 }
 
+                // Worker file viewers emit source lines as "183: catch (...)" or "183 | ...".
+                // Provider signatures inside those echoed files must not drive recovery decisions.
+                if (IsWorkerDisplayedContentLine(line))
+                {
+                    continue;
+                }
+
                 if (IsProviderErrorLine(line))
                 {
                     yield return line;
@@ -1639,9 +1653,8 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
         {
-            var candidate = rawLine.Trim();
             if (ContainsProviderAuthenticationText(candidate))
             {
                 line = candidate;
@@ -1655,9 +1668,8 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetProviderConnectivityLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
         {
-            var candidate = rawLine.Trim();
             if (ContainsRecoverableProviderConnectivityText(candidate))
             {
                 line = candidate;
@@ -1735,8 +1747,12 @@ public static class DispatchFailureClassifier
     {
         return line.StartsWith("ERROR:", StringComparison.Ordinal) ||
             line.StartsWith("Error:", StringComparison.Ordinal) ||
-            line.StartsWith("error:", StringComparison.Ordinal);
+            line.StartsWith("error:", StringComparison.Ordinal) ||
+            CodexCliDiagnosticPrefix.IsMatch(line);
     }
+
+    private static bool IsWorkerDisplayedContentLine(string line) =>
+        WorkerDisplayedContentPrefix.IsMatch(line);
 
     private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
     {
