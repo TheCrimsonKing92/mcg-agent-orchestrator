@@ -96,6 +96,8 @@ tail -F .orchestrator/logs/conduct-events.log
 
 It is JSON lines with `timestamp`, `eventKind`, `goalId`, and `detail`; `tail -F` follows the stable path across rotation. Key `eventKind` values include `loop-start`, `loop-stop`, `loop-handoff`, `watch-transition`, `acceptance`, and `lock-blocker`. The `detail` field preserves the compact loop line (`TICK`, `held`, `escalated`, `LOOP_STOP`, `LOOP_HANDOFF`, `LOOP_HANDOFF_FAILED`, `PHASE_TIMING`). `PHASE_TIMING` receipts are the tick latency profile: `sweep`, `prewalk`, `per-goal-walk`, and `dispatch-prep` show where the conductor spent the tick. Use them when ticks feel slow before blaming a worker.
 
+Incident history lives in `docs/incidents/`; use it when a symptom needs narrative context beyond the current transactional records.
+
 Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
 
 For focused goal inspection, prefer the repo helpers over broad `.orchestrator` reads:
