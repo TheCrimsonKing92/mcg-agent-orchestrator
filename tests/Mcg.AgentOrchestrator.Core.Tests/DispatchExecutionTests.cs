@@ -675,7 +675,7 @@ public sealed class DispatchExecutionTests
         "C:\\repo",
         1,
         string.Empty,
-        "Your access token could not be refreshed. Run codex login.",
+        "ERROR: Your access token could not be refreshed. Run codex login.",
         clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
