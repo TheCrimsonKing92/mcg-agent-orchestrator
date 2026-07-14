@@ -137,6 +137,7 @@ public static class WorkerProfileDispatcher
         bool allowPendingRecordedDispatchRefresh = false)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
+        EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
@@ -788,12 +789,12 @@ public static class WorkerProfileDispatcher
 
     private static void EnsureSubscriptionRetryWindowHasPassed(TaskSpec task, DateTimeOffset dispatchedAt)
     {
-        if (!DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, dispatchedAt, out var retryAfter))
+        if (!IsTaskRetryDeferred(task, dispatchedAt, out var retryAfter))
         {
             return;
         }
 
-        throw new InvalidOperationException($"Task '{task.Id}' hit a recoverable subscription usage limit; retry after {retryAfter:u}.");
+        throw new InvalidOperationException($"Task '{task.Id}' subscription retry deferred until {retryAfter:u}.");
     }
 
     private static void EnsureRepeatedSubscriptionLimitReviewed(TaskSpec task)

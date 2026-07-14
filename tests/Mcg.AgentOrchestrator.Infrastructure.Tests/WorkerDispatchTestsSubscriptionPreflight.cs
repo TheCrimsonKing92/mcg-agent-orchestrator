@@ -815,6 +815,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Directory.CreateDirectory(promptRoot);
     Directory.CreateDirectory(workingDirectory);
     var failureAt = DateTimeOffset.UtcNow.AddMinutes(5);
+    var retryAttemptAt = failureAt.AddSeconds(30);
     var kernel = new AgentOrchestratorKernel(new TestClock(failureAt));
     var goal = kernel.CreateGoal(
         "Retry planner dispatch after provider connectivity",
@@ -833,7 +834,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification("codex exec attempt 1", workingDirectory, failureAt));
 
-    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
     var item = plan.Items.Single();
     var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
@@ -843,14 +844,14 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         profiles,
         promptRoot,
         workingDirectory,
-        DateTimeOffset.UtcNow);
+        retryAttemptAt);
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
         task,
         agents,
         profiles,
         workingDirectory,
-        DateTimeOffset.UtcNow);
+        retryAttemptAt);
 
     Assert.Equal(failureAt.AddMinutes(1), task.SubscriptionRetryAfter);
     Assert.False(item.CanPrepare);
@@ -874,6 +875,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Directory.CreateDirectory(promptRoot);
     Directory.CreateDirectory(workingDirectory);
     var failureAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+    var retryAttemptAt = failureAt.AddMinutes(2);
     var kernel = new AgentOrchestratorKernel(new TestClock(failureAt));
     var goal = kernel.CreateGoal(
         "Resume planner dispatch after provider connectivity",
@@ -892,7 +894,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification("codex exec attempt 1", workingDirectory, failureAt));
 
-    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
     var item = plan.Items.Single();
     var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
     var expiredRetryAfter = task.SubscriptionRetryAfter;
@@ -903,10 +905,10 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         profiles,
         promptRoot,
         workingDirectory,
-        DateTimeOffset.UtcNow);
+        retryAttemptAt);
 
     Assert.Equal(failureAt.AddMinutes(1), expiredRetryAfter);
-    Assert.True(expiredRetryAfter < DateTimeOffset.UtcNow);
+    Assert.True(expiredRetryAfter < retryAttemptAt);
     Assert.True(item.CanPrepare);
     Assert.Null(item.RetryAfter);
     Assert.Equal(0, plan.RetryDeferredCount);

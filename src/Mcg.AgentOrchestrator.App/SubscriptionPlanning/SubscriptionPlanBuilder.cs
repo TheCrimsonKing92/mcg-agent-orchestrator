@@ -128,7 +128,8 @@ internal static class SubscriptionPlanBuilder
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
         Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
-        IReadOnlyList<ModelOutcomeRecord>? scorecard = null)
+        IReadOnlyList<ModelOutcomeRecord>? scorecard = null,
+        DateTimeOffset? now = null)
     {
         var validations = OrchestratorHealthInspector
             .InspectCurrentEnvironment(new AgentCatalog(agents), profiles)
@@ -140,7 +141,7 @@ internal static class SubscriptionPlanBuilder
             StringComparer.OrdinalIgnoreCase);
 
         var items = goal.Tasks
-            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup))
+            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup, now))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -177,7 +178,8 @@ internal static class SubscriptionPlanBuilder
         WorkerProfileCatalog profiles,
         IReadOnlyDictionary<string, WorkerProfileValidation> validations,
         Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
-        IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup = null)
+        IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup = null,
+        DateTimeOffset? now = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -266,8 +268,8 @@ internal static class SubscriptionPlanBuilder
                     profile,
                     ResolveWorkerProviderForPlan(profile.Name, effectiveProviderName));
             var requiresPatchCapability = task.RequiredRole == AgentRole.Developer;
-            var now = DateTimeOffset.UtcNow;
-            var retryDeferred = WorkerProfileDispatcher.IsTaskRetryDeferred(task, now, out var retryAfter);
+            var effectiveNow = now ?? DateTimeOffset.UtcNow;
+            var retryDeferred = WorkerProfileDispatcher.IsTaskRetryDeferred(task, effectiveNow, out var retryAfter);
             var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
             var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
             var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);
@@ -275,12 +277,12 @@ internal static class SubscriptionPlanBuilder
                 goal,
                 task.Id,
                 dispatchProviderName,
-                now,
+                effectiveNow,
                 out var providerCooldown);
             var retryDelaySeconds = retryDeferred
-                ? Math.Max(0, (int)Math.Ceiling((retryAfter - now).TotalSeconds))
+                ? Math.Max(0, (int)Math.Ceiling((retryAfter - effectiveNow).TotalSeconds))
                 : providerCoolingDown
-                    ? Math.Max(0, (int)Math.Ceiling((providerCooldown.RetryAfter - now).TotalSeconds))
+                    ? Math.Max(0, (int)Math.Ceiling((providerCooldown.RetryAfter - effectiveNow).TotalSeconds))
                 : (int?)null;
             var canPrepare = task.Status == WorkTaskStatus.Assigned &&
                 hasProfile &&
