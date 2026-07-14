@@ -1191,7 +1191,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(string co
         "C:\\repo",
         1,
         string.Empty,
-        "Falling back from WebSockets to HTTPS transport failed. stream disconnected",
+        "ERROR: Falling back from WebSockets to HTTPS transport. stream disconnected",
         completedAt,
         ProviderFailureKind: ProviderFailureKind.Connectivity);
 }

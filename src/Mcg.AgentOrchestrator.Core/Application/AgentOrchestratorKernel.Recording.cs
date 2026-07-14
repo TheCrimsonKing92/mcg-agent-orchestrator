@@ -84,14 +84,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
-        var outcome = ShouldUseTypedProviderFailureOutcome(effectiveProviderFailureKind)
-            ? DispatchFailureClassifier.ClassifyProviderFailure(
-                effectiveProviderFailureKind,
-                verification.ExitCode,
-                string.IsNullOrWhiteSpace(verification.StandardOutput) &&
-                string.IsNullOrWhiteSpace(verification.StandardError),
-                BuildTypedProviderFailureEvidenceSummary(verification))
-            : DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
+        var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
         if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
         {
             Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
@@ -189,31 +182,6 @@ public sealed partial class AgentOrchestratorKernel
     private static TimeSpan BuildProviderConnectivityBackoff(int attempt)
     {
         return TimeSpan.FromMinutes(Math.Clamp(attempt, 1, ProviderConnectivityRetryLimit));
-    }
-
-    private static bool ShouldUseTypedProviderFailureOutcome(ProviderFailureKind failureKind)
-    {
-        return failureKind is
-            ProviderFailureKind.RateLimit or
-            ProviderFailureKind.Connectivity or
-            ProviderFailureKind.Sandbox1312;
-    }
-
-    private static string BuildTypedProviderFailureEvidenceSummary(TaskVerificationRecord verification)
-    {
-        foreach (var output in new[] { verification.StandardError, verification.StandardOutput })
-        {
-            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-            {
-                var trimmed = line.Trim();
-                if (trimmed.Length > 0)
-                {
-                    return trimmed;
-                }
-            }
-        }
-
-        return "typed provider failure";
     }
 
     private bool TryFailWorkerResultBlocker(
