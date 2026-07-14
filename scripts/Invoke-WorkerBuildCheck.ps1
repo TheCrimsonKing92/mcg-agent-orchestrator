@@ -45,12 +45,22 @@ function Get-IsolatedRootBase {
 
 function Get-HostTempBase {
     $repositoryRoot = (Get-Location).Path
-    $worktreeMarker = "$([System.IO.Path]::DirectorySeparatorChar).orchestrator-worktrees$([System.IO.Path]::DirectorySeparatorChar)"
-    if ($repositoryRoot.IndexOf($worktreeMarker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-        return (Join-Path (Get-IsolatedRootBase) "temp")
+    $candidate = [System.IO.Path]::GetTempPath()
+    if ($candidate.StartsWith($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $localTemp = Join-Path $env:LOCALAPPDATA "Temp"
+        try {
+            $probe = Join-Path $localTemp "mcg-dotnet-probe-$PID"
+            New-Item -ItemType Directory -Force -Path $probe | Out-Null
+            Remove-Item -LiteralPath $probe -Force -Recurse
+            return $localTemp
+        }
+        catch {
+            return $candidate
+        }
     }
 
-    return [System.IO.Path]::GetTempPath()
+    return $candidate
 }
 
 function Get-BuildMaxCpuCount {
@@ -235,6 +245,8 @@ $metadata = [ordered]@{
 ($metadata | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath (Join-Path $leaseRoot "lease.json")
 
 $processTempPath = Join-Path (Join-Path (Get-HostTempBase) "pt\$leaseId") "$PID"
+New-Item -ItemType Directory -Force -Path (Join-Path (Get-HostTempBase) "pt") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path (Get-HostTempBase) "pt\$leaseId") | Out-Null
 New-Item -ItemType Directory -Force -Path $processTempPath | Out-Null
 
 $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = $repositoryRoot

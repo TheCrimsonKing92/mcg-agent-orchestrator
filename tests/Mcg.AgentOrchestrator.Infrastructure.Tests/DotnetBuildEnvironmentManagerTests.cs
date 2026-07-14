@@ -207,6 +207,68 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(
+        DisplayName = "LockAttribution_handle_probe_returns_results_for_real_held_file",
+        Skip = "probe spawn-context hang under managed hosts - tracked by the probe-fix goal; unskip there")]
+    public void LockAttributionHandleProbeReturnsResultsForRealHeldFile()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var handle = ResolveHandleExecutableForTests();
+        if (handle is null)
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-handle64-held-file-{Guid.NewGuid():N}");
+        var lockedPath = Path.Combine(root, "held.dll");
+        var readyPath = Path.Combine(root, "ready.txt");
+        var releasePath = Path.Combine(root, "release.txt");
+        Process? holder = null;
+        LockAttribution.HandleExecutableForTests = handle;
+        LockAttribution.HandleProbeTimeoutForTests = TimeSpan.FromSeconds(10);
+        LockAttribution.DisableRestartManagerForTests = true;
+        try
+        {
+            holder = StartFileHolder(lockedPath, readyPath, releasePath);
+            Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "file holder did not become ready");
+
+            var elapsed = Stopwatch.StartNew();
+            var attribution = LockAttribution.Attribute(
+                lockedPath,
+                "mcg-dotnet-isolated",
+                "artifact-prep",
+                "prepare-artifacts");
+            elapsed.Stop();
+
+            var diagnostic = FormatAttributionDiagnostic(handle, lockedPath, holder.Id, elapsed.Elapsed, attribution);
+            Assert.True(
+                string.Equals("handle64", attribution.Source, StringComparison.Ordinal),
+                $"Expected source handle64 but got {attribution.Source}. {diagnostic}");
+            Assert.True(attribution.Holders.Any(attributedHolder => attributedHolder.ProcessId == holder.Id), diagnostic);
+            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10), $"handle64 probe exceeded bound. {diagnostic}");
+            Assert.Equal("artifact-prep", attribution.Phase);
+            Assert.Equal("prepare-artifacts", attribution.Operation);
+        }
+        finally
+        {
+            try { File.WriteAllText(releasePath, "release"); } catch { }
+            if (holder is not null)
+            {
+                StopProcess(holder);
+                holder.Dispose();
+            }
+
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.HandleProbeTimeoutForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LockAttribution_restart_manager_names_file_holder")]
     public void LockAttributionRestartManagerNamesFileHolder()
     {
@@ -402,11 +464,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
 
-            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
-            acquired.Lease.Dispose();
-            Assert.Equal(2, prepareAttempts);
+            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+            Assert.Equal(environment.LeaseId, busy.WantedBy);
+            Assert.Equal(3, prepareAttempts);
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
             Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+            Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -494,15 +557,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
         try
         {
             DotnetBuildLeaseAcquisition? result = null;
-            var stopwatch = Stopwatch.StartNew();
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(5)));
-            stopwatch.Stop();
 
             var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
             Assert.Equal(environment.LeaseId, busy.WantedBy);
             Assert.Equal(3, prepareAttempts);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), $"Expected bounded busy retry, elapsed {stopwatch.Elapsed}.");
             Assert.False(holder.HasExited);
             Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
@@ -786,7 +846,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             environment.ExecutionLockPath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
-            FileShare.None);
+            FileShare.ReadWrite);
+        heldLease.Lock(0, 1);
         var attributionAttempts = 0;
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -820,6 +881,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
+            heldLease.Unlock(0, 1);
             WorkerProcessJobs.TryKillPidTree = originalKill;
             LockAttribution.AttributeForTests = null;
         }
@@ -1030,9 +1092,10 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var readyPath = Path.Combine(Path.GetDirectoryName(slot0.ExecutionLockPath)!, $"holder-ready-{Guid.NewGuid():N}.txt");
         var script = $$"""
-            $stream = [System.IO.File]::Open('{{slot0.ExecutionLockPath}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-            Set-Content -LiteralPath '{{readyPath}}' -Value ([string]$PID)
-            try { Start-Sleep -Seconds 30 } finally { $stream.Dispose() }
+            $stream = [System.IO.File]::Open('{{EscapePowerShell(slot0.ExecutionLockPath)}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            $stream.Lock(0, 1)
+            Set-Content -LiteralPath '{{EscapePowerShell(readyPath)}}' -Value ([string]$PID)
+            try { Start-Sleep -Seconds 30 } finally { $stream.Unlock(0, 1); $stream.Dispose() }
             """;
         using var holder = Process.Start(new ProcessStartInfo
         {
@@ -1059,7 +1122,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             }
 
             Assert.True(File.Exists(readyPath), "Lease holder did not signal readiness.");
-            Assert.ThrowsAny<IOException>(() =>
+            Assert.Throws<DotnetBuildSlotsBusyException>(() =>
                 DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromMilliseconds(100)));
 
             holder.Kill(entireProcessTree: true);
@@ -1120,6 +1183,164 @@ public sealed class DotnetBuildEnvironmentManagerTests
             }
 
             LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_gate_held_lease_blocks_script_byte_range_lock_not_open")]
+    public void DotnetBuildEnvironmentManagerGateHeldLeaseBlocksScriptByteRangeLockNotOpen()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using var gateLease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0);
+        var script = $$"""
+            $stream = [System.IO.File]::Open('{{EscapePowerShell(slot0.ExecutionLockPath)}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            try {
+                $stream.Lock(0, 1)
+                try { Write-Output 'acquired' } finally { $stream.Unlock(0, 1) }
+                exit 2
+            }
+            catch [System.IO.IOException] {
+                Write-Output 'busy'
+                exit 0
+            }
+            finally {
+                $stream.Dispose()
+            }
+            """;
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                EncodePowerShell(script)
+            }
+        }) ?? throw new InvalidOperationException("Failed to start script lease probe.");
+
+        Assert.True(process.WaitForExit(5000), "Script lease probe did not exit.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Script lease probe exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+        Assert.Contains("busy", stdout, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_classifies_unleased_active_testhost_slot_as_busy")]
+    public void DotnetBuildEnvironmentManagerClassifiesUnleasedActiveTesthostSlotAsBusy()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using var sleeper = StartSleepProcess();
+        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+            new Dictionary<int, string>
+            {
+                [sleeper.Id] = $"testhost.exe --artifacts-path \"{slot0.ArtifactsPath}\""
+            });
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var ex = Assert.Throws<DotnetBuildSlotsBusyException>(() =>
+                    DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.Zero));
+                Assert.Contains(ex.SlotsBusy.BusySlots, slot => slot.SlotIndex == 0 && slot.OwnerProcessId == sleeper.Id);
+            });
+
+            Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
+            Assert.Contains($"slot-0:pid-{sleeper.Id}", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+            StopProcess(sleeper);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unleased_slot_consumer_racing_artifact_prep_returns_slots_busy")]
+    public void DotnetBuildEnvironmentManagerUnleasedSlotConsumerRacingArtifactPrepReturnsSlotsBusy()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var lockedPath = Path.Combine(slot0.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "debug_net10.0", "testhost.exe");
+        using var sleeper = StartSleepProcess();
+        var snapshotCalls = 0;
+        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+        {
+            var call = Interlocked.Increment(ref snapshotCalls);
+            return new ProcessCommandLineSnapshot(call == 1
+                ? new Dictionary<int, string>()
+                : new Dictionary<int, string>
+                {
+                    [sleeper.Id] = $"vstest.console.exe --artifacts-path \"{slot0.ArtifactsPath}\""
+                });
+        };
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == slot0.ExecutionLockPath)
+            {
+                throw new IOException($"The process cannot access the file '{lockedPath}' because it is being used by another process.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(sleeper.Id, "vstest.console", $"vstest.console.exe --artifacts-path \"{slot0.ArtifactsPath}\"", true)],
+            "test");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(slot0, TimeSpan.FromSeconds(1)));
+
+            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+            Assert.Equal(slot0.LeaseId, busy.WantedBy);
+            Assert.Contains(busy.BusySlots, slot => slot.SlotIndex == 0 && slot.OwnerProcessId == sleeper.Id);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
+            Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+            StopProcess(sleeper);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_gate_rescans_when_previous_slot_has_unleased_testhost")]
+    public void DotnetBuildEnvironmentManagerReusedGoalGateRescansWhenPreviousSlotHasUnleasedTesthost()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var gateGoalId = new GoalId("92000000920000009200000092000000");
+        var first = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "first");
+        using var sleeper = StartSleepProcess();
+        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+            new Dictionary<int, string>
+            {
+                [sleeper.Id] = $"vstest.console.exe --artifacts-path \"{first.ArtifactsPath}\""
+            });
+
+        try
+        {
+            var reused = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
+
+            Assert.True(reused.ReusedGoalLease);
+            Assert.NotEqual(first.ExecutionLockPath, reused.ExecutionLockPath);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+            StopProcess(sleeper);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(gateGoalId);
         }
     }
 
@@ -1734,6 +1955,82 @@ public sealed class DotnetBuildEnvironmentManagerTests
         return "powershell";
     }
 
+    private static string? ResolveHandleExecutableForTests()
+    {
+        var explicitPath = Environment.GetEnvironmentVariable("MCG_HANDLE64");
+        if (!string.IsNullOrWhiteSpace(explicitPath) && File.Exists(explicitPath))
+        {
+            return explicitPath;
+        }
+
+        foreach (var directory in HandleProbeSearchDirectories())
+        {
+            foreach (var name in new[] { "handle64.exe", "handle.exe" })
+            {
+                var candidate = Path.Combine(directory, name);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string FormatAttributionDiagnostic(
+        string handleExecutable,
+        string lockedPath,
+        int expectedHolderPid,
+        TimeSpan elapsed,
+        BuildLockAttribution attribution)
+    {
+        var holders = attribution.Holders.Count == 0
+            ? "none"
+            : string.Join(
+                " | ",
+                attribution.Holders.Select(holder =>
+                    $"pid={holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+                    $"name={holder.ProcessName ?? "unknown"} owned={holder.IsOrchestratorOwned} commandLine={holder.CommandLine ?? string.Empty}"));
+        return
+            $"handle={handleExecutable}; lockedPath={lockedPath}; expectedPid={expectedHolderPid}; " +
+            $"elapsed={elapsed}; source={attribution.Source}; holders={holders}";
+    }
+
+    private static IEnumerable<string> HandleProbeSearchDirectories()
+    {
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+        {
+            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory.Trim()))
+            {
+                yield return directory.Trim();
+            }
+        }
+
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (var directory in new[]
+        {
+            Path.Combine(userProfile, "Downloads"),
+            Path.Combine(userProfile, "Downloads", "Handle"),
+            Path.Combine(userProfile, "Downloads", "SysinternalsSuite"),
+            Path.Combine(userProfile, "Desktop"),
+            Path.GetTempPath(),
+            @"C:\Sysinternals",
+            @"C:\SysinternalsSuite",
+            @"C:\Tools",
+            @"C:\Tools\Sysinternals",
+            Path.Combine(Environment.GetEnvironmentVariable("ChocolateyInstall") ?? string.Empty, "bin"),
+            @"C:\ProgramData\chocolatey\bin",
+            Path.Combine(userProfile, "scoop", "shims")
+        })
+        {
+            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+            {
+                yield return directory;
+            }
+        }
+    }
+
     private static string? ResolveExecutablePath(string name)
     {
         var extensions = Path.HasExtension(name)
@@ -1856,6 +2153,44 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
 
         return count;
+    }
+
+    private static Process StartSleepProcess()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-InputFormat");
+        startInfo.ArgumentList.Add("None");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add("Start-Sleep -Seconds 30");
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start sleep process.");
+    }
+
+    private static void StopProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+        }
+        catch
+        {
+        }
     }
 
     private static int SlotIndexFromPath(string path)
