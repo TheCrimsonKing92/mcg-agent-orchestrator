@@ -150,9 +150,11 @@ public sealed class DispatchRecoveryPolicyTests
                 "Dispatch recovery policy action='mark-stale' evidence='heartbeat-absent' reason='previous stale attempt stale retry budget remaining=1'.",
                 Now.AddMinutes(-10)));
         kernel.RetryTask(goal.Id, task.Id, "retry previous stale dispatch");
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, Now.AddMinutes(-5)));
-        var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, Now.AddMinutes(-5), null, null);
+        clock.Advance();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, clock.UtcNow));
+        var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, clock.UtcNow, null, null);
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        clock.Advance(TimeSpan.FromMinutes(5));
 
         var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
@@ -244,6 +246,11 @@ public sealed class DispatchRecoveryPolicyTests
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
-        public DateTimeOffset UtcNow { get; } = utcNow;
+        public DateTimeOffset UtcNow { get; private set; } = utcNow;
+
+        public void Advance(TimeSpan? by = null)
+        {
+            UtcNow += by ?? TimeSpan.FromTicks(1);
+        }
     }
 }
