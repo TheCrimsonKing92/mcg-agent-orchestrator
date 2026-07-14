@@ -535,6 +535,7 @@ public sealed class DispatchProcessHostTests
         var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
         try
         {
+            CreateGitRepository(worktree);
             var preparer = new WorkerSandboxPreparer(labeler);
             var rootOnlyReceipt = preparer.Prepare(worktree, sandboxRoot);
             Assert.False(rootOnlyReceipt.PrepReceiptHit);
@@ -558,6 +559,9 @@ public sealed class DispatchProcessHostTests
             Assert.Contains(WorkerSandboxPreparer.ProtectGitMetadataPhase, protectedPhases);
             Assert.Contains(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, phases);
             Assert.Contains(WorkerSandboxPreparer.ProtectGitMetadataPhase, phases);
+            var statusAfterRootOnlyReceiptHit = GitStatus(worktree);
+            Assert.DoesNotContain(".mcg-sandbox/", statusAfterRootOnlyReceiptHit);
+            Assert.Empty(GitCli.FilterCommitWorthyStatus(statusAfterRootOnlyReceiptHit));
 
             protectedPhases.Clear();
             var completedResult = DispatchProcessHost.ApplyWorkerSandbox(
@@ -571,6 +575,9 @@ public sealed class DispatchProcessHostTests
             Assert.True(completedResult.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase));
             Assert.True(completedResult.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase));
             Assert.Empty(protectedPhases);
+            var statusAfterCompletedReceiptHit = GitStatus(worktree);
+            Assert.DoesNotContain(".mcg-sandbox/", statusAfterCompletedReceiptHit);
+            Assert.Empty(GitCli.FilterCommitWorthyStatus(statusAfterCompletedReceiptHit));
         }
         finally
         {
@@ -1271,6 +1278,17 @@ public sealed class DispatchProcessHostTests
         RunGit(repo, "commit", "-m", "seed");
         RunGit(repo, "worktree", "add", "-b", "linked-test", worktree);
     }
+
+    private static void CreateGitRepository(string worktree)
+    {
+        Directory.CreateDirectory(worktree);
+        RunGit(worktree, "init");
+        RunGit(worktree, "config", "user.email", "tests@example.invalid");
+        RunGit(worktree, "config", "user.name", "Tests");
+    }
+
+    private static string GitStatus(string worktree) =>
+        RunGit(worktree, "status", "--porcelain", "--untracked-files=all");
 
     private static ProcessStartInfo CreateSandboxStartInfo(string worktree)
     {

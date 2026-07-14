@@ -161,10 +161,7 @@ public static class DispatchProcessHost
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
             // the worktree must read as clean after the orchestrator commits the worker's real edits.
-            if (!preparation.PrepReceiptHit)
-            {
-                ExcludeSandboxFromGit(parameters.WorkingDirectory);
-            }
+            ExcludeSandboxFromGit(parameters.WorkingDirectory);
 
             startInfo.Environment["TEMP"] = tempDir;
             startInfo.Environment["TMP"] = tempDir;
