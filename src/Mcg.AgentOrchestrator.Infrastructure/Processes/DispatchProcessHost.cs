@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 
@@ -17,6 +19,7 @@ public static class DispatchProcessHost
     public const string SubcommandName = "__dispatch-run";
     public const string StartGatePathVariable = "MCG_DISPATCH_HOST_START_GATE";
     internal const string LowIntegritySetupArtifactName = "low-integrity-setup.json";
+    internal const string WorkerCaBundleFileName = "worker-ca-bundle.pem";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
     private static readonly IcaclsIntegrityLabeler IntegrityLabeler = new();
 
@@ -71,11 +74,40 @@ public static class DispatchProcessHost
     internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(
         ProcessStartInfo startInfo,
         DispatchRunParameters parameters,
-        WorkerSandboxPreparer preparer)
+        WorkerSandboxPreparer preparer,
+        Action<string, DateTimeOffset, TimeSpan>? recordStep = null,
+        Action<string>? protectWorkspaceBoundary = null,
+        Action<string>? protectGitMetadata = null)
     {
         if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
         {
             return new WorkerSandboxPreparationResult(false, false);
+        }
+
+        T Track<T>(string phase, Func<T> action)
+        {
+            var stepStartedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                return action();
+            }
+            finally
+            {
+                recordStep?.Invoke(phase, stepStartedAt, DateTimeOffset.UtcNow - stepStartedAt);
+            }
+        }
+
+        void TrackAction(string phase, Action action)
+        {
+            var stepStartedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                recordStep?.Invoke(phase, stepStartedAt, DateTimeOffset.UtcNow - stepStartedAt);
+            }
         }
 
         // Label ONLY the worktree Low so the Low worker can edit it. The shared git common dir is
@@ -85,43 +117,67 @@ public static class DispatchProcessHost
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
-        ProtectWorkspaceBoundary(parameters.WorkingDirectory);
-        var preparation = preparer.Prepare(parameters.WorkingDirectory, sandboxRoot);
-        if (preparation.RecoveryAction is { } action)
+        var preparation = Track("prepare-roots", () => preparer.Prepare(parameters.WorkingDirectory, sandboxRoot));
+        if (preparation.RecoveryAction is { } recoveryAction)
         {
-            throw new InvalidOperationException(action.Reason);
+            throw new InvalidOperationException(recoveryAction.Reason);
         }
 
-        ProtectGitMetadata(parameters.WorkingDirectory);
+        protectWorkspaceBoundary ??= ProtectWorkspaceBoundary;
+        protectGitMetadata ??= ProtectGitMetadata;
 
-        // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
-        // provider-specific home/config directories. The sandbox root is labeled before child paths are
-        // materialized so they inherit Low without a second recursive icacls traversal.
-        var tempDir = Path.Combine(sandboxRoot, "temp");
-        var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
-        Directory.CreateDirectory(tempDir);
-        WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
-
-        SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
-
-        // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
-        // the worktree must read as clean after the orchestrator commits the worker's real edits.
-        ExcludeSandboxFromGit(parameters.WorkingDirectory);
-
-        startInfo.Environment["TEMP"] = tempDir;
-        startInfo.Environment["TMP"] = tempDir;
-        startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
-        WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, preparation);
-
-        // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
-        // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
-        var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
-        File.WriteAllText(dropScript, DropToLowScript);
-        var lastIndex = startInfo.ArgumentList.Count - 1;
-        if (lastIndex >= 0)
+        if (!preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase))
         {
-            startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
+            TrackAction(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, () => protectWorkspaceBoundary(parameters.WorkingDirectory));
         }
+
+        if (!preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase))
+        {
+            TrackAction(WorkerSandboxPreparer.ProtectGitMetadataPhase, () => protectGitMetadata(parameters.WorkingDirectory));
+        }
+
+        WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
+
+        if (preparation.PrepReceiptHit)
+        {
+            // The receipt verifies the prepared root identity, schema, Low inheritable integrity, and
+            // explicit protection-phase coverage. Covered phases skip the medium-integrity icacls calls
+            // that caused the fixed ~120s tax observed on receipt hits.
+            recordStep?.Invoke("receipt-fast-path", DateTimeOffset.UtcNow, TimeSpan.Zero);
+        }
+
+        TrackAction("materialize-sandbox", () =>
+        {
+            // Per-dispatch Low-labeled writable set: provider-neutral temp scratch, command shims, and any
+            // provider-specific home/config directories. The sandbox root is labeled before child paths are
+            // materialized so they inherit Low without a second recursive icacls traversal.
+            var tempDir = Path.Combine(sandboxRoot, "temp");
+            var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
+            Directory.CreateDirectory(tempDir);
+            WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
+
+            SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
+            SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath);
+
+            // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
+            // the worktree must read as clean after the orchestrator commits the worker's real edits.
+            ExcludeSandboxFromGit(parameters.WorkingDirectory);
+
+            startInfo.Environment["TEMP"] = tempDir;
+            startInfo.Environment["TMP"] = tempDir;
+            startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
+            WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, preparation);
+
+            // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
+            // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
+            var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
+            File.WriteAllText(dropScript, DropToLowScript);
+            var lastIndex = startInfo.ArgumentList.Count - 1;
+            if (lastIndex >= 0)
+            {
+                startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
+            }
+        });
 
         return preparation;
     }
@@ -147,6 +203,106 @@ public static class DispatchProcessHost
         if (provider == WorkerSandboxProvider.Claude)
         {
             SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+        }
+    }
+
+    internal static void SeedWorkerCaBundle(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath = null)
+    {
+        var bundlePath = Path.Combine(sandboxRoot, WorkerCaBundleFileName);
+        try
+        {
+            Directory.CreateDirectory(sandboxRoot);
+            if (!HasNonEmptyFile(bundlePath))
+            {
+                var existingBundle = startInfo.Environment.TryGetValue("SSL_CERT_FILE", out var existingPath)
+                    ? existingPath
+                    : Environment.GetEnvironmentVariable("SSL_CERT_FILE");
+                if (!string.IsNullOrWhiteSpace(existingBundle) && File.Exists(existingBundle))
+                {
+                    File.Copy(existingBundle, bundlePath, overwrite: true);
+                }
+                else
+                {
+                    File.WriteAllText(bundlePath, ExportWindowsRootCertificateBundle());
+                }
+            }
+
+            startInfo.Environment["SSL_CERT_FILE"] = bundlePath;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException or InvalidOperationException)
+        {
+            if (!string.IsNullOrWhiteSpace(stderrPath))
+            {
+                AppendDispatchStderrDiagnostic(
+                    stderrPath,
+                    $"Worker sandbox diagnostic: failed to provision SSL_CERT_FILE bundle: {ex.Message}");
+            }
+        }
+    }
+
+    private static bool HasNonEmptyFile(string path)
+    {
+        try
+        {
+            return new FileInfo(path) is { Exists: true, Length: > 0 };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static string BuildPemCertificateBundle(IEnumerable<X509Certificate2> certificates)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var builder = new StringBuilder();
+        foreach (var certificate in certificates)
+        {
+            var hash = Convert.ToHexString(SHA256.HashData(certificate.RawData));
+            if (!seen.Add(hash))
+            {
+                continue;
+            }
+
+            builder.AppendLine(certificate.ExportCertificatePem().TrimEnd());
+        }
+
+        if (builder.Length == 0)
+        {
+            throw new InvalidOperationException("No exportable root CA certificates were available.");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string ExportWindowsRootCertificateBundle()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new InvalidOperationException("Worker CA bundle export is only supported by this sandbox path on Windows.");
+        }
+
+        var certificates = new List<X509Certificate2>();
+        AddCertificates(certificates, StoreLocation.LocalMachine, StoreName.Root);
+        AddCertificates(certificates, StoreLocation.LocalMachine, StoreName.CertificateAuthority);
+        AddCertificates(certificates, StoreLocation.CurrentUser, StoreName.Root);
+        AddCertificates(certificates, StoreLocation.CurrentUser, StoreName.CertificateAuthority);
+        return BuildPemCertificateBundle(certificates);
+    }
+
+    private static void AddCertificates(List<X509Certificate2> certificates, StoreLocation location, StoreName name)
+    {
+        try
+        {
+            using var store = new X509Store(name, location);
+            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+            certificates.AddRange(store.Certificates);
+        }
+        catch (CryptographicException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
@@ -688,7 +844,11 @@ public static void DropToLow() {
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
-            var sandboxPreparation = ApplyWorkerSandbox(startInfo, parameters);
+            var sandboxPreparation = ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                WorkerSandboxPreparer.CreateDefault(),
+                (phase, stepStartedAt, elapsed) => WriteSandboxPrepEvent(parameters, phase, stepStartedAt, elapsed));
             WriteSandboxPrepEvent(
                 parameters,
                 sandboxPreparation.PrepReceiptHit ? "receipt-hit" : "complete",
@@ -696,7 +856,9 @@ public static void DropToLow() {
                 DateTimeOffset.UtcNow - sandboxPrepStartedAt);
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
+            var preflightStartedAt = DateTimeOffset.UtcNow;
             RunLowIntegrityLaunchPreflight(startInfo, parameters);
+            WriteSandboxPrepEvent(parameters, "launch-preflight", preflightStartedAt, DateTimeOffset.UtcNow - preflightStartedAt);
 
             WriteHeartbeat("starting");
             RequireStartGate();

@@ -312,6 +312,17 @@ mcg-orchestrator.cmd record-goal <goal-prefix>   # compatibility alias for add +
 
 `DOGFOOD_LOG.md` remains only as a pointer for operators and should not receive new durable entries.
 
+### State backup and restore
+
+Use `scripts\Backup-OrchestratorState.ps1` for machine-local `.orchestrator` backups. It writes timestamped archives to `%USERPROFILE%\backups\mcg-orchestrator\` by default, snapshots SQLite stores with `sqlite3 .backup`, includes the goal/event/log artifact directories plus `agents.json` and `workers.json`, verifies an extracted copy with row counts when `-VerifyRestore` is supplied, and retains the latest 7 daily plus 4 weekly archives unless overridden.
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Backup-OrchestratorState.ps1 -VerifyRestore
+.\scripts\Invoke-RepoScript.ps1 scripts\Backup-OrchestratorState.ps1 -Install -DailyAt 03:20
+```
+
+To restore after a machine loss, first restore git branches and worktrees from origin. Then stop the conductor/dashboard, extract the selected backup zip, copy the extracted `.orchestrator` directory back to the repository root, and restart normal operator commands. For a single-store repair, keep the current `.orchestrator` directory intact and replace only the intended restored `*.db` file after verifying the archive in a scratch directory.
+
 For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` / `Invoke-OrchestratorSqliteTool.ps1 set-goal-status` update both the indexed `goals.status` column and the serialized snapshot in `.orchestrator/state.db`. They are operator recovery tools, not normal workflow commands; prefer `recover`, `retry`, and `conduct` first. Use only Core-valid statuses, and make the write during a quiet window after `LOOP_STOP`.
 
 ---

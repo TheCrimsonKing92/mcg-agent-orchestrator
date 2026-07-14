@@ -462,7 +462,9 @@ public sealed class ConductorBatchLoopTests
         string? runEventStorePath = null,
         int renewalCount = 0,
         int maxRenewals = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
-        Action? release = null) =>
+        Action? release = null,
+        TimeSpan verificationTimeout = default,
+        Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null) =>
         new(
             Args: args ?? ["conduct", "--loop", "--watch", "--max-duration", "14400"],
             ExecutionDirectory: root,
@@ -472,7 +474,9 @@ public sealed class ConductorBatchLoopTests
             StopFilePath: stopFilePath ?? Path.Combine(root, ConductorBatchLoop.StopFileName),
             RenewalCount: renewalCount,
             MaxRenewals: maxRenewals,
-            ReleaseCurrentLease: release ?? (() => { }));
+            ReleaseCurrentLease: release ?? (() => { }),
+            VerificationTimeout: verificationTimeout,
+            LoopStartProbe: loopStartProbe);
 
     private static void RunGit(string workingDirectory, params string[] args)
     {
@@ -828,8 +832,90 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_retries_once_and_journals_failed_verification_loudly")]
-    public void ConductorLoopHandoffRetriesOnceAndJournalsFailedVerificationLoudly()
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_does_not_retry_while_successor_is_alive")]
+    public void ConductorLoopHandoffDoesNotRetryWhileSuccessorIsAlive()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-slow-handoff");
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        using var outWriter = new StringWriter();
+        using var errorWriter = new StringWriter();
+        try
+        {
+            Console.SetOut(outWriter);
+            Console.SetError(errorWriter);
+            var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
+            var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
+            var stopwatch = Stopwatch.StartNew();
+            var attempts = 0;
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(
+                    root,
+                    verificationTimeout: scaledOldTimeout,
+                    loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    attempts++;
+                    File.WriteAllText(request.StdoutPath, "successor booting");
+                    return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
+                });
+
+            Assert.False(result.Started);
+            Assert.True(result.Failed);
+            Assert.Equal(1, attempts);
+            Assert.Equal("successor-verification-failed", result.Reason);
+            Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_slow_boot_successor_succeeds_without_retry")]
+    public void ConductorLoopHandoffSlowBootSuccessorSucceedsWithoutRetry()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-delayed-handoff");
+        try
+        {
+            var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
+            var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
+            var stopwatch = Stopwatch.StartNew();
+            var attempts = 0;
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(
+                    root,
+                    verificationTimeout: TimeSpan.FromSeconds(2),
+                    loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    attempts++;
+                    File.WriteAllText(request.StdoutPath, "successor booting");
+                    return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
+                });
+
+            Assert.True(result.Started);
+            Assert.Equal(1, attempts);
+            Assert.Equal(Environment.ProcessId, result.ProcessId);
+            Assert.True(stopwatch.Elapsed >= scaledOldTimeout);
+            Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_retries_dead_successor_once_and_reports_last_attempt")]
+    public void ConductorLoopHandoffRetriesDeadSuccessorOnceAndReportsLastAttempt()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-failed-handoff");
         var originalOut = Console.Out;
@@ -859,6 +945,8 @@ public sealed class ConductorBatchLoopTests
             Assert.True(result.Failed);
             Assert.Equal(2, attempts);
             Assert.Equal("successor-verification-failed", result.Reason);
+            Assert.Contains("attempt=2", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("pid=4502", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
@@ -933,10 +1021,60 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("CreateBreakawayFromJob", source, StringComparison.Ordinal);
         Assert.Contains("CreateInheritedOutputFile", source, StringComparison.Ordinal);
         Assert.Contains("UseStdHandles", source, StringComparison.Ordinal);
-        Assert.Contains("bInheritHandles: false", source, StringComparison.Ordinal);
+        Assert.Contains("bInheritHandles: true", source, StringComparison.Ordinal);
+        Assert.Contains("ProcThreadAttributeHandleList", source, StringComparison.Ordinal);
+        Assert.Contains("ExtendedStartupInfoPresent", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("WindowsCreationFlags.CreateNoWindow", source, StringComparison.Ordinal);
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
         Assert.Contains("JobObjectLimitBreakawayOk", jobSource, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_inherits_redirected_stdout_handle")]
+    public void ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
+        int? processId = null;
+        try
+        {
+            var stdoutPath = Path.Combine(root, "successor.out.log");
+            var stderrPath = Path.Combine(root, "successor.err.log");
+            var marker = "handoff-stdout-marker-" + Guid.NewGuid().ToString("N");
+            var scriptPath = Path.Combine(root, "write-marker.cmd");
+            File.WriteAllText(scriptPath, $"@echo {marker}{Environment.NewLine}");
+            var cmdPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "cmd.exe");
+            var result = ConductorLoopHandoff.LaunchDetachedWindows(
+                new ConductLoopLaunchRequest("batch1", [], stdoutPath, stderrPath, root, 0),
+                [
+                    cmdPath,
+                    "/d",
+                    "/c",
+                    scriptPath
+                ]);
+
+            Assert.True(result.ProcessId > 0);
+            processId = result.ProcessId;
+            Assert.True(WaitUntil(
+                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
+                TimeSpan.FromSeconds(10)),
+                $"stdout did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
+        }
+        finally
+        {
+            if (processId is { } pid)
+            {
+                TryKillProcess(pid);
+            }
+
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "ConductorLoopHandoff_successor_survives_parent_job_exit_and_emits_loop_start")]
@@ -1000,7 +1138,7 @@ public sealed class ConductorBatchLoopTests
             var conductEventsPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
             Assert.True(WaitUntil(() =>
                 File.Exists(conductEventsPath) &&
-                File.ReadAllText(conductEventsPath).Contains("LOOP_START", StringComparison.Ordinal),
+                ReadAllTextShared(conductEventsPath).Contains("LOOP_START", StringComparison.Ordinal),
                 TimeSpan.FromSeconds(5)), $"Successor did not journal LOOP_START. stdout={stdout} stderr={stderr}");
 
             Assert.NotEmpty(Directory.GetFiles(logDirectory, "operator-batch99-*.out.log"));
@@ -1071,6 +1209,25 @@ public sealed class ConductorBatchLoopTests
         return predicate();
     }
 
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private static string TryReadAllTextShared(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? ReadAllTextShared(path) : "<missing>";
+        }
+        catch (Exception ex)
+        {
+            return $"<{ex.GetType().Name}:{ex.Message}>";
+        }
+    }
+
     private static bool IsProcessRunning(int processId)
     {
         try
@@ -1103,6 +1260,28 @@ public sealed class ConductorBatchLoopTests
         }
         catch (InvalidOperationException)
         {
+        }
+    }
+
+    private static string DescribeProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.WaitForExit(100))
+            {
+                return $"pid={processId} running";
+            }
+
+            return $"pid={processId} exit={process.ExitCode}";
+        }
+        catch (ArgumentException)
+        {
+            return $"pid={processId} missing";
+        }
+        catch (InvalidOperationException)
+        {
+            return $"pid={processId} unavailable";
         }
     }
 
