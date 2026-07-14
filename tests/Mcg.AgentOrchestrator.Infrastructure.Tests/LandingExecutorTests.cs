@@ -278,10 +278,16 @@ public sealed class LandingExecutorTests
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateCompletedGoalWithLeftoverWorkspace(string repo)
     {
         var (kernel, goal) = CreateVerifiedGoal(repo);
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        RunGit(repo, "checkout", "-b", branch);
+        File.WriteAllText(Path.Combine(repo, "landed-work.txt"), "landed");
+        RunGit(repo, "add", "landed-work.txt");
+        RunGit(repo, "commit", "-m", "Goal work");
+        RunGit(repo, "checkout", "main");
+        RunGit(repo, "merge", "--ff-only", branch);
+        RunGit(repo, "worktree", "add", GoalWorktrees.WorktreePath(repo, goal.Id), branch);
+        GoalOperationJournal.Completed(repo, goal, "conductor:land", "landed");
         kernel.CompleteGoal(goal.Id, "Already landed; cleanup remains.");
-        var leftoverPath = GoalWorktrees.WorktreePath(repo, goal.Id);
-        Directory.CreateDirectory(leftoverPath);
-        File.WriteAllText(Path.Combine(leftoverPath, "leftover.txt"), "cleanup debt");
         return (kernel, goal);
     }
 

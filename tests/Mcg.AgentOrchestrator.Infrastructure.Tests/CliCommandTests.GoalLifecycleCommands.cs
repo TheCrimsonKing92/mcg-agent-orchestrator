@@ -1024,10 +1024,10 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             Xunit.Assert.False(changed);
         });
 
-        Xunit.Assert.Contains("ProviderConnectivity task 1", output);
-        Xunit.Assert.Contains("action=ReRoute", output);
-        Xunit.Assert.Contains("canAutoApply=True", output);
-        Xunit.Assert.Contains("command=re-delegate 1 --autonomy safe-auto", output);
+        Xunit.Assert.Contains("SubscriptionRetryAfter task 1", output);
+        Xunit.Assert.Contains("action=Wait", output);
+        Xunit.Assert.Contains("canAutoApply=False", output);
+        Xunit.Assert.Contains("command=wait until", output);
     }
 
 

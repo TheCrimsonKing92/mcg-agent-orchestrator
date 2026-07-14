@@ -235,6 +235,11 @@ public sealed partial class AgentOrchestratorKernel
         return GoalTimingReport.Build(GetGoal(goalId));
     }
 
+    public DispatchValueReportSnapshot BuildDispatchValueReport(DateTimeOffset? since = null)
+    {
+        return GoalTimingReport.BuildDispatchValueReport(Goals, since);
+    }
+
     public LoopHealthSnapshot BuildLoopHealthReport(int? lastN = null)
     {
         return LoopHealthReport.Build(Goals, HumanInputRequests, lastN);

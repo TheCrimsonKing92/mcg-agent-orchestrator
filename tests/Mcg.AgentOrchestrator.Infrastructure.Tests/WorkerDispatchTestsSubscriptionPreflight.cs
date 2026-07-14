@@ -806,6 +806,118 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.Equal(developer.SubscriptionRetryAfter, DashboardResponseMapper.ToTaskSummaryDto(goal, developer).SubscriptionRetryAfter);
 }
 
+    [Xunit.Fact(DisplayName = "Provider_connectivity_retry_backoff_defers_subscription_dispatch_until_not_before")]
+    public void ProviderConnectivityRetryBackoffDefersSubscriptionDispatchUntilNotBefore()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(promptRoot);
+    Directory.CreateDirectory(workingDirectory);
+    var failureAt = DateTimeOffset.UtcNow.AddMinutes(5);
+    var retryAttemptAt = failureAt.AddSeconds(30);
+    var kernel = new AgentOrchestratorKernel(new TestClock(failureAt));
+    var goal = kernel.CreateGoal(
+        "Retry planner dispatch after provider connectivity",
+        [new TaskSpec(TaskId.New(), "Plan retry.", AgentRole.Planner)]);
+    var agent = SubscriptionPlannerAgent("planner", "Planner");
+    var agents = new[] { agent };
+    var profiles = DispatchTestProfiles();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec attempt 1",
+        workingDirectory,
+        failureAt,
+        ProviderName: "OpenAI",
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification("codex exec attempt 1", workingDirectory, failureAt));
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
+    var item = plan.Items.Single();
+    var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        kernel,
+        goal,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        retryAttemptAt);
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        agents,
+        profiles,
+        workingDirectory,
+        retryAttemptAt);
+
+    Assert.Equal(failureAt.AddMinutes(1), task.SubscriptionRetryAfter);
+    Assert.False(item.CanPrepare);
+    Assert.Equal(task.SubscriptionRetryAfter, item.RetryAfter);
+    Assert.Equal(1, plan.RetryDeferredCount);
+    Assert.Empty(parallelPlan.Batches);
+    Assert.Empty(batch.Dispatches);
+    Assert.Contains(batch.Blocked, blocked =>
+        blocked.Reason == "subscription-preflight" &&
+        blocked.Details?.Any(detail => detail.Contains("subscription retry deferred", StringComparison.Ordinal)) == true);
+    Assert.False(preflight.Allowed);
+    Assert.Contains(preflight.Findings, finding => finding.Contains("subscription retry deferred", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Provider_connectivity_retry_backoff_allows_subscription_dispatch_after_not_before")]
+    public void ProviderConnectivityRetryBackoffAllowsSubscriptionDispatchAfterNotBefore()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(promptRoot);
+    Directory.CreateDirectory(workingDirectory);
+    var failureAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+    var retryAttemptAt = failureAt.AddMinutes(2);
+    var kernel = new AgentOrchestratorKernel(new TestClock(failureAt));
+    var goal = kernel.CreateGoal(
+        "Resume planner dispatch after provider connectivity",
+        [new TaskSpec(TaskId.New(), "Plan after retry.", AgentRole.Planner)]);
+    var agent = SubscriptionPlannerAgent("planner", "Planner");
+    var agents = new[] { agent };
+    var profiles = DispatchTestProfiles();
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec attempt 1",
+        workingDirectory,
+        failureAt,
+        ProviderName: "OpenAI",
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification("codex exec attempt 1", workingDirectory, failureAt));
+
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
+    var item = plan.Items.Single();
+    var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+    var expiredRetryAfter = task.SubscriptionRetryAfter;
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        kernel,
+        goal,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        retryAttemptAt);
+
+    Assert.Equal(failureAt.AddMinutes(1), expiredRetryAfter);
+    Assert.True(expiredRetryAfter < retryAttemptAt);
+    Assert.True(item.CanPrepare);
+    Assert.Null(item.RetryAfter);
+    Assert.Equal(0, plan.RetryDeferredCount);
+    Assert.Contains(parallelPlan.Batches, candidate => candidate.IntentIds.Contains(task.Id.Value, StringComparer.OrdinalIgnoreCase));
+    Assert.Single(batch.Dispatches);
+    Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
+    Assert.Empty(batch.Blocked);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_blocks_large_paid_ready_subscription_start_before_dispatch")]
     public void SubscriptionPromptCostGuardBlocksLargePaidReadySubscriptionStartBeforeDispatch()
 {
@@ -844,6 +956,19 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.Contains("Inspect the generated prompt before paid subscription start", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 }
+
+private static TaskVerificationRecord ProviderConnectivityVerification(
+    string command,
+    string workingDirectory,
+    DateTimeOffset completedAt) =>
+    new(
+        command,
+        workingDirectory,
+        1,
+        string.Empty,
+        "Falling back from WebSockets to HTTPS transport failed. stream disconnected",
+        completedAt,
+        ProviderFailureKind: ProviderFailureKind.Connectivity);
 
     [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_paid_batch_fanout_with_small_prompts_is_advisory_not_blocking")]
     public void SubscriptionPromptCostGuardPaidBatchFanoutWithSmallPromptsIsAdvisoryNotBlocking()
@@ -1205,7 +1330,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     var firstFailureAt = DateTimeOffset.Parse("2026-06-01T12:00:00Z");
     var secondFailureAt = DateTimeOffset.Parse("2026-06-01T13:00:00Z");
     var retryWindowPassed = DateTimeOffset.Parse("2026-06-01T18:00:00Z");
-    var kernel = new AgentOrchestratorKernel();
+    var kernel = new AgentOrchestratorKernel(new TestClock(firstFailureAt));
     var goal = kernel.CreateGoal("Review repeated subscription usage limits");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);

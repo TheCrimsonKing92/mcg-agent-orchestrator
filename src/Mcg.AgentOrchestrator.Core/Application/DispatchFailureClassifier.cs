@@ -166,7 +166,8 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        return TryGetRecoverableSubscriptionLimitLine(verification, out _);
+        return verification.ProviderFailureKind == ProviderFailureKind.RateLimit ||
+            TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
     public static bool HasRecoverableSubscriptionLimitEvidence(TaskVerificationRecord verification) =>
@@ -1235,7 +1236,8 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        return TryGetProviderConnectivityLine(verification, out _) &&
+        return (verification.ProviderFailureKind == ProviderFailureKind.Connectivity ||
+            TryGetProviderConnectivityLine(verification, out _)) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -1682,6 +1684,7 @@ public static class DispatchFailureClassifier
     private static bool IsProviderErrorLine(string line)
     {
         return line.StartsWith("ERROR:", StringComparison.Ordinal) ||
+            line.Contains(" : ERROR:", StringComparison.Ordinal) ||
             CodexCliDiagnosticPrefix.IsMatch(line);
     }
 

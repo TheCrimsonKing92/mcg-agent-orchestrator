@@ -1453,6 +1453,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
     Console.WriteLine($"  gates {prefix}");
     Console.WriteLine($"  subscription-plan {prefix}");
     Console.WriteLine($"  model-outcomes");
+    Console.WriteLine($"  dispatch-value [--since <yyyy-mm-dd>]");
     Console.WriteLine($"  loop-health");
     Console.WriteLine($"  failure-triage {prefix}");
     Console.WriteLine($"  goal-recovery {prefix}");
@@ -2316,7 +2317,15 @@ private static string? ResolveTextArgumentOrDefault(IReadOnlyList<string> parts,
     var hasInlineText = parts.Count > inlineIndex && !parts[inlineIndex].StartsWith("--", StringComparison.Ordinal);
     if (presentFlags.Length == 0)
     {
-        return hasInlineText ? parts[inlineIndex] : defaultValue;
+        if (!hasInlineText)
+        {
+            return defaultValue;
+        }
+
+        var inlineParts = parts
+            .Skip(inlineIndex)
+            .TakeWhile(part => !part.StartsWith("--", StringComparison.Ordinal));
+        return string.Join(' ', inlineParts);
     }
 
     if (hasInlineText)
