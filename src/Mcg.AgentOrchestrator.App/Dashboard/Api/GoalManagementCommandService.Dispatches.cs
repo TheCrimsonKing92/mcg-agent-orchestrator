@@ -363,11 +363,12 @@ private sealed record ParallelSafeBatchSelection(
     ParallelExecutionPlan Plan,
     IReadOnlyList<ReadyBlockedDiagnostic> Blocked);
 
-private static bool IsSubscriptionStartCandidate(TaskSpec task)
-{
-    return task.Status == WorkTaskStatus.Assigned &&
-        !HasBlockingRunningProcess(task);
-}
+    private static bool IsSubscriptionStartCandidate(TaskSpec task)
+    {
+        return task.Status == WorkTaskStatus.Assigned &&
+            !HasBlockingRunningProcess(task) &&
+            !WorkerProfileDispatcher.IsTaskRetryDeferred(task, DateTimeOffset.UtcNow, out _);
+    }
 
 internal static bool HasAssignedDispatchCandidates(Goal goal) =>
     goal.Tasks.Any(IsSubscriptionStartCandidate);
