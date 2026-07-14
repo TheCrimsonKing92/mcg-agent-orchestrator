@@ -505,7 +505,7 @@ public sealed class DispatchProcessHostTests
             Assert.True(second.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
             Assert.Empty(protectedPhases);
-            Assert.Equal(4, labeler.QueryCalls.Count);
+            AssertNoGitReceiptHitIntegrityQueries(labeler, worktree, root, sandboxRoot);
             Assert.Contains("prepare-roots", phases);
             Assert.Contains("receipt-fast-path", phases);
             Assert.Contains("materialize-sandbox", phases);
@@ -566,7 +566,7 @@ public sealed class DispatchProcessHostTests
             Assert.Empty(labeler.SetCalls);
             Assert.Contains(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, protectedPhases);
             Assert.DoesNotContain(WorkerSandboxPreparer.ProtectGitMetadataPhase, protectedPhases);
-            Assert.Equal(4, labeler.QueryCalls.Count);
+            AssertNoGitReceiptHitIntegrityQueries(labeler, worktree, root, sandboxRoot);
             Assert.NotEqual(receiptBefore, File.ReadAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName)));
         }
         finally
@@ -1475,6 +1475,19 @@ public sealed class DispatchProcessHostTests
         }
 
         return count;
+    }
+
+    private static void AssertNoGitReceiptHitIntegrityQueries(
+        RecordingIntegrityLabeler labeler,
+        string worktree,
+        string workspaceBoundary,
+        string sandboxRoot)
+    {
+        // Receipt-hit verification for a non-git temp worktree queries exactly the roots whose
+        // receipt/protection state can invalidate the fast path: worktree Low/Inheritable,
+        // workspace boundary Medium, and sandbox root Low/Inheritable. Git metadata adds queries
+        // only when a .git file/directory exists.
+        Assert.Equal([worktree, workspaceBoundary, sandboxRoot], labeler.QueryCalls);
     }
 
     private sealed class RecordingIntegrityLabeler(IntegrityLabelState queryState, bool setResult = true) : IWorkerIntegrityLabeler
