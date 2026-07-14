@@ -724,7 +724,7 @@ public sealed class DispatchProcessHostTests
             var sourceBundle = Path.Combine(root, "source-ca.pem");
             var sourcePem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
             File.WriteAllText(sourceBundle, sourcePem);
-            var startInfo = new ProcessStartInfo { UseShellExecute = false };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
             startInfo.Environment["SSL_CERT_FILE"] = sourceBundle;
 
             DispatchProcessHost.SeedWorkerCaBundle(startInfo, sandboxRoot);

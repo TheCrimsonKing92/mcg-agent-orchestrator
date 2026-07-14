@@ -143,7 +143,14 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("stop", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
+        return SplitTargetTextCommandWithFileFlags(
+            command,
+            remainder,
+            "--text-file",
+            "--as",
+            "--confirm-goal-stop",
+            "--confirm-goal-park",
+            "--confirm-goal-abandon");
     }
 
     if (command.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
