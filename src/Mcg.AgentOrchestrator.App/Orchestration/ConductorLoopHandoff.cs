@@ -340,51 +340,61 @@ internal static partial class ConductorLoopHandoff
         {
             stdoutHandle = CreateInheritedOutputFile(request.StdoutPath);
             stderrHandle = CreateInheritedOutputFile(request.StderrPath);
-            var startupInfo = new WindowsProcessStartupInfo
+            var startupInfo = new WindowsProcessStartupInfoEx
             {
-                cb = Marshal.SizeOf<WindowsProcessStartupInfo>(),
+                cb = Marshal.SizeOf<WindowsProcessStartupInfoEx>(),
                 dwFlags = (int)WindowsStartupInfoFlags.UseStdHandles,
                 hStdOutput = stdoutHandle,
                 hStdError = stderrHandle
             };
-
-            if (!CreateProcessW(
-                    lpApplicationName: command[0],
-                    lpCommandLine: commandLine,
-                    lpProcessAttributes: IntPtr.Zero,
-                    lpThreadAttributes: IntPtr.Zero,
-                    bInheritHandles: true,
-                    dwCreationFlags: WindowsCreationFlags.CreateBreakawayFromJob |
-                        WindowsCreationFlags.CreateNewProcessGroup |
-                        WindowsCreationFlags.DetachedProcess |
-                        WindowsCreationFlags.CreateUnicodeEnvironment,
-                    lpEnvironment: environment,
-                    lpCurrentDirectory: request.WorkingDirectory,
-                    lpStartupInfo: ref startupInfo,
-                    lpProcessInformation: out var processInformation))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start breakaway conduct loop successor.");
-            }
+            var attributeList = CreateInheritedHandleList(stdoutHandle, stderrHandle);
+            startupInfo.lpAttributeList = attributeList.AttributeList;
 
             try
             {
-                var inJob = IsProcessInJob(processInformation.hProcess);
-                if (inJob)
+                if (!CreateProcessW(
+                        lpApplicationName: command[0],
+                        lpCommandLine: commandLine,
+                        lpProcessAttributes: IntPtr.Zero,
+                        lpThreadAttributes: IntPtr.Zero,
+                        bInheritHandles: true,
+                        dwCreationFlags: WindowsCreationFlags.CreateBreakawayFromJob |
+                            WindowsCreationFlags.CreateNewProcessGroup |
+                            WindowsCreationFlags.DetachedProcess |
+                            WindowsCreationFlags.CreateUnicodeEnvironment |
+                            WindowsCreationFlags.ExtendedStartupInfoPresent,
+                        lpEnvironment: environment,
+                        lpCurrentDirectory: request.WorkingDirectory,
+                        lpStartupInfo: ref startupInfo,
+                        lpProcessInformation: out var processInformation))
                 {
-                    TerminateProcess(processInformation.hProcess, 1);
-                    throw new InvalidOperationException("Breakaway conduct loop successor remained in a Windows job.");
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start breakaway conduct loop successor.");
                 }
 
-                return new ConductLoopLaunchResult(
-                    (int)processInformation.dwProcessId,
-                    request.StdoutPath,
-                    request.StderrPath,
-                    "spawnPath=windows-createprocess breakawayRequested=true breakawaySucceeded=true");
+                try
+                {
+                    var inJob = IsProcessInJob(processInformation.hProcess);
+                    if (inJob)
+                    {
+                        TerminateProcess(processInformation.hProcess, 1);
+                        throw new InvalidOperationException("Breakaway conduct loop successor remained in a Windows job.");
+                    }
+
+                    return new ConductLoopLaunchResult(
+                        (int)processInformation.dwProcessId,
+                        request.StdoutPath,
+                        request.StderrPath,
+                        "spawnPath=windows-createprocess breakawayRequested=true breakawaySucceeded=true");
+                }
+                finally
+                {
+                    CloseHandle(processInformation.hThread);
+                    CloseHandle(processInformation.hProcess);
+                }
             }
             finally
             {
-                CloseHandle(processInformation.hThread);
-                CloseHandle(processInformation.hProcess);
+                attributeList.Dispose();
             }
         }
         finally
@@ -393,6 +403,47 @@ internal static partial class ConductorLoopHandoff
                 CloseHandle(stdoutHandle);
             if (stderrHandle != IntPtr.Zero)
                 CloseHandle(stderrHandle);
+        }
+    }
+
+    private static WindowsInheritedHandleList CreateInheritedHandleList(params IntPtr[] handles)
+    {
+        var size = IntPtr.Zero;
+        _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+        if (size == IntPtr.Zero)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to size Windows process attribute list.");
+
+        var attributeList = Marshal.AllocHGlobal(size);
+        var handleList = Marshal.AllocHGlobal(IntPtr.Size * handles.Length);
+        var initialized = false;
+        try
+        {
+            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to initialize Windows process attribute list.");
+
+            initialized = true;
+            Marshal.Copy(handles, 0, handleList, handles.Length);
+            if (!UpdateProcThreadAttribute(
+                    attributeList,
+                    0,
+                    new IntPtr(ProcThreadAttributeHandleList),
+                    handleList,
+                    new IntPtr(IntPtr.Size * handles.Length),
+                    IntPtr.Zero,
+                    IntPtr.Zero))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to restrict inherited Windows process handles.");
+            }
+
+            return new WindowsInheritedHandleList(attributeList, handleList, initialized);
+        }
+        catch
+        {
+            if (initialized)
+                DeleteProcThreadAttributeList(attributeList);
+            Marshal.FreeHGlobal(handleList);
+            Marshal.FreeHGlobal(attributeList);
+            throw;
         }
     }
 
@@ -640,8 +691,11 @@ internal static partial class ConductorLoopHandoff
         CreateNewProcessGroup = 0x00000200,
         CreateUnicodeEnvironment = 0x00000400,
         CreateBreakawayFromJob = 0x01000000,
-        DetachedProcess = 0x00000008
+        DetachedProcess = 0x00000008,
+        ExtendedStartupInfoPresent = 0x00080000
     }
+
+    private const int ProcThreadAttributeHandleList = 0x00020002;
 
     [Flags]
     private enum WindowsStartupInfoFlags : int
@@ -714,6 +768,52 @@ internal static partial class ConductorLoopHandoff
         public uint dwThreadId;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WindowsProcessStartupInfoEx
+    {
+        public int cb;
+        public string? lpReserved;
+        public string? lpDesktop;
+        public string? lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+        public IntPtr lpAttributeList;
+    }
+
+    private sealed class WindowsInheritedHandleList : IDisposable
+    {
+        public WindowsInheritedHandleList(IntPtr attributeList, IntPtr handleList, bool initialized)
+        {
+            AttributeList = attributeList;
+            HandleList = handleList;
+            Initialized = initialized;
+        }
+
+        public IntPtr AttributeList { get; }
+        private IntPtr HandleList { get; }
+        private bool Initialized { get; }
+
+        public void Dispose()
+        {
+            if (Initialized)
+                DeleteProcThreadAttributeList(AttributeList);
+            Marshal.FreeHGlobal(HandleList);
+            Marshal.FreeHGlobal(AttributeList);
+        }
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
         string? lpApplicationName,
@@ -724,8 +824,28 @@ internal static partial class ConductorLoopHandoff
         WindowsCreationFlags dwCreationFlags,
         string? lpEnvironment,
         string? lpCurrentDirectory,
-        ref WindowsProcessStartupInfo lpStartupInfo,
+        ref WindowsProcessStartupInfoEx lpStartupInfo,
         out WindowsProcessInformation lpProcessInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr lpAttributeList,
+        int dwAttributeCount,
+        int dwFlags,
+        ref IntPtr lpSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr lpAttributeList,
+        uint dwFlags,
+        IntPtr attribute,
+        IntPtr lpValue,
+        IntPtr cbSize,
+        IntPtr lpPreviousValue,
+        IntPtr lpReturnSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);

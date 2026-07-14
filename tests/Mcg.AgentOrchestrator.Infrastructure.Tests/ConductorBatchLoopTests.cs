@@ -1022,6 +1022,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("CreateInheritedOutputFile", source, StringComparison.Ordinal);
         Assert.Contains("UseStdHandles", source, StringComparison.Ordinal);
         Assert.Contains("bInheritHandles: true", source, StringComparison.Ordinal);
+        Assert.Contains("ProcThreadAttributeHandleList", source, StringComparison.Ordinal);
+        Assert.Contains("ExtendedStartupInfoPresent", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WindowsCreationFlags.CreateNoWindow", source, StringComparison.Ordinal);
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
@@ -1037,33 +1039,40 @@ public sealed class ConductorBatchLoopTests
         }
 
         var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
+        int? processId = null;
         try
         {
             var stdoutPath = Path.Combine(root, "successor.out.log");
             var stderrPath = Path.Combine(root, "successor.err.log");
             var marker = "handoff-stdout-marker-" + Guid.NewGuid().ToString("N");
-            var powershellPath = Path.Combine(
+            var scriptPath = Path.Combine(root, "write-marker.cmd");
+            File.WriteAllText(scriptPath, $"@echo {marker}{Environment.NewLine}");
+            var cmdPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe");
+                "cmd.exe");
             var result = ConductorLoopHandoff.LaunchDetachedWindows(
                 new ConductLoopLaunchRequest("batch1", [], stdoutPath, stderrPath, root, 0),
                 [
-                    powershellPath,
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    $"[Console]::Out.WriteLine('{marker}')"
+                    cmdPath,
+                    "/d",
+                    "/c",
+                    scriptPath
                 ]);
 
             Assert.True(result.ProcessId > 0);
+            processId = result.ProcessId;
             Assert.True(WaitUntil(
-                () => File.Exists(stdoutPath) && File.ReadAllText(stdoutPath).Contains(marker, StringComparison.Ordinal),
-                TimeSpan.FromSeconds(10)));
+                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
+                TimeSpan.FromSeconds(10)),
+                $"stdout did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
         }
         finally
         {
+            if (processId is { } pid)
+            {
+                TryKillProcess(pid);
+            }
+
             TryDeleteDirectory(root);
         }
     }
@@ -1129,7 +1138,7 @@ public sealed class ConductorBatchLoopTests
             var conductEventsPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
             Assert.True(WaitUntil(() =>
                 File.Exists(conductEventsPath) &&
-                File.ReadAllText(conductEventsPath).Contains("LOOP_START", StringComparison.Ordinal),
+                ReadAllTextShared(conductEventsPath).Contains("LOOP_START", StringComparison.Ordinal),
                 TimeSpan.FromSeconds(5)), $"Successor did not journal LOOP_START. stdout={stdout} stderr={stderr}");
 
             Assert.NotEmpty(Directory.GetFiles(logDirectory, "operator-batch99-*.out.log"));
@@ -1200,6 +1209,25 @@ public sealed class ConductorBatchLoopTests
         return predicate();
     }
 
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private static string TryReadAllTextShared(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? ReadAllTextShared(path) : "<missing>";
+        }
+        catch (Exception ex)
+        {
+            return $"<{ex.GetType().Name}:{ex.Message}>";
+        }
+    }
+
     private static bool IsProcessRunning(int processId)
     {
         try
@@ -1232,6 +1260,28 @@ public sealed class ConductorBatchLoopTests
         }
         catch (InvalidOperationException)
         {
+        }
+    }
+
+    private static string DescribeProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.WaitForExit(100))
+            {
+                return $"pid={processId} running";
+            }
+
+            return $"pid={processId} exit={process.ExitCode}";
+        }
+        catch (ArgumentException)
+        {
+            return $"pid={processId} missing";
+        }
+        catch (InvalidOperationException)
+        {
+            return $"pid={processId} unavailable";
         }
     }
 
