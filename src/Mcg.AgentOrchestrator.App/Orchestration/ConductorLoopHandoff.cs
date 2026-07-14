@@ -63,7 +63,8 @@ internal sealed record ConductLoopHandoffOptions(
     int RenewalCount,
     int MaxRenewals,
     Action ReleaseCurrentLease,
-    TimeSpan VerificationTimeout = default);
+    TimeSpan VerificationTimeout = default,
+    Func<ConductLoopHandoffOptions, long, bool>? LoopStartProbe = null);
 
 internal sealed record ConductLoopLaunchRequest(
     string Name,
@@ -484,7 +485,7 @@ internal static partial class ConductorLoopHandoff
         {
             processAlive = IsProcessAlive(result.ProcessId);
             stdoutLogExists = File.Exists(result.StdoutPath);
-            loopStartJournaled = HasLoopStartAfterCursor(options, eventCursor);
+            loopStartJournaled = (options.LoopStartProbe ?? HasLoopStartAfterCursor)(options, eventCursor);
             if (processAlive && stdoutLogExists && loopStartJournaled)
                 break;
             if (!processAlive)

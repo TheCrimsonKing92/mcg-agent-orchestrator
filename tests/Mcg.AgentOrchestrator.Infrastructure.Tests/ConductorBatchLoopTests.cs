@@ -463,7 +463,8 @@ public sealed class ConductorBatchLoopTests
         int renewalCount = 0,
         int maxRenewals = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
         Action? release = null,
-        TimeSpan verificationTimeout = default) =>
+        TimeSpan verificationTimeout = default,
+        Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null) =>
         new(
             Args: args ?? ["conduct", "--loop", "--watch", "--max-duration", "14400"],
             ExecutionDirectory: root,
@@ -474,7 +475,8 @@ public sealed class ConductorBatchLoopTests
             RenewalCount: renewalCount,
             MaxRenewals: maxRenewals,
             ReleaseCurrentLease: release ?? (() => { }),
-            VerificationTimeout: verificationTimeout);
+            VerificationTimeout: verificationTimeout,
+            LoopStartProbe: loopStartProbe);
 
     private static void RunGit(string workingDirectory, params string[] args)
     {
@@ -842,20 +844,22 @@ public sealed class ConductorBatchLoopTests
         {
             Console.SetOut(outWriter);
             Console.SetError(errorWriter);
+            var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
+            var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
+            var stopwatch = Stopwatch.StartNew();
             var attempts = 0;
             var result = ConductorLoopHandoff.TryStartSuccessor(
-                HandoffOptions(root),
+                HandoffOptions(
+                    root,
+                    verificationTimeout: scaledOldTimeout,
+                    loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
                 {
                     attempts++;
-                    return new ConductLoopLaunchResult(4500 + attempts, request.StdoutPath, request.StderrPath);
-                },
-                (_, _) => new ConductLoopHandoffVerification(
-                    ProcessAlive: true,
-                    StdoutLogExists: true,
-                    LoopStartJournaled: false,
-                    Detail: "processAlive=true stdoutLogExists=true loopStartJournaled=false deadline=120s"));
+                    File.WriteAllText(request.StdoutPath, "successor booting");
+                    return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
+                });
 
             Assert.False(result.Started);
             Assert.True(result.Failed);
@@ -881,25 +885,28 @@ public sealed class ConductorBatchLoopTests
         var root = CreateTempDirectory("mcg-conduct-loop-delayed-handoff");
         try
         {
+            var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
+            var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
+            var stopwatch = Stopwatch.StartNew();
             var attempts = 0;
             var result = ConductorLoopHandoff.TryStartSuccessor(
-                HandoffOptions(root, verificationTimeout: TimeSpan.FromSeconds(120)),
+                HandoffOptions(
+                    root,
+                    verificationTimeout: TimeSpan.FromSeconds(2),
+                    loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
                 {
                     attempts++;
-                    return new ConductLoopLaunchResult(4500 + attempts, request.StdoutPath, request.StderrPath);
-                },
-                (_, _) => new ConductLoopHandoffVerification(
-                    ProcessAlive: true,
-                    StdoutLogExists: true,
-                    LoopStartJournaled: true,
-                    Detail: "processAlive=true stdoutLogExists=true loopStartJournaled=true simulatedBootDelay=75s"));
+                    File.WriteAllText(request.StdoutPath, "successor booting");
+                    return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
+                });
 
             Assert.True(result.Started);
             Assert.Equal(1, attempts);
-            Assert.Equal(4501, result.ProcessId);
-            Assert.Contains("simulatedBootDelay=75s", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Equal(Environment.ProcessId, result.ProcessId);
+            Assert.True(stopwatch.Elapsed >= scaledOldTimeout);
+            Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
         }
         finally
         {
