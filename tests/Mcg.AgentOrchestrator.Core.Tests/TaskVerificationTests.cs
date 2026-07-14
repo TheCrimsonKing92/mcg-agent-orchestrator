@@ -59,6 +59,8 @@ public sealed class TaskVerificationTests
     kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Developer)]);
     var task = goal.Tasks.Single();
 
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "verified-commit");
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implementation done.");
 
     Assert.Equal(GoalStatus.Active, goal.Status);
@@ -71,6 +73,18 @@ public sealed class TaskVerificationTests
         "passed",
         string.Empty,
         clock.UtcNow));
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(VerificationGateReason.MissingExecutedTestReceipt, kernel.BuildVerificationGate(goal.Id).Reason);
+
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "verified-commit");
 
     Assert.Equal(GoalStatus.Verified, goal.Status);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
@@ -291,6 +305,7 @@ public sealed class TaskVerificationTests
     CompleteWithVerification(kernel, goal, developer, "developer ok", clock);
     CompleteWithVerification(kernel, goal, tester, "tester ok", clock);
     CompleteWithVerification(kernel, goal, reviewer, "reviewer ok", clock);
+    RecordPassingExecutedTestReceipt(kernel, goal, reviewer, clock);
     Assert.Equal(GoalStatus.Verified, goal.Status);
 
     kernel.RetryTask(goal.Id, developer.Id, "Developer output changed; downstream evidence is stale.");
@@ -315,6 +330,8 @@ private static void CompleteWithVerification(
     string stdout,
     FakeClock clock)
 {
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "verified-commit");
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} done.");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
         $"{task.RequiredRole} verify",
@@ -324,5 +341,21 @@ private static void CompleteWithVerification(
         string.Empty,
         clock.UtcNow));
     clock.Advance();
+}
+
+private static void RecordPassingExecutedTestReceipt(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    FakeClock clock)
+{
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "verified-commit");
 }
 }

@@ -14,6 +14,9 @@ internal sealed class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex DotnetTestCountPattern = new(
+        @"\b(?<name>Passed|Failed|Total):\s*(?<count>\d+)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
@@ -29,6 +32,7 @@ internal sealed class ConductorDriver
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<Goal, IReadOnlyList<string>, string?, string?> _recordAcceptanceFailure;
     private readonly Action<Goal> _clearAcceptanceFailure;
+    private readonly Action<Goal, AcceptanceVerificationSummary> _recordExecutedTestReceipt;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
     private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
@@ -275,6 +279,10 @@ internal sealed class ConductorDriver
                 .Where(check => !check.Advisory && !check.Passed)
                 .Select(check => check.Name)
                 .ToArray() ?? [];
+            var executedTestChecks = verification.Checks?
+                .Where(IsExecutedDotnetTestCheck)
+                .ToArray() ?? [];
+            var executedTestCounts = SummarizeExecutedDotnetTestCounts(executedTestChecks);
             if (verification.Passed)
                 GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
@@ -289,7 +297,12 @@ internal sealed class ConductorDriver
                 verification.Passed ? null : verification.OutputTail,
                 failedChecks,
                 branchHeadSha,
-                mainHeadSha);
+                mainHeadSha,
+                changedFiles,
+                executedTestChecks.Select(check => check.Name).ToArray(),
+                executedTestCounts.Passed,
+                executedTestCounts.Failed,
+                executedTestCounts.Total);
         };
 
         _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
@@ -302,6 +315,18 @@ internal sealed class ConductorDriver
         _recordAcceptanceFailure = (goal, failedChecks, branchHeadSha, mainHeadSha) =>
             kernel.RecordAcceptanceFailure(goal.Id, failedChecks, branchHeadSha, mainHeadSha);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
+        _recordExecutedTestReceipt = (goal, acceptance) =>
+            kernel.RecordExecutedTestReceipt(
+                goal.Id,
+                acceptance.RunContext,
+                acceptance.ChangedFiles ?? [],
+                acceptance.CoveredChecks ?? [],
+                acceptance.PassedCount,
+                acceptance.FailedCount,
+                acceptance.BranchHeadSha,
+                acceptance.MainHeadSha,
+                acceptance.FailedChecks,
+                acceptance.TotalCount);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
 
@@ -469,6 +494,7 @@ internal sealed class ConductorDriver
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Action<Goal, IReadOnlyList<string>, string?, string?>? recordAcceptanceFailure = null,
         Action<Goal>? clearAcceptanceFailure = null,
+        Action<Goal, AcceptanceVerificationSummary>? recordExecutedTestReceipt = null,
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
@@ -493,6 +519,7 @@ internal sealed class ConductorDriver
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _, _, _) => { });
         _clearAcceptanceFailure = clearAcceptanceFailure ?? (_ => { });
+        _recordExecutedTestReceipt = recordExecutedTestReceipt ?? ((_, _) => { });
         _rebaseOntoMain = rebaseOntoMain;
         _land = land;
         _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
@@ -668,13 +695,71 @@ internal sealed class ConductorDriver
             GoalLifecycleState.Dispatched => ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.Dispatched),
             GoalLifecycleState.Running => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
-            GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
+            GoalLifecycleState.AwaitingVerification => ExecuteAwaitingVerification(goal, goalPrefix, policy),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
+    }
+
+    private ConductorAdvanceResult ExecuteAwaitingVerification(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy)
+    {
+        if (goal.Tasks.Any(task => task.Status != WorkTaskStatus.Completed || task.LastVerification is null))
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.AwaitingVerification,
+                    "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified"));
+        }
+
+        AcceptanceVerificationSummary acceptance;
+        try
+        {
+            acceptance = _runAcceptanceVerification(goal, null);
+        }
+        catch (DotnetBuildSlotsBusyException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.AwaitingVerification,
+                    $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(ex.SlotsBusy)}"));
+        }
+        catch (BuildLockBlockedException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.AwaitingVerification,
+                    $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(ex.Attribution)}"));
+        }
+
+        _recordExecutedTestReceipt(goal, acceptance);
+        if (!acceptance.Passed)
+        {
+            if (acceptance.FailedChecks is { Count: > 0 })
+            {
+                _recordAcceptanceFailure(goal, acceptance.FailedChecks, acceptance.BranchHeadSha, acceptance.MainHeadSha);
+            }
+
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.AwaitingVerification,
+                "Focused acceptance verification failed before promotion to Verified." +
+                FormatFailureTail(acceptance.FailureDetail));
+        }
+
+        _clearAcceptanceFailure(goal);
+        return MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Executed(
+                GoalLifecycleState.AwaitingVerification,
+                "Executed focused acceptance verification and recorded the required test receipt."));
     }
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
@@ -1443,6 +1528,73 @@ internal sealed class ConductorDriver
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.TrimEnd())
             .Where(line => !string.IsNullOrWhiteSpace(line));
+
+    internal static bool IsExecutedDotnetTestCheck(AcceptanceCheckResult check)
+    {
+        if (check.Advisory ||
+            !string.Equals(check.BrokerName, "goal-acceptance-verifier", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(check.ArtifactsPath) ||
+            string.IsNullOrWhiteSpace(check.ResultSummary))
+        {
+            return false;
+        }
+
+        return check.ResultSummary.Contains("Passed:", StringComparison.OrdinalIgnoreCase) ||
+            check.ResultSummary.Contains("Failed:", StringComparison.OrdinalIgnoreCase) ||
+            check.ResultSummary.Contains("Total:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static (int Passed, int Failed, int Total) SummarizeExecutedDotnetTestCounts(IReadOnlyList<AcceptanceCheckResult> checks)
+    {
+        var passed = 0;
+        var failed = 0;
+        var total = 0;
+        foreach (var check in checks)
+        {
+            var counts = ParseDotnetTestCounts(check.ResultSummary);
+            var parsedPassed = counts.Passed ?? 0;
+            var parsedFailed = counts.Failed ?? 0;
+            passed += parsedPassed;
+            failed += parsedFailed;
+            total += counts.Total ?? (parsedPassed + parsedFailed);
+        }
+
+        return (passed, failed, total);
+    }
+
+    private static (int? Passed, int? Failed, int? Total) ParseDotnetTestCounts(string? resultSummary)
+    {
+        if (string.IsNullOrWhiteSpace(resultSummary))
+        {
+            return (null, null, null);
+        }
+
+        int? passed = null;
+        int? failed = null;
+        int? total = null;
+        foreach (Match match in DotnetTestCountPattern.Matches(resultSummary))
+        {
+            if (!int.TryParse(match.Groups["count"].Value, out var count))
+            {
+                continue;
+            }
+
+            switch (match.Groups["name"].Value.ToLowerInvariant())
+            {
+                case "passed":
+                    passed = count;
+                    break;
+                case "failed":
+                    failed = count;
+                    break;
+                case "total":
+                    total = count;
+                    break;
+            }
+        }
+
+        return (passed, failed, total);
+    }
 
     private static string FormatUnmetCriterion(AcceptanceCheckResult criterion)
     {

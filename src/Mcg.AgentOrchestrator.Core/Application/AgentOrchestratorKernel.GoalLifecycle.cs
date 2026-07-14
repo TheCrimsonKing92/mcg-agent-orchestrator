@@ -50,6 +50,7 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var task = new TaskSpec(TaskId.New(), description, requiredRole, verificationPlan);
         goal.AddTask(task);
+        goal.ClearExecutedTestReceipt();
         Append(goal, task.Id, ProgressKind.TaskAdded, $"Added {requiredRole} task.");
 
         if (availableAgents is not null)
@@ -157,6 +158,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var retryAt = _clock.UtcNow;
+        goal.ClearExecutedTestReceipt();
         ResetTaskForRetry(task, retryAt);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
@@ -182,7 +184,8 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed) ||
+            !HasPassingExecutedTestReceipt(goal))
         {
             return false;
         }
@@ -208,6 +211,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
 
+        goal.ClearExecutedTestReceipt();
         task.ClearLatestVerification();
         task.ClearLastExecution();
         task.ClearLastDispatch();
@@ -244,6 +248,38 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         goal.ClearAcceptanceFailure();
+    }
+
+    public void RecordExecutedTestReceipt(
+        GoalId goalId,
+        string runContext,
+        IReadOnlyList<string> changedFiles,
+        IReadOnlyList<string> coveredChecks,
+        int passedCount,
+        int failedCount,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null,
+        IReadOnlyList<string>? failedChecks = null,
+        int? totalCount = null)
+    {
+        var goal = GetGoal(goalId);
+        goal.RecordExecutedTestReceipt(
+            runContext,
+            changedFiles,
+            coveredChecks,
+            passedCount,
+            failedCount,
+            _clock.UtcNow,
+            branchHeadSha,
+            mainHeadSha,
+            failedChecks,
+            totalCount);
+        Append(
+            goal,
+            null,
+            ProgressKind.TaskVerificationRecorded,
+            $"Executed test receipt recorded ({passedCount} passed, {failedCount} failed, {Math.Max(0, totalCount ?? passedCount + failedCount)} total): {runContext}");
+        RefreshGoalStatus(goal);
     }
 
     public void ClearCriterionRetryFeedback(GoalId goalId, TaskId taskId)

@@ -20,7 +20,8 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed) &&
+            HasPassingExecutedTestReceipt(goal))
         {
             goal.SetStatus(GoalStatus.Verified);
             return;
@@ -111,6 +112,25 @@ public sealed partial class AgentOrchestratorKernel
             VerificationGateStatus.Passed,
             $"Verified by {task.LastVerification.Command} at {task.LastVerification.CompletedAt:u}.",
             VerificationGateReason.Passed);
+    }
+
+    private static bool HasPassingExecutedTestReceipt(Goal goal)
+    {
+        if (goal.LatestExecutedTestReceipt is not { Passed: true } receipt)
+        {
+            return false;
+        }
+
+        var candidateCommit = goal.Tasks
+            .Where(task => task.Status == WorkTaskStatus.Completed)
+            .Select(task => task.LastDispatch)
+            .Where(dispatch => !string.IsNullOrWhiteSpace(dispatch?.ResultCommit))
+            .OrderByDescending(dispatch => dispatch!.DispatchedAt)
+            .Select(dispatch => dispatch!.ResultCommit)
+            .FirstOrDefault();
+
+        return candidateCommit is not null &&
+            string.Equals(receipt.BranchHeadSha, candidateCommit, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasOutputTokenLimitHit(TaskExecutionRecord? execution)

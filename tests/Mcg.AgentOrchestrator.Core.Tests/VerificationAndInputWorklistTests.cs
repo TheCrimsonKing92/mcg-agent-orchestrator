@@ -109,10 +109,12 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Contains(blocked.Blockers, item => item.Kind == GoalAcceptanceBlockerKind.VerificationNotReady && item.TaskId == needsInput.Id);
 
     kernel.SubmitHumanInput(kernel.GetPendingHumanInput(goal.Id).Single().Id, "Use main.");
+    RecordDispatchResult(kernel, goal, needsInput, clock);
     kernel.ReportTaskProgress(goal.Id, needsInput.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, needsInput.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
     kernel.RecordTaskVerification(goal.Id, missing.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
     kernel.RecordTaskVerification(goal.Id, failed.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var accepted = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
@@ -158,6 +160,7 @@ public sealed class VerificationAndInputWorklistTests
         "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
 
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -167,6 +170,7 @@ public sealed class VerificationAndInputWorklistTests
         stdout,
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
@@ -211,6 +215,7 @@ public sealed class VerificationAndInputWorklistTests
         "**skills**: none",
         "**confidence**: high",
         "END_WORKER_RESULT");
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
 
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -220,6 +225,7 @@ public sealed class VerificationAndInputWorklistTests
         stdout,
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
@@ -258,13 +264,14 @@ public sealed class VerificationAndInputWorklistTests
         "**WORKER_RESULT**:",
         "**files**: none",
         "**commands**: none",
-        "**tests**: clean retry",
+        "**tests**: pass - clean retry",
         "**commit**: none",
         "**blockers**: none",
         "**model_fit**: OpenAI/gpt-5.5 - adequate - review",
         "**skills**: none",
         "**confidence**: high",
         "END_WORKER_RESULT");
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
 
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -274,6 +281,7 @@ public sealed class VerificationAndInputWorklistTests
         stdout,
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
@@ -294,6 +302,7 @@ public sealed class VerificationAndInputWorklistTests
         [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
     kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Reviewer)]);
     var reviewer = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, reviewer, clock);
     kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
     kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
         "reviewer stdout",
@@ -302,6 +311,7 @@ public sealed class VerificationAndInputWorklistTests
         "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: pass\ncommit: none\nblockers: none - no acceptance blockers\nEND_WORKER_RESULT",
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
@@ -320,6 +330,7 @@ public sealed class VerificationAndInputWorklistTests
         [new TaskSpec(TaskId.New(), "Implement result", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Developer)]);
     var developer = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, developer, clock);
     kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Completed, "Developer done.");
     kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
         "developer stdout",
@@ -328,6 +339,7 @@ public sealed class VerificationAndInputWorklistTests
         "WORKER_RESULT:\nfiles: src/Foo.cs\ncommands: dotnet test\ntests: pass\ncommit: abc123\nblockers: API rate limit hit; retry later\nEND_WORKER_RESULT",
         string.Empty,
         clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
 
@@ -476,14 +488,45 @@ public sealed class VerificationAndInputWorklistTests
     var goal = kernel.CreateGoal("Complete on proof", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task, clock);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
 
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
 }
+
+    [Xunit.Fact(DisplayName = "BuildVerificationGate_rejects_passing_executed_test_receipt_from_previous_commit")]
+    public void BuildVerificationGateRejectsPassingExecutedTestReceiptFromPreviousCommit()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reject stale receipt", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "current-commit");
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "ok", "", clock.UtcNow));
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "previous-commit");
+
+    var gate = kernel.BuildVerificationGate(goal.Id);
+
+    Assert.False(gate.IsSatisfied);
+    Assert.Equal(VerificationGateReason.MissingExecutedTestReceipt, gate.Reason);
+    Assert.Equal("Goal is missing an executed test receipt covering the changed test surface.", gate.Message);
+}
+
     [Xunit.Fact(DisplayName = "Answered_human_input_keeps_verified_task_completed")]
     public void AnsweredHumanInputKeepsVerifiedTaskCompleted()
 {
@@ -492,6 +535,7 @@ public sealed class VerificationAndInputWorklistTests
     var goal = kernel.CreateGoal("Complete after input", [new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer)]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.Single();
+    RecordDispatchResult(kernel, goal, task, clock);
     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started.");
     var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", "C:\\repo", 0, "ok", "", clock.UtcNow));
@@ -499,6 +543,7 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
 
     kernel.SubmitHumanInput(request.Id, "Use main.");
+    RecordPassingExecutedTestReceipt(kernel, goal);
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
@@ -582,5 +627,27 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
 }
+
+private static void RecordPassingExecutedTestReceipt(AgentOrchestratorKernel kernel, Goal goal)
+{
+    kernel.RecordExecutedTestReceipt(
+        goal.Id,
+        "slot-path focused tests",
+        ["tests/FooTests.cs"],
+        ["FooTests"],
+        passedCount: 1,
+        failedCount: 0,
+        branchHeadSha: "branch");
 }
 
+private static void RecordDispatchResult(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    FakeClock clock)
+{
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "codex exec prompt.md", "C:\\repo", clock.UtcNow));
+    kernel.RecordDispatchResultCommit(goal.Id, task.Id, "branch");
+    clock.Advance();
+}
+}

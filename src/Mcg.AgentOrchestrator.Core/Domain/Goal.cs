@@ -25,6 +25,8 @@ public sealed class Goal
 
     public AcceptanceFailureSummary? LatestAcceptanceFailure { get; private set; }
 
+    public ExecutedTestReceiptSummary? LatestExecutedTestReceipt { get; private set; }
+
     public string? SourceBacklogItemId { get; private set; }
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
@@ -56,6 +58,33 @@ public sealed class Goal
     }
 
     internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
+
+    internal void ClearExecutedTestReceipt() => LatestExecutedTestReceipt = null;
+
+    internal void RecordExecutedTestReceipt(
+        string runContext,
+        IReadOnlyList<string> changedFiles,
+        IReadOnlyList<string> coveredChecks,
+        int passedCount,
+        int failedCount,
+        DateTimeOffset occurredAt,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null,
+        IReadOnlyList<string>? failedChecks = null,
+        int? totalCount = null)
+    {
+        LatestExecutedTestReceipt = new ExecutedTestReceiptSummary(
+            occurredAt,
+            RequireText(runContext, nameof(runContext)),
+            NormalizeList(changedFiles),
+            NormalizeList(coveredChecks),
+            Math.Max(0, passedCount),
+            Math.Max(0, failedCount),
+            NormalizeSha(branchHeadSha),
+            NormalizeSha(mainHeadSha),
+            NormalizeList(failedChecks ?? []),
+            Math.Max(0, totalCount ?? passedCount + failedCount));
+    }
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
 
@@ -90,7 +119,20 @@ public sealed class Goal
                     LatestAcceptanceFailure.OccurredAt,
                     LatestAcceptanceFailure.FailedChecks.ToList(),
                     LatestAcceptanceFailure.BranchHeadSha,
-                    LatestAcceptanceFailure.MainHeadSha));
+                    LatestAcceptanceFailure.MainHeadSha),
+            LatestExecutedTestReceipt is null
+                ? null
+                : new ExecutedTestReceiptSnapshot(
+                    LatestExecutedTestReceipt.OccurredAt,
+                    LatestExecutedTestReceipt.RunContext,
+                    LatestExecutedTestReceipt.ChangedFiles.ToList(),
+                    LatestExecutedTestReceipt.CoveredChecks.ToList(),
+                    LatestExecutedTestReceipt.PassedCount,
+                    LatestExecutedTestReceipt.FailedCount,
+                    LatestExecutedTestReceipt.BranchHeadSha,
+                    LatestExecutedTestReceipt.MainHeadSha,
+                    LatestExecutedTestReceipt.FailedChecks.ToList(),
+                    LatestExecutedTestReceipt.TotalCount));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -135,6 +177,21 @@ public sealed class Goal
                 failure.MainHeadSha);
         }
 
+        if (snapshot.LatestExecutedTestReceipt is { } receipt)
+        {
+            goal.RecordExecutedTestReceipt(
+                receipt.RunContext,
+                receipt.ChangedFiles,
+                receipt.CoveredChecks,
+                receipt.PassedCount,
+                receipt.FailedCount,
+                receipt.OccurredAt,
+                receipt.BranchHeadSha,
+                receipt.MainHeadSha,
+                receipt.FailedChecks ?? [],
+                receipt.TotalCount > 0 ? receipt.TotalCount : null);
+        }
+
         return goal;
     }
 
@@ -156,6 +213,13 @@ public sealed class Goal
 
     private static string? NormalizeSha(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static IReadOnlyList<string> NormalizeList(IEnumerable<string> values) =>
+        values
+            .Select(item => item.Trim())
+            .Where(item => item.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 }
 
 public sealed record AcceptanceFailureSummary(
@@ -163,3 +227,18 @@ public sealed record AcceptanceFailureSummary(
     IReadOnlyList<string> FailedChecks,
     string? BranchHeadSha = null,
     string? MainHeadSha = null);
+
+public sealed record ExecutedTestReceiptSummary(
+    DateTimeOffset OccurredAt,
+    string RunContext,
+    IReadOnlyList<string> ChangedFiles,
+    IReadOnlyList<string> CoveredChecks,
+    int PassedCount,
+    int FailedCount,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null,
+    IReadOnlyList<string>? FailedChecks = null,
+    int TotalCount = 0)
+{
+    public bool Passed => CoveredChecks.Count > 0 && FailedCount == 0;
+}

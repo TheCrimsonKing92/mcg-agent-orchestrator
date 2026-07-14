@@ -29,8 +29,21 @@ public sealed class ConductorBatchLoopTests
     {
         var dispatch = new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, "verified-commit");
         var verification = new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "ok", "", DateTimeOffset.UtcNow);
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+        if (goal.Tasks.All(candidate => candidate.Status == WorkTaskStatus.Completed && candidate.LastVerification is { Succeeded: true }))
+        {
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            kernel.RecordExecutedTestReceipt(
+                goal.Id,
+                "slot-path focused tests",
+                ["tests/FooTests.cs"],
+                ["FooTests"],
+                passedCount: 1,
+                failedCount: 0,
+                branchHeadSha: "verified-commit");
+        }
     }
 
     private static Exception SqliteBusy() =>
