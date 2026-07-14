@@ -691,9 +691,11 @@ public sealed class ConductorBatchLoopTests
             Assert.True(released);
             Assert.Equal("batch26", launchRequest!.Name);
             Assert.Contains("operator-batch26-", Path.GetFileName(launchRequest.StdoutPath), StringComparison.Ordinal);
-            Assert.Equal(1, launchRequest.Args.Count(arg => arg == ConductorLoopHandoff.RenewalCountFlag));
-            Assert.Equal("5", launchRequest.Args.Last());
+            Assert.DoesNotContain(ConductorLoopHandoff.RenewalCountFlag, launchRequest.Args);
+            Assert.Equal(5, launchRequest.RenewalCount);
             Assert.Equal(4567, result.ProcessId);
+            Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
 
             var records = new SqliteRunEventStore(Path.Combine(root, ".orchestrator", "run-events.db"))
@@ -704,6 +706,8 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal("Started", handoffEvent.Status);
             Assert.Contains(Path.GetFullPath(launchRequest.StdoutPath), handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains(Path.GetFullPath(launchRequest.StderrPath), handoffEvent.Detail, StringComparison.Ordinal);
+            Assert.Contains("guard=lease-released-before-launch", handoffEvent.Detail, StringComparison.Ordinal);
+            Assert.Contains("spawnPath=injected", handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=true", handoffEvent.Detail, StringComparison.Ordinal);
         }
         finally
@@ -775,7 +779,8 @@ public sealed class ConductorBatchLoopTests
             Assert.NotNull(handoffRequest);
             Assert.Equal(0, handoffRequest!.Done);
             Assert.Equal(1, handoffRequest.LandedGoalDelta);
-            Assert.Equal("0", launchRequest!.Args.Last());
+            Assert.DoesNotContain(ConductorLoopHandoff.RenewalCountFlag, launchRequest!.Args);
+            Assert.Equal(0, launchRequest.RenewalCount);
         }
         finally
         {
@@ -854,6 +859,8 @@ public sealed class ConductorBatchLoopTests
             Assert.True(result.Failed);
             Assert.Equal(2, attempts);
             Assert.Equal("successor-verification-failed", result.Reason);
+            Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
@@ -912,23 +919,20 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_uses_cmd_redirection_for_no_handle_inheritance")]
-    public void ConductorLoopHandoffWindowsLauncherUsesCmdRedirectionForNoHandleInheritance()
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_windows_launcher_uses_direct_process_with_explicit_log_handles")]
+    public void ConductorLoopHandoffWindowsLauncherUsesDirectProcessWithExplicitLogHandles()
     {
-        var commandLine = ConductorLoopHandoff.BuildWindowsBreakawayCommandLine(
-            @"C:\Windows\System32\cmd.exe",
-            ["dotnet", @"C:\repo\src\Mcg.AgentOrchestrator.App.dll", "conduct", "--loop", "--watch"],
-            @"C:\repo\.orchestrator\logs\operator-batch39.out.log",
-            @"C:\repo\.orchestrator\logs\operator-batch39.err.log");
+        var commandLine = ConductorLoopHandoff.BuildWindowsProcessCommandLine(
+            ["dotnet", @"C:\repo\src\Mcg.AgentOrchestrator.App.dll", "conduct", "--loop", "--watch"]);
 
-        Assert.StartsWith(@"""C:\Windows\System32\cmd.exe"" /d /s /c ", commandLine, StringComparison.Ordinal);
         Assert.Contains(@"""dotnet"" ""C:\repo\src\Mcg.AgentOrchestrator.App.dll"" ""conduct"" ""--loop"" ""--watch""", commandLine, StringComparison.Ordinal);
-        Assert.Contains(@"1>""C:\repo\.orchestrator\logs\operator-batch39.out.log""", commandLine, StringComparison.Ordinal);
-        Assert.Contains(@"2>""C:\repo\.orchestrator\logs\operator-batch39.err.log""", commandLine, StringComparison.Ordinal);
         Assert.DoesNotContain("Start-Process", commandLine, StringComparison.Ordinal);
+        Assert.DoesNotContain("cmd.exe", commandLine, StringComparison.OrdinalIgnoreCase);
 
         var source = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ConductorLoopHandoff.cs"));
         Assert.Contains("CreateBreakawayFromJob", source, StringComparison.Ordinal);
+        Assert.Contains("CreateInheritedOutputFile", source, StringComparison.Ordinal);
+        Assert.Contains("UseStdHandles", source, StringComparison.Ordinal);
         Assert.Contains("bInheritHandles: false", source, StringComparison.Ordinal);
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
@@ -962,6 +966,7 @@ public sealed class ConductorBatchLoopTests
             startInfo.ArgumentList.Add("conduct");
             startInfo.ArgumentList.Add("--loop");
             startInfo.ArgumentList.Add("--daemon");
+            startInfo.ArgumentList.Add("--watch");
             startInfo.ArgumentList.Add("--poll-seconds");
             startInfo.ArgumentList.Add("1");
             startInfo.ArgumentList.Add("--max-duration");
@@ -986,6 +991,10 @@ public sealed class ConductorBatchLoopTests
             successorPid = ParseHandoffProcessId(stdout);
 
             Assert.True(IsProcessRunning(successorPid.Value), $"Successor pid {successorPid.Value} did not survive parent job close. stdout={stdout} stderr={stderr}");
+            Assert.Contains("guard=lease-released-before-launch", stdout, StringComparison.Ordinal);
+            Assert.Contains("spawnPath=windows-createprocess", stdout, StringComparison.Ordinal);
+            Assert.Contains("breakawayRequested=true", stdout, StringComparison.Ordinal);
+            Assert.Contains("breakawaySucceeded=true", stdout, StringComparison.Ordinal);
 
             var logDirectory = Path.Combine(root, ".orchestrator", "logs");
             var conductEventsPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
