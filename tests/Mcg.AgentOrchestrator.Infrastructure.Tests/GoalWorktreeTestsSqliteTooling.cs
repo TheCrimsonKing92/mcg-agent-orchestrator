@@ -334,7 +334,8 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var log = File.ReadAllText(logPath);
             var repoScratch = Path.Combine(repo, ".t");
             Assert.True(!log.Contains(repoScratch, StringComparison.OrdinalIgnoreCase), log);
-            Assert.True(log.Contains(Path.Combine(isolatedRoot, "temp"), StringComparison.OrdinalIgnoreCase), log);
+            var expectedProcessTempRoot = Path.Combine(Path.GetTempPath(), "pt", $"goal-{goalId.Value[..8]}");
+            Assert.True(log.Contains(expectedProcessTempRoot, StringComparison.OrdinalIgnoreCase), log);
             Assert.True(!Directory.Exists(repoScratch), $"Root scratch directory should not exist: {repoScratch}");
             Assert.Equal(string.Empty, RunGitOutput(repo, "status", "--short"));
         }

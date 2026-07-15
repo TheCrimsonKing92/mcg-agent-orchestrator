@@ -2570,7 +2570,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains($"/api/goals/{goalPrefix}/start-subscription-ready?confirmBatchStart=true", html, StringComparison.Ordinal);
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
     Assert.False(html.Contains("Paid subscription start requires explicit confirmation", StringComparison.Ordinal));
-    Assert.Contains("OpenAI/gpt-5.3-codex Complex reasoning medium", html, StringComparison.Ordinal);
+    Assert.Contains("OpenAI/gpt-5.3-codex Complex reasoning high", html, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_confirms_large_paid_prepared_dispatch_start")]
