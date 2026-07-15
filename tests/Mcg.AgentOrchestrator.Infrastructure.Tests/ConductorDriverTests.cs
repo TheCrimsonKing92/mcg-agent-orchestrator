@@ -17,9 +17,20 @@ public sealed class ConductorDriverTests
         return (kernel, goal);
     }
 
-    private static void DispatchTask(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) SoftwareGoal(string objective = "Review retry goal")
     {
-        var dispatch = new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), objective);
+        return (kernel, goal);
+    }
+
+    private static void DispatchTask(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string command = "test.exe")
+    {
+        var dispatch = new TaskDispatchRecord("test-worker", command, "C:\\tmp", DateTimeOffset.UtcNow);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -36,6 +47,36 @@ public sealed class ConductorDriverTests
         // RecordDispatchExecutionResult sets WorkTaskStatus.Failed; RecordTaskVerification does not
         var verification = new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "fail", "error", DateTimeOffset.UtcNow);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+    }
+
+    private static void FailReviewerNeedsWork(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string blocker,
+        string? stdoutPath = "C:\\tmp\\reviewer.out.log")
+    {
+        DispatchTask(kernel, goal, reviewer, "review");
+        var stdout = $"""
+            Findings first.
+            WORKER_RESULT:
+            files: none
+            commands: review
+            tests: pass - inspected evidence
+            blockers: {blocker}
+            verdict: needs-work
+            END_WORKER_RESULT
+            """;
+        var verification = new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            1,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: stdoutPath,
+            WorkerResultPresent: true);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
     }
 
     private static WorkerSandboxPrepRecoverableAction NewSandboxRecoveryAction() =>
@@ -1220,6 +1261,139 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_auto_retries_developer_with_findings")]
+    public void ConductorDriverReviewerNeedsWorkAutoRetriesDeveloperWithFindings()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var blocker = "Developer omitted retry receipt injection in TaskBriefs.";
+        FailReviewerNeedsWork(kernel, goal, reviewer, blocker);
+        var dispatched = false;
+        var escalated = false;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTask: (gid, tid, msg) => { retryMessage = msg; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(dispatched);
+        Assert.False(escalated);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Contains("auto-review-retry round 1", retryMessage);
+        Assert.Contains(blocker, retryMessage);
+        Assert.Contains("C:\\tmp\\reviewer.out.log", retryMessage);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_round_7_stops_and_escalates")]
+    public void ConductorDriverReviewerNeedsWorkRound7StopsAndEscalates()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        for (var i = 1; i <= 6; i++)
+        {
+            kernel.RetryTask(goal.Id, developer.Id, $"auto-review-retry round {i}: prior reviewer finding");
+            PassVerification(kernel, goal, developer);
+            PassVerification(kernel, goal, tester);
+        }
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Developer still misses the review blocker.");
+        var retried = false;
+        var dispatched = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.False(dispatched);
+        Assert.Contains("auto-review-retry stopped at review round 7/7", escalation);
+        Assert.Contains("operator decision required", escalation);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_operator_evidence_blocker_escalates_without_retry")]
+    public void ConductorDriverReviewerOperatorEvidenceBlockerEscalatesWithoutRetry()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Operator receipt required for measurement mandate before acceptance.");
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.Contains("operator-owned evidence", escalation);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_provider_failure_does_not_auto_review_retry")]
+    public void ConductorDriverReviewerProviderFailureDoesNotAutoReviewRetry()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        DispatchTask(kernel, goal, reviewer, "review");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            1,
+            "ERROR: provider authentication failed before WORKER_RESULT",
+            "",
+            DateTimeOffset.UtcNow,
+            ProviderFailureKind: ProviderFailureKind.RateLimit));
+        var retried = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 

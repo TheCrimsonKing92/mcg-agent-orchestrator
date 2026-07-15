@@ -262,6 +262,11 @@ internal static class RunGoalService
         {
             var failedList = string.Join(", ", failedAgents.Select(agentId => agentId.Value).Order(StringComparer.OrdinalIgnoreCase));
             stopReason = $"Automatic failover stopped for task {task.Id.Value[..8]} after {evidence.Reason}: no available unused alternate subscription-capable {task.RequiredRole} agent exists in the active agent list. Current failed agent: {failedAgentId.Value}. Previously failed agent(s): {failedList}. Add a different available {task.RequiredRole} agent, then re-run run-goal or use re-delegate.";
+            if (evidence.Reason.Contains("provider connectivity", StringComparison.OrdinalIgnoreCase))
+            {
+                kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, stopReason);
+            }
+
             return false;
         }
 
