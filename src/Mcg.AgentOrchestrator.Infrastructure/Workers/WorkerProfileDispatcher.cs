@@ -1338,16 +1338,16 @@ public static class WorkerProfileDispatcher
         IReadOnlyDictionary<string, string?>? variables)
     {
         var isWriteCapable = role == AgentRole.Developer || role == AgentRole.Tester;
-        // When the OS worker sandbox is active, codex's own sandbox is set to danger-full-access so it
-        // uses ordinary CreateProcess (no CreateProcessAsUserW poisoning); the OS account+ACL enforces
-        // confinement instead. Otherwise keep codex's enforced workspace-write sandbox.
+        // When the OS worker sandbox is active, Codex's nested sandbox is disabled so it does not run
+        // the expensive Windows sandbox setup helper. MIC remains the enforcement boundary: file roles
+        // receive a Low writable worktree, while read-only Codex roles keep the worktree Medium.
         var osSandbox = WorkerSandboxOptions.FromEnvironment().Enabled;
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["workingDirectory"] = workingDirectory,
-            ["sandboxMode"] = isWriteCapable
-                ? (osSandbox ? "danger-full-access" : "workspace-write")
-                : "read-only",
+            ["sandboxMode"] = osSandbox
+                ? "danger-full-access"
+                : (isWriteCapable ? "workspace-write" : "read-only"),
             ["permissionMode"] = isWriteCapable ? "bypassPermissions" : "plan"
         };
 

@@ -861,6 +861,56 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.True(!developer.LastDispatch.Command.Contains("read-only", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_OS_sandbox_uses_danger_full_access_for_read_only_codex_role")]
+    public void WorkerProfileDispatcherOsSandboxUsesDangerFullAccessForReadOnlyCodexRole()
+    {
+        var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, "1");
+
+            var variables = WorkerProfileDispatcher.BuildDispatchVariables(
+                AgentRole.Researcher,
+                @"C:\repo",
+                variables: null);
+
+            Assert.Equal("danger-full-access", variables["sandboxMode"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_OS_sandbox_covers_read_only_codex_without_writable_worktree")]
+    public void BackgroundDispatchRunnerOsSandboxCoversReadOnlyCodexWithoutWritableWorktree()
+    {
+        Assert.True(BackgroundDispatchRunner.ShouldUseOsSandbox(
+            sandboxEnabled: true,
+            isLocalDispatch: false,
+            AgentRole.Researcher,
+            WorkerSandboxProvider.Codex));
+        Assert.False(BackgroundDispatchRunner.IsSandboxWorktreeWritable(AgentRole.Researcher));
+
+        Assert.True(BackgroundDispatchRunner.ShouldUseOsSandbox(
+            sandboxEnabled: true,
+            isLocalDispatch: false,
+            AgentRole.Developer,
+            WorkerSandboxProvider.Claude));
+        Assert.True(BackgroundDispatchRunner.IsSandboxWorktreeWritable(AgentRole.Developer));
+
+        Assert.False(BackgroundDispatchRunner.ShouldUseOsSandbox(
+            sandboxEnabled: true,
+            isLocalDispatch: false,
+            AgentRole.Researcher,
+            WorkerSandboxProvider.Claude));
+        Assert.False(BackgroundDispatchRunner.ShouldUseOsSandbox(
+            sandboxEnabled: true,
+            isLocalDispatch: true,
+            AgentRole.Researcher,
+            WorkerSandboxProvider.Codex));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
     public void WorkerProfileDispatcherClaudeResolvesPlanForReviewerAndBypassPermissionsForDeveloper()
 {

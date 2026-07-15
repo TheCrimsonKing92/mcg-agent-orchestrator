@@ -100,6 +100,21 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
                     sandboxResult.ReceiptSkippedProtectionPhases));
     }
 
+    public WorkerSandboxPreparationResult PrepareSandboxRootOnly(string worktree, string sandboxRoot)
+    {
+        Directory.CreateDirectory(worktree);
+        var reusedSandboxRoot = Directory.Exists(sandboxRoot);
+        Directory.CreateDirectory(sandboxRoot);
+
+        // Read-only workers run at Low integrity too, but the worktree deliberately stays Medium:
+        // MIC then permits reads while denying writes. Only provider scratch needs a Low label.
+        return EnsureLowIntegrityRoot(
+            sandboxRoot,
+            sandboxRoot,
+            allowRecursiveMigration: false,
+            reusedWorktree: reusedSandboxRoot);
+    }
+
     private WorkerSandboxPreparationResult EnsureLowIntegrityRoot(
         string path,
         string sandboxRoot,

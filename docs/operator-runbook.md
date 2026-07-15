@@ -4,6 +4,8 @@
 
 Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <command> ...` (or `./mcg-orchestrator.cmd` from a POSIX shell). For Codex/operator foreground CLI calls, prefer `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 <orchestrator-args...>`; it runs the built app through the repo-bounded helper prefix and avoids repeated permission prompts from ad-hoc `dotnet` commands. For other checked-in helper scripts, prefer `.\scripts\Invoke-RepoScript.ps1 <repo-relative-script.ps1> ...`; for source windows, use `.\scripts\Invoke-RepoScript.ps1 scripts\Show-RepoFileSlice.ps1 <path> <start> <count>` instead of PowerShell pipelines. For compact monitoring, use `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal1> <goal2>`; for SQLite store reads/repairs, use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 ...`. Never run the bare launcher with no command — it opens an interactive REPL that holds build-output locks.
 
+For exact process ownership, command-line, or lineage inspection, use `.\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Id <pid> -IncludeChildren` (optionally `-Newest <n>`). It replaces ad-hoc `Get-CimInstance` and inline process-tree snippets. Keep every Codex harness command shell-plain and single-purpose: do not join commands with `;`, `|`, or `&`, and do not construct PID lists with comma expressions. Those forms are evaluated as separate or unmatched permission segments and cause avoidable approval prompts or sandbox routing. When an operation needs compound logic, put it in or extend a checked-in repo-bounded helper, then invoke that helper through `Invoke-RepoScript.ps1`.
+
 ---
 
 ## 1. Golden path (conductor-first)

@@ -915,10 +915,11 @@ public sealed class ConductorBatchLoopTests
             Assert.False(result.Started);
             Assert.True(result.Failed);
             Assert.Equal(1, attempts);
-            Assert.Equal("successor-verification-failed", result.Reason);
+            Assert.Equal("successor-timeout", result.Reason);
             Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("terminalReason=timeout", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
         }
@@ -936,15 +937,15 @@ public sealed class ConductorBatchLoopTests
         var root = CreateTempDirectory("mcg-conduct-loop-delayed-handoff");
         try
         {
-            var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
-            var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
+            var oldFixedStartupWindow = TimeSpan.FromSeconds(10);
+            var loopStartDelay = TimeSpan.FromMilliseconds(10250);
             var stopwatch = Stopwatch.StartNew();
             var attempts = 0;
             var result = ConductorLoopHandoff.TryStartSuccessor(
                 HandoffOptions(
                     root,
-                    verificationTimeout: TimeSpan.FromSeconds(2),
-                    loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
+                    verificationTimeout: TimeSpan.FromSeconds(12),
+                    loopStartProbe: (_, _) => stopwatch.Elapsed >= loopStartDelay),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
                 {
@@ -956,8 +957,9 @@ public sealed class ConductorBatchLoopTests
             Assert.True(result.Started);
             Assert.Equal(1, attempts);
             Assert.Equal(Environment.ProcessId, result.ProcessId);
-            Assert.True(stopwatch.Elapsed >= scaledOldTimeout);
+            Assert.True(stopwatch.Elapsed > oldFixedStartupWindow);
             Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("terminalReason=loop-start", result.VerificationOutcome, StringComparison.Ordinal);
         }
         finally
         {
@@ -965,8 +967,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_retries_dead_successor_once_and_reports_last_attempt")]
-    public void ConductorLoopHandoffRetriesDeadSuccessorOnceAndReportsLastAttempt()
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_dead_successor_fails_with_own_evidence")]
+    public void ConductorLoopHandoffDeadSuccessorFailsWithOwnEvidence()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-failed-handoff");
         var originalOut = Console.Out;
@@ -984,23 +986,19 @@ public sealed class ConductorBatchLoopTests
                 request =>
                 {
                     attempts++;
-                    return new ConductLoopLaunchResult(4500 + attempts, request.StdoutPath, request.StderrPath);
-                },
-                (_, _) => new ConductLoopHandoffVerification(
-                    ProcessAlive: false,
-                    StdoutLogExists: false,
-                    LoopStartJournaled: false,
-                    Detail: "processAlive=false stdoutLogExists=false loopStartJournaled=false"));
+                    return new ConductLoopLaunchResult(int.MaxValue, request.StdoutPath, request.StderrPath);
+                });
 
             Assert.False(result.Started);
             Assert.True(result.Failed);
-            Assert.Equal(2, attempts);
-            Assert.Equal("successor-verification-failed", result.Reason);
-            Assert.Contains("attempt=2", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("pid=4502", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Equal(1, attempts);
+            Assert.Equal("successor-child-dead", result.Reason);
+            Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains($"pid={int.MaxValue}", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("terminalReason=child-dead", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
 
@@ -1008,11 +1006,18 @@ public sealed class ConductorBatchLoopTests
                 .ReadSinceAsync()
                 .GetAwaiter()
                 .GetResult();
-            Assert.Equal(2, records.Count(record => record.Operation == "LOOP_HANDOFF" && record.Status == "Failed"));
+            Assert.Equal(1, records.Count(record => record.Operation == "LOOP_HANDOFF" && record.Status == "Failed"));
+            Assert.Contains(records, record =>
+                record.Operation == "LOOP_HANDOFF" &&
+                record.Status == "Failed" &&
+                record.Detail is not null &&
+                record.Detail.Contains($"pid={int.MaxValue}", StringComparison.Ordinal) &&
+                record.Detail.Contains("terminalReason=child-dead", StringComparison.Ordinal));
             Assert.Contains(records, record =>
                 record.Operation == "LOOP_HANDOFF" &&
                 record.Status == "Escalated" &&
-                record.Detail.Contains("successor-verification-failed", StringComparison.Ordinal));
+                record.Detail is not null &&
+                record.Detail.Contains("successor-child-dead", StringComparison.Ordinal));
         }
         finally
         {
@@ -1076,6 +1081,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("ProcThreadAttributeHandleList", source, StringComparison.Ordinal);
         Assert.Contains("ExtendedStartupInfoPresent", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WindowsCreationFlags.CreateNoWindow", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("WindowsCreationFlags.DetachedProcess", source, StringComparison.Ordinal);
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
         Assert.Contains("JobObjectLimitBreakawayOk", jobSource, StringComparison.Ordinal);
@@ -1095,9 +1101,10 @@ public sealed class ConductorBatchLoopTests
         {
             var stdoutPath = Path.Combine(root, "successor.out.log");
             var stderrPath = Path.Combine(root, "successor.err.log");
-            var marker = "handoff-stdout-marker-" + Guid.NewGuid().ToString("N");
+            var stdoutMarker = "handoff-stdout-marker-" + Guid.NewGuid().ToString("N");
+            var stderrMarker = "handoff-stderr-marker-" + Guid.NewGuid().ToString("N");
             var scriptPath = Path.Combine(root, "write-marker.cmd");
-            File.WriteAllText(scriptPath, $"@echo {marker}{Environment.NewLine}");
+            File.WriteAllText(scriptPath, $"@echo {stdoutMarker}{Environment.NewLine}@echo {stderrMarker} 1>&2{Environment.NewLine}");
             var cmdPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.System),
                 "cmd.exe");
@@ -1113,9 +1120,13 @@ public sealed class ConductorBatchLoopTests
             Assert.True(result.ProcessId > 0);
             processId = result.ProcessId;
             Assert.True(WaitUntil(
-                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
+                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(stdoutMarker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),
                 $"stdout did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
+            Assert.True(WaitUntil(
+                () => File.Exists(stderrPath) && ReadAllTextShared(stderrPath).Contains(stderrMarker, StringComparison.Ordinal),
+                TimeSpan.FromSeconds(10)),
+                $"stderr did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
         }
         finally
         {

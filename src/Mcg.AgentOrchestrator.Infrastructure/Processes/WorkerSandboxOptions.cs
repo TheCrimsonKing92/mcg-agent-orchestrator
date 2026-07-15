@@ -27,11 +27,12 @@ public sealed class EnvironmentWorkerSandbox : IWorkerSandbox
 
 /// <summary>
 /// Configuration for the OS-level worker sandbox: when enabled (and on Windows), write-capable
-/// worker dispatches (Developer/Tester) run at Low integrity as the operator account. Mandatory
-/// Integrity Control confines writes to the Low-labeled goal worktree and sandbox scratch; linked
-/// worktree git metadata under the shared repository .git stays medium integrity and is committed
-/// by the orchestrator after verified edits. Gated by environment so it is off by default and a
-/// no-op on non-Windows hosts.
+/// worker dispatches run at Low integrity as the operator account. Mandatory Integrity Control
+/// confines implementation-role writes to the Low-labeled goal worktree and sandbox scratch;
+/// read-only Codex roles receive only Low-labeled scratch and keep the worktree Medium. Linked
+/// worktree git metadata under the shared repository .git stays Medium and is committed by the
+/// orchestrator after verified edits. Gated by environment so it is off by default and a no-op on
+/// non-Windows hosts.
 /// </summary>
 public sealed record WorkerSandboxOptions(
     bool Enabled,

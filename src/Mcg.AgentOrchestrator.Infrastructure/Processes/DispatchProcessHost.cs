@@ -49,12 +49,13 @@ public static class DispatchProcessHost
         bool ShutdownBuildServerOnExit,
         bool DisableSharedCompilation,
         // OS worker sandbox: when SandboxLowIntegrity is set, the worker runs at LOW integrity (same
-        // operator user) confined by Mandatory Integrity Control to the worktree + a Low CODEX_HOME/TEMP.
-        // The worker can only EDIT the worktree (the shared .git stays medium and out of reach); the
-        // orchestrator commits the worker's edits afterwards. Default = run at medium integrity.
+        // operator user) with a Low CODEX_HOME/TEMP. SandboxWorktreeWritable controls whether the
+        // worktree is also Low (Developer/Tester) or remains Medium/read-only (other Codex roles).
+        // The shared .git stays Medium and out of reach. Default = run at Medium integrity.
         bool SandboxLowIntegrity = false,
         WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown,
-        string? PromptPath = null);
+        string? PromptPath = null,
+        bool SandboxWorktreeWritable = true);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -117,7 +118,9 @@ public static class DispatchProcessHost
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
         var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
-        var preparation = Track("prepare-roots", () => preparer.Prepare(parameters.WorkingDirectory, sandboxRoot));
+        var preparation = Track("prepare-roots", () => parameters.SandboxWorktreeWritable
+            ? preparer.Prepare(parameters.WorkingDirectory, sandboxRoot)
+            : preparer.PrepareSandboxRootOnly(parameters.WorkingDirectory, sandboxRoot));
         if (preparation.RecoveryAction is { } recoveryAction)
         {
             throw new InvalidOperationException(recoveryAction.Reason);
@@ -126,17 +129,22 @@ public static class DispatchProcessHost
         protectWorkspaceBoundary ??= ProtectWorkspaceBoundary;
         protectGitMetadata ??= ProtectGitMetadata;
 
-        if (!preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase))
+        if (parameters.SandboxWorktreeWritable &&
+            !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase))
         {
             TrackAction(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, () => protectWorkspaceBoundary(parameters.WorkingDirectory));
         }
 
-        if (!preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase))
+        if (parameters.SandboxWorktreeWritable &&
+            !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase))
         {
             TrackAction(WorkerSandboxPreparer.ProtectGitMetadataPhase, () => protectGitMetadata(parameters.WorkingDirectory));
         }
 
-        WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
+        if (parameters.SandboxWorktreeWritable)
+        {
+            WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
+        }
 
         if (preparation.PrepReceiptHit)
         {

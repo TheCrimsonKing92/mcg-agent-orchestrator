@@ -151,11 +151,17 @@ public sealed class BackgroundDispatchRunner
         var isLocalDispatch = IsLocalDispatch(dispatch);
         var parametersPath = Path.Combine(logRoot, $"{prefix}.dispatch.json");
 
-        // OS worker sandbox: for write-capable subscription dispatches (Developer/Tester), run the
-        // worker AS the dedicated low-priv account, confined by ACL to the worktree + git common dir.
+        // OS worker sandbox: implementation roles receive a Low-labeled writable worktree. Read-only
+        // Codex roles also run Low so Codex can skip its expensive nested Windows sandbox setup, but
+        // their worktree stays Medium and MIC therefore denies writes.
         var sandbox = WorkerSandboxOptions.FromEnvironment();
-        var useSandbox = sandbox.Enabled && !isLocalDispatch &&
-            task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+        var sandboxProvider = ResolveSandboxProvider(dispatch);
+        var sandboxWorktreeWritable = IsSandboxWorktreeWritable(task.RequiredRole);
+        var useSandbox = ShouldUseOsSandbox(
+            sandbox.Enabled,
+            isLocalDispatch,
+            task.RequiredRole,
+            sandboxProvider);
         kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
 
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
@@ -168,13 +174,17 @@ public sealed class BackgroundDispatchRunner
             ShutdownBuildServerOnExit: !isLocalDispatch,
             DisableSharedCompilation: !isLocalDispatch,
             SandboxLowIntegrity: useSandbox,
-            Provider: ResolveSandboxProvider(dispatch),
-            PromptPath: dispatch.PromptPath));
+            Provider: sandboxProvider,
+            PromptPath: dispatch.PromptPath,
+            SandboxWorktreeWritable: sandboxWorktreeWritable));
 
         if (useSandbox && OperatingSystem.IsWindows())
         {
             var sandboxRoot = Path.Combine(dispatch.WorkingDirectory, ".mcg-sandbox");
-            var preparation = WorkerSandboxPreparer.CreateDefault().Prepare(dispatch.WorkingDirectory, sandboxRoot);
+            var preparer = WorkerSandboxPreparer.CreateDefault();
+            var preparation = sandboxWorktreeWritable
+                ? preparer.Prepare(dispatch.WorkingDirectory, sandboxRoot)
+                : preparer.PrepareSandboxRootOnly(dispatch.WorkingDirectory, sandboxRoot);
             if (preparation.RecoveryAction is { } action)
             {
                 return DispatchProcessStartResult.RequiresRecovery(action);
@@ -293,6 +303,18 @@ public sealed class BackgroundDispatchRunner
 
         return WorkerSandboxProvider.Unknown;
     }
+
+    internal static bool IsSandboxWorktreeWritable(AgentRole role) =>
+        role is AgentRole.Developer or AgentRole.Tester;
+
+    internal static bool ShouldUseOsSandbox(
+        bool sandboxEnabled,
+        bool isLocalDispatch,
+        AgentRole role,
+        WorkerSandboxProvider provider) =>
+        sandboxEnabled &&
+        !isLocalDispatch &&
+        (IsSandboxWorktreeWritable(role) || provider == WorkerSandboxProvider.Codex);
 
     /// <summary>
     /// Scans tasks for an exit file and auto-reconciles any whose dispatched process
