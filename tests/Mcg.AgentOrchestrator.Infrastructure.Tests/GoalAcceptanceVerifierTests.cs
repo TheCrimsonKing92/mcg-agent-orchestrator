@@ -346,7 +346,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         finally
         {
             SetAcceptanceTimeoutEnvironment(previous);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -383,7 +383,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         finally
         {
             SetAcceptanceTimeoutEnvironment(previous);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -423,7 +423,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 }
@@ -444,6 +444,32 @@ public abstract class GoalAcceptanceVerifierTestBase
         var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);
         Environment.SetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable, value);
         return previous;
+    }
+
+    protected static void DeleteDirectoryWithRetry(string path)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (IOException) when (attempt < 9)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 9)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+        }
+
+        Directory.Delete(path, recursive: true);
     }
 }
 
@@ -505,7 +531,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         {
             GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
             GoalAcceptanceVerifier.ProgressInterval = previousProgress;
-            try { Directory.Delete(root, recursive: true); } catch { }
+            try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }
 
@@ -532,7 +558,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -575,7 +601,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -633,7 +659,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             TryDeleteStableSlotHeartbeat(0);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -655,7 +681,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
-            "test");
+            "handle64-timeout");
 
         try
         {
@@ -728,7 +754,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             sleeper.Dispose();
             TryDeleteStableSlotHeartbeat(0);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -833,7 +859,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             TryDeleteStableSlotHeartbeat(0);
             try { File.Delete(stdoutPath); } catch { }
             try { File.Delete(stderrPath); } catch { }
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -872,7 +898,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -927,7 +953,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             AppContext.SetData(AcceptanceCheckTimeouts.AppContextKey, originalTimeout);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -976,7 +1002,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -1171,7 +1197,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 

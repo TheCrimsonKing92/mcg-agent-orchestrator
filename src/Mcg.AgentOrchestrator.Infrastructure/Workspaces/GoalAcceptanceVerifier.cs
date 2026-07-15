@@ -1645,13 +1645,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironment environment)
     {
         var holders = attribution.Holders.ToList();
+        var consumedGateContext = false;
         if (HasNoActionableHolder(attribution) &&
             DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(environment) is { } activeConsumer)
         {
+            consumedGateContext = true;
             holders.Add(activeConsumer);
         }
 
         var heartbeat = ReadGateHeartbeat(environment);
+        consumedGateContext |= heartbeat?.Snapshot is not null;
         foreach (var holder in BuildLiveHeartbeatHolders(heartbeat?.Snapshot, environment))
         {
             if (!holders.Any(existing => existing.ProcessId == holder.ProcessId))
@@ -1660,7 +1663,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        if (holders.Count == attribution.Holders.Count)
+        if (!consumedGateContext)
         {
             return attribution;
         }
@@ -1668,7 +1671,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var enriched = attribution with
         {
             Holders = holders,
-            Source = attribution.Source + "+gate-context"
+            Source = attribution.Source.Contains("+gate-context", StringComparison.Ordinal)
+                ? attribution.Source
+                : attribution.Source + "+gate-context"
         };
         LockAttribution.EmitReceipt(enriched);
         return enriched;
