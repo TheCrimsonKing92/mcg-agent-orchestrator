@@ -52,7 +52,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.LatestRetryAt is { } latestRetryAt &&
-            task.LastDispatch.DispatchedAt < latestRetryAt)
+            (task.LastDispatch.DispatchedAt < latestRetryAt ||
+             (task.LastDispatch.DispatchedAt == latestRetryAt &&
+              task.LastVerification is null &&
+              task.Status != WorkTaskStatus.Running)))
         {
             var staleDispatchAt = task.LastDispatch.DispatchedAt;
             task.ClearLastDispatch();
@@ -72,6 +75,18 @@ public sealed partial class AgentOrchestratorKernel
             verification.ProviderFailureKind == ProviderFailureKind.Unknown)
         {
             verification = verification with { ProviderFailureKind = providerFailureKind };
+        }
+
+        if (task.LastVerification is { } latestVerification &&
+            IsDuplicateDispatchExecutionResult(latestVerification, verification))
+        {
+            Append(
+                goal,
+                taskId,
+                ProgressKind.TaskNote,
+                $"Ignored duplicate dispatch execution evidence for already settled dispatch: {verification.Command}");
+            RefreshGoalStatus(goal);
+            return;
         }
 
         task.RecordVerification(verification);
@@ -182,6 +197,19 @@ public sealed partial class AgentOrchestratorKernel
     private static TimeSpan BuildProviderConnectivityBackoff(int attempt)
     {
         return TimeSpan.FromMinutes(Math.Clamp(attempt, 1, ProviderConnectivityRetryLimit));
+    }
+
+    private static bool IsDuplicateDispatchExecutionResult(
+        TaskVerificationRecord latestVerification,
+        TaskVerificationRecord verification)
+    {
+        return string.Equals(latestVerification.Command, verification.Command, StringComparison.Ordinal) &&
+            string.Equals(latestVerification.WorkingDirectory, verification.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
+            latestVerification.ExitCode == verification.ExitCode &&
+            string.Equals(latestVerification.StandardOutput, verification.StandardOutput, StringComparison.Ordinal) &&
+            string.Equals(latestVerification.StandardError, verification.StandardError, StringComparison.Ordinal) &&
+            latestVerification.CompletedAt == verification.CompletedAt &&
+            latestVerification.ProviderFailureKind == verification.ProviderFailureKind;
     }
 
     private bool TryFailWorkerResultBlocker(
