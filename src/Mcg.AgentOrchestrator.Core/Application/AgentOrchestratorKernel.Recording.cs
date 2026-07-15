@@ -52,7 +52,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.LatestRetryAt is { } latestRetryAt &&
-            task.LastDispatch.DispatchedAt <= latestRetryAt)
+            task.LastDispatch.DispatchedAt < latestRetryAt)
         {
             var staleDispatchAt = task.LastDispatch.DispatchedAt;
             task.ClearLastDispatch();
