@@ -993,7 +993,7 @@ public static class DotnetBuildEnvironmentManager
     private static bool IsSlotArtifactsBusy(DotnetBuildEnvironment environment) =>
         TryFindActiveSlotArtifactConsumer(environment) is not null;
 
-    private static BuildLockHolder? TryFindActiveSlotArtifactConsumer(DotnetBuildEnvironment environment)
+    internal static BuildLockHolder? TryFindActiveSlotArtifactConsumer(DotnetBuildEnvironment environment)
     {
         var artifactsPath = NormalizeForCommandLineMatch(environment.ArtifactsPath);
         if (string.IsNullOrWhiteSpace(artifactsPath))
