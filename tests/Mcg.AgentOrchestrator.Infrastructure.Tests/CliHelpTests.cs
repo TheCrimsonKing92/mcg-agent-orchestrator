@@ -21,6 +21,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "add-task", "--help" }, "add-task", "--text-file")]
     [Xunit.InlineData(new[] { "abandon-goal", "--help" }, "abandon-goal", "--text-file")]
     [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--text-file")]
+    [Xunit.InlineData(new[] { "goals", "subscribe", "--help" }, "goals subscribe", "--from-cursor")]
     [Xunit.InlineData(new[] { "conduct", "--help" }, "conduct", "--loop")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
@@ -84,6 +85,48 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("Usage: backlog-list", output);
         Xunit.Assert.Contains("--limit <n>", output);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_help_goals_subscribe_prints_nested_command_usage_without_executing")]
+    public void CliHelpGoalsSubscribePrintsNestedCommandUsageWithoutExecuting()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["help", "goals", "subscribe"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains(GoalMonitoringSubscriptionCommand.GoalsSubscribeUsage, output);
+        Xunit.Assert.Contains("Monitor goal lifecycle events.", output);
+        Xunit.Assert.Contains("Example: goals subscribe --goal-prefix abc123 --event-kind conductor:dispatch --wait-terminal --once --timeout 5m", output);
+        Xunit.Assert.Contains("--goal-prefix", output);
+        Xunit.Assert.Contains("--from-cursor", output);
+        Xunit.Assert.Contains("--since", output);
+        Xunit.Assert.Contains("--task", output);
+        Xunit.Assert.Contains("--event-kind", output);
+        Xunit.Assert.Contains("--once", output);
+        Xunit.Assert.Contains("--wait-terminal", output);
+        Xunit.Assert.Contains("--format", output);
+        Xunit.Assert.Contains("--timeout", output);
+        Xunit.Assert.DoesNotContain("Goals:", output);
+        Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+        Xunit.Assert.Empty(kernel.Goals);
     }
 
     [Xunit.Fact(DisplayName = "Cli_help_unknown_command_suggests_nearest_command")]
@@ -209,6 +252,8 @@ public sealed class CliHelpTests
 
     [Xunit.Theory(DisplayName = "Cli_help_startup_exits_zero_before_state_creation")]
     [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--text-file")]
+    [Xunit.InlineData(new[] { "goals", "subscribe", "--help" }, "goals subscribe", "--wait-terminal")]
+    [Xunit.InlineData(new[] { "help", "goals", "subscribe" }, "goals subscribe", "--wait-terminal")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
     public void CliHelpStartupExitsZeroBeforeStateCreation(string[] args, string synopsisToken, string optionToken)

@@ -12,6 +12,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class GoalMonitoringSubscriptionCommand
 {
     private static readonly JsonSerializerOptions NdjsonOptions = new(DashboardJson.Options()) { WriteIndented = false };
+    public const string GoalsSubscribeUsage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--from-cursor <cursor>|--since <event-id>] [--task <id>] [--event-kind <kind,...>] [--once] [--wait-terminal] [--format ndjson|human] [--timeout <duration>]";
     private const string OnceFlag = "--once";
     private const string SinceFlag = "--since";
     private const string FromCursorFlag = "--from-cursor";
