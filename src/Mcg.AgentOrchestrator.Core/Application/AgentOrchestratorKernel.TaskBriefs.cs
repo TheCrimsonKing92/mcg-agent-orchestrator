@@ -7,6 +7,7 @@ public sealed partial class AgentOrchestratorKernel
     private const int FailureReceiptMaxChars = 2000;
     private const int FailureReceiptStreamTailChars = 700;
     private const int ReviewerExecutedTestEvidenceMaxLines = 12;
+    private const int ReviewerChangedFileScopeMaxLines = 120;
     private static readonly JsonSerializerOptions GoalOperationJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -43,7 +44,10 @@ public sealed partial class AgentOrchestratorKernel
         string? workingDirectory = null,
         string? contextDirectory = null,
         string? targetBranchName = null,
-        string? targetHeadCommit = null)
+        string? targetHeadCommit = null,
+        IReadOnlyList<string>? reviewerScopeChangedFiles = null,
+        string? reviewerScopeMergeBase = null,
+        int? reviewerScopeTotalChangedFileCount = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -145,6 +149,16 @@ public sealed partial class AgentOrchestratorKernel
         roleLines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
+
+        var reviewerChangedFileScope = BuildReviewerChangedFileScopeBriefBlock(
+            task,
+            reviewerScopeChangedFiles,
+            reviewerScopeMergeBase,
+            reviewerScopeTotalChangedFileCount);
+        if (reviewerChangedFileScope.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(reviewerChangedFileScope));
+        }
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
@@ -552,6 +566,52 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
+        lines.Add(string.Empty);
+        return lines;
+    }
+
+    private static IReadOnlyList<string> BuildReviewerChangedFileScopeBriefBlock(
+        TaskSpec task,
+        IReadOnlyList<string>? changedFiles,
+        string? mergeBase,
+        int? totalChangedFileCount)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer || changedFiles is null)
+        {
+            return [];
+        }
+
+        var boundedChangedFiles = changedFiles
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Take(ReviewerChangedFileScopeMaxLines)
+            .ToArray();
+        var total = Math.Max(totalChangedFileCount ?? boundedChangedFiles.Length, boundedChangedFiles.Length);
+        var lines = new List<string>
+        {
+            "## Reviewer Changed-File Scope",
+            "Authoritative dispatch-preparation scope: git diff --name-only main...HEAD using three-dot merge-base semantics against current main.",
+            $"Merge base: {(string.IsNullOrWhiteSpace(mergeBase) ? "unknown" : mergeBase.Trim())}",
+            $"Changed files: {total}; showing {boundedChangedFiles.Length}."
+        };
+
+        if (boundedChangedFiles.Length == 0)
+        {
+            lines.Add("- No changed files reported by git diff --name-only main...HEAD.");
+        }
+        else
+        {
+            foreach (var path in boundedChangedFiles)
+            {
+                lines.Add($"- {path}");
+            }
+        }
+
+        if (boundedChangedFiles.Length < total)
+        {
+            lines.Add($"- Omitted {total - boundedChangedFiles.Length} additional changed file(s) to preserve prompt budget.");
+        }
+
+        lines.Add("Independent scope checks must use git diff main...HEAD. Do not use two-dot diffs such as main..HEAD, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence.");
         lines.Add(string.Empty);
         return lines;
     }

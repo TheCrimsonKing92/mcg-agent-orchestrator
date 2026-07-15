@@ -62,6 +62,7 @@ internal static class SdlcRolePromptRequirements
                 "## Reviewer Requirements",
                 "- Review in code-review form: findings first, ordered by severity.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
+                "- For independent changed-file scope checks, use git diff main...HEAD; do not use two-dot diffs, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence.",
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
                 "- State residual risk, test gaps, and whether acceptance is justified.",
@@ -132,6 +133,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Reviewer Requirements",
                 "- Review in code-review form: findings first, ordered by severity, with file/evidence references.",
+                "- Use git diff main...HEAD for independent scope checks; reject two-dot or working-tree-only scope verdict evidence.",
                 "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."

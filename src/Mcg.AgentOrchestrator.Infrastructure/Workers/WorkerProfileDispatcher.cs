@@ -25,7 +25,10 @@ public sealed record WorkerSubscriptionPreflightResult(
     string ProfileName,
     string CapabilityStatus,
     IReadOnlyList<string> Findings,
-    string? ErrorCode = null);
+    string? ErrorCode = null,
+    IReadOnlyList<string>? ReviewerScopeChangedFiles = null,
+    string? ReviewerScopeMergeBase = null,
+    int? ReviewerScopeTotalChangedFileCount = null);
 
 public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
 {
@@ -117,6 +120,8 @@ public static class WorkerProfileDispatcher
     public const string AnthropicSubscriptionProfileName = "claude-cli";
     public const string LightRoleAnthropicModelName = "claude-haiku-4-5";
     public const string OllamaSubscriptionProfileName = "qwen-code-cli";
+    public const string ReviewerScopeUnavailableErrorCode = WorkerGitContext.ReviewerScopeUnavailableErrorCode;
+    public const string ReviewerMergeBaseUnavailableErrorCode = WorkerGitContext.ReviewerMergeBaseUnavailableErrorCode;
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
 
     public static WorkerProfileDispatchResult PrepareTask(
@@ -135,7 +140,10 @@ public static class WorkerProfileDispatcher
         bool usesComplexModel = false,
         string? reasoningEffortReason = null,
         IReadOnlyList<string>? preflightFindings = null,
-        bool allowPendingRecordedDispatchRefresh = false)
+        bool allowPendingRecordedDispatchRefresh = false,
+        IReadOnlyList<string>? reviewerScopeChangedFiles = null,
+        string? reviewerScopeMergeBase = null,
+        int? reviewerScopeTotalChangedFileCount = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -150,7 +158,10 @@ public static class WorkerProfileDispatcher
             workingDirectory,
             contextDirectory,
             targetContext?.BranchName,
-            targetContext?.HeadCommit);
+            targetContext?.HeadCommit,
+            reviewerScopeChangedFiles,
+            reviewerScopeMergeBase,
+            reviewerScopeTotalChangedFileCount);
         var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
         var preparation = WorkerCommandTemplate.Prepare(
             budgetedBrief,
@@ -261,7 +272,10 @@ public static class WorkerProfileDispatcher
             roleSelection.Complexity,
             roleSelection.UsesComplexModel,
             reasoningEffortReason,
-            preflight.Findings);
+            preflight.Findings,
+            reviewerScopeChangedFiles: preflight.ReviewerScopeChangedFiles,
+            reviewerScopeMergeBase: preflight.ReviewerScopeMergeBase,
+            reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -278,6 +292,7 @@ public static class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null)
     {
         var findings = new List<string>();
+        ReviewerChangedFileScope? reviewerScope = null;
         string profileName;
         try
         {
@@ -335,6 +350,7 @@ public static class WorkerProfileDispatcher
             AddBuildEnvironmentFinding(findings, goal, task);
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
             AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
+            reviewerScope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
 
             if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
@@ -363,7 +379,15 @@ public static class WorkerProfileDispatcher
                 findings.Add("ready: profile, sandbox, worktree, and retry state passed deterministic preflight");
             }
 
-            return new WorkerSubscriptionPreflightResult(!blocked, profileName, capability.Status, findings, ResolvePreflightErrorCode(findings));
+            return new WorkerSubscriptionPreflightResult(
+                !blocked,
+                profileName,
+                capability.Status,
+                findings,
+                ResolvePreflightErrorCode(findings),
+                reviewerScope?.ChangedFiles,
+                reviewerScope?.MergeBase,
+                reviewerScope?.TotalChangedFileCount);
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
@@ -419,7 +443,54 @@ public static class WorkerProfileDispatcher
             return ClaudeCliAuthProbe.AuthUnavailableErrorCode;
         }
 
+        if (findings.Any(finding => finding.Contains(ReviewerMergeBaseUnavailableErrorCode, StringComparison.Ordinal)))
+        {
+            return ReviewerMergeBaseUnavailableErrorCode;
+        }
+
+        if (findings.Any(finding => finding.Contains(ReviewerScopeUnavailableErrorCode, StringComparison.Ordinal)))
+        {
+            return ReviewerScopeUnavailableErrorCode;
+        }
+
         return null;
+    }
+
+    private static ReviewerChangedFileScope? AddReviewerChangedFileScopeFindings(
+        List<string> findings,
+        TaskSpec task,
+        string workingDirectory)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            findings.Add("reviewer-scope: changed-file contract not required for non-Reviewer role");
+            return null;
+        }
+
+        try
+        {
+            var scope = new WorkerGitContext().ReadReviewerChangedFileScope(workingDirectory);
+            findings.Add(
+                $"reviewer-scope: git diff --name-only main...HEAD found {scope.TotalChangedFileCount} changed file(s) from merge-base {ShortSha(scope.MergeBase)}");
+            if (scope.Truncated)
+            {
+                findings.Add(
+                    $"reviewer-scope: changed-file prompt list truncated to {scope.ChangedFiles.Count} file(s) from {scope.TotalChangedFileCount}");
+            }
+
+            return scope;
+        }
+        catch (ReviewerChangedFileScopeException ex)
+        {
+            findings.Add($"blocked: {ex.ErrorCode}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string ShortSha(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length <= 12 ? trimmed : trimmed[..12];
     }
 
     private static void AddGitMetadataAccessFinding(
@@ -655,7 +726,10 @@ public static class WorkerProfileDispatcher
                 roleSelection.Complexity,
                 roleSelection.UsesComplexModel,
                 reasoningEffortSelection.Reason,
-                preflight.Findings));
+                preflight.Findings,
+                reviewerScopeChangedFiles: preflight.ReviewerScopeChangedFiles,
+                reviewerScopeMergeBase: preflight.ReviewerScopeMergeBase,
+                reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

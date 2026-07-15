@@ -3,6 +3,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class WorkerGitContext
 {
     private const int DiffSummaryMaxChars = 6000;
+    internal const int ReviewerChangedFilePromptMaxFiles = 120;
+    internal const string ReviewerScopeUnavailableErrorCode = "ERR_REVIEWER_SCOPE_UNAVAILABLE";
+    internal const string ReviewerMergeBaseUnavailableErrorCode = "ERR_REVIEWER_MERGE_BASE_UNAVAILABLE";
     internal const int DiffSummaryRetrievalMaxChars = DiffSummaryMaxChars;
 
     internal string[] ReadChangedFilesForTestImpact(string workingDirectory)
@@ -37,6 +40,51 @@ internal sealed class WorkerGitContext
         }
 
         return files.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    internal ReviewerChangedFileScope ReadReviewerChangedFileScope(string workingDirectory)
+    {
+        if (!LooksLikeGitWorkspace(workingDirectory))
+        {
+            throw new ReviewerChangedFileScopeException(
+                ReviewerScopeUnavailableErrorCode,
+                "Reviewer changed-file scope unavailable because the working directory is not a git workspace.");
+        }
+
+        var mainResult = GitCli.Run(workingDirectory, 5_000, "rev-parse", "--verify", "main^{commit}");
+        if (!mainResult.Succeeded || string.IsNullOrWhiteSpace(mainResult.Output))
+        {
+            throw new ReviewerChangedFileScopeException(
+                ReviewerScopeUnavailableErrorCode,
+                "Reviewer changed-file scope unavailable because git ref 'main' could not be resolved.",
+                mainResult.Error);
+        }
+
+        var mergeBaseResult = GitCli.Run(workingDirectory, 5_000, "merge-base", "main", "HEAD");
+        if (!mergeBaseResult.Succeeded || string.IsNullOrWhiteSpace(mergeBaseResult.Output))
+        {
+            throw new ReviewerChangedFileScopeException(
+                ReviewerMergeBaseUnavailableErrorCode,
+                "Reviewer changed-file scope unavailable because git merge-base main HEAD could not be computed.",
+                mergeBaseResult.Error);
+        }
+
+        var diffResult = GitCli.Run(workingDirectory, 5_000, "diff", "--name-only", "main...HEAD", "--");
+        if (!diffResult.Succeeded)
+        {
+            throw new ReviewerChangedFileScopeException(
+                ReviewerScopeUnavailableErrorCode,
+                "Reviewer changed-file scope unavailable because git diff --name-only main...HEAD failed.",
+                diffResult.Error);
+        }
+
+        var changedFiles = SplitGitOutput(diffResult.Output)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new ReviewerChangedFileScope(
+            mergeBaseResult.Output.Trim(),
+            changedFiles.Take(ReviewerChangedFilePromptMaxFiles).ToArray(),
+            changedFiles.Length);
     }
 
     private static string[] SplitGitOutput(string output) =>
@@ -107,4 +155,23 @@ internal sealed class WorkerGitContext
         output = result.Output;
         return result.Succeeded;
     }
+}
+
+internal sealed record ReviewerChangedFileScope(
+    string MergeBase,
+    IReadOnlyList<string> ChangedFiles,
+    int TotalChangedFileCount)
+{
+    public bool Truncated => ChangedFiles.Count < TotalChangedFileCount;
+}
+
+internal sealed class ReviewerChangedFileScopeException : InvalidOperationException
+{
+    public ReviewerChangedFileScopeException(string errorCode, string message, string? detail = null)
+        : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
+    {
+        ErrorCode = errorCode;
+    }
+
+    public string ErrorCode { get; }
 }
