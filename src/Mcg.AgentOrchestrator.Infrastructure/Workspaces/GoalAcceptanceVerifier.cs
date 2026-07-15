@@ -2550,8 +2550,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? startedProcessId = null;
         try
         {
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
+            using var process = ProcessTreeGuiSuppression.Start(startInfo);
             startedProcessId = process.Id;
             WorkerProcessJobs.TryRegister(process, $"acceptance:{workingDirectory}");
             if (heartbeatContext is not null)
