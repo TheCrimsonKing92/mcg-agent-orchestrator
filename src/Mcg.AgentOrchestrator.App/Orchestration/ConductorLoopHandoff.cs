@@ -84,9 +84,10 @@ internal sealed record ConductLoopHandoffVerification(
     bool ProcessAlive,
     bool StdoutLogExists,
     bool LoopStartJournaled,
-    string Detail)
+    string Detail,
+    string TerminalReason = "")
 {
-    public bool Succeeded => ProcessAlive && StdoutLogExists && LoopStartJournaled;
+    public bool Succeeded => ProcessAlive && LoopStartJournaled;
 }
 
 internal static partial class ConductorLoopHandoff
@@ -94,7 +95,6 @@ internal static partial class ConductorLoopHandoff
     public const string RenewalCountFlag = "--handoff-renewals";
     public const int DefaultMaxRenewalsWithoutLanding = 6;
     public static readonly TimeSpan DefaultVerificationTimeout = TimeSpan.FromSeconds(120);
-    private const int MaxLaunchAttempts = 2;
     private static readonly TimeSpan VerificationPollInterval = TimeSpan.FromMilliseconds(250);
     private const string BatchNameEnvironmentVariable = "MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME";
     private const string RenewalCountEnvironmentVariable = "MCG_ORCHESTRATOR_HANDOFF_RENEWALS";
@@ -140,71 +140,66 @@ internal static partial class ConductorLoopHandoff
         options.ReleaseCurrentLease();
         var guardDetail = "guard=lease-released-before-launch";
         verify ??= (result, eventCursor) => VerifySuccessor(result, options, eventCursor);
-        ConductLoopLaunchResult? lastLaunch = null;
-        ConductLoopHandoffVerification? lastVerification = null;
-        string? lastAttemptDetail = null;
-        Exception? lastError = null;
-
-        for (var attempt = 1; attempt <= MaxLaunchAttempts; attempt++)
+        const int attempt = 1;
+        var eventCursor = GetConductEventCursor(options);
+        try
         {
-            var eventCursor = GetConductEventCursor(options);
-            try
-            {
-                var result = launch(launchRequest);
-                lastLaunch = result;
-                var verification = verify(result, eventCursor);
-                lastVerification = verification;
-                var launchDetail = string.IsNullOrWhiteSpace(result.LaunchDetail)
-                    ? "spawnPath=injected breakawayRequested=false breakawaySucceeded=not-applicable"
-                    : result.LaunchDetail;
-                var handoffDetail = $"{guardDetail} {launchDetail} verification={verification.Detail}";
-                var detail =
-                    $"attempt={attempt} pid={result.ProcessId} stdout={result.StdoutPath} stderr={result.StderrPath} {handoffDetail}";
-                lastAttemptDetail = detail;
+            var result = launch(launchRequest);
+            var verification = verify(result, eventCursor);
+            var launchDetail = string.IsNullOrWhiteSpace(result.LaunchDetail)
+                ? "spawnPath=injected breakawayRequested=false breakawaySucceeded=not-applicable"
+                : result.LaunchDetail;
+            var handoffDetail = $"{guardDetail} {launchDetail} verification={verification.Detail}";
+            var detail =
+                $"attempt={attempt} pid={result.ProcessId} stdout={result.StdoutPath} stderr={result.StderrPath} {handoffDetail}";
 
-                if (verification.Succeeded)
-                {
-                    TryRecordHandoffEvent(options.RunEventStorePath, "Started", detail);
-                    return ConductorLoopHandoffResult.StartedProcess(
-                        result.ProcessId,
-                        result.StdoutPath,
-                        result.StderrPath,
-                        handoffDetail);
-                }
-
-                TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
-                EmitHandoffFailure(detail);
-                if (verification.ProcessAlive)
-                    break;
-            }
-            catch (Exception ex)
+            if (verification.Succeeded)
             {
-                lastError = ex;
-                var launchDetail = DefaultFailedLaunchDetail();
-                var detail =
-                    $"attempt={attempt} stdout={launchRequest.StdoutPath} stderr={launchRequest.StderrPath} {guardDetail} {launchDetail} error={ex.GetType().Name}:{ex.Message}";
-                lastAttemptDetail = detail;
-                TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
-                EmitHandoffFailure(detail);
+                TryRecordHandoffEvent(options.RunEventStorePath, "Started", detail);
+                return ConductorLoopHandoffResult.StartedProcess(
+                    result.ProcessId,
+                    result.StdoutPath,
+                    result.StderrPath,
+                    handoffDetail);
             }
+
+            TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
+            EmitHandoffFailure(detail);
+            var failureReason = VerificationFailureReason(verification);
+            TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
+                $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={detail}");
+            return ConductorLoopHandoffResult.FailedStart(
+                failureReason,
+                stdoutPath,
+                stderrPath,
+                detail,
+                result.ProcessId);
         }
-
-        var failureReason = lastError is null
-            ? "successor-verification-failed"
-            : $"successor-launch-failed {lastError.GetType().Name}:{lastError.Message}";
-        var verificationOutcome = lastVerification is null
-            ? "not-verified"
-            : lastAttemptDetail ??
-                $"{guardDetail} {(string.IsNullOrWhiteSpace(lastLaunch?.LaunchDetail) ? "spawnPath=injected breakawayRequested=false breakawaySucceeded=not-applicable" : lastLaunch.LaunchDetail)} verification={lastVerification.Detail}";
-        TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
-            $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={verificationOutcome}");
-        return ConductorLoopHandoffResult.FailedStart(
-            failureReason,
-            stdoutPath,
-            stderrPath,
-            verificationOutcome,
-            lastLaunch?.ProcessId);
+        catch (Exception ex)
+        {
+            var launchDetail = DefaultFailedLaunchDetail();
+            var detail =
+                $"attempt={attempt} stdout={launchRequest.StdoutPath} stderr={launchRequest.StderrPath} {guardDetail} {launchDetail} error={ex.GetType().Name}:{ex.Message}";
+            TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
+            EmitHandoffFailure(detail);
+            var failureReason = $"successor-launch-failed {ex.GetType().Name}:{ex.Message}";
+            TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
+                $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={detail}");
+            return ConductorLoopHandoffResult.FailedStart(
+                failureReason,
+                stdoutPath,
+                stderrPath,
+                detail);
+        }
     }
+
+    private static string VerificationFailureReason(ConductLoopHandoffVerification verification) =>
+        verification.TerminalReason switch
+        {
+            "child-dead" => "successor-child-dead",
+            "timeout" => "successor-timeout",
+            _ => "successor-verification-failed"
+        };
 
     private static string DefaultFailedLaunchDetail() =>
         OperatingSystem.IsWindows()
@@ -360,7 +355,6 @@ internal static partial class ConductorLoopHandoff
                         bInheritHandles: true,
                         dwCreationFlags: WindowsCreationFlags.CreateBreakawayFromJob |
                             WindowsCreationFlags.CreateNewProcessGroup |
-                            WindowsCreationFlags.DetachedProcess |
                             WindowsCreationFlags.CreateUnicodeEnvironment |
                             WindowsCreationFlags.ExtendedStartupInfoPresent,
                         lpEnvironment: environment,
@@ -531,16 +525,23 @@ internal static partial class ConductorLoopHandoff
         var processAlive = false;
         var stdoutLogExists = false;
         var loopStartJournaled = false;
+        var terminalReason = "timeout";
 
         while (DateTimeOffset.UtcNow <= deadline)
         {
             processAlive = IsProcessAlive(result.ProcessId);
             stdoutLogExists = File.Exists(result.StdoutPath);
             loopStartJournaled = (options.LoopStartProbe ?? HasLoopStartAfterCursor)(options, eventCursor);
-            if (processAlive && stdoutLogExists && loopStartJournaled)
+            if (processAlive && loopStartJournaled)
+            {
+                terminalReason = "loop-start";
                 break;
+            }
             if (!processAlive)
+            {
+                terminalReason = "child-dead";
                 break;
+            }
 
             Thread.Sleep(VerificationPollInterval);
         }
@@ -548,8 +549,9 @@ internal static partial class ConductorLoopHandoff
         var detail =
             $"processAlive={ToLowerInvariant(processAlive)} " +
             $"stdoutLogExists={ToLowerInvariant(stdoutLogExists)} " +
-            $"loopStartJournaled={ToLowerInvariant(loopStartJournaled)}";
-        return new ConductLoopHandoffVerification(processAlive, stdoutLogExists, loopStartJournaled, detail);
+            $"loopStartJournaled={ToLowerInvariant(loopStartJournaled)} " +
+            $"terminalReason={terminalReason}";
+        return new ConductLoopHandoffVerification(processAlive, stdoutLogExists, loopStartJournaled, detail, terminalReason);
     }
 
     private static bool IsProcessAlive(int processId)
@@ -691,7 +693,6 @@ internal static partial class ConductorLoopHandoff
         CreateNewProcessGroup = 0x00000200,
         CreateUnicodeEnvironment = 0x00000400,
         CreateBreakawayFromJob = 0x01000000,
-        DetachedProcess = 0x00000008,
         ExtendedStartupInfoPresent = 0x00080000
     }
 
