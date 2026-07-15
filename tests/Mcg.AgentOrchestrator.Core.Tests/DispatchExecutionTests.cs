@@ -592,6 +592,11 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("attempt 1/3", StringComparison.Ordinal));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
 
+    var restoredBeforeRetry = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredBeforeRetryTask = restoredBeforeRetry.GetTask(goal.Id, task.Id);
+    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(restoredBeforeRetryTask));
+    Assert.Equal(clock.UtcNow.AddMinutes(1), restoredBeforeRetryTask.SubscriptionRetryAfter);
+
     clock.Advance(TimeSpan.FromMinutes(1));
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
         "codex-cli",
@@ -616,7 +621,45 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(2, task.VerificationHistory.Count);
+    Assert.Null(task.SubscriptionRetryAfter);
+    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_duplicate_provider_connectivity_retry_after_restart")]
+    public void RecordDispatchExecutionResultDoesNotDuplicateProviderConnectivityRetryAfterRestart()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Keep provider connectivity retry idempotent");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var command = "codex exec attempt 1";
+    var verification = ProviderConnectivityVerification(command, clock.UtcNow);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        command,
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredGoal = restored.GetGoal(goal.Id);
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+
+    restored.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+    Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
+    Assert.Null(restoredTask.LastVerification);
+    Assert.Null(restoredTask.LastDispatch);
+    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(restoredTask));
+    Assert.Equal(clock.UtcNow.AddMinutes(1), restoredTask.SubscriptionRetryAfter);
+    Assert.Single(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
+    Assert.Contains(restoredGoal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Ignored stale dispatch execution evidence", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_escalates_provider_connectivity_after_retry_cap")]
@@ -627,6 +670,7 @@ public sealed class DispatchExecutionTests
     var goal = kernel.CreateGoal("Cap provider connectivity retries");
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    TaskVerificationRecord? finalVerification = null;
 
     for (var attempt = 1; attempt <= 4; attempt++)
     {
@@ -637,7 +681,8 @@ public sealed class DispatchExecutionTests
             "C:\\repo",
             clock.UtcNow,
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
-        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, ProviderConnectivityVerification(command, clock.UtcNow));
+        finalVerification = ProviderConnectivityVerification(command, clock.UtcNow);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, finalVerification);
         clock.Advance(TimeSpan.FromMinutes(attempt));
     }
 
@@ -653,6 +698,15 @@ public sealed class DispatchExecutionTests
         evt.Kind == ProgressKind.TaskFailed &&
         evt.Message.Contains("provider connectivity failed after 3 automatic retry attempt", StringComparison.Ordinal) &&
         evt.Message.Contains("stream disconnected", StringComparison.Ordinal));
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredGoal = restored.GetGoal(goal.Id);
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+    restored.RecordDispatchExecutionResult(goal.Id, task.Id, finalVerification!);
+
+    Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
+    Assert.Equal(4, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(restoredTask));
+    Assert.Single(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_reopen_task_on_provider_authentication_failure")]
