@@ -1705,7 +1705,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return;
         }
 
-        WorkerProcessJobs.TryKillOrFallbackAndWait(childPid, TimeSpan.FromSeconds(5));
+        WorkerProcessJobs.TryKillRecordedOwnedChildAndWait(childPid, TimeSpan.FromSeconds(5));
     }
 
     private static bool IsProcessRunning(int processId)
