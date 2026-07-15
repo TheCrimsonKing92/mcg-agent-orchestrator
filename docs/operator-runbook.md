@@ -94,13 +94,19 @@ acceptance suite output → git diff / commits in the worktree → verification 
 | `durations` | role/complexity runtime medians plus attempts-per-task; use it to spot slow lanes and retry redundancy before changing worker mix or loop policy |
 | `durations --by-model` | the same duration report sliced by model/provider; use it when a role looks slow but provider choice may be the real variable |
 
-Read the stable conduct event stream first:
+Listen to the stable conduct event stream first, starting at the current end so old runs are not replayed:
 
 ```bash
-tail -F .orchestrator/logs/conduct-events.log
+tail -n 0 -F .orchestrator/logs/conduct-events.log
 ```
 
-It is JSON lines with `timestamp`, `eventKind`, `goalId`, and `detail`; `tail -F` follows the stable path across rotation. Key `eventKind` values include `loop-start`, `loop-stop`, `loop-handoff`, `watch-transition`, `acceptance`, and `lock-blocker`. The `detail` field preserves the compact loop line (`TICK`, `held`, `escalated`, `LOOP_STOP`, `LOOP_HANDOFF`, `LOOP_HANDOFF_FAILED`, `PHASE_TIMING`). `PHASE_TIMING` receipts are the tick latency profile: `sweep`, `prewalk`, `per-goal-walk`, and `dispatch-prep` show where the conductor spent the tick. Use them when ticks feel slow before blaming a worker.
+```powershell
+Get-Content -LiteralPath .orchestrator\logs\conduct-events.log -Tail 0 -Wait
+```
+
+It is JSON lines with `timestamp`, `eventKind`, `goalId`, and `detail`; the stable path survives rotation. Key `eventKind` values include `loop-start`, `loop-stop`, `loop-handoff`, `watch-transition`, `gate-progress`, `acceptance`, and `lock-blocker`. The `detail` field preserves the compact loop line (`TICK`, `held`, `escalated`, `LOOP_STOP`, `LOOP_HANDOFF`, `LOOP_HANDOFF_FAILED`, `PHASE_TIMING`). `gate-progress` records phase changes and 30-second heartbeats for long acceptance checks, so a quiet worker does not require state or process polling while those heartbeats continue. `PHASE_TIMING` receipts are the tick latency profile: `sweep`, `prewalk`, `per-goal-walk`, and `dispatch-prep` show where the conductor spent the tick. Use them when ticks feel slow before blaming a worker.
+
+Keep one persistent listener when the harness can stream it. If the harness buffers a long-lived follower, make a sparse bounded read such as `Get-Content -LiteralPath .orchestrator\logs\conduct-events.log -Tail 8` after a meaningful interval; do not replace the listener with rapid state-file, process, or log polling. Query `next <goal> --full`, dispatch inventory, or an exact process lineage only when an event creates a decision point or expected heartbeats stop. A higher-level subscription command is a valid replacement only when it starts from the current cursor and demonstrably honors its goal/event filters; historical or cross-goal replay is not an operator signal.
 
 Incident history lives in `docs/incidents/`; use it when a symptom needs narrative context beyond the current transactional records.
 
@@ -125,7 +131,7 @@ scripts/watch-loop-events.sh <goal-prefix> [goal-prefix...]
 
 `watch-goal-pulse.sh` is the lightweight goal pulse while workers run. `watch-loop-events.sh` follows terminal events for the named goals from per-batch logs; prefer `conduct-events.log` when it is available.
 
-For long-running conductor/acceptance commands, keep the operator seat free by launching a bounded background command and polling:
+For long-running conductor/acceptance commands, keep the operator seat free by launching a bounded background command and listening to the conduct event stream. Read per-command artifacts only when the stream reports a failure or stops producing expected heartbeats:
 
 ```
 .\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <goal>-acceptance acceptance <goal> --autonomy supervised-auto
@@ -301,7 +307,7 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
 | `.orchestrator/agents.json` | the agent catalog (which model each role uses) |
-| `.orchestrator/logs/conduct-events.log` | canonical structured conduct event stream (JSON lines with `eventKind`; stable path, rotated by size) |
+| `.orchestrator/logs/conduct-events.log` | canonical structured conduct event stream (JSON lines with `eventKind`; stable path, rotated by size; listen from the current end) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
 | `.orchestrator-worktrees/<goal-prefix>` | the goal's isolated git worktree on branch `goal/<prefix>` |
 | `.orchestrator-context/<goal-id>` | worker context artifacts for a goal |
@@ -337,7 +343,7 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
 - **Backlog is candidate input, not an automatic queue.** A stale/open backlog can contain obsolete, overlapping, or underspecified work. Before daemon mode, curate a small active set with `backlog-list` + filtered `backlog-intake "<heading>" --create-goal` for ordinary implementation goals; use `backlog-intake "<heading>" --create-simple-goal` only for the explicit `simple-goal` exception, not because an item looks narrow. Avoid unfiltered `goal-plan --create-*` or multi-filter batch creation unless you have reviewed dependencies and file scopes. Keep daemon runs bounded with `--max-duration` until the active set is proven healthy.
-- **Keep long waits out of the foreground.** Use `scripts\Start-OrchestratorCommand.ps1` through `scripts\Invoke-RepoScript.ps1` for long acceptance/conductor runs, then watch `.orchestrator/logs/conduct-events.log` and poll `next <goal> --full` or `Find-OrchestratorLocks.ps1` when you need state. Use `Show-OrchestratorLogArtifacts.ps1` for per-dispatch fallback logs. Avoid raw `Start-Sleep` loops and broad `.orchestrator` filesystem commands.
+- **Keep long waits out of the foreground.** Use `scripts\Start-OrchestratorCommand.ps1` through `scripts\Invoke-RepoScript.ps1` for long acceptance/conductor runs, then keep one listener on `.orchestrator/logs/conduct-events.log`. Use `next <goal> --full`, `Find-OrchestratorLocks.ps1`, or `Show-OrchestratorLogArtifacts.ps1` only at a decision point or after expected stream heartbeats stop. Avoid raw `Start-Sleep` loops and broad `.orchestrator` filesystem commands.
 - **State writes vs a running loop.** Light writes (`attention answer`, `backlog-add` — the latter on a separate `backlog.db`) are safe concurrent with the loop. But a burst of HEAVY state-`db` writes — `goal --brief-file`, `abandon-goal`, `park-goal` (each does a whole-kernel load+save) — racing a write-heavy tick can exhaust the SQLite busy-retry and **crash** the loop (observed twice, 2026-06-25). Serialize those *between* loop runs (stop → mutate → restart). Read-only inspection (`status`, `next`, git on worktrees, loop output) is always free.
 - **Scope the test suite to the changed project**, not the whole solution; run it foreground (or poll). Use `scripts/Invoke-TestSummary.ps1 -Target <project>` for compact results.
 - **Provider requirements:** `claude-cli` needs a valid model id (`claude-sonnet-4-6`/`sonnet`/`haiku`/`opus`) **and** a permission mode (the default profile carries both). `codex-cli` on a ChatGPT account accepts `gpt-5.5`. API runs (`run`/`api-run`) have **no file access** — embed needed data in the task description.
