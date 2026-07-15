@@ -188,8 +188,8 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.DoesNotContain("source=pending", output);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_conductor_acceptance_journal_for_landing")]
-    public void CliGoalTimingUsesConductorAcceptanceJournalForLanding()
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_keeps_conductor_acceptance_pass_without_landing_pending")]
+    public void CliGoalTimingKeepsConductorAcceptancePassWithoutLandingPending()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -213,8 +213,42 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
 
-        Xunit.Assert.Contains("source=acceptance-journal", output);
+        Xunit.Assert.Contains("source=pending", output);
+        Xunit.Assert.Contains("gate=", output);
+        Xunit.Assert.DoesNotContain("source=acceptance-journal", output);
+        Xunit.Assert.DoesNotContain("source=landing-journal", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_conductor_landing_journal_for_landing")]
+    public void CliGoalTimingUsesConductorLandingJournalForLanding()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement conductor landing timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Conductor landed timing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec prompt.md",
+            root,
+            0,
+            "WORKER_RESULT:\nfiles: src/file.cs\ncommands: build\ntests: pass - focused\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: 100));
+        GoalOperationJournal.Begin(root, goal, "conductor:acceptance", "Running acceptance.");
+        GoalOperationJournal.AcceptancePassed(root, goal, "conductor:acceptance", "branch-head", "main-head", "Acceptance passed.");
+        GoalOperationJournal.Begin(root, goal, "conductor:land", "Landing goal via integration branch.");
+        GoalOperationJournal.Completed(root, goal, "conductor:land", "Landed.");
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("source=landing-journal", output);
         Xunit.Assert.DoesNotContain("source=pending", output);
+        Xunit.Assert.DoesNotContain("source=acceptance-journal", output);
     }
 
 

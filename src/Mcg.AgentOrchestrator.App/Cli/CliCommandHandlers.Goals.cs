@@ -1976,25 +1976,6 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
     Goal goal,
     GoalOperationJournalSummary journal)
 {
-    var acceptedAt = journal.Entries
-        .Where(entry =>
-            entry.Status == GoalOperationStatus.Completed &&
-            IsAcceptanceTimingOperation(entry.Operation) &&
-            (string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) ||
-             entry.AcceptanceOutcome.Equals("passed", StringComparison.OrdinalIgnoreCase)))
-        .OrderBy(entry => entry.At)
-        .Select(entry => (DateTimeOffset?)entry.At)
-        .LastOrDefault();
-    if (acceptedAt is not null)
-    {
-        return (acceptedAt, "acceptance-journal");
-    }
-
-    if (TryResolveIntegrationCommitAuthoredAt(executionDirectory, goal, out var commitAuthoredAt))
-    {
-        return (commitAuthoredAt, "git-integration-commit");
-    }
-
     var dispositionAt = journal.Entries
         .Where(entry =>
             entry.Status == GoalOperationStatus.Completed &&
@@ -2002,14 +1983,11 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
         .OrderBy(entry => entry.At)
         .Select(entry => (DateTimeOffset?)entry.At)
         .LastOrDefault();
-    if (dispositionAt is not null)
-    {
-        return (dispositionAt, "terminal-disposition");
-    }
 
     var conductorLandingAt = journal.Entries
         .Where(entry =>
             entry.Status == GoalOperationStatus.Completed &&
+            dispositionAt is null &&
             (entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase) ||
              entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase)))
         .OrderBy(entry => entry.At)
@@ -2018,6 +1996,28 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
     if (conductorLandingAt is not null)
     {
         return (conductorLandingAt, "landing-journal");
+    }
+
+    var legacyAcceptanceLandingAt = journal.Entries
+        .Where(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(entry => entry.At)
+        .Select(entry => (DateTimeOffset?)entry.At)
+        .LastOrDefault();
+    if (legacyAcceptanceLandingAt is not null)
+    {
+        return (legacyAcceptanceLandingAt, "acceptance-journal");
+    }
+
+    if (TryResolveIntegrationCommitAuthoredAt(executionDirectory, goal, out var commitAuthoredAt))
+    {
+        return (commitAuthoredAt, "git-integration-commit");
+    }
+
+    if (dispositionAt is not null)
+    {
+        return (dispositionAt, "terminal-disposition");
     }
 
     return goal.Status == GoalStatus.Verified
