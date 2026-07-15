@@ -119,6 +119,27 @@ public sealed class GoalTimingReportTests
         Xunit.Assert.Equal(TimeSpan.FromMinutes(50), report.TotalDuration);
     }
 
+    [Xunit.Fact(DisplayName = "GoalTimingReport_verified_unlanded_goal_reports_pending_landing_wait")]
+    public void GoalTimingReportVerifiedUnlandedGoalReportsPendingLandingWait()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement pending landing report", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Pending landed timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        RecordRound(kernel, clock, goal.Id, task.Id, Success(clock.UtcNow));
+
+        var verifiedAt = goal.Timeline.Max(evt => evt.OccurredAt);
+        var report = GoalTimingReport.Build(
+            goal,
+            new GoalTimingReportContext(LandedAt: verifiedAt.AddMinutes(20), LandingSource: "pending"));
+
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+        Xunit.Assert.Equal("pending", report.LandingSource);
+        Xunit.Assert.InRange(report.LandingWait, TimeSpan.FromMinutes(20), TimeSpan.FromMinutes(21));
+        Xunit.Assert.True(report.TotalDuration > TimeSpan.Zero);
+    }
+
     [Xunit.Fact(DisplayName = "GoalTimingReport_gate_duration_uses_acceptance_journal_span")]
     public void GoalTimingReportGateDurationUsesAcceptanceJournalSpan()
     {
@@ -158,6 +179,11 @@ public sealed class GoalTimingReportTests
         kernel.RetryTask(second.Id, secondTask.Id, "retry environmental failure");
         RecordRound(kernel, clock, second.Id, secondTask.Id, Success(clock.UtcNow));
 
+        var pendingTask = new TaskSpec(TaskId.New(), "Implement pending report", AgentRole.Developer);
+        var pending = kernel.CreateGoal("Pending timing", [pendingTask]);
+        kernel.ActivateGoal(pending.Id, DefaultAgents());
+        RecordRound(kernel, clock, pending.Id, pendingTask.Id, Success(clock.UtcNow));
+
         var contexts = new Dictionary<GoalId, GoalTimingReportContext>
         {
             [first.Id] = new(
@@ -167,12 +193,15 @@ public sealed class GoalTimingReportTests
             [second.Id] = new(
                 LandedAt: second.Timeline.Max(evt => evt.OccurredAt).AddMinutes(9),
                 LandingSource: "fixture",
-                GateSpans: [new GoalTimingGateSpan(second.Timeline.Max(evt => evt.OccurredAt), second.Timeline.Max(evt => evt.OccurredAt).AddMinutes(2), "passed")])
+                GateSpans: [new GoalTimingGateSpan(second.Timeline.Max(evt => evt.OccurredAt), second.Timeline.Max(evt => evt.OccurredAt).AddMinutes(2), "passed")]),
+            [pending.Id] = new(
+                LandedAt: pending.Timeline.Max(evt => evt.OccurredAt).AddMinutes(20),
+                LandingSource: "pending")
         };
 
         var firstReport = GoalTimingReport.Build(first, contexts[first.Id]);
         var secondReport = GoalTimingReport.Build(second, contexts[second.Id]);
-        var rollup = GoalTimingReport.BuildRollup([first, second], contexts);
+        var rollup = GoalTimingReport.BuildRollup([first, second, pending], contexts);
 
         Xunit.Assert.Equal(2, rollup.GoalCount);
         Xunit.Assert.Equal(firstReport.TotalDuration + secondReport.TotalDuration, rollup.TotalDuration);

@@ -67,6 +67,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             WorkerResultPresent: true,
             HasCommittedChanges: true,
             HeartbeatStandardOutputBytes: 100));
+        GoalOperationJournal.Completed(root, goal, "acceptance", "Acceptance passed and merge completed.");
 
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["goal-timing", "--all"],
@@ -80,6 +81,140 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("Goal timing rollup: goals=1", output);
         Xunit.Assert.Contains("Phase", output);
         Xunit.Assert.Contains("Daily trend:", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_links_backlog_reference_from_objective_and_labels_pending_landing")]
+    public void CliGoalTimingLinksBacklogReferenceFromObjectiveAndLabelsPendingLanding()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var backlogCreatedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+        var backlogId = "1234abcd000000000000000000000000";
+        new BacklogStore(workspace.BacklogStorePath).UpsertAsync(new BacklogItem(
+            backlogId,
+            "Timing backlog item",
+            string.Empty,
+            BacklogItemStatus.Open,
+            backlogCreatedAt,
+            backlogCreatedAt,
+            null)).GetAwaiter().GetResult();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement linked backlog timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal($"Handle backlog {backlogId[..8]} timing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec prompt.md",
+            root,
+            0,
+            "WORKER_RESULT:\nfiles: src/file.cs\ncommands: build\ntests: pass - focused\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: 100));
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("source=pending", output);
+        Xunit.Assert.Contains("backlogIntentWait=", output);
+        Xunit.Assert.DoesNotContain("backlogIntentWait=0s", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_integration_commit_for_hand_landed_goal")]
+    public void CliGoalTimingUsesIntegrationCommitForHandLandedGoal()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "README.md"), "seed");
+        RunGit(root, "add", "README.md");
+        RunGit(root, "commit", "-m", "Seed");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement hand landing timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Hand landed timing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec prompt.md",
+            root,
+            0,
+            "WORKER_RESULT:\nfiles: src/file.cs\ncommands: build\ntests: pass - focused\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: 100));
+        File.WriteAllText(Path.Combine(root, "landed.txt"), goal.Id.Value);
+        RunGit(root, "add", "landed.txt");
+        RunGit(root, "commit", "-m", $"Integrate {GoalWorktrees.BranchName(goal.Id)}");
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("source=git-integration-commit", output);
+        Xunit.Assert.DoesNotContain("source=pending", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_terminal_disposition_for_sweep_reconciliation")]
+    public void CliGoalTimingUsesTerminalDispositionForSweepReconciliation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement sweep timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Sweep reconciled timing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec prompt.md",
+            root,
+            0,
+            "WORKER_RESULT:\nfiles: src/file.cs\ncommands: build\ntests: pass - focused\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: 100));
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            goal,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Landed, "Terminal sweep reconciled landed goal."));
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("source=terminal-disposition", output);
+        Xunit.Assert.DoesNotContain("source=pending", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_conductor_acceptance_journal_for_landing")]
+    public void CliGoalTimingUsesConductorAcceptanceJournalForLanding()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement acceptance timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Acceptance landed timing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec prompt.md",
+            root,
+            0,
+            "WORKER_RESULT:\nfiles: src/file.cs\ncommands: build\ntests: pass - focused\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: 100));
+        GoalOperationJournal.Begin(root, goal, "conductor:acceptance", "Running acceptance.");
+        GoalOperationJournal.AcceptancePassed(root, goal, "conductor:acceptance", "branch-head", "main-head", "Acceptance passed.");
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("source=acceptance-journal", output);
+        Xunit.Assert.DoesNotContain("source=pending", output);
     }
 
 

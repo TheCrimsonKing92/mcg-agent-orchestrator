@@ -204,7 +204,10 @@ public static class GoalTimingReport
                     Timing = Build(goal, context)
                 };
             })
-            .Where(item => ResolveTerminalOutcome(item.Goal) == GoalTerminalOutcome.Landed && item.Timing.LandedAt is not null)
+            .Where(item =>
+                ResolveTerminalOutcome(item.Goal) == GoalTerminalOutcome.Landed &&
+                item.Timing.LandedAt is not null &&
+                !IsPendingLanding(item.Timing))
             .ToList();
 
         var phaseObservations = new List<PhaseObservation>();
@@ -561,6 +564,11 @@ public static class GoalTimingReport
 
     private static DateTimeOffset? ResolveLandedAt(Goal goal)
     {
+        if (goal.Status == GoalStatus.Verified)
+        {
+            return null;
+        }
+
         var policyLanding = goal.Timeline
             .Where(evt => evt.TaskId is null && evt.Kind == ProgressKind.GoalPolicyDecision)
             .OrderByDescending(evt => evt.OccurredAt)
@@ -580,6 +588,9 @@ public static class GoalTimingReport
             GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded => GoalTerminalOutcome.Abandoned,
             _ => GoalTerminalOutcome.Active
         };
+
+    private static bool IsPendingLanding(GoalTimingReportSnapshot timing) =>
+        string.Equals(timing.LandingSource, "pending", StringComparison.OrdinalIgnoreCase);
 
     private static DispatchValueGoalReport BuildDispatchValueGoalReport(
         Goal goal,

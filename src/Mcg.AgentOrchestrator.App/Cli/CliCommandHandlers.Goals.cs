@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -23,6 +24,10 @@ private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
         ["--tester"] = AgentRole.Tester,
         ["--reviewer"] = AgentRole.Reviewer
     };
+
+private static readonly Regex BacklogObjectiveReferenceRegex = new(
+    @"\bbacklog\s+([0-9a-f]{8,64})\b",
+    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
 private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
     GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
@@ -1872,8 +1877,7 @@ private static GoalTimingReportContext BuildGoalTimingContext(
 
 private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogStorePath)
 {
-    if (string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) ||
-        string.IsNullOrWhiteSpace(backlogStorePath) ||
+    if (string.IsNullOrWhiteSpace(backlogStorePath) ||
         !File.Exists(backlogStorePath))
     {
         return null;
@@ -1881,16 +1885,52 @@ private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogS
 
     try
     {
-        return new BacklogStore(backlogStorePath)
-            .GetByExactIdAsync(goal.SourceBacklogItemId)
-            .GetAwaiter()
-            .GetResult()
-            ?.CreatedAt;
+        var store = new BacklogStore(backlogStorePath);
+        if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) &&
+            TryResolveBacklogItemCreatedAt(store, goal.SourceBacklogItemId, out var linkedCreatedAt))
+        {
+            return linkedCreatedAt;
+        }
+
+        foreach (Match match in BacklogObjectiveReferenceRegex.Matches(goal.Objective))
+        {
+            if (TryResolveBacklogItemCreatedAt(store, match.Groups[1].Value, out var objectiveCreatedAt))
+            {
+                return objectiveCreatedAt;
+            }
+        }
     }
     catch
     {
-        return null;
     }
+
+    return null;
+}
+
+private static bool TryResolveBacklogItemCreatedAt(
+    BacklogStore store,
+    string idOrPrefix,
+    out DateTimeOffset createdAt)
+{
+    createdAt = default;
+    if (string.IsNullOrWhiteSpace(idOrPrefix))
+    {
+        return false;
+    }
+
+    var item = store.GetByExactIdAsync(idOrPrefix).GetAwaiter().GetResult();
+    if (item is null && idOrPrefix.Length >= 8)
+    {
+        item = store.GetByIdPrefixAsync(idOrPrefix).GetAwaiter().GetResult();
+    }
+
+    if (item is null)
+    {
+        return false;
+    }
+
+    createdAt = item.CreatedAt;
+    return true;
 }
 
 private static IReadOnlyList<GoalTimingGateSpan> BuildGoalTimingGateSpans(GoalOperationJournalSummary journal)
@@ -1939,7 +1979,9 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
     var acceptedAt = journal.Entries
         .Where(entry =>
             entry.Status == GoalOperationStatus.Completed &&
-            entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase))
+            IsAcceptanceTimingOperation(entry.Operation) &&
+            (string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) ||
+             entry.AcceptanceOutcome.Equals("passed", StringComparison.OrdinalIgnoreCase)))
         .OrderBy(entry => entry.At)
         .Select(entry => (DateTimeOffset?)entry.At)
         .LastOrDefault();
@@ -1953,18 +1995,34 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
         return (commitAuthoredAt, "git-integration-commit");
     }
 
+    var dispositionAt = journal.Entries
+        .Where(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            entry.Operation.Equals(GoalOperationJournal.TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(entry => entry.At)
+        .Select(entry => (DateTimeOffset?)entry.At)
+        .LastOrDefault();
+    if (dispositionAt is not null)
+    {
+        return (dispositionAt, "terminal-disposition");
+    }
+
     var conductorLandingAt = journal.Entries
         .Where(entry =>
             entry.Status == GoalOperationStatus.Completed &&
             (entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase) ||
-             entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) ||
-             entry.Operation.Equals(GoalOperationJournal.TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase)))
+             entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase)))
         .OrderBy(entry => entry.At)
         .Select(entry => (DateTimeOffset?)entry.At)
         .LastOrDefault();
-    return conductorLandingAt is null
-        ? (null, null)
-        : (conductorLandingAt, "landing-journal");
+    if (conductorLandingAt is not null)
+    {
+        return (conductorLandingAt, "landing-journal");
+    }
+
+    return goal.Status == GoalStatus.Verified
+        ? (DateTimeOffset.UtcNow, "pending")
+        : (null, null);
 }
 
 private static bool TryResolveIntegrationCommitAuthoredAt(
@@ -1979,7 +2037,8 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
     }
 
     var goalPrefix = goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)];
-    foreach (var pattern in new[] { goal.Id.Value, goalPrefix, GoalWorktrees.BranchName(goal.Id) })
+    var branchName = GoalWorktrees.BranchName(goal.Id);
+    foreach (var pattern in new[] { $"Integrate {branchName}", $"Integrate goal/{goalPrefix}", branchName, goal.Id.Value, goalPrefix })
     {
         var result = GitCli.Run(
             executionDirectory,
@@ -1987,6 +2046,7 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
             "--format=%aI",
             "-n",
             "1",
+            "--first-parent",
             "--regexp-ignore-case",
             $"--grep={pattern}",
             "HEAD");
