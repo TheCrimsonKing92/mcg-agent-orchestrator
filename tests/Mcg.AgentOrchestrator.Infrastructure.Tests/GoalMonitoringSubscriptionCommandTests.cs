@@ -1057,6 +1057,204 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Contains("\"eventKind\":\"goal.snapshot\"", output.ToString());
     }
 
+    [Xunit.Fact(DisplayName = "Goals_subscribe_once_waits_through_unrelated_events_and_emits_one_matching_human_event")]
+    public async Task GoalsSubscribeOnceWaitsThroughUnrelatedEventsAndEmitsOneMatchingHumanEvent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new SqliteRunEventStore(workspace.RunEventStorePath);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("abc10000111111111111111111111111"), "Target subscribe");
+        var other = kernel.CreateGoal(new GoalId("def20000222222222222222222222222"), "Other subscribe");
+        kernel.ActivateGoal(target.Id, []);
+        kernel.ActivateGoal(other.Id, []);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.ConductorTick,
+            null,
+            "conduct:tick",
+            "Completed",
+            "global tick",
+            null));
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            other.Id.Value,
+            "conductor:dispatch",
+            "Completed",
+            "other goal dispatch",
+            null));
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            target.Id.Value,
+            "conductor:plan",
+            "Completed",
+            "wrong event kind",
+            null));
+        using var output = new StringWriter();
+
+        var runTask = GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                target.Id.Value[..8],
+                "--event-kind",
+                "conductor:dispatch",
+                "--once",
+                "--format",
+                "human",
+                "--timeout",
+                "5s"
+            ],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default());
+
+        await Task.Delay(TimeSpan.FromMilliseconds(150));
+        Assert.False(runTask.IsCompleted);
+        Assert.Equal(string.Empty, output.ToString());
+
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            target.Id.Value,
+            "conductor:dispatch",
+            "Completed",
+            "target dispatch",
+            null));
+        await runTask.WaitAsync(TimeSpan.FromSeconds(3));
+
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("[conductor:dispatch]", line);
+        Assert.Contains(target.Id.Value, line);
+        Assert.DoesNotContain(other.Id.Value, line);
+        Assert.DoesNotContain("conduct:tick", line);
+        Assert.DoesNotContain("conductor:plan", line);
+    }
+
+    [Xunit.Fact(DisplayName = "Goals_subscribe_once_without_matching_event_times_out_with_scoped_ndjson_event")]
+    public async Task GoalsSubscribeOnceWithoutMatchingEventTimesOutWithScopedNdjsonEvent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new SqliteRunEventStore(workspace.RunEventStorePath);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("abc30000333333333333333333333333"), "Target timeout");
+        var other = kernel.CreateGoal(new GoalId("def40000444444444444444444444444"), "Other timeout");
+        kernel.ActivateGoal(target.Id, []);
+        kernel.ActivateGoal(other.Id, []);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            other.Id.Value,
+            "conductor:dispatch",
+            "Completed",
+            "other goal dispatch",
+            null));
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            target.Id.Value,
+            "conductor:plan",
+            "Completed",
+            "wrong event kind",
+            null));
+        using var output = new StringWriter();
+
+        var ex = await Xunit.Assert.ThrowsAsync<CliExitException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                target.Id.Value[..8],
+                "--event-kind",
+                "conductor:dispatch",
+                "--once",
+                "--format",
+                "ndjson",
+                "--timeout",
+                "10ms"
+            ],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.Equal(124, ex.ExitCode);
+        var line = Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        using var doc = JsonDocument.Parse(line);
+        Assert.Equal("monitor.timeout", doc.RootElement.GetProperty("eventKind").GetString());
+        Assert.Equal(target.Id.Value, doc.RootElement.GetProperty("goalId").GetString());
+        Assert.Equal("Created", doc.RootElement.GetProperty("currentState").GetString());
+        Assert.DoesNotContain(other.Id.Value, output.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Goals_subscribe_once_waiting_for_match_honors_cancellation")]
+    public async Task GoalsSubscribeOnceWaitingForMatchHonorsCancellation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal("Target cancellation");
+        kernel.ActivateGoal(target.Id, []);
+        using var output = new StringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+
+        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                target.Id.Value[..8],
+                "--event-kind",
+                "conductor:dispatch",
+                "--once",
+                "--format",
+                "ndjson"
+            ],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default(),
+            cancellationToken: cts.Token));
+
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "Goals_subscribe_rejects_ambiguous_goal_prefix_without_output")]
+    public async Task GoalsSubscribeRejectsAmbiguousGoalPrefixWithoutOutput()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal(new GoalId("abc50000555555555555555555555555"), "First ambiguous");
+        kernel.CreateGoal(new GoalId("abc60000666666666666666666666666"), "Second ambiguous");
+        using var output = new StringWriter();
+
+        var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            [
+                "goals",
+                "subscribe",
+                "--goal-prefix",
+                "abc",
+                "--event-kind",
+                "conductor:dispatch",
+                "--once",
+                "--format",
+                "ndjson",
+                "--timeout",
+                "10ms"
+            ],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.Contains("ambiguous", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_wait_terminal_exits_zero_for_completed_and_nonzero_for_failed")]
     public async Task MonitorGoalWaitTerminalExitBehavior()
     {

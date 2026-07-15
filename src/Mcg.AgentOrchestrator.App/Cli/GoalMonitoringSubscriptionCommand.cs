@@ -520,9 +520,10 @@ internal static class GoalMonitoringSubscriptionCommand
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             snapshotWritten = true;
 
-            if (options.Once || (options.WaitTerminal && IsTerminalForWait(state)))
+            var reachedTerminalState = options.WaitTerminal && IsTerminalForWait(state);
+            if ((options.Once && eligibleEvents.Count > 0) || reachedTerminalState)
             {
-                PrintCurrentSnapshotWhenNoEligibleEvent(
+                var fallbackWritten = PrintCurrentSnapshotWhenNoEligibleEvent(
                     eligibleEvents.Count,
                     batch,
                     state,
@@ -534,7 +535,10 @@ internal static class GoalMonitoringSubscriptionCommand
                     output);
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-                return state;
+                if (!options.Once || eligibleEvents.Count > 0 || fallbackWritten)
+                {
+                    return state;
+                }
             }
 
             if (deadline is { } dueAt && DateTimeOffset.UtcNow >= dueAt)
@@ -571,7 +575,7 @@ internal static class GoalMonitoringSubscriptionCommand
         }
     }
 
-    private static void PrintCurrentSnapshotWhenNoEligibleEvent(
+    private static bool PrintCurrentSnapshotWhenNoEligibleEvent(
         int eligibleEventCount,
         GoalMonitoringBatchDto batch,
         GoalLifecycleState state,
@@ -584,7 +588,7 @@ internal static class GoalMonitoringSubscriptionCommand
     {
         if (eligibleEventCount != 0)
         {
-            return;
+            return false;
         }
 
         var snapshot = BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, timelineCursor) with
@@ -594,7 +598,10 @@ internal static class GoalMonitoringSubscriptionCommand
         if (Matches(snapshot, options))
         {
             PrintSubscriptionEvent(snapshot, options.Format, output);
+            return true;
         }
+
+        return false;
     }
 
     internal static IReadOnlyList<GoalStateSubscriptionEvent> BuildSubscriptionEvents(
