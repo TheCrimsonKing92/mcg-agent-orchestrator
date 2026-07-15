@@ -504,26 +504,26 @@ public static partial class DashboardRenderer
         html.AppendLine(RenderProviderOption("Ollama", provider));
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>API model</label><select name=\"modelName\" data-provider-options=\"apiModels\" required>");
-        RenderProviderSelectOptions(html, provider, modelName, ApiModelOptions);
+        RenderProviderSelectOptions(html, provider, modelName, DashboardAgentOptionCatalog.ApiModelOptions);
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>API reasoning</label><select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\">");
-        RenderProviderSelectOptions(html, provider, agent.ReasoningEffort, ApiReasoningOptions);
+        RenderProviderSelectOptions(html, provider, agent.ReasoningEffort, DashboardAgentOptionCatalog.ApiReasoningOptions);
         html.AppendLine("</select></div>");
         html.AppendLine($"<div class=\"field\"><label>Max tokens</label><input type=\"number\" name=\"maxOutputTokens\" min=\"1\" placeholder=\"{DefaultMaxTokensPlaceholder(provider)}\" value=\"{(agent.MaxOutputTokens.HasValue ? agent.MaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
         html.AppendLine("<div class=\"field\"><label>Subscription profile</label><select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\">");
         RenderSubscriptionProfileOptions(html, provider, subscriptionProfile, workerProfiles);
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>CLI model alias</label><select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\">");
-        RenderProviderSelectOptions(html, provider, agent.SubscriptionModelAlias ?? DefaultSubscriptionModelAlias(provider), SubscriptionModelOptions);
+        RenderProviderSelectOptions(html, provider, agent.SubscriptionModelAlias ?? DefaultSubscriptionModelAlias(provider), DashboardAgentOptionCatalog.SubscriptionModelOptions);
         html.AppendLine("</select></div>");
         html.AppendLine("<div class=\"field\"><label>CLI reasoning</label><select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\">");
-        RenderProviderSelectOptions(html, provider, agent.SubscriptionReasoningEffort, SubscriptionReasoningOptions);
+        RenderProviderSelectOptions(html, agent.SubscriptionReasoningEffort, DashboardAgentOptionCatalog.SubscriptionReasoningOptions(provider, agent.SubscriptionModelAlias ?? DefaultSubscriptionModelAlias(provider)));
         html.AppendLine("</select></div>");
         html.AppendLine("<details style=\"margin-top:0.5em\"><summary style=\"cursor:pointer;font-size:0.85em\">Complex task model (auto-selected for ambitious tasks)</summary>");
         html.AppendLine($"<div class=\"field\"><label>Complex provider</label><input type=\"text\" name=\"complexProviderName\" value=\"{Encode(agent.ComplexProviderName ?? "")}\" placeholder=\"same as above\"></div>");
         html.AppendLine($"<div class=\"field\"><label>Complex model</label><input type=\"text\" name=\"complexModelName\" value=\"{Encode(agent.ComplexModelName ?? "")}\" placeholder=\"none\"></div>");
         html.AppendLine("<div class=\"field\"><label>Complex reasoning</label><select name=\"complexReasoningEffort\" data-provider-options=\"apiReasoning\">");
-        RenderProviderSelectOptions(html, complexProvider, agent.ComplexReasoningEffort, ApiReasoningOptions);
+        RenderProviderSelectOptions(html, complexProvider, agent.ComplexReasoningEffort, DashboardAgentOptionCatalog.ApiReasoningOptions);
         html.AppendLine("</select></div>");
         html.AppendLine($"<div class=\"field\"><label>Complex max tokens</label><input type=\"number\" name=\"complexMaxOutputTokens\" min=\"1\" placeholder=\"{DefaultComplexMaxTokensPlaceholder(complexProvider)}\" value=\"{(agent.ComplexMaxOutputTokens.HasValue ? agent.ComplexMaxOutputTokens.Value.ToString() : "")}\" style=\"width:5em\"></div>");
         html.AppendLine("</details>");
@@ -555,65 +555,15 @@ public static partial class DashboardRenderer
 
     private static string DefaultSubscriptionProfile(string provider)
     {
-        if (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
-        {
-            return "codex-cli";
-        }
-
-        if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-        {
-            return "claude-cli";
-        }
-
-        return string.Empty;
+        return DashboardAgentOptionCatalog.DefaultSubscriptionProfile(provider);
     }
 
     private static string DefaultSubscriptionModelAlias(string provider)
     {
-        if (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
-        {
-            return AgentCatalog.OpenAiSubscriptionModelAlias;
-        }
-
-        return string.Empty;
+        return DashboardAgentOptionCatalog.DefaultSubscriptionModelAlias(provider);
     }
 
-    private static IReadOnlyList<(string Value, string Label)> ApiModelOptions(string provider)
-    {
-        if (provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-        {
-            return
-            [
-                ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-                ("claude-haiku-4-5", "Claude Haiku 4.5"),
-                ("claude-opus-4-8", "Claude Opus 4.8")
-            ];
-        }
-
-        if (provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            return
-            [
-                ("qwen2.5-coder:7b", "Qwen2.5 Coder 7B"),
-                ("qwen3:8b", "Qwen3 8B")
-            ];
-        }
-
-        return
-            [
-                ("gpt-5.4-mini", "GPT-5.4 mini"),
-                ("gpt-5.4", "GPT-5.4"),
-                ("gpt-5.4-pro", "GPT-5.4 pro"),
-                ("gpt-5.5", "GPT-5.5"),
-                ("gpt-5.5-pro", "GPT-5.5 pro"),
-                ("gpt-5.4-nano", "GPT-5.4 nano"),
-                ("gpt-5-mini", "GPT-5 mini"),
-                ("gpt-5-nano", "GPT-5 nano"),
-                ("gpt-5.2", "GPT-5.2 (previous)")
-            ];
-    }
-
-    private static string DefaultApiModel(string provider) => ApiModelOptions(provider)[0].Value;
+    private static string DefaultApiModel(string provider) => DashboardAgentOptionCatalog.ApiModelOptions(provider)[0].Value;
 
     private static string DisplayMaxTokens(string provider, int? configured, bool complex)
     {
@@ -638,47 +588,27 @@ public static partial class DashboardRenderer
                 : OutputTokenPolicy.ComplexLocalMaxOutputTokens;
     }
 
-    private static IReadOnlyList<(string Value, string Label)> ApiReasoningOptions(string provider)
-    {
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
-            provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
-            ? [("", "Default")]
-            : [("", "Default"), ("none", "None"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high")];
-    }
-
-    private static IReadOnlyList<(string Value, string Label)> SubscriptionModelOptions(string provider)
-    {
-        if (provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            return [("", "No subscription model")];
-        }
-
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-            ? [("", "Use API model"), ("sonnet", "Claude Sonnet (latest)"), ("haiku", "Claude Haiku (latest)"), ("opus", "Claude Opus (latest)"), ("fable", "Claude Fable (heaviest tasks)")]
-            : [(AgentCatalog.OpenAiSubscriptionModelAlias, "GPT-5.5"), ("", "Use API model")];
-    }
-
-    private static IReadOnlyList<(string Value, string Label)> SubscriptionReasoningOptions(string provider)
-    {
-        return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
-            provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
-            ? [("", "Default")]
-            : [("", "Default"), ("none", "None"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high")];
-    }
-
     private static void RenderProviderSelectOptions(
         StringBuilder html,
         string provider,
         string? selected,
-        Func<string, IReadOnlyList<(string Value, string Label)>> optionsFactory)
+        Func<string, IReadOnlyList<DashboardAgentOption>> optionsFactory)
     {
         var options = optionsFactory(provider);
+        RenderProviderSelectOptions(html, selected, options);
+    }
+
+    private static void RenderProviderSelectOptions(
+        StringBuilder html,
+        string? selected,
+        IReadOnlyList<DashboardAgentOption> options)
+    {
         foreach (var option in options)
         {
             html.AppendLine(RenderSelectOption(option.Value, option.Label, selected));
         }
 
-        RenderUnknownSelectedOption(html, selected, options);
+        RenderUnknownSelectedOption(html, selected, options.Select(option => (option.Value, option.Label)).ToList());
     }
 
     private static void RenderSubscriptionProfileOptions(

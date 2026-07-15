@@ -265,4 +265,38 @@ public sealed class AgentCatalogTests
     Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
     Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_load_preserves_new_and_unknown_subscription_aliases")]
+    public void AgentCatalogStoreLoadPreservesNewAndUnknownSubscriptionAliases()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var catalog = new AgentCatalog(
+    [
+        new AgentDefinition(
+            new AgentId("openai-developer"),
+            "OpenAI developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiTerraSubscriptionModelAlias)),
+        new AgentDefinition(
+            new AgentId("openai-reviewer"),
+            "OpenAI reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-future-alias"))
+    ]);
+
+    AgentCatalogStore.Save(path, catalog);
+
+    var restored = AgentCatalogStore.Load(path);
+
+    var developerSubscription = restored.GetRequired(AgentRole.Developer).Subscription!;
+    var reviewerSubscription = restored.GetRequired(AgentRole.Reviewer).Subscription!;
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, developerSubscription.ModelAlias);
+    Assert.Equal("medium", developerSubscription.ReasoningEffort);
+    Assert.Equal("gpt-future-alias", reviewerSubscription.ModelAlias);
+    Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, reviewerSubscription.ReasoningEffort);
+}
 }

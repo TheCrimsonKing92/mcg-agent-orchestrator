@@ -1081,6 +1081,43 @@ public sealed class DashboardRenderingTests
     Assert.True(ollama.Model.MaxOutputTokens is null);
     Assert.Equal(SubscriptionMode.LocalBridge, ollama.Model.SubscriptionMode);
 }
+    [Xunit.Fact(DisplayName = "DashboardRequestParser_applies_first_class_subscription_reasoning_defaults")]
+    public void DashboardRequestParserAppliesFirstClassSubscriptionReasoningDefaults()
+{
+    var sol = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Developer",
+        "OpenAI",
+        "gpt-5.4-mini",
+        null,
+        SubscriptionModelAlias: AgentCatalog.OpenAiSolSubscriptionModelAlias));
+    var terra = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Tester",
+        "OpenAI",
+        "gpt-5.4-mini",
+        null,
+        SubscriptionModelAlias: AgentCatalog.OpenAiTerraSubscriptionModelAlias));
+    var luna = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Reviewer",
+        "OpenAI",
+        "gpt-5.4-mini",
+        null,
+        SubscriptionModelAlias: AgentCatalog.OpenAiLunaSubscriptionModelAlias));
+    var fable = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        "Planner",
+        "Anthropic",
+        "claude-haiku-4-5",
+        null,
+        SubscriptionModelAlias: "fable"));
+
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, sol.Subscription!.ModelAlias);
+    Assert.Equal("low", sol.Subscription.ReasoningEffort);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, terra.Subscription!.ModelAlias);
+    Assert.Equal("medium", terra.Subscription.ReasoningEffort);
+    Assert.Equal(AgentCatalog.OpenAiLunaSubscriptionModelAlias, luna.Subscription!.ModelAlias);
+    Assert.Equal("medium", luna.Subscription.ReasoningEffort);
+    Assert.Equal("fable", fable.Subscription!.ModelAlias);
+    Assert.True(fable.Subscription.ReasoningEffort is null);
+}
     [Xunit.Fact(DisplayName = "DashboardRequestParser_ignores_subscription_fields_for_api_only_agents")]
     public void DashboardRequestParserIgnoresSubscriptionFieldsForApiOnlyAgents()
 {
@@ -1564,6 +1601,9 @@ public sealed class DashboardRenderingTests
     Assert.Contains("<select name=\"reasoningEffort\" data-provider-options=\"apiReasoning\"", configHtml, StringComparison.Ordinal);
     Assert.Contains("<select name=\"subscriptionProfileName\" data-provider-options=\"subscriptionProfiles\"", configHtml, StringComparison.Ordinal);
     Assert.Contains("<select name=\"subscriptionModelAlias\" data-provider-options=\"subscriptionModels\"", configHtml, StringComparison.Ordinal);
+    Assert.Contains("<option value=\"gpt-5.6-sol\">GPT-5.6 Sol</option>", configHtml, StringComparison.Ordinal);
+    Assert.Contains("<option value=\"gpt-5.6-terra\">GPT-5.6 Terra</option>", configHtml, StringComparison.Ordinal);
+    Assert.Contains("<option value=\"gpt-5.6-luna\">GPT-5.6 Luna</option>", configHtml, StringComparison.Ordinal);
     Assert.Contains("<option value=\"gpt-5.5\" selected>GPT-5.5</option>", configHtml, StringComparison.Ordinal);
     Assert.Contains("<option value=\"\">Use API model</option>", configHtml, StringComparison.Ordinal);
     Assert.Contains("<select name=\"subscriptionReasoningEffort\" data-provider-options=\"subscriptionReasoning\"", configHtml, StringComparison.Ordinal);
@@ -1576,7 +1616,11 @@ public sealed class DashboardRenderingTests
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Default CLI model", StringComparison.Ordinal));
     Assert.Contains("defaultSubscriptionModel: 'gpt-5.5'", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("GPT-5.3-Codex", StringComparison.Ordinal));
+    Assert.Contains("['gpt-5.6-sol','GPT-5.6 Sol']", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("'gpt-5.6-luna': [['','Default'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high'], ['max','Max']]", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("'gpt-5.6-terra': 'medium'", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("['sonnet','Claude Sonnet (latest)']", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("['fable','Claude Fable (heaviest tasks)']", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("maxTokenPlaceholder(provider)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("complexMaxTokenPlaceholder(provider)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("complexProviderName", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);

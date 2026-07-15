@@ -7,12 +7,29 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 {
     public const string OpenAiSubscriptionModelAlias = "gpt-5.5";
+    public const string OpenAiSolSubscriptionModelAlias = "gpt-5.6-sol";
+    public const string OpenAiTerraSubscriptionModelAlias = "gpt-5.6-terra";
+    public const string OpenAiLunaSubscriptionModelAlias = "gpt-5.6-luna";
     public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex";
     public const int RoutineApiMaxOutputTokens = OutputTokenPolicy.RoutinePaidMaxOutputTokens;
     public const int ComplexApiMaxOutputTokens = OutputTokenPolicy.ComplexPaidMaxOutputTokens;
     public const string RoutineReasoningEffort = "medium";
     public const string RoutineSubscriptionReasoningEffort = "low";
     public const string ComplexReasoningEffort = "high";
+
+    public static string? DefaultSubscriptionReasoningEffort(string providerName, string? modelAlias)
+    {
+        if (!providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return modelAlias is not null &&
+            (modelAlias.Equals(OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+             modelAlias.Equals(OpenAiLunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
+            ? "medium"
+            : RoutineSubscriptionReasoningEffort;
+    }
 
     public AgentDefinition GetRequired(AgentRole role)
     {
@@ -220,7 +237,7 @@ public static class AgentCatalogStore
         }
 
         return string.IsNullOrWhiteSpace(subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)
-            ? subscription with { ReasoningEffort = AgentCatalog.RoutineSubscriptionReasoningEffort }
+            ? subscription with { ReasoningEffort = AgentCatalog.DefaultSubscriptionReasoningEffort(agent.Model.ProviderName, subscription.ModelAlias) }
             : subscription;
     }
 

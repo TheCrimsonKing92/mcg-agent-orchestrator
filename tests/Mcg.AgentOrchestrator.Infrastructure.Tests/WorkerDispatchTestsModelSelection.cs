@@ -1787,6 +1787,42 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model_reasoning_effort='low'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionDispatch_emits_first_class_subscription_alias_and_reasoning")]
+    public void SubscriptionDispatchEmitsFirstClassSubscriptionAliasAndReasoning()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-15T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Review the implementation",
+        [new TaskSpec(TaskId.New(), "Review the code.", AgentRole.Reviewer)]);
+    var agent = new AgentDefinition(
+        new AgentId("openai-reviewer"),
+        "OpenAI Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiLunaSubscriptionModelAlias, "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory}")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiLunaSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal("medium", task.LastDispatch.ReasoningEffort);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiLunaSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='medium'", task.LastDispatch.Command, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_no_override_preserves_complex_model_default")]
     public void SubscriptionDispatchNoOverridePreservesComplexModelDefault()
 {
