@@ -5,9 +5,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record GoalTimingReportSnapshot(
     GoalId GoalId,
     string Objective,
+    DateTimeOffset? BacklogIntentAt,
     DateTimeOffset? IntakeAt,
     DateTimeOffset? FirstDispatchAt,
     DateTimeOffset? LandedAt,
+    string? LandingSource,
+    TimeSpan BacklogIntentWait,
     TimeSpan IntakeToFirstDispatchWait,
     TimeSpan GateDuration,
     TimeSpan LandingWait,
@@ -17,6 +20,17 @@ public sealed record GoalTimingReportSnapshot(
     double WorkPercent,
     double WaitPercent,
     IReadOnlyList<GoalTimingTaskReport> Tasks);
+
+public sealed record GoalTimingReportContext(
+    DateTimeOffset? BacklogIntentAt = null,
+    DateTimeOffset? LandedAt = null,
+    string? LandingSource = null,
+    IReadOnlyList<GoalTimingGateSpan>? GateSpans = null);
+
+public sealed record GoalTimingGateSpan(
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt,
+    string Outcome);
 
 public sealed record GoalTimingTaskReport(
     TaskId TaskId,
@@ -79,10 +93,43 @@ public sealed record DispatchValueWasteSource(
     string Source,
     int Count);
 
+public sealed record GoalTimingRollupSnapshot(
+    int GoalCount,
+    TimeSpan TotalDuration,
+    TimeSpan WorkDuration,
+    TimeSpan WaitDuration,
+    double WorkPercent,
+    double WaitPercent,
+    int ProductiveCount,
+    int CorrectiveCount,
+    int WastedEnvironmentalCount,
+    int WastedFalseFailCount,
+    int SupersededCount,
+    IReadOnlyList<GoalTimingPhaseRollup> Phases,
+    IReadOnlyList<GoalTimingDailyRollup> Daily,
+    IReadOnlyList<DispatchValueWasteSource> TopWasteSources);
+
+public sealed record GoalTimingPhaseRollup(
+    string Phase,
+    TimeSpan Total,
+    double Share,
+    TimeSpan Median,
+    TimeSpan P90);
+
+public sealed record GoalTimingDailyRollup(
+    DateOnly Day,
+    int GoalCount,
+    TimeSpan TotalDuration,
+    TimeSpan MedianTotalDuration,
+    double WorkPercent,
+    int WastedEnvironmentalCount,
+    int WastedFalseFailCount);
+
 public static class GoalTimingReport
 {
-    public static GoalTimingReportSnapshot Build(Goal goal)
+    public static GoalTimingReportSnapshot Build(Goal goal, GoalTimingReportContext? context = null)
     {
+        context ??= new GoalTimingReportContext();
         var intakeAt = goal.Timeline
             .Where(evt => evt.Kind == ProgressKind.TaskDelegated)
             .Select(evt => (DateTimeOffset?)evt.OccurredAt)
@@ -92,18 +139,19 @@ public static class GoalTimingReport
             .OrderBy(evt => evt.OccurredAt)
             .ToList();
         var firstDispatchAt = dispatchEvents.Select(evt => (DateTimeOffset?)evt.OccurredAt).Min();
-        var landedAt = ResolveLandedAt(goal);
+        var landedAt = context.LandedAt ?? ResolveLandedAt(goal);
         var roundsByTask = BuildRounds(goal, dispatchEvents);
         var allRounds = roundsByTask
             .SelectMany(task => task.Rounds)
             .OrderBy(round => round.DispatchAt)
             .ToList();
-        var gateDuration = ParseGateDuration(goal.Tasks.SelectMany(task => task.VerificationHistory));
+        var gateDuration = ResolveGateDuration(goal, context);
+        var backlogIntentWait = PositiveDuration(intakeAt, context.BacklogIntentAt);
         var intakeWait = PositiveDuration(firstDispatchAt, intakeAt);
         var handoffWait = AddHandoffWaits(allRounds);
         var workDuration = allRounds.Aggregate(TimeSpan.Zero, (sum, round) => sum + round.SandboxPrepDuration + round.WorkerRunDuration) + gateDuration;
-        var totalDuration = PositiveDuration(landedAt, intakeAt);
-        var landingWait = totalDuration - workDuration - intakeWait - handoffWait;
+        var totalDuration = PositiveDuration(landedAt, context.BacklogIntentAt ?? intakeAt);
+        var landingWait = totalDuration - workDuration - backlogIntentWait - intakeWait - handoffWait;
         if (landingWait < TimeSpan.Zero)
         {
             landingWait = TimeSpan.Zero;
@@ -124,9 +172,12 @@ public static class GoalTimingReport
         return new GoalTimingReportSnapshot(
             goal.Id,
             goal.Objective,
+            context.BacklogIntentAt,
             intakeAt,
             firstDispatchAt,
             landedAt,
+            context.LandingSource,
+            backlogIntentWait,
             intakeWait,
             gateDuration,
             landingWait,
@@ -136,6 +187,105 @@ public static class GoalTimingReport
             totalDuration > TimeSpan.Zero ? workDuration.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
             totalDuration > TimeSpan.Zero ? waitDuration.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
             taskReports);
+    }
+
+    public static GoalTimingRollupSnapshot BuildRollup(
+        IEnumerable<Goal> goals,
+        IReadOnlyDictionary<GoalId, GoalTimingReportContext>? contexts = null)
+    {
+        contexts ??= new Dictionary<GoalId, GoalTimingReportContext>();
+        var items = goals
+            .Select(goal =>
+            {
+                contexts.TryGetValue(goal.Id, out var context);
+                return new
+                {
+                    Goal = goal,
+                    Timing = Build(goal, context)
+                };
+            })
+            .Where(item =>
+                ResolveTerminalOutcome(item.Goal) == GoalTerminalOutcome.Landed &&
+                item.Timing.LandedAt is not null &&
+                !IsPendingLanding(item.Timing))
+            .ToList();
+
+        var phaseObservations = new List<PhaseObservation>();
+        foreach (var item in items)
+        {
+            AddPhase(phaseObservations, "BacklogIntentWait", item.Timing.BacklogIntentWait);
+            AddPhase(phaseObservations, "IntakeWait", item.Timing.IntakeToFirstDispatchWait);
+            AddPhase(phaseObservations, "Gate", item.Timing.GateDuration);
+            AddPhase(phaseObservations, "LandingWait", item.Timing.LandingWait);
+
+            foreach (var roleGroup in item.Timing.Tasks.GroupBy(task => task.Role))
+            {
+                var role = roleGroup.Key.ToString();
+                AddPhase(phaseObservations, $"Prep:{role}", roleGroup.SumDuration(task => task.Rounds, round => round.SandboxPrepDuration));
+                AddPhase(phaseObservations, $"Worker:{role}", roleGroup.SumDuration(task => task.Rounds, round => round.WorkerRunDuration));
+                AddPhase(phaseObservations, $"Handoff:{role}", roleGroup.SumDuration(task => task.Rounds, round => round.HandoffWait));
+            }
+        }
+
+        var totalDuration = items.SumDuration(item => item.Timing.TotalDuration);
+        var workDuration = items.SumDuration(item => item.Timing.WorkDuration);
+        var waitDuration = totalDuration >= workDuration ? totalDuration - workDuration : TimeSpan.Zero;
+        var dispatchValue = BuildDispatchValueReport(items.Select(item => item.Goal));
+        var phases = phaseObservations
+            .GroupBy(item => item.Phase, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var durations = group.Select(item => item.Duration).OrderBy(duration => duration).ToList();
+                var total = durations.Aggregate(TimeSpan.Zero, (sum, duration) => sum + duration);
+                return new GoalTimingPhaseRollup(
+                    group.Key,
+                    total,
+                    totalDuration > TimeSpan.Zero ? total.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
+                    Percentile(durations, 0.5) ?? TimeSpan.Zero,
+                    Percentile(durations, 0.9) ?? TimeSpan.Zero);
+            })
+            .OrderByDescending(phase => phase.Total)
+            .ThenBy(phase => phase.Phase, StringComparer.Ordinal)
+            .ToList();
+
+        var daily = items
+            .GroupBy(item => DateOnly.FromDateTime(item.Timing.LandedAt!.Value.UtcDateTime))
+            .OrderBy(group => group.Key)
+            .Select(group =>
+            {
+                var dayItems = group.ToList();
+                var dayTotal = dayItems.SumDuration(item => item.Timing.TotalDuration);
+                var dayWork = dayItems.SumDuration(item => item.Timing.WorkDuration);
+                var dayRounds = dayItems
+                    .SelectMany(item => item.Timing.Tasks)
+                    .SelectMany(task => task.Rounds)
+                    .ToList();
+                return new GoalTimingDailyRollup(
+                    group.Key,
+                    dayItems.Count,
+                    dayTotal,
+                    Percentile(dayItems.Select(item => item.Timing.TotalDuration).OrderBy(duration => duration).ToList(), 0.5) ?? TimeSpan.Zero,
+                    dayTotal > TimeSpan.Zero ? dayWork.TotalMilliseconds / dayTotal.TotalMilliseconds : 0.0,
+                    dayRounds.Count(round => round.ValueClass == DispatchRoundValueClass.WastedEnvironmental),
+                    dayRounds.Count(round => round.ValueClass == DispatchRoundValueClass.WastedFalseFail));
+            })
+            .ToList();
+
+        return new GoalTimingRollupSnapshot(
+            items.Count,
+            totalDuration,
+            workDuration,
+            waitDuration,
+            totalDuration > TimeSpan.Zero ? workDuration.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
+            totalDuration > TimeSpan.Zero ? waitDuration.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
+            dispatchValue.Goals.Sum(goal => goal.ProductiveCount),
+            dispatchValue.Goals.Sum(goal => goal.CorrectiveCount),
+            dispatchValue.Goals.Sum(goal => goal.WastedEnvironmentalCount),
+            dispatchValue.Goals.Sum(goal => goal.WastedFalseFailCount),
+            dispatchValue.Goals.Sum(goal => goal.SupersededCount),
+            phases,
+            daily,
+            dispatchValue.TopWasteSources);
     }
 
     public static DispatchValueReportSnapshot BuildDispatchValueReport(
@@ -344,6 +494,18 @@ public static class GoalTimingReport
             .LastOrDefault();
     }
 
+    private static TimeSpan ResolveGateDuration(Goal goal, GoalTimingReportContext context)
+    {
+        if (context.GateSpans is { Count: > 0 })
+        {
+            return context.GateSpans.Aggregate(
+                TimeSpan.Zero,
+                (sum, span) => sum + PositiveDuration(span.EndedAt, span.StartedAt));
+        }
+
+        return ParseGateDuration(goal.Tasks.SelectMany(task => task.VerificationHistory));
+    }
+
     private static TimeSpan ParseGateDuration(IEnumerable<TaskVerificationRecord> verifications)
     {
         var total = TimeSpan.Zero;
@@ -402,6 +564,11 @@ public static class GoalTimingReport
 
     private static DateTimeOffset? ResolveLandedAt(Goal goal)
     {
+        if (goal.Status == GoalStatus.Verified)
+        {
+            return null;
+        }
+
         var policyLanding = goal.Timeline
             .Where(evt => evt.TaskId is null && evt.Kind == ProgressKind.GoalPolicyDecision)
             .OrderByDescending(evt => evt.OccurredAt)
@@ -421,6 +588,9 @@ public static class GoalTimingReport
             GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded => GoalTerminalOutcome.Abandoned,
             _ => GoalTerminalOutcome.Active
         };
+
+    private static bool IsPendingLanding(GoalTimingReportSnapshot timing) =>
+        string.Equals(timing.LandingSource, "pending", StringComparison.OrdinalIgnoreCase);
 
     private static DispatchValueGoalReport BuildDispatchValueGoalReport(
         Goal goal,
@@ -520,4 +690,29 @@ public static class GoalTimingReport
         string WasteSource);
 
     private sealed record TaskRounds(TaskId TaskId, IReadOnlyList<GoalTimingRoundReport> Rounds);
+
+    private sealed record PhaseObservation(string Phase, TimeSpan Duration);
+
+    private static void AddPhase(List<PhaseObservation> observations, string phase, TimeSpan duration) =>
+        observations.Add(new PhaseObservation(phase, duration > TimeSpan.Zero ? duration : TimeSpan.Zero));
+
+    private static TimeSpan SumDuration<T>(this IEnumerable<T> items, Func<T, TimeSpan> selector) =>
+        items.Aggregate(TimeSpan.Zero, (sum, item) => sum + selector(item));
+
+    private static TimeSpan SumDuration<TItem, TNested>(
+        this IEnumerable<TItem> items,
+        Func<TItem, IEnumerable<TNested>> nestedSelector,
+        Func<TNested, TimeSpan> durationSelector) =>
+        items.SelectMany(nestedSelector).Aggregate(TimeSpan.Zero, (sum, item) => sum + durationSelector(item));
+
+    private static TimeSpan? Percentile(List<TimeSpan> sorted, double percentile)
+    {
+        if (sorted.Count == 0)
+        {
+            return null;
+        }
+
+        var index = Math.Clamp((int)Math.Ceiling(sorted.Count * percentile) - 1, 0, sorted.Count - 1);
+        return sorted[index];
+    }
 }

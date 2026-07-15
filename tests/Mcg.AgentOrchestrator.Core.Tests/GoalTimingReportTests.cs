@@ -79,6 +79,138 @@ public sealed class GoalTimingReportTests
         Xunit.Assert.Equal(report.TotalDuration, report.WorkDuration + report.WaitDuration);
     }
 
+    [Xunit.Fact(DisplayName = "GoalTimingReport_hand_landed_goal_reports_verified_to_integration_commit_landing_wait")]
+    public void GoalTimingReportHandLandedGoalReportsVerifiedToIntegrationCommitLandingWait()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement hand landed report", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Hand landed timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, Process(clock.UtcNow, completedAt: null, "hand-landed"));
+        clock.Advance(TimeSpan.FromMinutes(10));
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            Process(clock.UtcNow.AddMinutes(-10), clock.UtcNow, "hand-landed"),
+            Success(clock.UtcNow) with
+            {
+                Command = Command,
+                WorkingDirectory = WorkDir,
+                StandardError = SandboxPrep(clock.UtcNow.AddMinutes(-15), TimeSpan.FromMinutes(5)),
+                StandardOutputPath = "hand-landed.out.log",
+                StandardErrorPath = "hand-landed.err.log"
+            });
+
+        var verifiedAt = clock.UtcNow;
+        var landedAt = verifiedAt.AddMinutes(30);
+        var report = GoalTimingReport.Build(
+            goal,
+            new GoalTimingReportContext(LandedAt: landedAt, LandingSource: "git-integration-commit"));
+
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+        Xunit.Assert.Equal(landedAt, report.LandedAt);
+        Xunit.Assert.Equal("git-integration-commit", report.LandingSource);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(30), report.LandingWait);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(50), report.TotalDuration);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalTimingReport_verified_unlanded_goal_reports_pending_landing_wait")]
+    public void GoalTimingReportVerifiedUnlandedGoalReportsPendingLandingWait()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement pending landing report", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Pending landed timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        RecordRound(kernel, clock, goal.Id, task.Id, Success(clock.UtcNow));
+
+        var verifiedAt = goal.Timeline.Max(evt => evt.OccurredAt);
+        var report = GoalTimingReport.Build(
+            goal,
+            new GoalTimingReportContext(LandedAt: verifiedAt.AddMinutes(20), LandingSource: "pending"));
+
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+        Xunit.Assert.Equal("pending", report.LandingSource);
+        Xunit.Assert.InRange(report.LandingWait, TimeSpan.FromMinutes(20), TimeSpan.FromMinutes(21));
+        Xunit.Assert.True(report.TotalDuration > TimeSpan.Zero);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalTimingReport_gate_duration_uses_acceptance_journal_span")]
+    public void GoalTimingReportGateDurationUsesAcceptanceJournalSpan()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement gated report", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Gated timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        RecordRound(kernel, clock, goal.Id, task.Id, Success(clock.UtcNow));
+
+        var gateStart = clock.UtcNow.AddMinutes(3);
+        var gateEnd = gateStart.AddMinutes(7);
+        var report = GoalTimingReport.Build(
+            goal,
+            new GoalTimingReportContext(
+                LandedAt: gateEnd,
+                LandingSource: "acceptance-journal",
+                GateSpans: [new GoalTimingGateSpan(gateStart, gateEnd, "passed")]));
+
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(7), report.GateDuration);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalTimingReport_rollup_reconciles_per_goal_totals_and_dispatch_value_waste")]
+    public void GoalTimingReportRollupReconcilesPerGoalTotalsAndDispatchValueWaste()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var firstTask = new TaskSpec(TaskId.New(), "Implement first report", AgentRole.Developer);
+        var first = kernel.CreateGoal("First landed timing", [firstTask]);
+        kernel.ActivateGoal(first.Id, DefaultAgents());
+        RecordRound(kernel, clock, first.Id, firstTask.Id, Success(clock.UtcNow));
+
+        var secondTask = new TaskSpec(TaskId.New(), "Implement second report", AgentRole.Developer);
+        var second = kernel.CreateGoal("Second landed timing", [secondTask]);
+        kernel.ActivateGoal(second.Id, DefaultAgents());
+        RecordRound(kernel, clock, second.Id, secondTask.Id, Verification(1, clock.UtcNow, string.Empty, "ERROR: Unable to connect to API", "env-waste"));
+        kernel.RetryTask(second.Id, secondTask.Id, "retry environmental failure");
+        RecordRound(kernel, clock, second.Id, secondTask.Id, Success(clock.UtcNow));
+
+        var pendingTask = new TaskSpec(TaskId.New(), "Implement pending report", AgentRole.Developer);
+        var pending = kernel.CreateGoal("Pending timing", [pendingTask]);
+        kernel.ActivateGoal(pending.Id, DefaultAgents());
+        RecordRound(kernel, clock, pending.Id, pendingTask.Id, Success(clock.UtcNow));
+
+        var contexts = new Dictionary<GoalId, GoalTimingReportContext>
+        {
+            [first.Id] = new(
+                BacklogIntentAt: first.Timeline.Min(evt => evt.OccurredAt).AddMinutes(-4),
+                LandedAt: first.Timeline.Max(evt => evt.OccurredAt).AddMinutes(6),
+                LandingSource: "fixture"),
+            [second.Id] = new(
+                LandedAt: second.Timeline.Max(evt => evt.OccurredAt).AddMinutes(9),
+                LandingSource: "fixture",
+                GateSpans: [new GoalTimingGateSpan(second.Timeline.Max(evt => evt.OccurredAt), second.Timeline.Max(evt => evt.OccurredAt).AddMinutes(2), "passed")]),
+            [pending.Id] = new(
+                LandedAt: pending.Timeline.Max(evt => evt.OccurredAt).AddMinutes(20),
+                LandingSource: "pending")
+        };
+
+        var firstReport = GoalTimingReport.Build(first, contexts[first.Id]);
+        var secondReport = GoalTimingReport.Build(second, contexts[second.Id]);
+        var rollup = GoalTimingReport.BuildRollup([first, second, pending], contexts);
+
+        Xunit.Assert.Equal(2, rollup.GoalCount);
+        Xunit.Assert.Equal(firstReport.TotalDuration + secondReport.TotalDuration, rollup.TotalDuration);
+        Xunit.Assert.Equal(firstReport.WorkDuration + secondReport.WorkDuration, rollup.WorkDuration);
+        Xunit.Assert.Equal(1, rollup.WastedEnvironmentalCount);
+        Xunit.Assert.Contains(rollup.Phases, phase => phase.Phase == "BacklogIntentWait" && phase.Total == TimeSpan.FromMinutes(4));
+        Xunit.Assert.Single(rollup.TopWasteSources, source => source.Source == DispatchOutcomeKind.ProviderConnectivity.ToString() && source.Count == 1);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchValueReport_classifies_known_round_types_and_rolls_up_per_goal")]
     public void DispatchValueReportClassifiesKnownRoundTypesAndRollsUpPerGoal()
     {

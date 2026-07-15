@@ -102,18 +102,23 @@ public static class WorkerProcessJobs
 
     public static bool TryKillOrFallback(int processId)
     {
-        if (IsProtectedProcessOrAncestor(processId) || ProtectedPidIsDescendantOf(processId))
-        {
-            return false;
-        }
-
-        return TryKillOrFallback(processId, out _);
+        return TryKillOrFallback(processId, allowProtectedDescendant: false, out _);
     }
 
     public static bool TryKillOrFallback(int processId, out WorkerProcessJobAccounting? accounting)
     {
+        return TryKillOrFallback(processId, allowProtectedDescendant: false, out accounting);
+    }
+
+    internal static bool TryKillRecordedOwnedChildAndWait(int processId, TimeSpan timeout)
+    {
+        return TryKillOrFallbackAndWait(processId, timeout, allowProtectedDescendant: true);
+    }
+
+    private static bool TryKillOrFallback(int processId, bool allowProtectedDescendant, out WorkerProcessJobAccounting? accounting)
+    {
         accounting = null;
-        if (IsProtectedProcessOrAncestor(processId) || ProtectedPidIsDescendantOf(processId))
+        if (!CanKillProcess(processId, allowProtectedDescendant))
         {
             return false;
         }
@@ -138,7 +143,12 @@ public static class WorkerProcessJobs
 
     public static bool TryKillOrFallbackAndWait(int processId, TimeSpan timeout)
     {
-        if (!TryKillOrFallback(processId))
+        return TryKillOrFallbackAndWait(processId, timeout, allowProtectedDescendant: false);
+    }
+
+    private static bool TryKillOrFallbackAndWait(int processId, TimeSpan timeout, bool allowProtectedDescendant)
+    {
+        if (!TryKillOrFallback(processId, allowProtectedDescendant, out _))
         {
             return false;
         }
@@ -422,8 +432,27 @@ public static class WorkerProcessJobs
 
     private static bool IsProtectedProcessOrAncestor(int processId)
     {
-        return TryGetProtectedPid(out var protectedPid) &&
-            (processId == protectedPid || IsDescendantOf(processId, protectedPid));
+        return IsProtectedProcess(processId) || IsProtectedDescendant(processId);
+    }
+
+    private static bool CanKillProcess(int processId, bool allowProtectedDescendant)
+    {
+        if (IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId))
+        {
+            return false;
+        }
+
+        return allowProtectedDescendant || !IsProtectedDescendant(processId);
+    }
+
+    private static bool IsProtectedProcess(int processId)
+    {
+        return TryGetProtectedPid(out var protectedPid) && processId == protectedPid;
+    }
+
+    private static bool IsProtectedDescendant(int processId)
+    {
+        return TryGetProtectedPid(out var protectedPid) && IsDescendantOf(processId, protectedPid);
     }
 
     private static bool ProtectedPidIsDescendantOf(int processId)

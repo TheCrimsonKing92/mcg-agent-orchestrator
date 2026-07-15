@@ -1120,6 +1120,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var arguments = BuildCommandArguments(check);
         if (IsDotnetCommand(arguments))
         {
+            if (IsDotnetTestCommand(arguments) && GateUsesStableSlot(stableSlotIndex, stableSlotLease))
+            {
+                return await RunManagedDotnetTestCheckAsync(
+                    check,
+                    BuildDotnetTestBuildArguments(arguments),
+                    EnsureDotnetTestNoBuildArguments(arguments),
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    $"acceptance-{Slug(check.Name)}",
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             return await RunManagedDotnetCheckAsync(
                 check,
                 arguments,
@@ -1165,15 +1179,82 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
-        return await RunManagedDotnetCheckAsync(
+        var noBuild = GateUsesStableSlot(stableSlotIndex, stableSlotLease);
+        var testArguments = BuildDotnetTestArguments(check, noBuild);
+        if (!noBuild)
+        {
+            return await RunManagedDotnetCheckAsync(
+                check,
+                testArguments,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                $"acceptance-{Slug(check.Name)}",
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return await RunManagedDotnetTestCheckAsync(
             check,
-            BuildDotnetTestArguments(check),
+            BuildDotnetTestBuildArguments(check),
+            testArguments,
             worktreePath,
             goalId,
             stableSlotIndex,
             stableSlotLease,
             $"acceptance-{Slug(check.Name)}",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
+        AcceptanceManifestCheck check,
+        string[] buildArguments,
+        string[] testArguments,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        string attemptName,
+        CancellationToken cancellationToken)
+    {
+        var buildRun = await RunManagedDotnetCheckAsync(
+            check,
+            buildArguments,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            $"{attemptName}-build",
+            cancellationToken).ConfigureAwait(false);
+        if (!buildRun.Result.Passed)
+        {
+            return (buildRun.Result with
+            {
+                Name = check.Name,
+                ResultSummary = PrefixResultSummary("build phase failed", buildRun.Result.ResultSummary)
+            }, buildRun.Retried);
+        }
+
+        var testRun = await RunManagedDotnetCheckAsync(
+            check,
+            testArguments,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            attemptName,
+            cancellationToken).ConfigureAwait(false);
+
+        var lockRemediationApplied = buildRun.Result.LockRemediationApplied || testRun.Result.LockRemediationApplied;
+        var durationMilliseconds = (buildRun.Result.DurationMilliseconds ?? 0) + (testRun.Result.DurationMilliseconds ?? 0);
+        return (testRun.Result with
+        {
+            DurationMilliseconds = durationMilliseconds,
+            LockRemediationApplied = lockRemediationApplied,
+            ResultSummary = lockRemediationApplied && buildRun.Result.LockRemediationApplied
+                ? PrefixResultSummary("build phase remediated", testRun.Result.ResultSummary)
+                : testRun.Result.ResultSummary
+        }, buildRun.Retried || testRun.Retried);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetCheckAsync(
@@ -1521,6 +1602,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken)
     {
         var effectiveArguments = WithBuildEnvironmentArguments(arguments, environment);
+        ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
         return await RunWithGateHeartbeatAsync(
             effectiveArguments,
             worktreePath,
@@ -1565,6 +1647,79 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             (string.IsNullOrWhiteSpace(holder.ProcessName) ||
                 holder.ProcessName.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
                 holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
+
+    private static void ReapRecordedGateChildBeforeManagedDotnetCommand(
+        DotnetBuildEnvironment environment,
+        GoalId? goalId,
+        int? stableSlotIndex)
+    {
+        var heartbeatPath = Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName);
+        if (!File.Exists(heartbeatPath))
+        {
+            return;
+        }
+
+        GateHeartbeatSnapshot? snapshot;
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        }
+        catch
+        {
+            return;
+        }
+
+        if (snapshot?.ChildPid is not { } childPid)
+        {
+            return;
+        }
+
+        if (stableSlotIndex.HasValue && snapshot.SlotIndex != stableSlotIndex)
+        {
+            return;
+        }
+
+        if (goalId is not null &&
+            !string.IsNullOrWhiteSpace(snapshot.GoalId) &&
+            !snapshot.GoalId.Equals(goalId.Value, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!snapshot.State.Equals("running", StringComparison.OrdinalIgnoreCase) &&
+            DateTimeOffset.UtcNow - snapshot.LastObservedAt > TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
+
+        if (snapshot.CommandLine is not null &&
+            !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!IsProcessRunning(childPid))
+        {
+            return;
+        }
+
+        WorkerProcessJobs.TryKillRecordedOwnedChildAndWait(childPid, TimeSpan.FromSeconds(5));
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
 
     private static bool PathIsUnderDirectory(string path, string directory)
     {
@@ -1611,6 +1766,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? remediation
             : $"{remediation}; {summary}";
     }
+
+    private static string PrefixResultSummary(string prefix, string? summary) =>
+        string.IsNullOrWhiteSpace(summary)
+            ? prefix
+            : $"{prefix}; {summary}";
 
     private static string? BuildGenericCommandResultSummary(CommandResult result)
     {
@@ -1839,7 +1999,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int TestAttrRemoved,
         int TestAttrAdded);
 
-    private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check)
+    private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check, bool noBuild = false)
     {
         var args = new List<string> { "dotnet", "test" };
         if (!string.IsNullOrWhiteSpace(check.Project))
@@ -1868,6 +2028,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         args.Add("120s");
         args.Add("--blame-hang-dump-type");
         args.Add("none");
+        if (noBuild && !args.Any(argument => argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase)))
+        {
+            args.Add("--no-build");
+        }
+
+        return [.. args];
+    }
+
+    private static string[] BuildDotnetTestBuildArguments(AcceptanceManifestCheck check)
+    {
+        var testArguments = BuildDotnetTestArguments(check);
+        return BuildDotnetTestBuildArguments(testArguments);
+    }
+
+    private static string[] BuildDotnetTestBuildArguments(string[] testArguments)
+    {
+        var args = new List<string> { "dotnet", "build" };
+        var startIndex = 2;
+        if (testArguments.Length > 2 && !testArguments[2].StartsWith("-", StringComparison.Ordinal))
+        {
+            args.Add(testArguments[2]);
+            startIndex = 3;
+        }
+
+        for (var index = startIndex; index < testArguments.Length; index++)
+        {
+            var argument = testArguments[index];
+            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--logger", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--collect", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--blame-hang-timeout", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--blame-hang-dump-type", StringComparison.OrdinalIgnoreCase))
+            {
+                index++;
+                continue;
+            }
+
+            if (argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("--blame", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!IsBuildCompatibleDotnetArgument(argument))
+            {
+                continue;
+            }
+
+            args.Add(argument);
+            if (ArgumentExpectsValue(argument) && index + 1 < testArguments.Length)
+            {
+                args.Add(testArguments[++index]);
+            }
+        }
+
         return [.. args];
     }
 
@@ -1875,6 +2090,51 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string.IsNullOrWhiteSpace(check.Project) ||
         check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
         IsInfrastructureTestProject(check.Project);
+
+    private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
+        stableSlotIndex.HasValue || stableSlotLease is not null;
+
+    private static bool IsDotnetTestCommand(string[] arguments) =>
+        arguments.Length >= 2 &&
+        arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase);
+
+    private static string[] EnsureDotnetTestNoBuildArguments(string[] arguments)
+    {
+        if (arguments.Any(argument => argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase)))
+        {
+            return arguments;
+        }
+
+        return [.. arguments, "--no-build"];
+    }
+
+    private static bool IsBuildCompatibleDotnetArgument(string argument) =>
+        argument.Equals("--configuration", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--framework", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--runtime", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-r", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--verbosity", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-v", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--no-restore", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--nologo", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--force", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--interactive", StringComparison.OrdinalIgnoreCase) ||
+        argument.StartsWith("-p:", StringComparison.OrdinalIgnoreCase) ||
+        argument.StartsWith("/p:", StringComparison.OrdinalIgnoreCase) ||
+        argument.StartsWith("--property:", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ArgumentExpectsValue(string argument) =>
+        argument.Equals("--configuration", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--framework", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--runtime", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-r", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("--verbosity", StringComparison.OrdinalIgnoreCase) ||
+        argument.Equals("-v", StringComparison.OrdinalIgnoreCase);
 
     private static string? ExtractFilterArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
     {
@@ -2158,7 +2418,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     try { await heartbeatTask.ConfigureAwait(false); } catch { }
                 }
 
-                heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: null);
+                heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id);
                 heartbeatCts?.Dispose();
                 heartbeatCts = null;
                 heartbeatTask = null;
