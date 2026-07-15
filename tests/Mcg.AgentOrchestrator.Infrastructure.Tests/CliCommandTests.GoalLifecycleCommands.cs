@@ -43,6 +43,45 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Equal(oneShot, interactive);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_all_prints_rollup")]
+    public void CliGoalTimingAllPrintsRollup()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement timed work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Roll up goal timing", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex exec prompt.md",
+            root,
+            0,
+            "WORKER_RESULT:\nfiles: src/file.cs\ncommands: build\ntests: pass - focused\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            HeartbeatStandardOutputBytes: 100));
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-timing", "--all"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Goal timing rollup: goals=1", output);
+        Xunit.Assert.Contains("Phase", output);
+        Xunit.Assert.Contains("Daily trend:", output);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_abandon_goal_keeps_reason_text_grouped_before_confirmation")]
     public void CliAbandonGoalKeepsReasonTextGroupedBeforeConfirmation()

@@ -364,9 +364,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal-timing":
-            CliArgumentParser.RequirePartCount(parts, 2, "goal-timing <goal-prefix>");
+            CliArgumentParser.RequirePartCount(parts, 2, "goal-timing <goal-prefix> | goal-timing --all");
+            if (parts[1].Equals("--all", StringComparison.OrdinalIgnoreCase))
+            {
+                ConsoleViews.PrintGoalTimingRollup(context.Kernel.BuildGoalTimingRollup(BuildGoalTimingContexts(context)));
+                return false;
+            }
+
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            ConsoleViews.PrintGoalTimingReport(context.Kernel.BuildGoalTimingReport(context.CurrentGoal.Id));
+            ConsoleViews.PrintGoalTimingReport(context.Kernel.BuildGoalTimingReport(
+                context.CurrentGoal.Id,
+                BuildGoalTimingContext(context, context.CurrentGoal)));
             return false;
 
         case "readiness":
@@ -1831,6 +1839,171 @@ internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStoreP
     {
         return null;
     }
+}
+
+private static IReadOnlyDictionary<GoalId, GoalTimingReportContext> BuildGoalTimingContexts(CliExecutionContext context)
+{
+    var journals = GoalOperationJournal.ReadAll(
+        context.Workspace.ExecutionDirectory,
+        context.Kernel.Goals.Select(goal => goal.Id));
+    return context.Kernel.Goals.ToDictionary(
+        goal => goal.Id,
+        goal => BuildGoalTimingContext(
+            context,
+            goal,
+            journals.TryGetValue(goal.Id, out var journal) ? journal : null));
+}
+
+private static GoalTimingReportContext BuildGoalTimingContext(
+    CliExecutionContext context,
+    Goal goal,
+    GoalOperationJournalSummary? journal = null)
+{
+    journal ??= GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
+    var backlogIntentAt = ResolveBacklogIntentAt(goal, context.Workspace.BacklogStorePath);
+    var gateSpans = BuildGoalTimingGateSpans(journal);
+    var landing = ResolveGoalTimingLanding(context.Workspace.ExecutionDirectory, goal, journal);
+    return new GoalTimingReportContext(
+        backlogIntentAt,
+        landing.LandedAt,
+        landing.Source,
+        gateSpans);
+}
+
+private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogStorePath)
+{
+    if (string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) ||
+        string.IsNullOrWhiteSpace(backlogStorePath) ||
+        !File.Exists(backlogStorePath))
+    {
+        return null;
+    }
+
+    try
+    {
+        return new BacklogStore(backlogStorePath)
+            .GetByExactIdAsync(goal.SourceBacklogItemId)
+            .GetAwaiter()
+            .GetResult()
+            ?.CreatedAt;
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+private static IReadOnlyList<GoalTimingGateSpan> BuildGoalTimingGateSpans(GoalOperationJournalSummary journal)
+{
+    var spans = new List<GoalTimingGateSpan>();
+    var entries = journal.Entries
+        .Where(entry => IsAcceptanceTimingOperation(entry.Operation))
+        .OrderBy(entry => entry.At)
+        .ToList();
+    for (var index = 0; index < entries.Count; index++)
+    {
+        var begin = entries[index];
+        if (begin.Status != GoalOperationStatus.Begin)
+        {
+            continue;
+        }
+
+        var end = entries
+            .Skip(index + 1)
+            .FirstOrDefault(entry =>
+                entry.Status != GoalOperationStatus.Begin &&
+                entry.Operation.Equals(begin.Operation, StringComparison.OrdinalIgnoreCase));
+        if (end is null)
+        {
+            continue;
+        }
+
+        spans.Add(new GoalTimingGateSpan(
+            begin.At,
+            end.At,
+            string.IsNullOrWhiteSpace(end.AcceptanceOutcome) ? end.Status.ToString() : end.AcceptanceOutcome!));
+    }
+
+    return spans;
+}
+
+private static bool IsAcceptanceTimingOperation(string operation) =>
+    operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+    operation.Equals("conductor:acceptance", StringComparison.OrdinalIgnoreCase);
+
+private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLanding(
+    string executionDirectory,
+    Goal goal,
+    GoalOperationJournalSummary journal)
+{
+    var acceptedAt = journal.Entries
+        .Where(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(entry => entry.At)
+        .Select(entry => (DateTimeOffset?)entry.At)
+        .LastOrDefault();
+    if (acceptedAt is not null)
+    {
+        return (acceptedAt, "acceptance-journal");
+    }
+
+    if (TryResolveIntegrationCommitAuthoredAt(executionDirectory, goal, out var commitAuthoredAt))
+    {
+        return (commitAuthoredAt, "git-integration-commit");
+    }
+
+    var conductorLandingAt = journal.Entries
+        .Where(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            (entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Equals(GoalOperationJournal.TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(entry => entry.At)
+        .Select(entry => (DateTimeOffset?)entry.At)
+        .LastOrDefault();
+    return conductorLandingAt is null
+        ? (null, null)
+        : (conductorLandingAt, "landing-journal");
+}
+
+private static bool TryResolveIntegrationCommitAuthoredAt(
+    string executionDirectory,
+    Goal goal,
+    out DateTimeOffset authoredAt)
+{
+    authoredAt = default;
+    if (!Directory.Exists(executionDirectory))
+    {
+        return false;
+    }
+
+    var goalPrefix = goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)];
+    foreach (var pattern in new[] { goal.Id.Value, goalPrefix, GoalWorktrees.BranchName(goal.Id) })
+    {
+        var result = GitCli.Run(
+            executionDirectory,
+            "log",
+            "--format=%aI",
+            "-n",
+            "1",
+            "--regexp-ignore-case",
+            $"--grep={pattern}",
+            "HEAD");
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            continue;
+        }
+
+        var line = result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        if (line is not null && DateTimeOffset.TryParse(line, out authoredAt))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 private static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)

@@ -33,7 +33,53 @@ public static void PrintGoalTimingReport(GoalTimingReportSnapshot report)
         $"Summary: total={FormatDuration(report.TotalDuration)} " +
         $"work={FormatDuration(report.WorkDuration)} ({report.WorkPercent:P0}) " +
         $"wait={FormatDuration(report.WaitDuration)} ({report.WaitPercent:P0}) " +
-        $"gate={FormatDuration(report.GateDuration)} landingWait={FormatDuration(report.LandingWait)}");
+        $"backlogIntentWait={FormatDuration(report.BacklogIntentWait)} " +
+        $"intakeWait={FormatDuration(report.IntakeToFirstDispatchWait)} " +
+        $"gate={FormatDuration(report.GateDuration)} landingWait={FormatDuration(report.LandingWait)} " +
+        $"landedAt={(report.LandedAt is null ? "n/a" : report.LandedAt.Value.ToString("u"))} " +
+        $"source={report.LandingSource ?? "timeline"}");
+    Console.WriteLine();
+}
+
+public static void PrintGoalTimingRollup(GoalTimingRollupSnapshot report)
+{
+    Console.WriteLine();
+    Console.WriteLine(
+        $"Goal timing rollup: goals={report.GoalCount} total={FormatDuration(report.TotalDuration)} " +
+        $"work={FormatDuration(report.WorkDuration)} ({report.WorkPercent:P0}) " +
+        $"wait={FormatDuration(report.WaitDuration)} ({report.WaitPercent:P0}) " +
+        $"productive={report.ProductiveCount} corrective={report.CorrectiveCount} " +
+        $"envWaste={report.WastedEnvironmentalCount} falseFail={report.WastedFalseFailCount} superseded={report.SupersededCount}");
+    Console.WriteLine("Phase               Total   Share  Median     P90");
+    foreach (var phase in report.Phases)
+    {
+        Console.WriteLine(
+            $"{phase.Phase,-18} {FormatDuration(phase.Total),7} {phase.Share,7:P0} " +
+            $"{FormatDuration(phase.Median),7} {FormatDuration(phase.P90),7}");
+    }
+
+    if (report.Daily.Count > 0)
+    {
+        Console.WriteLine("Daily trend:");
+        Console.WriteLine("Day          Goals    Total  Median  Work%  EnvWaste  FalseFail");
+        foreach (var day in report.Daily)
+        {
+            Console.WriteLine(
+                $"{day.Day:yyyy-MM-dd} {day.GoalCount,5} {FormatDuration(day.TotalDuration),8} " +
+                $"{FormatDuration(day.MedianTotalDuration),7} {day.WorkPercent,6:P0} " +
+                $"{day.WastedEnvironmentalCount,9} {day.WastedFalseFailCount,10}");
+        }
+    }
+
+    if (report.TopWasteSources.Count > 0)
+    {
+        Console.WriteLine("Top waste sources:");
+        foreach (var source in report.TopWasteSources)
+        {
+            Console.WriteLine($"  {source.Source}: {source.Count}");
+        }
+    }
+
     Console.WriteLine();
 }
 

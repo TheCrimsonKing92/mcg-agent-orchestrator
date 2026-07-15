@@ -235,6 +235,17 @@ public sealed partial class AgentOrchestratorKernel
         return GoalTimingReport.Build(GetGoal(goalId));
     }
 
+    public GoalTimingReportSnapshot BuildGoalTimingReport(GoalId goalId, GoalTimingReportContext context)
+    {
+        return GoalTimingReport.Build(GetGoal(goalId), context);
+    }
+
+    public GoalTimingRollupSnapshot BuildGoalTimingRollup(
+        IReadOnlyDictionary<GoalId, GoalTimingReportContext>? contexts = null)
+    {
+        return GoalTimingReport.BuildRollup(Goals, contexts);
+    }
+
     public DispatchValueReportSnapshot BuildDispatchValueReport(DateTimeOffset? since = null)
     {
         return GoalTimingReport.BuildDispatchValueReport(Goals, since);
