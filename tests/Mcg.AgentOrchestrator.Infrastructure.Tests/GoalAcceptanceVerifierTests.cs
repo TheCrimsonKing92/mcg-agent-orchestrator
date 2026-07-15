@@ -377,6 +377,64 @@ public abstract class GoalAcceptanceVerifierTestBase
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_surfaces_hung_child_without_process_inspection")]
+    public async Task GoalAcceptanceVerifierGateHeartbeatSurfacesHungChildWithoutProcessInspection()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "hung gate receipt", "type": "command", "command": "powershell", "arguments": ["-NoProfile", "-Command", "Start-Sleep -Seconds 30"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousHeartbeat = GoalAcceptanceVerifier.HeartbeatInterval;
+        var previousProgress = GoalAcceptanceVerifier.ProgressInterval;
+        var progress = new List<AcceptanceGateProgress>();
+        try
+        {
+            GoalAcceptanceVerifier.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
+            GoalAcceptanceVerifier.ProgressInterval = TimeSpan.FromMilliseconds(200);
+            var verifier = new GoalAcceptanceVerifier();
+            var goalId = new GoalId("feedfacefeedfacefeedfacefeedface");
+            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
+            using var cts = new CancellationTokenSource();
+            var run = verifier.RunAsync(root, goalId, stableSlotIndex: 0, cancellationToken: cts.Token);
+            var heartbeatPath = GateHeartbeatArtifacts.GetStableSlotPath(0);
+
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (!File.Exists(heartbeatPath) && DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(100);
+            }
+
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+
+            var status = GateHeartbeatArtifacts.ReadStableSlot(0);
+            Assert.True(status.IsAvailable, status.UnavailableReason);
+            Assert.NotNull(status.Snapshot);
+            Assert.Equal("feedfacefeedfacefeedfacefeedface", status.Snapshot!.GoalId);
+            Assert.Equal("verification-check", status.Snapshot.Phase);
+            Assert.Equal("hung gate receipt", status.Snapshot.CurrentTarget);
+            Assert.True(status.Snapshot.ChildPid.HasValue || status.Snapshot.State is "completed" or "timed-out");
+            Assert.True(status.IdleDuration >= TimeSpan.Zero);
+            Assert.Contains(progress, item => item.GoalId == goalId.Value && item.CurrentTarget == "hung gate receipt");
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
+            GoalAcceptanceVerifier.ProgressInterval = previousProgress;
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
     public async Task GoalAcceptanceVerifierRealRunnerSmokeIsOptIn()
     {

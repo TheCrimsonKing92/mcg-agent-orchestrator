@@ -166,6 +166,10 @@ internal static partial class CliCommandHandlers
     {
         switch (command)
         {
+            case "gate-status":
+                ConsoleViews.PrintGateStatus(GateHeartbeatArtifacts.ReadStableSlots());
+                return false;
+
             case "attention":
             {
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
