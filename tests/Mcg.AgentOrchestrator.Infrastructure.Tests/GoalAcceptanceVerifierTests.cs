@@ -472,6 +472,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var progress = new List<AcceptanceGateProgress>();
         try
         {
+            TryDeleteStableSlotHeartbeat(0);
             GoalAcceptanceVerifier.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
             GoalAcceptanceVerifier.ProgressInterval = TimeSpan.FromMilliseconds(200);
             var verifier = new GoalAcceptanceVerifier();
@@ -574,6 +575,150 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_does_not_start_next_build_until_test_child_exits")]
+    public async Task GoalAcceptanceVerifierSlotGateDoesNotStartNextBuildUntilTestChildExits()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "first tests", "type": "dotnet-test", "project": "tests/First.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "second tests", "type": "dotnet-test", "project": "tests/Second.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var firstTestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstTest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier(async (args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test" && args.Contains("tests/First.Tests.csproj"))
+                {
+                    firstTestStarted.SetResult();
+                    await releaseFirstTest.Task.ConfigureAwait(false);
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.");
+                }
+
+                return new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : "Build succeeded.");
+            });
+
+            var run = verifier.RunAsync(root, new GoalId("11112222333344445555666677778888"), stableSlotIndex: 0);
+            await firstTestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Task.Delay(100);
+            Assert.DoesNotContain(calls, call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "build" && call[2] == "tests/Second.Tests.csproj");
+
+            releaseFirstTest.SetResult();
+            var result = await run;
+
+            Assert.True(result.Passed);
+            var secondBuildIndex = calls.FindIndex(call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "build" && call[2] == "tests/Second.Tests.csproj");
+            var firstTestIndex = calls.FindIndex(call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "test" && call[2] == "tests/First.Tests.csproj");
+            Assert.True(secondBuildIndex > firstTestIndex);
+            Assert.All(calls.Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test"), call => Assert.Contains("--no-build", call));
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_retry_reaps_recorded_heartbeat_child_before_rebuild")]
+    public async Task GoalAcceptanceVerifierSlotGateRetryReapsRecordedHeartbeatChildBeforeRebuild()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var buildAttempts = 0;
+        var sleeper = StartSleepProcess();
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+            "test");
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    buildAttempts++;
+                    if (buildAttempts == 1)
+                    {
+                        var artifactsPath = GetArtifactsPath(args);
+                        GateHeartbeatArtifacts.Write(
+                            Path.Combine(artifactsPath, GateHeartbeatArtifacts.FileName),
+                            new GateHeartbeatSnapshot(
+                                "99998888777766665555444433332222",
+                                "verification-check",
+                                "core tests",
+                                0,
+                                sleeper.Id,
+                                sleeper.Id,
+                                "running",
+                                DateTimeOffset.UtcNow,
+                                DateTimeOffset.UtcNow,
+                                DateTimeOffset.UtcNow,
+                                0,
+                                0,
+                                0,
+                                $"dotnet test --artifacts-path {artifactsPath}"));
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            $"error CS2012: Cannot open '{Path.Combine(artifactsPath, "bin", "Core.dll")}' for writing because it is being used by another process."));
+                    }
+
+                    Assert.True(sleeper.HasExited);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            });
+
+            var result = await verifier.RunAsync(root, new GoalId("99998888777766665555444433332222"), stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(2, buildAttempts);
+            Assert.Contains(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test" && call.Contains("--no-build"));
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+            if (!sleeper.HasExited)
+            {
+                try { sleeper.Kill(entireProcessTree: true); } catch { }
+            }
+
+            sleeper.Dispose();
+            TryDeleteStableSlotHeartbeat(0);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1774,6 +1919,35 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.True(artifactsPathIndex >= 0);
         Assert.True(artifactsPathIndex + 1 < args.Length);
         return args[artifactsPathIndex + 1];
+    }
+
+    private static void TryDeleteStableSlotHeartbeat(int slotIndex)
+    {
+        try { File.Delete(GateHeartbeatArtifacts.GetStableSlotPath(slotIndex)); } catch { }
+    }
+
+    private static System.Diagnostics.Process StartSleepProcess()
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.FileName = "powershell";
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add("Start-Sleep -Seconds 30");
+        }
+        else
+        {
+            startInfo.FileName = "sleep";
+            startInfo.ArgumentList.Add("30");
+        }
+
+        return System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start sleep process.");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_grep_absent_failure_does_not_affect_passed")]
