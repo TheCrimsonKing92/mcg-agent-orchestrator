@@ -113,6 +113,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
     internal static TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
     internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
+    internal static TimeSpan TransientNoHolderBuildLockRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
+    private const int TransientNoHolderBuildLockRetryLimit = 3;
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
 
@@ -1384,6 +1386,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         retryAttribution ??= attribution;
+        if (IsTransientNoHolderSlotArtifactLock(retryAttribution, retryEnvironment))
+        {
+            return await RetryTransientNoHolderBuildLockAsync(
+                arguments,
+                worktreePath,
+                check,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                currentEnvironment,
+                retryAttribution,
+                reacquireLease,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var killed = false;
         foreach (var holder in attribution.Holders
@@ -1430,6 +1446,70 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return (killRetry, true);
     }
 
+    private async Task<(CommandResult Result, bool Remediated)> RetryTransientNoHolderBuildLockAsync(
+        string[] arguments,
+        string worktreePath,
+        AcceptanceManifestCheck check,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetBuildEnvironment currentEnvironment,
+        BuildLockAttribution attribution,
+        Action<DotnetBuildEnvironment> reacquireLease,
+        CancellationToken cancellationToken)
+    {
+        var latestAttribution = attribution;
+        for (var attempt = 1; attempt <= TransientNoHolderBuildLockRetryLimit; attempt++)
+        {
+            if (TransientNoHolderBuildLockRetryDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(TransientNoHolderBuildLockRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+                ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+                : currentEnvironment);
+            reacquireLease(retryEnvironment);
+
+            CommandResult retry;
+            try
+            {
+                retry = await RunManagedDotnetCommandAsync(
+                    check,
+                    arguments,
+                    retryEnvironment,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsBuildArtifactIoException(ex))
+            {
+                var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
+                latestAttribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-transient-retry", check.Name);
+                if (!IsTransientNoHolderSlotArtifactLock(latestAttribution, retryEnvironment))
+                {
+                    throw new BuildLockBlockedException(latestAttribution);
+                }
+
+                continue;
+            }
+
+            if (!IsBuildLockFailure(retry, retryEnvironment, out latestAttribution))
+            {
+                return (retry, true);
+            }
+
+            if (!IsTransientNoHolderSlotArtifactLock(latestAttribution, retryEnvironment))
+            {
+                throw new BuildLockBlockedException(latestAttribution);
+            }
+        }
+
+        throw new BuildLockBlockedException(latestAttribution);
+    }
+
     private async Task<CommandResult> RunManagedDotnetCommandAsync(
         AcceptanceManifestCheck check,
         string[] arguments,
@@ -1472,6 +1552,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "acceptance-output",
             "classify-build-lock");
         return true;
+    }
+
+    private static bool IsTransientNoHolderSlotArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
+        PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
+        HasNoActionableHolder(attribution);
+
+    private static bool HasNoActionableHolder(BuildLockAttribution attribution) =>
+        attribution.Holders.Count == 0 ||
+        attribution.Holders.All(holder =>
+            holder.ProcessId is null &&
+            (string.IsNullOrWhiteSpace(holder.ProcessName) ||
+                holder.ProcessName.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
+                holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
+
+    private static bool PathIsUnderDirectory(string path, string directory)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return fullPath.Equals(fullDirectory, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(fullDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(fullDirectory + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static string? TryExtractPathFromException(Exception ex)

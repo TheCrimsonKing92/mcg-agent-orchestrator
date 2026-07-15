@@ -170,6 +170,48 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires")]
+    public void DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.Core.dll");
+        var prepareAttempts = 0;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath &&
+                Interlocked.Increment(ref prepareAttempts) <= 2)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+            "handle64-timeout");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    environment,
+                    TimeSpan.FromSeconds(2)));
+
+            var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
+            acquired.Lease.Dispose();
+            Assert.Equal(3, prepareAttempts);
+            Assert.Contains("LOCK ", output, StringComparison.Ordinal);
+            Assert.Contains("holderName=\"unknown-probe-timeout\"", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LockAttribution_handle_probe_timeout_returns_unknown_without_wedging")]
     public void LockAttributionHandleProbeTimeoutReturnsUnknownWithoutWedging()
     {
