@@ -44,6 +44,8 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
     private readonly Func<bool> _hasGateReadyGoal;
+    private readonly string? _executionDirectory;
+    private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
 
     internal Action<string>? PhaseTimingSink { get; set; }
 
@@ -58,6 +60,9 @@ internal sealed class ConductorDriver
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null)
     {
         var dir = workspace.ExecutionDirectory;
+        _executionDirectory = dir;
+        _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(dir, "acceptance-gate-attempts"));
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         kernel.SetEventWriter(eventWriter);
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
@@ -477,7 +482,8 @@ internal sealed class ConductorDriver
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
-        Func<bool>? hasGateReadyGoal = null)
+        Func<bool>? hasGateReadyGoal = null,
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -513,7 +519,15 @@ internal sealed class ConductorDriver
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
+        _executionDirectory = null;
+        _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
+            ?? new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(Path.GetTempPath(), "mcg-conductor-acceptance-attempts", Guid.NewGuid().ToString("N")),
+                runInline: true);
     }
+
+    internal ConductorParallelAcceptanceAttemptCoordinator ParallelAcceptanceAttemptCoordinator =>
+        _parallelAcceptanceAttemptCoordinator;
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
@@ -846,7 +860,12 @@ internal sealed class ConductorDriver
             return null;
         }
 
-        return ConductorParallelAcceptanceCandidate.Create(goal, slotIndex, _getLandingFileScopes(goal));
+        return ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            slotIndex,
+            _getLandingFileScopes(goal),
+            TryResolveAcceptanceBranchHead(goal),
+            _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
     }
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
@@ -1242,6 +1261,17 @@ internal sealed class ConductorDriver
     {
         var result = GitCli.Run(path, "rev-parse", "HEAD");
         return result.Succeeded ? result.Output.Trim() : null;
+    }
+
+    private string? TryResolveAcceptanceBranchHead(Goal goal)
+    {
+        if (_executionDirectory is null)
+        {
+            return null;
+        }
+
+        var worktreePath = GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
+        return worktreePath is null ? null : TryResolveGitHead(worktreePath);
     }
 
     private static string FormatAcceptanceCandidate(string? branchHeadSha, string? mainHeadSha) =>

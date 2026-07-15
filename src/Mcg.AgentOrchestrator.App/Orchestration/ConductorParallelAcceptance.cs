@@ -7,7 +7,9 @@ internal sealed record ConductorParallelAcceptanceCandidate(
     Goal Goal,
     int SlotIndex,
     IReadOnlyList<string> ScopePaths,
-    IReadOnlyList<string> ResourceKeys)
+    IReadOnlyList<string> ResourceKeys,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null)
 {
     public string GoalPrefix => Goal.Id.Value[..8];
 
@@ -21,7 +23,15 @@ internal sealed record ConductorParallelAcceptanceCandidate(
         return ScopePaths.Any(left => other.ScopePaths.Any(right => PathsOverlap(left, right)));
     }
 
-    public static ConductorParallelAcceptanceCandidate Create(Goal goal, int slotIndex, IReadOnlyList<string> fileScopes)
+    public string CandidateKey =>
+        $"{Goal.Id.Value}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
+
+    public static ConductorParallelAcceptanceCandidate Create(
+        Goal goal,
+        int slotIndex,
+        IReadOnlyList<string> fileScopes,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null)
     {
         var paths = fileScopes
             .Where(scope => !string.IsNullOrWhiteSpace(scope))
@@ -40,7 +50,7 @@ internal sealed record ConductorParallelAcceptanceCandidate(
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-        return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources);
+        return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources, branchHeadSha, mainHeadSha);
     }
 
     private static bool PathsOverlap(string left, string right) =>
