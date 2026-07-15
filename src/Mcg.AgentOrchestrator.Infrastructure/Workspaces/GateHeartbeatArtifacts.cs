@@ -32,7 +32,10 @@ public sealed record GateHeartbeatSnapshot(
     long StdoutBytes,
     long StderrBytes,
     long OutputBytes,
-    string? CommandLine = null);
+    string? CommandLine = null,
+    int? ExitCode = null,
+    string? StdoutPath = null,
+    string? StderrPath = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,

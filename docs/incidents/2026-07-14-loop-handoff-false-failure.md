@@ -22,11 +22,13 @@ The incident falsified "successor does not survive" for this case: the conduct s
 
 ## Fix
 
-No fix for the three residual defects is recorded as landed in this incident entry. The predecessor survival work landed as `81365c6c Integrate goal/59c23d66`.
+All three residual defects were fixed by goal `b9bbe713` (landed `c060ec08 Integrate goal/b9bbe713`, 2026-07-14): verification waits up to 120s while the successor process is alive, no retry spawns while an attempt's process lives (per-attempt evidence journaled), and stdio handles are inherited via a selective handle list (the naive `bInheritHandles:true` first attempt re-tethered the successor to the parent job and was caught at operator landing verification before merge). The predecessor survival work landed earlier as `81365c6c Integrate goal/59c23d66`.
+
+LIVE VALIDATION 2026-07-15 08:32Z: the batch51 -> batch52 max-duration handoff journaled `LOOP_HANDOFF` (success) for the first time - `LOOP_STOP` 08:32:10, successor verified, `LOOP_START` 08:32:57, no duplicate spawn, and the successor's console log captured output (4,561 bytes and growing, vs 0 bytes for every previous handoff-spawned generation).
 
 ## Residuals
 
-- Backlog `61ca9c5dab8c4221b5a6e74871ae6b3f`: widen live-successor verification, avoid retry while an attempt is still alive, and preserve redirected successor output.
+- None for this incident. Related improvement (not a defect): backlog `8856062b` - relaunch-on-landing, so conductor-scoped landings trigger a fresh-staged handoff instead of waiting for max-duration.
 
 ## Lessons
 

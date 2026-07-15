@@ -541,6 +541,32 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Xunit.Assert.Empty(plan.ReadyStartCostRiskDetails);
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionPlan_surfaces_adaptive_reasoning_effort_reason")]
+    public void SubscriptionPlanSurfacesAdaptiveReasoningEffortReason()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Implement high-risk multi-scope persistence migration across every store",
+        [new TaskSpec(TaskId.New(), "Implement the scoped slice.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("adaptive-developer"),
+        "Adaptive Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"),
+        ReasoningEffortPolicy: new ReasoningEffortPolicy(RetryDepthThreshold: 3, RetryDepthEffort: "high", ComplexityEffort: "high", ClassFindingEffort: "high"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    var plan = SubscriptionPlanBuilder.Build(goal, [agent], WorkerProfileCatalog.Default());
+
+    var item = Assert.Single(plan.Items);
+    Assert.Equal("high", item.SubscriptionReasoningEffort);
+    Assert.Equal("complexity", item.ReasoningEffortReason);
+    var summary = Assert.Single(plan.ReadyModelUsage);
+    Assert.Equal("high", summary.ReasoningEffort);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionPlan_surfaces_prior_model_fit_for_ready_models")]
     public void SubscriptionPlanSurfacesPriorModelFitForReadyModels()
 {

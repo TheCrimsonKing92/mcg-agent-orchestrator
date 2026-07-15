@@ -1189,10 +1189,22 @@ public static class DispatchFailureClassifier
 
     public static bool HasRecoverableProviderConnectivityFailure(TaskSpec task)
     {
-        return task.Status == WorkTaskStatus.Failed &&
-            IsSubscriptionProviderCliDispatch(task) &&
+        if (!IsSubscriptionProviderCliDispatch(task))
+        {
+            return false;
+        }
+
+        if (task.Status == WorkTaskStatus.Failed &&
             task.LastVerification is { Succeeded: false } latest &&
-            IsRecoverableProviderConnectivityFailure(latest);
+            IsRecoverableProviderConnectivityFailure(latest))
+        {
+            return true;
+        }
+
+        return task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Pending &&
+            task.LastVerification is null &&
+            task.VerificationHistory.LastOrDefault() is { Succeeded: false } historyLatest &&
+            IsRecoverableProviderConnectivityFailure(historyLatest);
     }
 
     public static bool HasRecoverableProviderAuthenticationFailure(TaskSpec task)
@@ -1493,12 +1505,21 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        return dispatch.WorkerProviderKind is
+        if (dispatch.WorkerProviderKind is
             ProviderKind.OpenAICodexCli or
             ProviderKind.AnthropicClaudeCli or
             ProviderKind.OpenAICodexSpark or
             ProviderKind.OpenAICodexOssCli or
-            ProviderKind.OllamaQwenCodeCli;
+            ProviderKind.OllamaQwenCodeCli)
+        {
+            return true;
+        }
+
+        return dispatch.WorkerName.Equals("codex-cli", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.WorkerName.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.WorkerName.Equals("codex-spark", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.WorkerName.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.WorkerName.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsRecoverableProviderConnectivityText(string text)
@@ -1683,7 +1704,7 @@ public static class DispatchFailureClassifier
 
     private static bool IsProviderErrorLine(string line)
     {
-        return line.StartsWith("ERROR:", StringComparison.Ordinal) ||
+        return line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains(" : ERROR:", StringComparison.Ordinal) ||
             CodexCliDiagnosticPrefix.IsMatch(line);
     }

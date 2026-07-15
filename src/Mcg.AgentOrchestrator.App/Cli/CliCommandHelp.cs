@@ -60,6 +60,11 @@ internal static class CliCommandHelp
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
 
+    private static readonly CommandHelpEntry GoalsSubscribe = new(
+        GoalMonitoringSubscriptionCommand.GoalsSubscribeUsage,
+        "Monitor goal lifecycle events. Example: goals subscribe --goal-prefix abc123 --event-kind conductor:dispatch --wait-terminal --once --timeout 5m",
+        ["--goal-prefix", "--from-cursor", "--since", "--task", "--event-kind", "--once", "--wait-terminal", "--format", "--timeout", "--help", "-h"]);
+
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,
         "Add a task to the current goal.",
@@ -272,6 +277,12 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (IsGoalsSubscribeHelpTarget(args))
+        {
+            entry = GoalsSubscribe;
+            return true;
+        }
+
         if (args[0].Equals("add-task", StringComparison.OrdinalIgnoreCase))
         {
             entry = AddTask;
@@ -471,8 +482,9 @@ internal static class CliCommandHelp
             return false;
         }
 
-        target = args[1];
-        if (TryResolveEntry([target], out var resolved))
+        var targetParts = ExpandHelpTarget(args.Skip(1)).ToArray();
+        target = string.Join(' ', targetParts);
+        if (TryResolveEntry(targetParts, out var resolved))
         {
             entry = resolved;
         }
@@ -542,10 +554,34 @@ internal static class CliCommandHelp
 
     private static bool HasHelpFlag(IReadOnlyList<string> args)
     {
-        return args.Any(arg =>
-            arg.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
-            arg.Equals("-h", StringComparison.OrdinalIgnoreCase));
+        return args.Any(IsHelpFlag) ||
+            (IsGoalsSubscribeHelpTarget(args) && SplitCompositeToken(args[1]).Any(IsHelpFlag));
     }
+
+    private static bool IsGoalsSubscribeHelpTarget(IReadOnlyList<string> args)
+    {
+        if (args.Count < 2 || !args[0].Equals("goals", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return SplitCompositeToken(args[1]).FirstOrDefault()?.Equals("subscribe", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static IEnumerable<string> ExpandHelpTarget(IEnumerable<string> targetParts)
+    {
+        var parts = targetParts.ToArray();
+        return parts.Length == 1 ? SplitCompositeToken(parts[0]) : parts;
+    }
+
+    private static IReadOnlyList<string> SplitCompositeToken(string value) =>
+        value.Contains(' ')
+            ? CliArgumentParser.SplitCommand(value)
+            : [value];
+
+    private static bool IsHelpFlag(string arg) =>
+        arg.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
+        arg.Equals("-h", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsFlag(string arg) =>
         arg.StartsWith("-", StringComparison.Ordinal) &&

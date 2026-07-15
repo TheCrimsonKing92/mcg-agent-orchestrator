@@ -51,7 +51,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan? Timeout = null,
         TimeSpan? Elapsed = null,
         TaskProcessResourceAccounting? ResourceAccounting = null,
-        bool ResourceAccountingExpected = false);
+        bool ResourceAccountingExpected = false,
+        long StdoutBytes = 0,
+        long StderrBytes = 0);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\[(?:Fact|Theory|Xunit\.Fact\()",
@@ -1633,7 +1635,143 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment.ArtifactsPath,
             "acceptance-output",
             "classify-build-lock");
+        attribution = EnrichBuildLockAttributionWithGateContext(attribution, environment);
+        EmitBuildLockClassificationContext(attribution, result, environment);
         return true;
+    }
+
+    private static BuildLockAttribution EnrichBuildLockAttributionWithGateContext(
+        BuildLockAttribution attribution,
+        DotnetBuildEnvironment environment)
+    {
+        var holders = attribution.Holders.ToList();
+        var consumedGateContext = false;
+        if (HasNoActionableHolder(attribution) &&
+            DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(environment) is { } activeConsumer)
+        {
+            consumedGateContext = true;
+            holders.Add(activeConsumer);
+        }
+
+        var heartbeat = ReadGateHeartbeat(environment);
+        consumedGateContext |= heartbeat?.Snapshot is not null;
+        foreach (var holder in BuildLiveHeartbeatHolders(heartbeat?.Snapshot, environment))
+        {
+            if (!holders.Any(existing => existing.ProcessId == holder.ProcessId))
+            {
+                holders.Add(holder);
+            }
+        }
+
+        if (!consumedGateContext)
+        {
+            return attribution;
+        }
+
+        var enriched = attribution with
+        {
+            Holders = holders,
+            Source = attribution.Source.Contains("+gate-context", StringComparison.Ordinal)
+                ? attribution.Source
+                : attribution.Source + "+gate-context"
+        };
+        LockAttribution.EmitReceipt(enriched);
+        return enriched;
+    }
+
+    private static IEnumerable<BuildLockHolder> BuildLiveHeartbeatHolders(
+        GateHeartbeatSnapshot? snapshot,
+        DotnetBuildEnvironment environment)
+    {
+        if (snapshot is null ||
+            snapshot.CommandLine is not null &&
+            !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
+        {
+            yield break;
+        }
+
+        var pids = new[] { snapshot.ProcessId, snapshot.ChildPid }
+            .Where(pid => pid.HasValue)
+            .Select(pid => pid!.Value)
+            .Distinct()
+            .Where(IsProcessRunning)
+            .ToArray();
+        var commandLines = ProcessCommandLines.Read(pids);
+        foreach (var pid in pids)
+        {
+            commandLines.TryGetValue(pid, out var commandLine);
+            yield return new BuildLockHolder(
+                pid,
+                TryProcessName(pid),
+                string.IsNullOrWhiteSpace(commandLine) ? snapshot.CommandLine : commandLine,
+                true,
+                TryProcessStartTime(pid));
+        }
+    }
+
+    private static void EmitBuildLockClassificationContext(
+        BuildLockAttribution attribution,
+        CommandResult result,
+        DotnetBuildEnvironment environment)
+    {
+        var heartbeat = ReadGateHeartbeat(environment);
+        var snapshot = heartbeat?.Snapshot;
+        var pidAlive = snapshot?.ProcessId is { } pid && IsProcessRunning(pid);
+        var childAlive = snapshot?.ChildPid is { } childPid && IsProcessRunning(childPid);
+        var line =
+            $"LOCK_CONTEXT path={QuoteProgressToken(attribution.Path)} source={QuoteProgressToken(attribution.Source)} " +
+            $"phase={QuoteProgressToken(attribution.Phase ?? "unknown")} operation={QuoteProgressToken(attribution.Operation ?? "unknown")} " +
+            $"exit_code={result.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"elapsed_ms={(long)(result.Elapsed ?? TimeSpan.Zero).TotalMilliseconds} " +
+            $"stdout_bytes={result.StdoutBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"stderr_bytes={result.StderrBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"stdout={QuoteProgressToken(result.StdoutPath ?? "unknown")} stderr={QuoteProgressToken(result.StderrPath ?? "unknown")} " +
+            $"heartbeat={QuoteProgressToken(heartbeat?.Path ?? Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName))} " +
+            $"heartbeat_available={(heartbeat?.IsAvailable == true).ToString().ToLowerInvariant()} " +
+            $"heartbeat_state={QuoteProgressToken(snapshot?.State ?? heartbeat?.UnavailableReason ?? "unknown")} " +
+            $"heartbeat_pid={snapshot?.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"heartbeat_pid_alive={pidAlive.ToString().ToLowerInvariant()} " +
+            $"heartbeat_child_pid={snapshot?.ChildPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"heartbeat_child_alive={childAlive.ToString().ToLowerInvariant()} " +
+            $"heartbeat_output_bytes={snapshot?.OutputBytes.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"slot_index={TryGetStableSlotIndex(environment)?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}";
+        Console.WriteLine(line);
+        Console.Out.Flush();
+    }
+
+    private static GateHeartbeatStatus? ReadGateHeartbeat(DotnetBuildEnvironment environment)
+    {
+        var path = Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        if (TryGetStableSlotIndex(environment) is { } stableSlotIndex)
+        {
+            return GateHeartbeatArtifacts.ReadStableSlot(stableSlotIndex);
+        }
+
+        try
+        {
+            var snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(path),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            return snapshot is null
+                ? new GateHeartbeatStatus(-1, path, false, "invalid", null, null, null)
+                : new GateHeartbeatStatus(
+                    -1,
+                    path,
+                    true,
+                    null,
+                    snapshot,
+                    Positive(DateTimeOffset.UtcNow - snapshot.LastObservedAt),
+                    Positive(DateTimeOffset.UtcNow - snapshot.LastProgressAt));
+        }
+        catch
+        {
+            return new GateHeartbeatStatus(-1, path, false, "invalid", null, null, null);
+        }
     }
 
     private static bool IsTransientNoHolderSlotArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
@@ -1720,6 +1858,49 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
     }
+
+    private static string? TryProcessName(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.ProcessName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? TryProcessStartTime(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int? TryGetStableSlotIndex(DotnetBuildEnvironment environment)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(environment.ArtifactsPath));
+        var name = Path.GetFileName(directory);
+        if (name is null ||
+            !name.StartsWith("slot-", StringComparison.Ordinal) ||
+            !int.TryParse(name["slot-".Length..], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex))
+        {
+            return null;
+        }
+
+        return slotIndex;
+    }
+
+    private static TimeSpan Positive(TimeSpan value) =>
+        value < TimeSpan.Zero ? TimeSpan.Zero : value;
 
     private static bool PathIsUnderDirectory(string path, string directory)
     {
@@ -2331,6 +2512,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationTokenSource? heartbeatCts = null;
         Task? heartbeatTask = null;
         GateHeartbeatRuntime? heartbeat = null;
+        var keepOutputFiles = false;
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -2368,8 +2550,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? startedProcessId = null;
         try
         {
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
+            using var process = ProcessTreeGuiSuppression.Start(startInfo);
             startedProcessId = process.Id;
             WorkerProcessJobs.TryRegister(process, $"acceptance:{workingDirectory}");
             if (heartbeatContext is not null)
@@ -2403,8 +2584,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
             var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
+            var stdoutBytes = TryGetFileLength(stdoutPath);
+            var stderrBytes = TryGetFileLength(stderrPath);
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
+            keepOutputFiles = timedOut || exitCode != 0;
             WorkerProcessJobs.Release(process.Id, out var accounting);
             if (heartbeat is not null)
             {
@@ -2418,7 +2602,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     try { await heartbeatTask.ConfigureAwait(false); } catch { }
                 }
 
-                heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id);
+                heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id, exitCode: exitCode);
                 heartbeatCts?.Dispose();
                 heartbeatCts = null;
                 heartbeatTask = null;
@@ -2441,7 +2625,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         accounting.PeakMemoryBytes,
                         accounting.IoBytes,
                         AccountingSource: accounting.AccountingSource),
-                ResourceAccountingExpected: OperatingSystem.IsWindows());
+                ResourceAccountingExpected: OperatingSystem.IsWindows(),
+                stdoutBytes,
+                stderrBytes);
         }
         finally
         {
@@ -2461,7 +2647,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 WorkerProcessJobs.Release(processId);
             }
 
-            if (!timedOut)
+            if (!keepOutputFiles)
             {
                 TryDeleteFile(stdoutPath);
                 TryDeleteFile(stderrPath);
@@ -2560,6 +2746,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static void TryDeleteFile(string path)
     {
         try { File.Delete(path); } catch { /* best effort; lives under the temp dir */ }
+    }
+
+    private static long TryGetFileLength(string path)
+    {
+        try { return File.Exists(path) ? new FileInfo(path).Length : 0L; }
+        catch { return 0L; }
     }
 
     private sealed record PolicyShardPlan(
@@ -2742,13 +2934,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        public void WriteFinal(string state, int? childPid)
+        public void WriteFinal(string state, int? childPid, int? exitCode)
         {
-            var snapshot = BuildSnapshot(state, childPid);
+            var snapshot = BuildSnapshot(state, childPid, exitCode);
             GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
         }
 
-        private GateHeartbeatSnapshot BuildSnapshot(string state, int? childPid)
+        private GateHeartbeatSnapshot BuildSnapshot(string state, int? childPid, int? exitCode = null)
         {
             var now = DateTimeOffset.UtcNow;
             var stdoutBytes = TryGetLength(_stdoutPath);
@@ -2774,7 +2966,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stdoutBytes,
                 stderrBytes,
                 outputBytes,
-                _context.CommandLine);
+                _context.CommandLine,
+                exitCode,
+                _stdoutPath,
+                _stderrPath);
         }
 
         private AcceptanceGateProgress ToProgress(GateHeartbeatSnapshot snapshot) =>

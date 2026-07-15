@@ -538,9 +538,98 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Equal(TaskComplexity.Complex, complexTask.LastDispatch.TaskComplexity);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_selects_reasoning_effort_from_policy_signals")]
+    public void WorkerProfileDispatcherSelectsReasoningEffortFromPolicySignals()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-14T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var agent = new AgentDefinition(
+        new AgentId("adaptive-developer"),
+        "Adaptive Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"),
+        ReasoningEffortPolicy: new ReasoningEffortPolicy(RetryDepthThreshold: 3, RetryDepthEffort: "high", ComplexityEffort: "high", ClassFindingEffort: "high"));
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --reason {reasoningEffortSelectionReason} --sandbox workspace-write --cd {workingDirectory}")
+    ]);
+    var simpleGoal = kernel.CreateGoal("Fix a dashboard typo", [new TaskSpec(TaskId.New(), "Update the button label copy.", AgentRole.Developer)]);
+    kernel.ActivateGoal(simpleGoal.Id, [agent]);
+    var complexGoal = kernel.CreateGoal("Implement high-risk multi-scope persistence migration across every store", [new TaskSpec(TaskId.New(), "Implement the scoped slice.", AgentRole.Developer)]);
+    kernel.ActivateGoal(complexGoal.Id, [agent]);
+    var retryGoal = kernel.CreateGoal("Fix a dashboard typo after review", [new TaskSpec(TaskId.New(), "Update the button label copy.", AgentRole.Developer)]);
+    kernel.ActivateGoal(retryGoal.Id, [agent]);
+    var retryTask = retryGoal.Tasks.Single();
+    kernel.RecordCriterionRetryFeedback(retryGoal.Id, retryTask.Id, ["first miss"]);
+    kernel.RecordCriterionRetryFeedback(retryGoal.Id, retryTask.Id, ["second miss"]);
+    var classGoal = kernel.CreateGoal("Fix a dashboard typo after class review", [new TaskSpec(TaskId.New(), "Update the button label copy.", AgentRole.Developer)]);
+    kernel.ActivateGoal(classGoal.Id, [agent]);
+    var classTask = classGoal.Tasks.Single();
+    kernel.RecordCriterionRetryFeedback(classGoal.Id, classTask.Id, ["The fix missed every call site in the persistence path."]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, simpleGoal, simpleGoal.Tasks.Single(), [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, complexGoal, complexGoal.Tasks.Single(), [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, retryGoal, retryTask, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, classGoal, classTask, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+
+    Assert.Equal("medium", simpleGoal.Tasks.Single().LastDispatch!.ReasoningEffort);
+    Assert.Equal("base", simpleGoal.Tasks.Single().LastDispatch!.ReasoningEffortReason);
+    Assert.Contains("--reason 'base'", simpleGoal.Tasks.Single().LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Equal("high", complexGoal.Tasks.Single().LastDispatch!.ReasoningEffort);
+    Assert.Equal("complexity", complexGoal.Tasks.Single().LastDispatch!.ReasoningEffortReason);
+    Assert.Contains("--reason 'complexity'", complexGoal.Tasks.Single().LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Equal("high", retryTask.LastDispatch!.ReasoningEffort);
+    Assert.Equal("retry-depth", retryTask.LastDispatch!.ReasoningEffortReason);
+    Assert.Contains("--reason 'retry-depth'", retryTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Equal("high", classTask.LastDispatch!.ReasoningEffort);
+    Assert.Equal("class-finding", classTask.LastDispatch!.ReasoningEffortReason);
+    Assert.Contains("--reason 'class-finding'", classTask.LastDispatch!.Command, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_persists_reasoning_effort_reason_in_snapshot")]
+    public void WorkerProfileDispatcherPersistsReasoningEffortReasonInSnapshot()
+{
+    var root = CreateTempDirectory();
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var agent = new AgentDefinition(
+        new AgentId("adaptive-developer"),
+        "Adaptive Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+    var goal = kernel.CreateGoal("Implement high-risk multi-scope persistence migration", [new TaskSpec(TaskId.New(), "Implement the scoped slice.", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, [agent]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        goal.Tasks.Single(),
+        [agent],
+        WorkerProfileCatalog.Default(),
+        Path.Combine(root, "prompts"),
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-14T12:00:00Z"));
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+    var restoredTask = restored.GetGoal(goal.Id).Tasks.Single();
+    Assert.Equal("high", restoredTask.LastDispatch!.ReasoningEffort);
+    Assert.Equal("complexity", restoredTask.LastDispatch!.ReasoningEffortReason);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_small_developer_task_can_route_to_codex_spark_provider_by_typed_selection")]
     public void WorkerProfileDispatcherSmallDeveloperTaskCanRouteToCodexSparkProviderByTypedSelection()
-{
+    {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");

@@ -346,7 +346,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         finally
         {
             SetAcceptanceTimeoutEnvironment(previous);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -383,7 +383,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         finally
         {
             SetAcceptanceTimeoutEnvironment(previous);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -423,7 +423,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 }
@@ -444,6 +444,32 @@ public abstract class GoalAcceptanceVerifierTestBase
         var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);
         Environment.SetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable, value);
         return previous;
+    }
+
+    protected static void DeleteDirectoryWithRetry(string path)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (IOException) when (attempt < 9)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 9)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+        }
+
+        Directory.Delete(path, recursive: true);
     }
 }
 
@@ -505,7 +531,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         {
             GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
             GoalAcceptanceVerifier.ProgressInterval = previousProgress;
-            try { Directory.Delete(root, recursive: true); } catch { }
+            try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }
 
@@ -532,7 +558,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -575,7 +601,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -633,12 +659,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             TryDeleteStableSlotHeartbeat(0);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_retry_reaps_recorded_heartbeat_child_before_rebuild")]
-    public async Task GoalAcceptanceVerifierSlotGateRetryReapsRecordedHeartbeatChildBeforeRebuild()
+    public void GoalAcceptanceVerifierSlotGateRetryReapsRecordedHeartbeatChildBeforeRebuild()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -655,7 +681,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
-            "test");
+            "handle64-timeout");
 
         try
         {
@@ -702,11 +728,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
             });
 
-            var result = await verifier.RunAsync(root, new GoalId("99998888777766665555444433332222"), stableSlotIndex: 0);
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(root, new GoalId("99998888777766665555444433332222"), stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
 
-            Assert.True(result.Passed);
+            Assert.NotNull(result);
+            Assert.True(result!.Passed);
             Assert.True(result.Retried);
             Assert.Equal(2, buildAttempts);
+            Assert.Contains("LOCK_CONTEXT ", output, StringComparison.Ordinal);
+            Assert.Contains("heartbeat_child_alive=true", output, StringComparison.Ordinal);
+            Assert.Contains($"holderPid={sleeper.Id}", output, StringComparison.Ordinal);
+            Assert.Contains("source=handle64-timeout+gate-context", output, StringComparison.Ordinal);
             Assert.Contains(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test" && call.Contains("--no-build"));
         }
         finally
@@ -719,7 +754,112 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             sleeper.Dispose();
             TryDeleteStableSlotHeartbeat(0);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_lock_context_keeps_fast_exit_child_output_evidence")]
+    public void GoalAcceptanceVerifierSlotGateLockContextKeepsFastExitChildOutputEvidence()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var buildAttempts = 0;
+        var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.out");
+        var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.err");
+        File.WriteAllText(stdoutPath, "fast child stdout");
+        File.WriteAllText(stderrPath, "fast child stderr");
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+            "handle64-timeout");
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    buildAttempts++;
+                    if (buildAttempts == 1)
+                    {
+                        var artifactsPath = GetArtifactsPath(args);
+                        var lockedPath = Path.Combine(artifactsPath, "bin", "Core.dll");
+                        GateHeartbeatArtifacts.Write(
+                            Path.Combine(artifactsPath, GateHeartbeatArtifacts.FileName),
+                            new GateHeartbeatSnapshot(
+                                "aaaabbbbccccddddeeeeffff00001111",
+                                "verification-check",
+                                "core tests",
+                                0,
+                                999999,
+                                999999,
+                                "completed",
+                                DateTimeOffset.UtcNow.AddSeconds(-18),
+                                DateTimeOffset.UtcNow,
+                                DateTimeOffset.UtcNow,
+                                new FileInfo(stdoutPath).Length,
+                                new FileInfo(stderrPath).Length,
+                                new FileInfo(stdoutPath).Length + new FileInfo(stderrPath).Length,
+                                $"dotnet test --artifacts-path {artifactsPath}",
+                                1,
+                                stdoutPath,
+                                stderrPath));
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process.",
+                            StdoutPath: stdoutPath,
+                            StderrPath: stderrPath,
+                            Elapsed: TimeSpan.FromSeconds(18),
+                            StdoutBytes: new FileInfo(stdoutPath).Length,
+                            StderrBytes: new FileInfo(stderrPath).Length));
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            });
+
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(root, new GoalId("aaaabbbbccccddddeeeeffff00001111"), stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
+
+            Assert.NotNull(result);
+            Assert.True(result!.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(2, buildAttempts);
+            Assert.Contains("LOCK_CONTEXT ", output, StringComparison.Ordinal);
+            Assert.Contains("exit_code=1", output, StringComparison.Ordinal);
+            Assert.Contains("elapsed_ms=18000", output, StringComparison.Ordinal);
+            Assert.Contains("stdout_bytes=17", output, StringComparison.Ordinal);
+            Assert.Contains("stderr_bytes=17", output, StringComparison.Ordinal);
+            Assert.Contains($"stdout={stdoutPath}", output, StringComparison.Ordinal);
+            Assert.Contains($"stderr={stderrPath}", output, StringComparison.Ordinal);
+            Assert.Contains("heartbeat_state=completed", output, StringComparison.Ordinal);
+            Assert.Contains("heartbeat_child_alive=false", output, StringComparison.Ordinal);
+            Assert.Contains("heartbeat_output_bytes=34", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+            TryDeleteStableSlotHeartbeat(0);
+            try { File.Delete(stdoutPath); } catch { }
+            try { File.Delete(stderrPath); } catch { }
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -758,7 +898,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -813,7 +953,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             AppContext.SetData(AcceptanceCheckTimeouts.AppContextKey, originalTimeout);
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -862,7 +1002,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -1057,7 +1197,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteDirectoryWithRetry(root);
         }
     }
 

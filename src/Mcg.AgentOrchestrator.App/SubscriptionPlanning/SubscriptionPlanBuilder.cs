@@ -119,7 +119,8 @@ internal sealed record SubscriptionPlanItem(
     int? CostGuardPromptCharacterCount = null,
     int? TaskBriefCharacterBudget = null,
     int? TaskBriefHeadroom = null,
-    WorkerRouteDecision? Route = null);
+    WorkerRouteDecision? Route = null,
+    string? ReasoningEffortReason = null);
 
 internal static class SubscriptionPlanBuilder
 {
@@ -245,6 +246,7 @@ internal static class SubscriptionPlanBuilder
         var usesComplexModel = UsesComplexModel(agent, effectiveProviderName, effectiveModelName);
         var subscriptionModelName = GetTemplateValue(templateVariables, "subscriptionModelName");
         var subscriptionReasoningEffort = GetTemplateValue(templateVariables, "subscriptionReasoningEffort");
+        var reasoningEffortReason = GetTemplateValue(templateVariables, "reasoningEffortSelectionReason");
         var modelSelectionReason = GetTemplateValue(templateVariables, "modelSelectionReason");
         var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
 
@@ -390,7 +392,8 @@ internal static class SubscriptionPlanBuilder
                 costGuardPromptCharacterCount,
                 taskBriefCharacterBudget,
                 taskBriefHeadroom,
-                route);
+                route,
+                reasoningEffortReason);
         }
         catch (InvalidOperationException ex)
         {
@@ -422,7 +425,8 @@ internal static class SubscriptionPlanBuilder
                 SubscriptionModelName: subscriptionModelName,
                 SubscriptionReasoningEffort: subscriptionReasoningEffort,
                 UsesComplexModel: usesComplexModel,
-                Route: route);
+                Route: route,
+                ReasoningEffortReason: reasoningEffortReason);
         }
     }
 

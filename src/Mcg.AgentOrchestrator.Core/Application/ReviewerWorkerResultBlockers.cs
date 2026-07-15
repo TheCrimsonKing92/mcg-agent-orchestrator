@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
-internal static class WorkerResultBlockers
+public static class WorkerResultBlockers
 {
     public enum TestsStatus
     {
@@ -38,6 +38,33 @@ internal static class WorkerResultBlockers
         }
 
         return false;
+    }
+
+    public static bool TryFindNeedsWorkVerdict(TaskVerificationRecord? verification, out string blocker)
+    {
+        blocker = string.Empty;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        var hasNeedsWorkVerdict = false;
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "verdict", out var verdict) &&
+                IsNeedsWorkVerdict(verdict))
+            {
+                hasNeedsWorkVerdict = true;
+            }
+
+            if (TryFindBlockersField(line, out var candidate) ||
+                TryFindBlockerMarkedFinding(line, out candidate))
+            {
+                blocker = candidate;
+            }
+        }
+
+        return hasNeedsWorkVerdict && !string.IsNullOrWhiteSpace(blocker);
     }
 
     public static bool TryFindHardFailureBlocker(TaskVerificationRecord? verification, out string blocker)
@@ -299,6 +326,15 @@ internal static class WorkerResultBlockers
             ? BlockersStatus.None
             : BlockersStatus.Present;
         return true;
+    }
+
+    private static bool IsNeedsWorkVerdict(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized.Equals("needs-work", StringComparison.Ordinal) ||
+            normalized.StartsWith("needs-work ", StringComparison.Ordinal) ||
+            normalized.StartsWith("needs-work-", StringComparison.Ordinal) ||
+            normalized.StartsWith("needs-work:", StringComparison.Ordinal);
     }
 
     private static string ReadLeadingWorkerResultToken(string value)
