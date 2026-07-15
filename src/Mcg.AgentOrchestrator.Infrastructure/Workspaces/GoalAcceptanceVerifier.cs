@@ -109,6 +109,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     ];
 
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
+    private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
+    private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
+    internal static TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
+    internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
+    internal static TimeSpan TransientNoHolderBuildLockRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
+    private const int TransientNoHolderBuildLockRetryLimit = 3;
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
 
@@ -121,6 +127,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal GoalAcceptanceVerifier(Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner)
     {
         _runner = runner;
+    }
+
+    public static IDisposable PushGateProgressSink(Action<AcceptanceGateProgress> sink)
+    {
+        var previous = CurrentGateProgressSink.Value;
+        CurrentGateProgressSink.Value = sink;
+        return new RestoreAction(() => CurrentGateProgressSink.Value = previous);
     }
 
     public async Task<AcceptanceVerificationResult> RunAsync(
@@ -1118,7 +1131,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false);
         }
 
-        var result = await _runner(arguments, worktreePath, AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes), cancellationToken).ConfigureAwait(false);
+        var result = await RunWithGateHeartbeatAsync(
+            arguments,
+            worktreePath,
+            AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+            CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
+            cancellationToken).ConfigureAwait(false);
         if (result.TimedOut)
         {
             return (new AcceptanceCheckResult(
@@ -1181,9 +1199,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             var lockRemediationApplied = false;
             var result = await RunManagedDotnetCommandAsync(
+                check,
                 arguments,
                 environment,
                 worktreePath,
+                goalId,
+                stableSlotIndex,
                 AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
 
@@ -1344,9 +1365,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try
         {
             retry = await RunManagedDotnetCommandAsync(
+                check,
                 arguments,
                 retryEnvironment,
                 worktreePath,
+                goalId,
+                stableSlotIndex,
                 AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
         }
@@ -1362,6 +1386,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         retryAttribution ??= attribution;
+        if (IsTransientNoHolderSlotArtifactLock(retryAttribution, retryEnvironment))
+        {
+            return await RetryTransientNoHolderBuildLockAsync(
+                arguments,
+                worktreePath,
+                check,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                currentEnvironment,
+                retryAttribution,
+                reacquireLease,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var killed = false;
         foreach (var holder in attribution.Holders
@@ -1385,9 +1423,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try
         {
             killRetry = await RunManagedDotnetCommandAsync(
+                check,
                 arguments,
                 killRetryEnvironment,
                 worktreePath,
+                goalId,
+                stableSlotIndex,
                 AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
         }
@@ -1405,17 +1446,86 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return (killRetry, true);
     }
 
+    private async Task<(CommandResult Result, bool Remediated)> RetryTransientNoHolderBuildLockAsync(
+        string[] arguments,
+        string worktreePath,
+        AcceptanceManifestCheck check,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetBuildEnvironment currentEnvironment,
+        BuildLockAttribution attribution,
+        Action<DotnetBuildEnvironment> reacquireLease,
+        CancellationToken cancellationToken)
+    {
+        var latestAttribution = attribution;
+        for (var attempt = 1; attempt <= TransientNoHolderBuildLockRetryLimit; attempt++)
+        {
+            if (TransientNoHolderBuildLockRetryDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(TransientNoHolderBuildLockRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+                ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+                : currentEnvironment);
+            reacquireLease(retryEnvironment);
+
+            CommandResult retry;
+            try
+            {
+                retry = await RunManagedDotnetCommandAsync(
+                    check,
+                    arguments,
+                    retryEnvironment,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsBuildArtifactIoException(ex))
+            {
+                var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
+                latestAttribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-transient-retry", check.Name);
+                if (!IsTransientNoHolderSlotArtifactLock(latestAttribution, retryEnvironment))
+                {
+                    throw new BuildLockBlockedException(latestAttribution);
+                }
+
+                continue;
+            }
+
+            if (!IsBuildLockFailure(retry, retryEnvironment, out latestAttribution))
+            {
+                return (retry, true);
+            }
+
+            if (!IsTransientNoHolderSlotArtifactLock(latestAttribution, retryEnvironment))
+            {
+                throw new BuildLockBlockedException(latestAttribution);
+            }
+        }
+
+        throw new BuildLockBlockedException(latestAttribution);
+    }
+
     private async Task<CommandResult> RunManagedDotnetCommandAsync(
+        AcceptanceManifestCheck check,
         string[] arguments,
         DotnetBuildEnvironment environment,
         string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        return await _runner(
-            WithBuildEnvironmentArguments(arguments, environment),
+        var effectiveArguments = WithBuildEnvironmentArguments(arguments, environment);
+        return await RunWithGateHeartbeatAsync(
+            effectiveArguments,
             worktreePath,
             timeout,
+            CreateGateHeartbeatContext(check, effectiveArguments, worktreePath, goalId, stableSlotIndex, environment),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -1442,6 +1552,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "acceptance-output",
             "classify-build-lock");
         return true;
+    }
+
+    private static bool IsTransientNoHolderSlotArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
+        PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
+        HasNoActionableHolder(attribution);
+
+    private static bool HasNoActionableHolder(BuildLockAttribution attribution) =>
+        attribution.Holders.Count == 0 ||
+        attribution.Holders.All(holder =>
+            holder.ProcessId is null &&
+            (string.IsNullOrWhiteSpace(holder.ProcessName) ||
+                holder.ProcessName.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
+                holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
+
+    private static bool PathIsUnderDirectory(string path, string directory)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return fullPath.Equals(fullDirectory, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(fullDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                fullPath.StartsWith(fullDirectory + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static string? TryExtractPathFromException(Exception ex)
@@ -1867,6 +2005,48 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? $"{timeout.TotalMinutes:0.#}m"
             : $"{timeout.TotalSeconds:0.#}s";
 
+    private async Task<CommandResult> RunWithGateHeartbeatAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan timeout,
+        GateHeartbeatContext heartbeatContext,
+        CancellationToken cancellationToken)
+    {
+        var previous = CurrentGateHeartbeatContext.Value;
+        CurrentGateHeartbeatContext.Value = heartbeatContext;
+        try
+        {
+            return await _runner(arguments, workingDirectory, timeout, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            CurrentGateHeartbeatContext.Value = previous;
+        }
+    }
+
+    private static GateHeartbeatContext CreateGateHeartbeatContext(
+        AcceptanceManifestCheck check,
+        string[] arguments,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironment? environment)
+    {
+        var heartbeatPath = environment is not null
+            ? Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName)
+            : stableSlotIndex.HasValue
+                ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value)
+                : GateHeartbeatArtifacts.GetManualPath(worktreePath);
+
+        return new GateHeartbeatContext(
+            goalId?.Value,
+            "verification-check",
+            check.Name,
+            stableSlotIndex,
+            heartbeatPath,
+            string.Join(' ', arguments.Select(QuoteForDisplay)));
+    }
+
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -1887,6 +2067,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var timedOut = false;
         WorkerProcessJobAccounting? killedAccounting = null;
         var elapsed = Stopwatch.StartNew();
+        var heartbeatContext = CurrentGateHeartbeatContext.Value;
+        CancellationTokenSource? heartbeatCts = null;
+        Task? heartbeatTask = null;
+        GateHeartbeatRuntime? heartbeat = null;
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -1928,6 +2112,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ?? throw new InvalidOperationException($"Failed to start process: {arguments[0]}");
             startedProcessId = process.Id;
             WorkerProcessJobs.TryRegister(process, $"acceptance:{workingDirectory}");
+            if (heartbeatContext is not null)
+            {
+                heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                heartbeat = new GateHeartbeatRuntime(
+                    heartbeatContext,
+                    process.Id,
+                    stdoutPath,
+                    stderrPath,
+                    commandTimeout);
+                heartbeatTask = WriteGateHeartbeatLoopAsync(heartbeat, heartbeatCts.Token);
+            }
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(commandTimeout);
@@ -1951,6 +2146,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed.Stop();
             var exitCode = timedOut ? -1 : process.ExitCode;
             WorkerProcessJobs.Release(process.Id, out var accounting);
+            if (heartbeat is not null)
+            {
+                if (heartbeatCts is not null)
+                {
+                    try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
+                }
+
+                if (heartbeatTask is not null)
+                {
+                    try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                }
+
+                heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: null);
+                heartbeatCts?.Dispose();
+                heartbeatCts = null;
+                heartbeatTask = null;
+            }
             accounting ??= killedAccounting;
             startedProcessId = null;
             return new CommandResult(
@@ -1973,6 +2185,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         finally
         {
+            if (heartbeatCts is not null)
+            {
+                try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
+                if (heartbeatTask is not null)
+                {
+                    try { await heartbeatTask.ConfigureAwait(false); } catch { }
+                }
+
+                heartbeatCts.Dispose();
+            }
+
             if (startedProcessId is { } processId)
             {
                 WorkerProcessJobs.Release(processId);
@@ -1985,6 +2208,47 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
     }
+
+    private static async Task WriteGateHeartbeatLoopAsync(GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken)
+    {
+        heartbeat.WriteRunning(emitProgress: true);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(HeartbeatInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            heartbeat.WriteRunning(emitProgress: false);
+        }
+    }
+
+    private static void EmitGateProgress(AcceptanceGateProgress progress)
+    {
+        var line =
+            $"PHASE_PROGRESS goal={FormatNullableToken(progress.GoalId, 8)} phase={progress.Phase} elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} " +
+            $"target={QuoteProgressToken(progress.CurrentTarget)} child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+            $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)}";
+        Console.WriteLine($"{line} ts={progress.LastObservedAt:O}");
+        Console.Out.Flush();
+        CurrentGateProgressSink.Value?.Invoke(progress);
+    }
+
+    private static string FormatNullableToken(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "unknown";
+        return value.Length <= maxLength ? value : value[..maxLength];
+    }
+
+    private static string QuoteProgressToken(string value) =>
+        value.IndexOfAny([' ', '\t', '\r', '\n', '"']) < 0
+            ? value
+            : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 
     private static string QuoteForDisplay(string value) =>
         value.Contains(' ', StringComparison.Ordinal) || value.Contains('"', StringComparison.Ordinal)
@@ -2171,4 +2435,121 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private sealed record InfrastructureTestLane(string Name, string Filter);
+
+    private sealed record GateHeartbeatContext(
+        string? GoalId,
+        string Phase,
+        string CurrentTarget,
+        int? SlotIndex,
+        string HeartbeatPath,
+        string CommandLine);
+
+    private sealed class GateHeartbeatRuntime
+    {
+        private readonly GateHeartbeatContext _context;
+        private readonly int _processId;
+        private readonly string _stdoutPath;
+        private readonly string _stderrPath;
+        private readonly TimeSpan _timeout;
+        private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+        private DateTimeOffset _lastProgressAt;
+        private DateTimeOffset _lastProgressEmittedAt = DateTimeOffset.MinValue;
+        private long _lastOutputBytes = -1;
+
+        public GateHeartbeatRuntime(
+            GateHeartbeatContext context,
+            int processId,
+            string stdoutPath,
+            string stderrPath,
+            TimeSpan timeout)
+        {
+            _context = context;
+            _processId = processId;
+            _stdoutPath = stdoutPath;
+            _stderrPath = stderrPath;
+            _timeout = timeout;
+            _lastProgressAt = _startedAt;
+        }
+
+        public void WriteRunning(bool emitProgress)
+        {
+            var snapshot = BuildSnapshot("running", childPid: _processId);
+            GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
+            if (emitProgress || snapshot.LastObservedAt - _lastProgressEmittedAt >= ProgressInterval)
+            {
+                _lastProgressEmittedAt = snapshot.LastObservedAt;
+                EmitGateProgress(ToProgress(snapshot));
+            }
+        }
+
+        public void WriteFinal(string state, int? childPid)
+        {
+            var snapshot = BuildSnapshot(state, childPid);
+            GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
+        }
+
+        private GateHeartbeatSnapshot BuildSnapshot(string state, int? childPid)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var stdoutBytes = TryGetLength(_stdoutPath);
+            var stderrBytes = TryGetLength(_stderrPath);
+            var outputBytes = stdoutBytes + stderrBytes;
+            if (outputBytes != _lastOutputBytes)
+            {
+                _lastOutputBytes = outputBytes;
+                _lastProgressAt = now;
+            }
+
+            return new GateHeartbeatSnapshot(
+                _context.GoalId,
+                _context.Phase,
+                _context.CurrentTarget,
+                _context.SlotIndex,
+                _processId,
+                childPid,
+                state,
+                _startedAt,
+                now,
+                _lastProgressAt,
+                stdoutBytes,
+                stderrBytes,
+                outputBytes,
+                _context.CommandLine);
+        }
+
+        private AcceptanceGateProgress ToProgress(GateHeartbeatSnapshot snapshot) =>
+            new(
+                snapshot.GoalId,
+                snapshot.Phase,
+                snapshot.CurrentTarget,
+                snapshot.SlotIndex,
+                snapshot.ProcessId,
+                snapshot.ChildPid,
+                snapshot.StartedAt,
+                snapshot.LastObservedAt,
+                snapshot.LastProgressAt,
+                Positive(snapshot.LastObservedAt - snapshot.StartedAt),
+                snapshot.OutputBytes,
+                _context.HeartbeatPath);
+
+        private static long TryGetLength(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? new FileInfo(path).Length : 0L;
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        private static TimeSpan Positive(TimeSpan value) =>
+            value < TimeSpan.Zero ? TimeSpan.Zero : value;
+    }
+
+    private sealed class RestoreAction(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
 }

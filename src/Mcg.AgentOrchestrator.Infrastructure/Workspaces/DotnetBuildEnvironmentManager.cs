@@ -945,6 +945,11 @@ public static class DotnetBuildEnvironmentManager
             return ArtifactPrepLockRemediation.RetryImmediately;
         }
 
+        if (IsTransientNoHolderSlotArtifactLock(environment, attribution))
+        {
+            return ArtifactPrepLockRemediation.SlotBusy;
+        }
+
         if (attemptedOwnedProcessRemediation)
         {
             return ArtifactPrepLockRemediation.Blocked;
@@ -970,6 +975,20 @@ public static class DotnetBuildEnvironmentManager
         attribution.Holders.Any(holder =>
             ContainsCompilerLockSignal(holder.ProcessName) ||
             ContainsCompilerLockSignal(holder.CommandLine));
+
+    private static bool IsTransientNoHolderSlotArtifactLock(
+        DotnetBuildEnvironment environment,
+        BuildLockAttribution attribution) =>
+        PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
+        HasNoActionableHolder(attribution);
+
+    private static bool HasNoActionableHolder(BuildLockAttribution attribution) =>
+        attribution.Holders.Count == 0 ||
+        attribution.Holders.All(holder =>
+            holder.ProcessId is null &&
+            (string.IsNullOrWhiteSpace(holder.ProcessName) ||
+                holder.ProcessName.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
+                holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
 
     private static bool IsSlotArtifactsBusy(DotnetBuildEnvironment environment) =>
         TryFindActiveSlotArtifactConsumer(environment) is not null;

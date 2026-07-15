@@ -32,6 +32,7 @@ internal static class CliCommandHelp
     public const string BacklogViewUsage = "Usage: backlog-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
+    public const string GateStatusUsage = "Usage: gate-status";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -200,6 +201,11 @@ internal static class CliCommandHelp
             "Logs: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix <goal> [-TaskPrefix <task>] [-TailLines <n>]",
             "Acceptance: .\\scripts\\Invoke-RepoScript.ps1 scripts\\Invoke-OrchestratorCommand.ps1 acceptance <goal>"
         ]);
+
+    private static readonly CommandHelpEntry GateStatus = new(
+        GateStatusUsage,
+        "List acceptance gate heartbeat status for stable build slots.",
+        ["--help", "-h"]);
 
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -407,6 +413,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("operator-commands", StringComparison.OrdinalIgnoreCase))
         {
             entry = OperatorCommands;
+            return true;
+        }
+
+        if (args[0].Equals("gate-status", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GateStatus;
             return true;
         }
 

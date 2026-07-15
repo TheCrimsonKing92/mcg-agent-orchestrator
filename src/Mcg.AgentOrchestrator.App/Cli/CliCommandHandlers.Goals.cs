@@ -2707,6 +2707,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             {
                 try
                 {
+                    using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
+                        AppendConductEvent(context, "gate-progress", goal.Id, FormatGateProgressConductEvent(progress)));
                     verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
                 }
                 catch (BuildLockBlockedException ex)
@@ -3030,6 +3032,17 @@ private static void AppendConductEvent(CliExecutionContext context, string event
         // Shared operator event streaming is advisory; command output and lifecycle events remain authoritative.
     }
 }
+
+private static string FormatGateProgressConductEvent(AcceptanceGateProgress progress) =>
+    $"PHASE_PROGRESS goal={progress.GoalId?[..Math.Min(8, progress.GoalId.Length)] ?? "unknown"} phase={progress.Phase} " +
+    $"elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} target={FormatConductToken(progress.CurrentTarget)} " +
+    $"child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
+    $"output_bytes={progress.OutputBytes} heartbeat={FormatConductToken(progress.HeartbeatPath)}";
+
+private static string FormatConductToken(string value) =>
+    value.IndexOfAny([' ', '\t', '\r', '\n', '"']) < 0
+        ? value
+        : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 
 private static string FormatConductEventChecks(IEnumerable<string> checks) =>
     string.Join(",", checks.Select(check => check.Replace(' ', '_').Replace('\t', '_').Replace('\r', '_').Replace('\n', '_')));
