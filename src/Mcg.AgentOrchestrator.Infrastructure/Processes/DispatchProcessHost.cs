@@ -863,8 +863,7 @@ public static void DropToLow() {
             WriteHeartbeat("starting");
             RequireStartGate();
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
-            worker = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start worker process.");
+            worker = ProcessTreeGuiSuppression.Start(startInfo);
             workerGroup = OwnedProcessGroup.Attach(worker);
 
             WritePromptToWorkerStdin(worker, parameters);

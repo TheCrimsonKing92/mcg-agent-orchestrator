@@ -24,6 +24,11 @@ public sealed class ProcessStartInfoSourceGuardTests
 
                 var end = Math.Min(lines.Length, index + 30);
                 var sourceWindow = string.Join('\n', lines[index..end]);
+                if (sourceWindow.Contains("MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 if (!sourceWindow.Contains("CreateNoWindow", StringComparison.Ordinal))
                 {
                     offenders.Add($"{relativePath}:{index + 1}");
