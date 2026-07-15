@@ -427,6 +427,30 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_read_only_preparation_labels_only_sandbox_root")]
+    public void WorkerSandboxPreparerReadOnlyPreparationLabelsOnlySandboxRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-sandbox-read-only-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: false, Low: false, Inheritable: false));
+        try
+        {
+            var result = new WorkerSandboxPreparer(labeler).PrepareSandboxRootOnly(worktree, sandboxRoot);
+
+            var setCall = Assert.Single(labeler.SetCalls);
+            Assert.Equal(sandboxRoot, setCall.Path);
+            Assert.False(setCall.Recursive);
+            Assert.False(result.WorktreeRecursiveRelabel);
+            Assert.True(File.Exists(Path.Combine(sandboxRoot, WorkerSandboxPreparer.MarkerFileName)));
+            Assert.False(File.Exists(Path.Combine(worktree, WorkerSandboxPreparer.MarkerFileName)));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSandboxPreparer_second_prepare_on_same_worktree_is_bounded_and_idempotent")]
     public void WorkerSandboxPreparerSecondPrepareOnSameWorktreeIsBoundedAndIdempotent()
     {
