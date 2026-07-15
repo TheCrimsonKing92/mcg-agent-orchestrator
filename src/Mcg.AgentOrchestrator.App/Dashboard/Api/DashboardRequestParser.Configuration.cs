@@ -73,7 +73,7 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
         : null;
     var subscriptionReasoningEffort = allowsSubscription
         ? string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort)
-            ? DefaultSubscriptionReasoningEffort(providerName, executionPolicy)
+            ? DefaultSubscriptionReasoningEffort(providerName, executionPolicy, subscriptionModelAlias)
             : submission.SubscriptionReasoningEffort
         : null;
     var subscription = string.IsNullOrWhiteSpace(subscriptionProfileName)
@@ -172,12 +172,11 @@ private static string? DefaultSubscriptionModelAlias(string providerName, AgentE
     return null;
 }
 
-private static string? DefaultSubscriptionReasoningEffort(string providerName, AgentExecutionPolicy executionPolicy)
+private static string? DefaultSubscriptionReasoningEffort(string providerName, AgentExecutionPolicy executionPolicy, string? subscriptionModelAlias)
 {
-    return AgentExecutionPolicies.AllowsSubscription(executionPolicy) &&
-        providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
-            ? AgentCatalog.RoutineSubscriptionReasoningEffort
-            : null;
+    return AgentExecutionPolicies.AllowsSubscription(executionPolicy)
+        ? AgentCatalog.DefaultSubscriptionReasoningEffort(providerName, subscriptionModelAlias)
+        : null;
 }
 
 private static string? DefaultReasoningEffort(string providerName)

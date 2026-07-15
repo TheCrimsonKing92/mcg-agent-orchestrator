@@ -2840,6 +2840,35 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_agent_command_pins_subscription_model_and_reasoning_from_flags")]
+    public void CliAgentCommandPinsSubscriptionModelAndReasoningFromFlags()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent", "Developer", "OpenAI", "gpt-5.4-mini", "--subscription-model", AgentCatalog.OpenAiSolSubscriptionModelAlias, "--subscription-reasoning", "ultra"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var agent = agents.Single(a => a.Role == AgentRole.Developer);
+        var restored = AgentCatalogStore.Load(workspace.AgentCatalogPath).GetRequired(AgentRole.Developer);
+        Xunit.Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, agent.Subscription!.ModelAlias);
+        Xunit.Assert.Equal("ultra", agent.Subscription.ReasoningEffort);
+        Xunit.Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.Subscription!.ModelAlias);
+        Xunit.Assert.Equal("ultra", restored.Subscription.ReasoningEffort);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_agent_command_replaces_existing_role")]
     public void CliAgentCommandReplacesExistingRole()
     {
@@ -2906,6 +2935,36 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Equal("Claude fallback", developers[1].Name);
         Xunit.Assert.Equal("claude-sonnet-4-6", developers[1].ComplexModel!.ModelName);
         Xunit.Assert.Equal(2, restoredDevelopers.Count);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_agent_add_persists_fable_subscription_alias")]
+    public void CliAgentAddPersistsFableSubscriptionAlias()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["agent-add", "Developer", "Anthropic", "claude-haiku-4-5", "Claude fable", "--subscription-model", "fable"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var added = agents.Single(agent => agent.Id.Value == "anthropic-developer-claude-fable");
+        var restored = AgentCatalogStore.Load(workspace.AgentCatalogPath).FindById("anthropic-developer-claude-fable")!;
+        Xunit.Assert.Equal("claude-cli", added.Subscription!.WorkerProfileName);
+        Xunit.Assert.Equal("fable", added.Subscription.ModelAlias);
+        Xunit.Assert.True(added.Subscription.ReasoningEffort is null);
+        Xunit.Assert.Equal("fable", restored.Subscription!.ModelAlias);
+        Xunit.Assert.True(restored.Subscription.ReasoningEffort is null);
     }
 
 

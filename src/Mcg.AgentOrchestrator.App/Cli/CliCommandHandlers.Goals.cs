@@ -315,11 +315,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "agent":
-            CliArgumentParser.RequirePartCount(parts, 4, "agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
+            CliArgumentParser.RequirePartCount(parts, 4, "agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]");
             if ((HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null) ||
-                (HasCliConfirmation(parts, "--subscription-model") && GetFlagValue(parts, "--subscription-model") is null))
+                (HasCliConfirmation(parts, "--subscription-model") && GetFlagValue(parts, "--subscription-model") is null) ||
+                (HasCliConfirmation(parts, "--subscription-reasoning") && GetFlagValue(parts, "--subscription-reasoning") is null))
             {
-                throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
+                throw new ArgumentException("Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]");
             }
             var agent = CreateCliAgentDefinition(parts);
             var previousRoleAgent = context.Agents.FirstOrDefault(existing => existing.Role == agent.Role);
@@ -330,11 +331,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "agent-add":
-            CliArgumentParser.RequirePartCount(parts, 4, "agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
+            CliArgumentParser.RequirePartCount(parts, 4, "agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]");
             if ((HasCliConfirmation(parts, "--complex-model") && GetFlagValue(parts, "--complex-model") is null) ||
-                (HasCliConfirmation(parts, "--subscription-model") && GetFlagValue(parts, "--subscription-model") is null))
+                (HasCliConfirmation(parts, "--subscription-model") && GetFlagValue(parts, "--subscription-model") is null) ||
+                (HasCliConfirmation(parts, "--subscription-reasoning") && GetFlagValue(parts, "--subscription-reasoning") is null))
             {
-                throw new ArgumentException("Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>]");
+                throw new ArgumentException("Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]");
             }
             var addedAgent = CreateCliAgentDefinition(parts);
             addedAgent = addedAgent with { Id = BuildAlternateAgentId(addedAgent, GetCliAgentIdSuffix(parts, addedAgent)) };
@@ -993,9 +995,11 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
     var agentName = parts.Count > 4 && !parts[4].StartsWith("--", StringComparison.Ordinal) ? parts[4] : null;
     var complexModelName = GetFlagValue(parts, "--complex-model");
     var subscriptionModel = GetFlagValue(parts, "--subscription-model");
+    var subscriptionReasoning = GetFlagValue(parts, "--subscription-reasoning");
     return DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
         parts[1], parts[2], parts[3], agentName,
         SubscriptionModelAlias: subscriptionModel,
+        SubscriptionReasoningEffort: subscriptionReasoning,
         ComplexProviderName: complexModelName is null ? null : parts[2],
         ComplexModelName: complexModelName));
 }

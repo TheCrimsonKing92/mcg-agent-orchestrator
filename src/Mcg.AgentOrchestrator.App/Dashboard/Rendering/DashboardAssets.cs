@@ -23,7 +23,7 @@ pre{white-space:pre-wrap;background:#f6f8fa;border:1px solid #d8dee4;border-radi
 @media (max-width:900px){main{padding:12px;overflow-x:hidden}section{overflow-x:auto}.dashboard-nav{flex-wrap:wrap;padding:0}.dashboard-nav a{flex:1 1 50%;box-sizing:border-box;min-height:44px;padding:12px 10px;text-align:center}table{min-width:640px}.controls,.controls.wide-form,.controls.answer-controls,.goal-control-grid,.goal-control-group-dispatch .controls.compact,.goal-overview-grid,.goal-work-grid,.goal-readiness-grid,.task-action-panel,.task-action-panel .controls.compact,.task-action-group-verification .controls.compact,.task-action-group-verification .controls.compact:first-of-type,.task-action-group-verification .controls.compact:nth-of-type(2){grid-template-columns:1fr;min-width:0}.goal-control-card-head,.task-action-card-head,.work-model-head{display:grid}.goal-control-group-wide,.goal-control-group-dispatch,.goal-control-group-planning,.goal-panel-wide,.report-preview-card-wide{grid-column:auto}.task-action-row td{padding:0 4px 12px}.buttonbar,.linkbar{align-items:stretch}.buttonbar button,.button-link,.goal-control-grid button,.task-action-panel button,.controls.answer-controls button{width:100%;min-height:44px}input,select,textarea,button{min-height:44px}.checkrow{min-height:44px;white-space:normal}}
 """;
 
-    public const string OperatorControlsScript = """
+    public static readonly string OperatorControlsScript = $$"""
 function statusElement(){ return document.getElementById('op-status'); }
 function setStatus(text){ const status = statusElement(); if(status) status.textContent = text; }
 function isEditing(){ const active = document.activeElement; if(active?.closest?.('form[data-action]')) return true; if(document.querySelector('.custom-answer:not([hidden])')) return true; return Array.from(document.querySelectorAll('form[data-action] input:not([type=hidden]),form[data-action] textarea')).some(item => !item.disabled && item.value && item.value !== item.defaultValue); }
@@ -70,32 +70,7 @@ function summarizeResponse(text){
   } catch {}
   return 'Updated.';
 }
-const agentProviderOptions = {
-  OpenAI: {
-    apiModels: [['gpt-5.4-mini','GPT-5.4 mini'], ['gpt-5.4','GPT-5.4'], ['gpt-5.4-pro','GPT-5.4 pro'], ['gpt-5.5','GPT-5.5'], ['gpt-5.5-pro','GPT-5.5 pro'], ['gpt-5.4-nano','GPT-5.4 nano'], ['gpt-5-mini','GPT-5 mini'], ['gpt-5-nano','GPT-5 nano'], ['gpt-5.2','GPT-5.2 (previous)']],
-    apiReasoning: [['','Default'], ['none','None'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high']],
-    subscriptionModels: [['gpt-5.5','GPT-5.5'], ['','Use API model']],
-    subscriptionReasoning: [['','Default'], ['none','None'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high']],
-    defaultSubscriptionModel: 'gpt-5.5',
-    preferredProfile: 'codex-cli'
-  },
-  Anthropic: {
-    apiModels: [['claude-sonnet-4-6','Claude Sonnet 4.6'], ['claude-haiku-4-5','Claude Haiku 4.5'], ['claude-opus-4-8','Claude Opus 4.8']],
-    apiReasoning: [['','Default']],
-    subscriptionModels: [['','Use API model'], ['sonnet','Claude Sonnet (latest)'], ['haiku','Claude Haiku (latest)'], ['opus','Claude Opus (latest)'], ['fable','Claude Fable (heaviest tasks)']],
-    subscriptionReasoning: [['','Default']],
-    defaultSubscriptionModel: '',
-    preferredProfile: 'claude-cli'
-  },
-  Ollama: {
-    apiModels: [['qwen2.5-coder:7b','Qwen2.5 Coder 7B'], ['qwen3:8b','Qwen3 8B']],
-    apiReasoning: [['','Default']],
-    subscriptionModels: [['','No subscription model']],
-    subscriptionReasoning: [['','Default']],
-    defaultSubscriptionModel: '',
-    preferredProfile: ''
-  }
-};
+const agentProviderOptions = {{DashboardAgentOptionCatalog.ToJavaScriptObjectLiteral()}};
 function setOptions(select, options, selected, allowConfigured){
   if(!select) return;
   const selectedValue = selected ?? '';
@@ -119,6 +94,29 @@ function profileOptions(form, preferred){
   });
   return unique.map(name => [name, name || 'None']);
 }
+function subscriptionReasoningOptions(options, modelAlias){
+  const byModel = options.subscriptionReasoningByModel || {};
+  const key = (modelAlias || '').toLowerCase();
+  return byModel[key] || options.subscriptionReasoning || [['','Default']];
+}
+function defaultSubscriptionReasoning(options, modelAlias){
+  const defaults = options.defaultSubscriptionReasoningByModel || {};
+  const key = (modelAlias || '').toLowerCase();
+  return defaults[key] ?? '';
+}
+function syncSubscriptionReasoningForModel(form, preserve){
+  const providerSelect = form.querySelector('select[name="providerName"]');
+  const defaultProvider = form.dataset.defaultProvider || 'OpenAI';
+  const provider = providerSelect?.value || defaultProvider;
+  const options = agentProviderOptions[provider] || agentProviderOptions[defaultProvider] || agentProviderOptions.OpenAI;
+  const modelAlias = form.querySelector('select[name="subscriptionModelAlias"]')?.value || '';
+  const currentReasoning = form.querySelector('select[name="subscriptionReasoningEffort"]')?.value;
+  setOptions(
+    form.querySelector('select[name="subscriptionReasoningEffort"]'),
+    subscriptionReasoningOptions(options, modelAlias),
+    preserve ? currentReasoning : defaultSubscriptionReasoning(options, modelAlias),
+    preserve);
+}
 function maxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '768' : '8192'; }
 function complexMaxTokenPlaceholder(provider){ return provider === 'OpenAI' || provider === 'Anthropic' ? '1200' : '8192'; }
 function syncAgentConfig(form, preserve){
@@ -137,7 +135,7 @@ function syncAgentConfig(form, preserve){
   setOptions(form.querySelector('select[name="reasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="reasoningEffort"]')?.value : '', keep);
   setOptions(form.querySelector('select[name="subscriptionProfileName"]'), profileOptions(form, options.preferredProfile), keep ? form.querySelector('select[name="subscriptionProfileName"]')?.value : options.preferredProfile, keep);
   setOptions(form.querySelector('select[name="subscriptionModelAlias"]'), options.subscriptionModels, keep ? form.querySelector('select[name="subscriptionModelAlias"]')?.value : options.defaultSubscriptionModel || '', keep);
-  setOptions(form.querySelector('select[name="subscriptionReasoningEffort"]'), options.subscriptionReasoning, keep ? form.querySelector('select[name="subscriptionReasoningEffort"]')?.value : '', keep);
+  syncSubscriptionReasoningForModel(form, keep);
   setOptions(form.querySelector('select[name="complexReasoningEffort"]'), options.apiReasoning, keep ? form.querySelector('select[name="complexReasoningEffort"]')?.value : '', keep);
   const maxTokens = form.querySelector('input[name="maxOutputTokens"]');
   if(maxTokens) maxTokens.placeholder = maxTokenPlaceholder(provider);
@@ -160,7 +158,12 @@ function startMonitoringStream(){ const content = document.getElementById('dashb
 async function post(url, body){ setStatus('Working...'); const options = { method: 'POST' }; if(body){ options.headers = {'Content-Type':'application/json'}; options.body = JSON.stringify(body); } const response = await fetch(url, options); const text = await response.text(); if(!response.ok){ throw new Error(text || response.statusText); } setStatus(summarizeResponse(text)); setTimeout(() => refreshContent(true), 350); }
 window.__dashboardSubmitForm = async function(form, submitter){ return post(form.dataset.action, payload(form, submitter)); };
 document.addEventListener('submit', async event => { const form = event.target.closest('form[data-action]'); if(!form) return; event.preventDefault(); try { await window.__dashboardSubmitForm(form, event.submitter); } catch(error) { setStatus(error.message); } });
-document.addEventListener('change', event => { const provider = event.target.closest('form[data-agent-config] select[name="providerName"]'); if(!provider) return; syncAgentConfig(provider.closest('form'), false); });
+document.addEventListener('change', event => {
+  const provider = event.target.closest('form[data-agent-config] select[name="providerName"]');
+  if(provider){ syncAgentConfig(provider.closest('form'), false); return; }
+  const subscriptionModel = event.target.closest('form[data-agent-config] select[name="subscriptionModelAlias"]');
+  if(subscriptionModel) syncSubscriptionReasoningForModel(subscriptionModel.closest('form'), false);
+});
 document.addEventListener('input', event => { const complexProvider = event.target.closest('form[data-agent-config] input[name="complexProviderName"]'); if(!complexProvider) return; syncAgentConfig(complexProvider.closest('form'), true); });
 document.addEventListener('click', async event => { const toggle = event.target.closest('button[data-toggle-custom-answer]'); if(!toggle) return; event.preventDefault(); const form = toggle.closest('form'); const panel = form?.querySelector('.custom-answer'); const textarea = document.getElementById(toggle.dataset.toggleCustomAnswer); if(!panel) return; const opening = panel.hidden; panel.hidden = !opening; toggle.setAttribute('aria-expanded', opening ? 'true' : 'false'); toggle.textContent = opening ? 'Hide custom answer' : 'Write custom answer'; if(textarea){ textarea.disabled = !opening; if(opening) textarea.focus(); else toggle.focus(); } });
 document.addEventListener('click', async event => { const button = event.target.closest('button[data-action-button]'); if(!button) return; event.preventDefault(); try { await post(button.dataset.actionButton); } catch(error) { setStatus(error.message); } });
