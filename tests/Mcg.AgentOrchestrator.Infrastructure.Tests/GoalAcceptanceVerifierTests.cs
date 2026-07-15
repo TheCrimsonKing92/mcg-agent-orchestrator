@@ -79,6 +79,79 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_no_holder_acceptance_output_lock_in_tick")]
+    public async Task GoalAcceptanceVerifierRetriesNoHolderAcceptanceOutputLockInTick()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "app build", "type": "command", "command": "dotnet", "arguments": ["build", "Fake.csproj"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var calls = new List<string[]>();
+        var buildAttempts = 0;
+        var previousDelay = GoalAcceptanceVerifier.TransientNoHolderBuildLockRetryDelay;
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+            "handle64-timeout");
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockRetryDelay = TimeSpan.Zero;
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                buildAttempts++;
+                if (buildAttempts <= 2)
+                {
+                    var lockedPath = Path.Combine(
+                        ExtractArtifactsPath(args),
+                        "bin",
+                        "Mcg.AgentOrchestrator.Core.dll");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.True(result.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(3, buildAttempts);
+            Assert.Equal(5, calls.Count);
+            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            var check = Assert.Single(result.Checks!);
+            Assert.True(check.LockRemediationApplied);
+            Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockRetryDelay = previousDelay;
+            LockAttribution.AttributeForTests = null;
+        }
+
+        static string ExtractArtifactsPath(string[] args)
+        {
+            var artifactsPathIndex = Array.IndexOf(args, "--artifacts-path");
+            Assert.True(artifactsPathIndex >= 0);
+            Assert.True(artifactsPathIndex + 1 < args.Length);
+            return args[artifactsPathIndex + 1];
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_with_LOCK_receipt_while_file_is_held_then_succeeds_after_release")]
     public async Task GoalAcceptanceVerifierBlocksWithLockReceiptWhileFileIsHeldThenSucceedsAfterRelease()
     {

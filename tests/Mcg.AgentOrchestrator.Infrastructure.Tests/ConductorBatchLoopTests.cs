@@ -426,6 +426,57 @@ public sealed class ConductorBatchLoopTests
             line.Contains("result=executed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_build_lock_blocked_gate_retries_and_lands_on_later_tick")]
+    public void BatchLoopBuildLockBlockedGateRetriesAndLandsOnLaterTick()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/BuildLock.cs");
+        var attempts = 0;
+        var escalations = 0;
+
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new BuildLockBlockedException(new BuildLockAttribution(
+                        @"C:\mcg-dotnet-isolated\slots\slot-0\artifacts\bin\Mcg.AgentOrchestrator.Core.dll",
+                        [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+                        "handle64-timeout",
+                        "acceptance-output",
+                        "classify-build-lock"));
+                }
+
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var ticks = new List<BatchTickSummary>();
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        Assert.Equal(2, attempts);
+        Assert.Equal(1, summary.Held);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(0, escalations);
+        Assert.Contains(ticks[0].ProgressLines!, line =>
+            line.Contains("GOAL", StringComparison.Ordinal) &&
+            line.Contains("result=held", StringComparison.Ordinal));
+        Assert.Contains(ticks[1].ProgressLines!, line =>
+            line.Contains("GOAL", StringComparison.Ordinal) &&
+            line.Contains("result=executed", StringComparison.Ordinal));
+    }
+
     // Creates a stop file and returns its path.
     private static string ExistingStopPath()
     {
