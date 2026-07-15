@@ -11,10 +11,12 @@ Most commands below are shown through the launcher: `.\mcg-orchestrator.cmd <com
 The conductor drives a goal through its **entire** lifecycle. You almost never call the manual verbs.
 
 ```
-# 1. Create a goal
-mcg-orchestrator.cmd goal "<objective>"                 # five-role SDLC pipeline
-mcg-orchestrator.cmd simple-goal "<objective>"          # single Developer task
+# 1. Create an ordinary implementation goal
+mcg-orchestrator.cmd goal "<objective>"                 # Planner + Researcher + Developer + Tester + Reviewer
 mcg-orchestrator.cmd goal --brief-file <path>           # long objective via throwaway file (then delete the file)
+
+# Explicit exception only: genuinely mechanical low-risk work, or direct operator instruction
+mcg-orchestrator.cmd simple-goal "<objective>"          # single Developer task
 
 # 2. (If the refiner raised clarifications) clear them so the goal can flow
 mcg-orchestrator.cmd attention dismiss <goal-prefix>    # proceed with the brief as written
@@ -25,6 +27,8 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 # 4. Observe
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
+
+For ordinary implementation goals, use `goal`: the normal dogfood pipeline is the five-role SDLC flow through Planner, Researcher, Developer, Tester, and Reviewer. `simple-goal` is an explicit exception for genuinely mechanical, low-risk work or direct operator instruction. It is not a throughput shortcut, and narrow backlog items still use `goal` unless they meet that exception.
 
 `conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`). When a bounded run reaches `--max-duration`, landed code attempts a successor loop handoff instead of requiring a ritual relaunch; watch for `LOOP_HANDOFF` or `LOOP_HANDOFF_FAILED` in the conduct event stream.
 
@@ -330,7 +334,7 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
 ## 8. Operating discipline (hard-won)
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
-- **Backlog is candidate input, not an automatic queue.** A stale/open backlog can contain obsolete, overlapping, or underspecified work. Before daemon mode, curate a small active set with `backlog-list` + filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal`; avoid unfiltered `goal-plan --create-*` or multi-filter batch creation unless you have reviewed dependencies and file scopes. Keep daemon runs bounded with `--max-duration` until the active set is proven healthy.
+- **Backlog is candidate input, not an automatic queue.** A stale/open backlog can contain obsolete, overlapping, or underspecified work. Before daemon mode, curate a small active set with `backlog-list` + filtered `backlog-intake "<heading>" --create-goal` for ordinary implementation goals; use `backlog-intake "<heading>" --create-simple-goal` only for the explicit `simple-goal` exception, not because an item looks narrow. Avoid unfiltered `goal-plan --create-*` or multi-filter batch creation unless you have reviewed dependencies and file scopes. Keep daemon runs bounded with `--max-duration` until the active set is proven healthy.
 - **Keep long waits out of the foreground.** Use `scripts\Start-OrchestratorCommand.ps1` through `scripts\Invoke-RepoScript.ps1` for long acceptance/conductor runs, then watch `.orchestrator/logs/conduct-events.log` and poll `next <goal> --full` or `Find-OrchestratorLocks.ps1` when you need state. Use `Show-OrchestratorLogArtifacts.ps1` for per-dispatch fallback logs. Avoid raw `Start-Sleep` loops and broad `.orchestrator` filesystem commands.
 - **State writes vs a running loop.** Light writes (`attention answer`, `backlog-add` — the latter on a separate `backlog.db`) are safe concurrent with the loop. But a burst of HEAVY state-`db` writes — `goal --brief-file`, `abandon-goal`, `park-goal` (each does a whole-kernel load+save) — racing a write-heavy tick can exhaust the SQLite busy-retry and **crash** the loop (observed twice, 2026-06-25). Serialize those *between* loop runs (stop → mutate → restart). Read-only inspection (`status`, `next`, git on worktrees, loop output) is always free.
 - **Scope the test suite to the changed project**, not the whole solution; run it foreground (or poll). Use `scripts/Invoke-TestSummary.ps1 -Target <project>` for compact results.
