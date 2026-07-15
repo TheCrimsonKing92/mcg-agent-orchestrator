@@ -53,10 +53,10 @@ public sealed class ProcessTreeGuiSuppressionTests
                 """
                 $psi = [System.Diagnostics.ProcessStartInfo]::new($env:MCG_PROBE_SHELL)
                 $psi.UseShellExecute = $false
-                $psi.CreateNoWindow = $false
-                $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
                 $psi.RedirectStandardOutput = $true
                 $psi.RedirectStandardError = $true
+                # MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE: this descendant intentionally uses default
+                # window settings to prove the launcher supplied an inheritable hidden console.
                 $psi.ArgumentList.Add('-NoProfile')
                 $psi.ArgumentList.Add('-NonInteractive')
                 $psi.ArgumentList.Add('-ExecutionPolicy')
