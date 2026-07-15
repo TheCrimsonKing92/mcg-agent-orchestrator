@@ -124,7 +124,8 @@ public sealed class TaskSpec
                     LastDispatch.ResultCommit,
                     LastDispatch.SandboxLowIntegrity,
                     LastDispatch.PromptPath,
-                    LastDispatch.WorkerProviderKind),
+                    LastDispatch.WorkerProviderKind,
+                    LastDispatch.ReasoningEffortReason),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -241,7 +242,8 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.ResultCommit,
                 snapshot.LastDispatch.SandboxLowIntegrity,
                 snapshot.LastDispatch.PromptPath,
-                snapshot.LastDispatch.WorkerProviderKind));
+                snapshot.LastDispatch.WorkerProviderKind,
+                ReasoningEffortReason: snapshot.LastDispatch.ReasoningEffortReason));
         }
 
         if (snapshot.LastProcess is not null)

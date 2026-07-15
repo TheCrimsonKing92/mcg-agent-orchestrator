@@ -99,7 +99,8 @@ public sealed record TaskDispatchSnapshot(
     string? ResultCommit = null,
     bool SandboxLowIntegrity = false,
     string? PromptPath = null,
-    ProviderKind WorkerProviderKind = ProviderKind.Unknown);
+    ProviderKind WorkerProviderKind = ProviderKind.Unknown,
+    string? ReasoningEffortReason = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
