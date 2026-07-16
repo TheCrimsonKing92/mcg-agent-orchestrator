@@ -170,6 +170,10 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintGateStatus(GateHeartbeatArtifacts.ReadStableSlots());
                 return false;
 
+            case "run-events-maintenance":
+                HandleRunEventsMaintenance(parts, context);
+                return false;
+
             case "attention":
             {
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
@@ -666,6 +670,38 @@ internal static partial class CliCommandHandlers
 
             default:
                 return null;
+        }
+    }
+
+    private static void HandleRunEventsMaintenance(IReadOnlyList<string> parts, CliExecutionContext context)
+    {
+        var retentionDays = GetFlagValue(parts, "--tick-max-age-days") is { } daysValue
+            ? ParsePositiveInteger(daysValue, "--tick-max-age-days")
+            : 7;
+        var keepRows = GetFlagValue(parts, "--keep-tick-rows") is { } keepValue
+            ? ParsePositiveInteger(keepValue, "--keep-tick-rows")
+            : 5000;
+        var vacuum = HasCliConfirmation(parts, "--vacuum");
+        var store = new SqliteRunEventStore(
+            context.Workspace.RunEventStorePath,
+            ensureSchema: !File.Exists(context.Workspace.RunEventStorePath));
+        var result = store.MaintainAsync(new RunEventMaintenanceOptions(
+                TimeSpan.FromDays(retentionDays),
+                keepRows,
+                vacuum))
+            .GetAwaiter()
+            .GetResult();
+
+        var status = result.Deferred ? "deferred" : "completed";
+        Console.WriteLine($"run-events-maintenance status={status}");
+        Console.WriteLine($"db={context.Workspace.RunEventStorePath}");
+        Console.WriteLine($"tickMaxAgeDays={retentionDays} keepTickRows={keepRows}");
+        Console.WriteLine($"conductorTickRowsDeleted={result.ConductorTickRowsDeleted}");
+        Console.WriteLine($"bytesBefore={result.BytesBefore} bytesAfter={result.BytesAfter}");
+        Console.WriteLine($"vacuumRequested={result.VacuumRequested} vacuumCompleted={result.VacuumCompleted} vacuumDeferred={result.VacuumDeferred}");
+        if (!string.IsNullOrWhiteSpace(result.DeferredReason))
+        {
+            Console.WriteLine($"deferredReason={result.DeferredReason}");
         }
     }
 

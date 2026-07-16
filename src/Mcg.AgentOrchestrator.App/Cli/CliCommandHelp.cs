@@ -36,6 +36,7 @@ internal static class CliCommandHelp
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
     public const string GateStatusUsage = "Usage: gate-status";
+    public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--vacuum]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -230,6 +231,11 @@ internal static class CliCommandHelp
         "List acceptance gate heartbeat status for stable build slots.",
         ["--help", "-h"]);
 
+    private static readonly CommandHelpEntry RunEventsMaintenance = new(
+        RunEventsMaintenanceUsage,
+        "Prune high-churn run-events.db conductor tick rows and optionally reclaim free pages when idle.",
+        ["--tick-max-age-days", "--keep-tick-rows", "--vacuum", "--help", "-h"]);
+
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -346,6 +352,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
         {
             entry = Attention;
+            return true;
+        }
+
+        if (args[0].Equals("run-events-maintenance", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = RunEventsMaintenance;
             return true;
         }
 

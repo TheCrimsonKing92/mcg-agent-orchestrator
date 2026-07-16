@@ -10,6 +10,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 /// </summary>
 internal static class ConductorTickPusher
 {
+    internal const int MaxPersistedProgressLines = 32;
+    internal const int MaxPersistedProgressLineChars = 240;
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
 
     public static string? TryReadDashboardUrl(string dashboardUrlFilePath)
@@ -76,16 +78,36 @@ internal static class ConductorTickPusher
         }
     }
 
-    private static object ToDto(BatchTickSummary tick) => new
+    private static object ToDto(BatchTickSummary tick)
     {
-        tick.Tick,
-        tick.Advanced,
-        tick.Held,
-        tick.Escalated,
-        tick.Retried,
-        tick.Done,
-        tick.WatchSleeping,
-        progressLines = (IReadOnlyList<string>?)tick.ProgressLines ?? Array.Empty<string>(),
-        operatorDispositions = (IReadOnlyList<ConductorOperatorDispositionSnapshot>?)tick.OperatorDispositions ?? Array.Empty<ConductorOperatorDispositionSnapshot>()
-    };
+        var progressLines = CompactProgressLines(tick.ProgressLines);
+        return new
+        {
+            tick.Tick,
+            tick.Advanced,
+            tick.Held,
+            tick.Escalated,
+            tick.Retried,
+            tick.Done,
+            tick.WatchSleeping,
+            progressLines,
+            operatorDispositionCount = tick.OperatorDispositions?.Count ?? 0
+        };
+    }
+
+    private static IReadOnlyList<string> CompactProgressLines(IReadOnlyList<string>? progressLines)
+    {
+        if (progressLines is null || progressLines.Count == 0)
+        {
+            return [];
+        }
+
+        return progressLines
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Take(MaxPersistedProgressLines)
+            .Select(line => line.Length <= MaxPersistedProgressLineChars
+                ? line
+                : line[..MaxPersistedProgressLineChars])
+            .ToList();
+    }
 }
