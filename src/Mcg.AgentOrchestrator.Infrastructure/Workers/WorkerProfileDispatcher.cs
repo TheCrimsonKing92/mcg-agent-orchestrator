@@ -147,6 +147,13 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        EnsureReviewerScopeForPreparation(
+            task,
+            workingDirectory,
+            ref preflightFindings,
+            ref reviewerScopeChangedFiles,
+            ref reviewerScopeMergeBase,
+            ref reviewerScopeTotalChangedFileCount);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
@@ -187,6 +194,46 @@ public static class WorkerProfileDispatcher
             ReasoningEffortReason: reasoningEffortReason),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
+    }
+
+    private static void EnsureReviewerScopeForPreparation(
+        TaskSpec task,
+        string workingDirectory,
+        ref IReadOnlyList<string>? preflightFindings,
+        ref IReadOnlyList<string>? reviewerScopeChangedFiles,
+        ref string? reviewerScopeMergeBase,
+        ref int? reviewerScopeTotalChangedFileCount)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            return;
+        }
+
+        if (reviewerScopeChangedFiles is not null &&
+            !string.IsNullOrWhiteSpace(reviewerScopeMergeBase) &&
+            reviewerScopeTotalChangedFileCount.HasValue)
+        {
+            return;
+        }
+
+        var findings = preflightFindings is null
+            ? []
+            : preflightFindings.ToList();
+        var scope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
+        if (scope is null)
+        {
+            var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerScopeUnavailableErrorCode;
+            var codePrefix = string.IsNullOrWhiteSpace(errorCode) ? string.Empty : $"{errorCode}: ";
+            throw new WorkerSubscriptionPreflightException(
+                "Reviewer changed-file scope preflight failed: " + codePrefix + string.Join("; ", findings),
+                errorCode,
+                findings);
+        }
+
+        preflightFindings = findings;
+        reviewerScopeChangedFiles = scope.ChangedFiles;
+        reviewerScopeMergeBase = scope.MergeBase;
+        reviewerScopeTotalChangedFileCount = scope.TotalChangedFileCount;
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareReadyTasks(

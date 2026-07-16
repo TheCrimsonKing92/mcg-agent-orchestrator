@@ -912,6 +912,117 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("Do not use two-dot diffs", prompt, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "ProfileDispatchTask_reviewer_uses_merge_base_changed_file_scope")]
+    public void ProfileDispatchTaskReviewerUsesMergeBaseChangedFileScope()
+{
+    var root = CreateSeededDispatchRepository();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review profile dispatch changed-file scope", [reviewer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Review profile dispatch changed-file scope",
+        ["Reviewer profile dispatch includes authoritative merge-base changed-file scope."],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    var agent = new AgentDefinition(
+        new AgentId("reviewer"),
+        "Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    WriteSkill(worktree, "orchestrator-worker-verification");
+    Directory.CreateDirectory(Path.Combine(worktree, "src", "Feature"));
+    File.WriteAllText(Path.Combine(worktree, "src", "Feature", "ProfileGoalFeature.cs"), "public sealed class ProfileGoalFeature {}");
+    RunGit(worktree, ["add", "src/Feature/ProfileGoalFeature.cs"], DateTimeOffset.Parse("2026-07-15T18:55:00Z"));
+    RunGit(worktree, ["commit", "-m", "Add profile goal feature"], DateTimeOffset.Parse("2026-07-15T18:55:00Z"));
+    File.WriteAllText(Path.Combine(root, "main-profile-only.txt"), "main advanced after goal branch");
+    RunGit(root, ["add", "main-profile-only.txt"], DateTimeOffset.Parse("2026-07-15T18:56:00Z"));
+    RunGit(root, ["commit", "-m", "Advance main for profile dispatch"], DateTimeOffset.Parse("2026-07-15T18:56:00Z"));
+
+    var result = GoalManagementCommandService.ProfileDispatchTask(
+        kernel,
+        workspace,
+        goal,
+        reviewer,
+        DispatchTestProfiles().GetRequired("codex-cli"),
+        [agent]);
+
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
+    Assert.Contains("git diff --name-only main...HEAD", prompt, StringComparison.Ordinal);
+    Assert.Contains("git diff main...HEAD", prompt, StringComparison.Ordinal);
+    Assert.Contains("src/Feature/ProfileGoalFeature.cs", prompt, StringComparison.Ordinal);
+    Assert.DoesNotContain("main-profile-only.txt", prompt, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "PrepareReadyTasks_reviewer_uses_merge_base_changed_file_scope")]
+    public void PrepareReadyTasksReviewerUsesMergeBaseChangedFileScope()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-15T18:57:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review ready batch changed-file scope", [reviewer]);
+    kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+        new AgentId("reviewer"),
+        "Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    WriteSkill(worktree, "orchestrator-worker-verification");
+    Directory.CreateDirectory(Path.Combine(worktree, "src", "Feature"));
+    File.WriteAllText(Path.Combine(worktree, "src", "Feature", "ReadyGoalFeature.cs"), "public sealed class ReadyGoalFeature {}");
+    RunGit(worktree, ["add", "src/Feature/ReadyGoalFeature.cs"], DateTimeOffset.Parse("2026-07-15T18:58:00Z"));
+    RunGit(worktree, ["commit", "-m", "Add ready goal feature"], DateTimeOffset.Parse("2026-07-15T18:58:00Z"));
+    File.WriteAllText(Path.Combine(root, "main-ready-only.txt"), "main advanced after goal branch");
+    RunGit(root, ["add", "main-ready-only.txt"], DateTimeOffset.Parse("2026-07-15T18:59:00Z"));
+    RunGit(root, ["commit", "-m", "Advance main for ready dispatch"], DateTimeOffset.Parse("2026-07-15T18:59:00Z"));
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
+
+    var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile, promptRoot, worktree, dispatchedAt);
+
+    var result = Assert.Single(results);
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
+    Assert.Contains("src/Feature/ReadyGoalFeature.cs", prompt, StringComparison.Ordinal);
+    Assert.DoesNotContain("main-ready-only.txt", prompt, StringComparison.Ordinal);
+    Assert.Contains("Do not use two-dot diffs", prompt, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "PrepareReadyTasks_reviewer_fails_when_merge_base_scope_unavailable")]
+    public void PrepareReadyTasksReviewerFailsWhenMergeBaseScopeUnavailable()
+{
+    var root = CreateSeededDispatchRepository();
+    RunGit(root, ["branch", "-m", "not-main"], DateTimeOffset.Parse("2026-07-15T19:00:00Z"));
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review ready missing main failure", [reviewer]);
+    kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+        new AgentId("reviewer"),
+        "Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
+
+    var ex = Assert.Throws<WorkerSubscriptionPreflightException>(() => WorkerProfileDispatcher.PrepareReadyTasks(
+        kernel,
+        goal,
+        profile,
+        promptRoot,
+        root,
+        DateTimeOffset.Parse("2026-07-15T19:01:00Z")));
+
+    Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
+    Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "Reviewer_dispatch_preflight_fails_when_merge_base_scope_unavailable")]
     public void ReviewerDispatchPreflightFailsWhenMergeBaseScopeUnavailable()
 {
