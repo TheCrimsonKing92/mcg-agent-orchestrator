@@ -130,6 +130,34 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordReviewerEvidenceRequestReceived(GoalId goalId, TaskId taskId, string message)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var trimmed = message.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("Reviewer evidence request message cannot be empty.", nameof(message));
+        }
+
+        Append(goal, taskId, ProgressKind.ReviewerEvidenceRequestReceived, trimmed);
+        return task;
+    }
+
+    public TaskSpec RecordReviewerEvidenceRunRecorded(GoalId goalId, TaskId taskId, string message)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var trimmed = message.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("Reviewer evidence run message cannot be empty.", nameof(message));
+        }
+
+        Append(goal, taskId, ProgressKind.ReviewerEvidenceRunRecorded, trimmed);
+        return task;
+    }
+
     public TaskSpec RetryTask(GoalId goalId, TaskId taskId, string message, bool invalidateDownstream = true)
     {
         var goal = GetGoal(goalId);

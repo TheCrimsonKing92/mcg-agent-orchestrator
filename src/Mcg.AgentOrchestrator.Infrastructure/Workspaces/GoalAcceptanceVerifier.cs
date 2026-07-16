@@ -28,12 +28,27 @@ public sealed record AcceptanceVerificationResult(
     string? ArtifactsPath = null,
     IReadOnlyList<AcceptanceCheckResult>? Checks = null);
 
+public sealed record FocusedEvidenceRunResult(
+    string Request,
+    bool Accepted,
+    bool Passed,
+    string Summary,
+    IReadOnlyList<AcceptanceCheckResult> Checks);
+
 public interface IGoalAcceptanceVerifier
 {
     Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
         IReadOnlyList<string>? changedFiles = null,
+        int? stableSlotIndex = null,
+        DotnetBuildEnvironmentLease? stableSlotLease = null,
+        CancellationToken cancellationToken = default);
+
+    Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        string worktreePath,
+        GoalId? goalId,
+        string request,
         int? stableSlotIndex = null,
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         CancellationToken cancellationToken = default);
@@ -69,6 +84,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+    private const int MaxFocusedEvidenceTargets = 4;
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -325,6 +341,194 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ArtifactsPath: artifactsPath,
             Checks: checks);
     }
+
+    public async Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        string worktreePath,
+        GoalId? goalId,
+        string request,
+        int? stableSlotIndex = null,
+        DotnetBuildEnvironmentLease? stableSlotLease = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
+        {
+            return new FocusedEvidenceRunResult(
+                request,
+                Accepted: false,
+                Passed: false,
+                Summary: rejection,
+                Checks: []);
+        }
+
+        await _runner(
+            ["dotnet", "build-server", "shutdown"],
+            worktreePath,
+            AcceptanceCheckTimeouts.DefaultTimeout,
+            cancellationToken).ConfigureAwait(false);
+
+        var checks = new List<AcceptanceCheckResult>();
+        foreach (var check in focusedChecks)
+        {
+            var checkResult = await RunCheckAsync(
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken).ConfigureAwait(false);
+            checks.Add(checkResult.Result);
+            if (!checkResult.Result.Passed)
+            {
+                break;
+            }
+        }
+
+        var failed = checks.FirstOrDefault(check => !check.Passed);
+        var receiptPaths = checks
+            .Select(check => check.ArtifactsPath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var summary = failed is null
+            ? $"focused evidence passed: {checks.Count} check(s); receipts: {FormatReceiptPaths(receiptPaths)}"
+            : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}; receipts: {FormatReceiptPaths(receiptPaths)}";
+        return new FocusedEvidenceRunResult(
+            request,
+            Accepted: true,
+            Passed: failed is null,
+            Summary: summary,
+            Checks: checks);
+    }
+
+    private static bool TryBuildFocusedEvidenceChecks(
+        string request,
+        out IReadOnlyList<AcceptanceManifestCheck> checks,
+        out string rejection)
+    {
+        checks = [];
+        rejection = string.Empty;
+        var items = request
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (items.Length == 0)
+        {
+            rejection = "empty evidence request";
+            return false;
+        }
+
+        var built = new List<AcceptanceManifestCheck>();
+        var totalTargets = 0;
+        foreach (var item in items)
+        {
+            var project = InfrastructureTestsProject;
+            var expression = item;
+            var separator = item.IndexOf(':', StringComparison.Ordinal);
+            if (separator >= 0)
+            {
+                var alias = item[..separator].Trim();
+                expression = item[(separator + 1)..].Trim();
+                if (!TryResolveFocusedEvidenceProject(alias, out project))
+                {
+                    rejection = $"unsupported evidence request project alias '{alias}'";
+                    return false;
+                }
+            }
+
+            if (!TryNormalizeFocusedEvidenceFilter(expression, out var filter, out var targetCount, out rejection))
+            {
+                return false;
+            }
+
+            totalTargets += targetCount;
+            if (totalTargets > MaxFocusedEvidenceTargets)
+            {
+                rejection = $"evidence request exceeds focused target limit ({MaxFocusedEvidenceTargets})";
+                return false;
+            }
+
+            built.Add(new AcceptanceManifestCheck
+            {
+                Name = $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
+                Type = "dotnet-test",
+                Project = project,
+                Arguments = ["--verbosity", "minimal", "--filter", filter],
+                TimeoutMinutes = 10
+            });
+        }
+
+        checks = built;
+        return true;
+    }
+
+    private static bool TryResolveFocusedEvidenceProject(string alias, out string project)
+    {
+        var normalized = alias.Replace('\\', '/').Trim();
+        project = normalized switch
+        {
+            "Core.Tests" or "Core" or "Mcg.AgentOrchestrator.Core.Tests" => CoreTestsProject,
+            "Infrastructure.Tests" or "Infrastructure" or "Mcg.AgentOrchestrator.Infrastructure.Tests" => InfrastructureTestsProject,
+            _ when normalized.EndsWith(CoreTestsProject, StringComparison.OrdinalIgnoreCase) => CoreTestsProject,
+            _ when normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) => InfrastructureTestsProject,
+            _ => string.Empty
+        };
+        return project.Length > 0;
+    }
+
+    private static bool TryNormalizeFocusedEvidenceFilter(
+        string expression,
+        out string filter,
+        out int targetCount,
+        out string rejection)
+    {
+        filter = string.Empty;
+        targetCount = 0;
+        rejection = string.Empty;
+        var trimmed = expression.Trim();
+        if (trimmed.Length == 0)
+        {
+            rejection = "empty focused evidence filter";
+            return false;
+        }
+
+        if (trimmed.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("full", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("full-suite", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains(".sln", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains('*', StringComparison.Ordinal) ||
+            trimmed.Contains('!', StringComparison.Ordinal))
+        {
+            rejection = "unbounded evidence request rejected; use focused FullyQualifiedName~TestClass filters only";
+            return false;
+        }
+
+        if (trimmed.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase))
+        {
+            targetCount = Regex.Matches(trimmed, @"FullyQualifiedName\s*~\s*[A-Za-z_][A-Za-z0-9_.]*", RegexOptions.IgnoreCase).Count;
+            if (targetCount == 0)
+            {
+                rejection = "focused evidence filter did not name a test class";
+                return false;
+            }
+
+            filter = Regex.Replace(trimmed, @"\s+", "");
+            return true;
+        }
+
+        var classNames = trimmed
+            .Split([',', '|'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (classNames.Length == 0 ||
+            classNames.Any(name => !Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
+        {
+            rejection = "focused evidence request must be a FullyQualifiedName~ filter or comma-separated test class list";
+            return false;
+        }
+
+        targetCount = classNames.Length;
+        filter = string.Join("|", classNames.Select(name => $"FullyQualifiedName~{name}"));
+        return true;
+    }
+
+    private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
+        paths.Count == 0 ? "none" : string.Join(", ", paths);
 
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(
         AcceptanceManifestCheck? solutionCheck,

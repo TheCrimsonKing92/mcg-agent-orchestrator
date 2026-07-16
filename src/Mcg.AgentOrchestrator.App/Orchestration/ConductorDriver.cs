@@ -23,8 +23,11 @@ internal sealed class ConductorDriver
     private readonly Action _buildServerShutdown;
     private readonly Func<Goal, int?, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
+    private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
+    private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRequestReceived;
+    private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRunRecorded;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<Goal, IReadOnlyList<string>, string?, string?> _recordAcceptanceFailure;
@@ -300,11 +303,42 @@ internal sealed class ConductorDriver
                 mainHeadSha);
         };
 
+        _runFocusedEvidence = (goal, request) =>
+        {
+            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
+            if (worktreePath is null)
+            {
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "goal worktree not found for focused evidence request",
+                    Checks: []);
+            }
+
+            GoalOperationJournal.Begin(dir, goal, "conductor:reviewer-evidence", $"Running focused reviewer evidence: {request}");
+            var result = acceptanceVerifier.RunFocusedEvidenceAsync(worktreePath, goal.Id, request).GetAwaiter().GetResult();
+            if (result.Accepted && result.Passed)
+            {
+                GoalOperationJournal.Completed(dir, goal, "conductor:reviewer-evidence", result.Summary);
+            }
+            else
+            {
+                GoalOperationJournal.Failed(dir, goal, "conductor:reviewer-evidence", result.Summary);
+            }
+
+            return result;
+        };
+
         _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
         _recordTaskNote = (goalId, taskId, message) =>
         {
             kernel.RecordTaskNote(goalId, taskId, message);
         };
+        _recordReviewerEvidenceRequestReceived = (goalId, taskId, message) =>
+            kernel.RecordReviewerEvidenceRequestReceived(goalId, taskId, message);
+        _recordReviewerEvidenceRunRecorded = (goalId, taskId, message) =>
+            kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message);
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
         _recordAcceptanceFailure = (goal, failedChecks, branchHeadSha, mainHeadSha) =>
@@ -484,7 +518,10 @@ internal sealed class ConductorDriver
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
         Func<bool>? hasGateReadyGoal = null,
-        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null)
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
+        Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
+        Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
+        Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -496,8 +533,16 @@ internal sealed class ConductorDriver
         _buildServerShutdown = buildServerShutdown ?? (() => { });
         _runAcceptanceVerification = runAcceptanceVerificationWithSlot ?? ((goal, _) => runAcceptanceVerification(goal));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
+        _runFocusedEvidence = runFocusedEvidence ?? ((_, request) => new FocusedEvidenceRunResult(
+            request,
+            Accepted: false,
+            Passed: false,
+            Summary: "focused evidence runner was not configured",
+            Checks: []));
         _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
+        _recordReviewerEvidenceRequestReceived = recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
+        _recordReviewerEvidenceRunRecorded = recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _, _, _) => { });
@@ -712,7 +757,7 @@ internal sealed class ConductorDriver
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
-    private static bool TryBuildReviewerNeedsWorkAutoRetry(
+    private bool TryBuildReviewerNeedsWorkAutoRetry(
         Goal goal,
         ConductorAutonomyPolicy policy,
         out ReviewNeedsWorkAutoRetryDecision decision)
@@ -729,6 +774,50 @@ internal sealed class ConductorDriver
         }
 
         var reviewArtifact = FormatReviewerOutputArtifact(reviewerTask);
+        if (WorkerResultBlockers.TryFindEvidenceRequest(reviewerTask.LastVerification, out var evidenceRequest))
+        {
+            var hadPriorEvidenceRequest = HasPriorReviewerEvidenceRequestInCurrentRound(goal, reviewerTask);
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                reviewerTask.Id,
+                $"Reviewer evidence request received: {evidenceRequest}. Full reviewer output: {reviewArtifact}");
+
+            if (hadPriorEvidenceRequest)
+            {
+                decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+                    $"Reviewer evidence request repeated in the same review round for task {reviewerTask.Id.Value[..8]}; " +
+                    $"normal escalation required. Request: {TrimForConductorMessage(evidenceRequest)}. Full reviewer output: {reviewArtifact}");
+                return true;
+            }
+
+            var evidence = _runFocusedEvidence(goal, evidenceRequest);
+            var evidenceMessage = FormatFocusedEvidenceResult(evidence);
+            _recordReviewerEvidenceRunRecorded(goal.Id, reviewerTask.Id, evidenceMessage);
+
+            if (!evidence.Accepted)
+            {
+                decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+                    $"Reviewer evidence request rejected for task {reviewerTask.Id.Value[..8]}; normal escalation required. " +
+                    $"{evidenceMessage}. Full reviewer output: {reviewArtifact}");
+                return true;
+            }
+
+            if (!evidence.Passed)
+            {
+                decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+                    $"Reviewer requested focused evidence failed for task {reviewerTask.Id.Value[..8]}; normal escalation required. " +
+                    $"{evidenceMessage}. Full reviewer output: {reviewArtifact}");
+                return true;
+            }
+
+            var evidenceRetryMessage =
+                $"reviewer evidence-on-demand: Reviewer task {reviewerTask.Id.Value[..8]} requested focused test evidence; " +
+                $"conductor ran it without reopening upstream Developer/Tester work. {evidenceMessage}. " +
+                $"Re-review the same round using these receipts.";
+            decision = ReviewNeedsWorkAutoRetryDecision.Retry(reviewerTask, evidenceRetryMessage, null);
+            return true;
+        }
+
         if (IsOperatorOwnedReviewBlocker(blocker))
         {
             decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
@@ -810,6 +899,43 @@ internal sealed class ConductorDriver
             evt.TaskId == taskId &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasPriorReviewerEvidenceRequestInCurrentRound(Goal goal, TaskSpec reviewerTask)
+    {
+        var currentRoundStartedAt = goal.Timeline
+            .Where(evt =>
+                evt.Kind == ProgressKind.TaskRetried &&
+                evt.TaskId is not null &&
+                evt.TaskId != reviewerTask.Id)
+            .Select(evt => evt.OccurredAt)
+            .DefaultIfEmpty(DateTimeOffset.MinValue)
+            .Max();
+
+        return goal.Timeline.Any(evt =>
+            evt.TaskId == reviewerTask.Id &&
+            evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
+            evt.OccurredAt >= currentRoundStartedAt);
+    }
+
+    private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence)
+    {
+        var checks = evidence.Checks.Count == 0
+            ? "checks: none"
+            : "checks: " + string.Join("; ", evidence.Checks.Select(FormatFocusedEvidenceCheck));
+        return $"request='{TrimForConductorMessage(evidence.Request)}'; accepted={evidence.Accepted}; passed={evidence.Passed}; " +
+            $"summary={TrimForConductorMessage(evidence.Summary)}; {checks}";
+    }
+
+    private static string FormatFocusedEvidenceCheck(AcceptanceCheckResult check)
+    {
+        var receipt = string.IsNullOrWhiteSpace(check.ArtifactsPath)
+            ? "receipt=none"
+            : $"receipt={check.ArtifactsPath}";
+        var summary = string.IsNullOrWhiteSpace(check.ResultSummary)
+            ? string.Empty
+            : $"; summary={TrimForConductorMessage(check.ResultSummary)}";
+        return $"{check.Name} passed={check.Passed} exit={check.ExitCode} {receipt}{summary}";
+    }
 
     private static string FormatReviewerOutputArtifact(TaskSpec reviewerTask)
     {

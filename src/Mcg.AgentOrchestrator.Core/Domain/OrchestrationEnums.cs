@@ -79,7 +79,9 @@ public enum ProgressKind
     TaskRedelegated = 18,
     GoalCancelled = 19,
     GoalSuperseded = 20,
-    GoalPolicyDecision = 21
+    GoalPolicyDecision = 21,
+    ReviewerEvidenceRequestReceived = 22,
+    ReviewerEvidenceRunRecorded = 23
 }
 
 public enum TaskAttentionKind

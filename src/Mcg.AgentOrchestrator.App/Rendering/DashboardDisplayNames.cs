@@ -50,6 +50,8 @@ internal static class DashboardDisplayNames
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
+        ProgressKind.ReviewerEvidenceRequestReceived => "Reviewer evidence requested",
+        ProgressKind.ReviewerEvidenceRunRecorded => "Reviewer evidence run recorded",
         ProgressKind.GoalCancelled => "Goal cancelled",
         ProgressKind.GoalSuperseded => "Goal superseded",
         ProgressKind.GoalPolicyDecision => "Autonomy policy",

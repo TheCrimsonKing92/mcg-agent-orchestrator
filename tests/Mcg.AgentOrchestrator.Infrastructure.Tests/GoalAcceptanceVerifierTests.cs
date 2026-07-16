@@ -605,6 +605,89 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_focused_evidence_uses_slot_routed_filtered_dotnet_test")]
+    public async Task GoalAcceptanceVerifierFocusedEvidenceUsesSlotRoutedFilteredDotnetTest()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
+                    ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.")
+                    : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                "Infrastructure.Tests: ConductorDriverTests,GoalAcceptanceVerifierTests",
+                stableSlotIndex: 0);
+
+            Assert.True(result.Accepted);
+            Assert.True(result.Passed);
+            Assert.Equal(3, calls.Count);
+            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.Equal("dotnet", calls[1][0]);
+            Assert.Equal("build", calls[1][1]);
+            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[1]);
+            AssertIsolatedTestCommand(calls[2]);
+            Assert.Contains("--no-build", calls[2]);
+            Assert.Contains("--filter", calls[2]);
+            Assert.Contains("FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~GoalAcceptanceVerifierTests", calls[2]);
+            Assert.Equal("run-slot-0", result.Checks.Single().LeaseId);
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
+    public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "should not run"));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                "Infrastructure.Tests: all");
+
+            Assert.False(result.Accepted);
+            Assert.False(result.Passed);
+            Assert.Contains("unbounded evidence request rejected", result.Summary);
+            Assert.Empty(result.Checks);
+            Assert.Empty(calls);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_does_not_start_next_build_until_test_child_exits")]
     public async Task GoalAcceptanceVerifierSlotGateDoesNotStartNextBuildUntilTestChildExits()
     {

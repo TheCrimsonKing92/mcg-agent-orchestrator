@@ -7,6 +7,9 @@ public sealed class AgentOutputDirectivesTests
     {
         Assert.Contains("tests: <pass|fail|not-run|deferred - token first, then evidence>", AgentOutputDirectives.WorkerResultTemplateLines);
         Assert.Contains("blockers: <none|exact-blocker - token first; blank is invalid; put deferred-verification notes in tests>", AgentOutputDirectives.WorkerResultTemplateLines);
+        Assert.Contains(
+            "evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>",
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer));
     }
 
     [Xunit.Theory(DisplayName = "TryParseHumanInputRequest_ignores_explicit_no_input_directives")]
