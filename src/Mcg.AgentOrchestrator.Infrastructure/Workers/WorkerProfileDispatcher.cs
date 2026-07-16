@@ -122,6 +122,8 @@ public static class WorkerProfileDispatcher
     public const string OllamaSubscriptionProfileName = "qwen-code-cli";
     public const string ReviewerScopeUnavailableErrorCode = WorkerGitContext.ReviewerScopeUnavailableErrorCode;
     public const string ReviewerMergeBaseUnavailableErrorCode = WorkerGitContext.ReviewerMergeBaseUnavailableErrorCode;
+    private const string HighRiskReviewerReasoningEffort = "xhigh";
+    private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
 
     public static WorkerProfileDispatchResult PrepareTask(
@@ -1027,6 +1029,11 @@ public static class WorkerProfileDispatcher
             : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
         var policy = agent.ReasoningEffortPolicy ?? new ReasoningEffortPolicy();
 
+        if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
+        {
+            return new EffectiveReasoningEffortSelection(HighRiskReviewerReasoningEffort, "intake-risk");
+        }
+
         if (HasClassFindingRetryFeedback(task))
         {
             return new EffectiveReasoningEffortSelection(policy.ClassFindingEffort ?? baseEffort, "class-finding");
@@ -1149,11 +1156,12 @@ public static class WorkerProfileDispatcher
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+            : ResolveRoleModelSelection(agent, goal, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions, commandExists);
     }
 
     private static SubscriptionModelSelection ResolveRoleModelSelection(
         AgentDefinition agent,
+        Goal goal,
         TaskSpec task,
         SubscriptionModelSelection fullSelection,
         WorkerProfileCatalog? profiles,
@@ -1169,6 +1177,11 @@ public static class WorkerProfileDispatcher
         if (HasCustomWorkerProfileOverride(agent))
         {
             return fullSelection with { Reason = "full-profile: role has custom subscription worker profile" };
+        }
+
+        if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
+        {
+            return fullSelection with { Reason = "full-profile: Reviewer high-risk/complex intake labels require exhaustive review" };
         }
 
         if (TryFindRoleGuardrailFailure(task, out var guardrailFailure))
@@ -1250,6 +1263,37 @@ public static class WorkerProfileDispatcher
     private static bool IsLightReadOnlyRole(AgentRole role)
     {
         return role is AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer;
+    }
+
+    private static bool HasHighRiskOrComplexIntakeRiskLabel(Goal goal)
+    {
+        return EnumerateStoredIntakeRiskLabels(goal).Any(label =>
+            label.Equals("high-risk", StringComparison.OrdinalIgnoreCase) ||
+            label.Equals("complex", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<string> EnumerateStoredIntakeRiskLabels(Goal goal)
+    {
+        foreach (var evt in goal.Timeline.Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision))
+        {
+            var markerIndex = evt.Message.IndexOf(IntakeRiskLabelsMarker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0)
+            {
+                continue;
+            }
+
+            var labelsText = evt.Message[(markerIndex + IntakeRiskLabelsMarker.Length)..].Trim();
+            var sentenceEnd = labelsText.IndexOf('.');
+            if (sentenceEnd >= 0)
+            {
+                labelsText = labelsText[..sentenceEnd];
+            }
+
+            foreach (var label in labelsText.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                yield return label;
+            }
+        }
     }
 
     private static bool HasCustomWorkerProfileOverride(AgentDefinition agent)

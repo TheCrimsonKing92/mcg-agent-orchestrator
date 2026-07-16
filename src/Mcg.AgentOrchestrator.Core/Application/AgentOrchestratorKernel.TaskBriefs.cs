@@ -146,7 +146,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var roleLines = new List<string>();
-        roleLines.AddRange(SdlcRolePromptRequirements.Build(task.RequiredRole, complexity));
+        roleLines.AddRange(SdlcRolePromptRequirements.Build(
+            task.RequiredRole,
+            complexity,
+            SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal)));
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
 

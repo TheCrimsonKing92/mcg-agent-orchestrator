@@ -164,6 +164,40 @@ public sealed class TaskBriefTests
     Assert.Contains("omit generic progress and long logs", brief, StringComparison.Ordinal);
     Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_adds_high_risk_reviewer_enumeration_contract_only_for_stored_intake_labels")]
+    public void BuildTaskBriefAddsHighRiskReviewerEnumerationContractOnlyForStoredIntakeLabels()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var highRiskReviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var complexReviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var normalReviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var highRiskGoal = kernel.CreateGoal("Review stored high-risk goal", [highRiskReviewer]);
+    var complexGoal = kernel.CreateGoal("Review stored complex goal", [complexReviewer]);
+    var normalGoal = kernel.CreateGoal("Review stored normal goal", [normalReviewer]);
+    kernel.RecordGoalPolicyDecision(
+        highRiskGoal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: high-risk, multi-scope.");
+    kernel.RecordGoalPolicyDecision(
+        complexGoal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: complex objective needs reviewer coverage before acceptance; risk labels: complex.");
+    kernel.RecordGoalPolicyDecision(
+        normalGoal.Id,
+        "Intake pipeline decision (auto): developer-only; reasons: simple code objective; risk labels: low-risk.");
+
+    var highRiskBrief = kernel.BuildTaskBrief(highRiskGoal.Id, highRiskReviewer.Id).Content;
+    var complexBrief = kernel.BuildTaskBrief(complexGoal.Id, complexReviewer.Id).Content;
+    var normalBrief = kernel.BuildTaskBrief(normalGoal.Id, normalReviewer.Id).Content;
+
+    Assert.Contains("High-risk review enumeration contract", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("list all acceptance-blocking findings", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("do not stop at the first blocker", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("WORKER_RESULT blockers field format unchanged", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("High-risk review enumeration contract", complexBrief, StringComparison.Ordinal);
+    Assert.DoesNotContain("High-risk review enumeration contract", normalBrief, StringComparison.Ordinal);
+    Assert.DoesNotContain("list all acceptance-blocking findings", normalBrief, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "AgentTaskRunner_includes_complex_response_budget_guidance")]
     public async Task AgentTaskRunnerIncludesComplexResponseBudgetGuidance()
 {
