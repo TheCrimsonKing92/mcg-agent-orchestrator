@@ -261,7 +261,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
                 warning.Operation == "orphan-sweep:backoff" &&
                 warning.Exception.Message.Contains("Cleanup-needed record persisted in SQLite", StringComparison.Ordinal) &&
                 warning.Exception.Message.Contains(orphanPath, StringComparison.Ordinal));
-            Assert.Contains(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
+            Assert.Equal(1, CleanupJournalSkipCount(repo, orphanPath));
             Assert.True(Directory.Exists(orphanPath));
         }
         finally
@@ -269,6 +270,151 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
             GoalWorktrees.SandboxAclHelper = originalAcl;
             GoalWorktrees.CleanupElapsedMilliseconds = originalElapsed;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_quietly_journals_in_budget_backoff_skip")]
+    public void GoalWorktreesSweepQuietlyJournalsInBudgetBackoffSkip()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-quiet-skip");
+            Directory.CreateDirectory(orphanPath);
+            File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "residue");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+                GoalWorktreeDeleteFailureKind.Transient,
+                "The process cannot access the file because it is being used by another process.");
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.CleanupWarningSink = _ => { };
+            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+
+            string stdout = string.Empty;
+            var stderr = CaptureConsoleError(() =>
+                stdout = CaptureConsole(() =>
+                {
+                    var second = GoalWorktrees.SweepOrphanedWorktrees(repo);
+                    Assert.Equal([orphanPath], second.LeftoverPaths);
+                }));
+
+            Assert.DoesNotContain("warning: worktree-cleanup", stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("warning: worktree-cleanup", stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(1, CleanupJournalSkipCount(repo, orphanPath));
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_escalates_cleanup_debt_once_with_lock_holders")]
+    public void GoalWorktreesSweepEscalatesCleanupDebtOnceWithLockHolders()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-escalates-once");
+            Directory.CreateDirectory(orphanPath);
+            File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "residue");
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
+                GoalWorktreeDeleteFailureKind.Transient,
+                "The process cannot access the file because it is being used by another process.");
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.FindLockHoldersForCleanup = _ =>
+            [
+                new WorktreeLockHolder(1234, "dotnet", "dotnet test")
+            ];
+
+            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            warnings.Clear();
+            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            var escalations = warnings
+                .Where(warning => warning.Operation == "orphan-sweep:cleanup-debt-escalated")
+                .ToList();
+            var escalation = Assert.Single(escalations);
+            Assert.Contains("dotnet[pid=1234]", escalation.Exception.Message, StringComparison.Ordinal);
+            Assert.Contains("dotnet test", escalation.Exception.Message, StringComparison.Ordinal);
+            Assert.Equal(4, CleanupJournalSkipCount(repo, orphanPath));
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryForCleanup = originalDelete;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_cleanup_status_lists_pending_debt_and_empty_state")]
+    public void CliCleanupStatusListsPendingDebtAndEmptyState()
+    {
+        var repo = CreateSeededRepository();
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
+            var kernel = new AgentOrchestratorKernel();
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                currentGoal: null);
+
+            var empty = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));
+            Assert.Contains("Cleanup status: no pending cleanup debt.", empty, StringComparison.Ordinal);
+
+            var goalId = GoalId.New();
+            GoalWorktrees.CleanupWarningSink = _ => { };
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            _ = GoalWorktrees.RecordGoalCleanupNeeded(repo, goalId, "remove:acceptance-deferred");
+            now = now.AddMinutes(5);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));
+
+            Assert.Contains("Cleanup status:", output, StringComparison.Ordinal);
+            Assert.Contains(GoalWorktrees.WorktreePath(repo, goalId), output, StringComparison.Ordinal);
+            Assert.Contains("age=00:05:00", output, StringComparison.Ordinal);
+            Assert.Contains("reason=remove:acceptance-deferred", output, StringComparison.Ordinal);
+            Assert.Contains("remaining_wait=00:05:00", output, StringComparison.Ordinal);
+        }
+        finally
+        {
             GoalWorktrees.CleanupWarningSink = originalWarnings;
             GoalWorktrees.CleanupUtcNow = originalNow;
             GoalWorktrees.CleanupBackoffDuration = originalBackoff;
@@ -428,7 +574,8 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             Assert.Equal(1, attempts);
             Assert.True(HasCleanupNeededRecord(repo, contextPath, "owned-ephemeral-sweep:delete-failed"));
             Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:backoff");
-            Assert.Contains(warnings, warning => warning.Operation == "owned-ephemeral-sweep:skip-backoff");
+            Assert.DoesNotContain(warnings, warning => warning.Operation == "owned-ephemeral-sweep:skip-backoff");
+            Assert.Equal(1, CleanupJournalSkipCount(repo, contextPath));
         }
         finally
         {

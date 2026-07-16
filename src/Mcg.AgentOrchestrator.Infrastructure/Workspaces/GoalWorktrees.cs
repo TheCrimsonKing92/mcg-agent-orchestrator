@@ -44,6 +44,18 @@ public sealed record GoalWorktreeCleanupBackoff(
         Reason.Equals("remove:cleanup-budget-exhausted", StringComparison.OrdinalIgnoreCase);
 }
 
+public sealed record GoalWorktreeCleanupDebt(
+    string Path,
+    string Reason,
+    string LastOperation,
+    DateTimeOffset FirstSeenUtc,
+    DateTimeOffset LastSeenUtc,
+    DateTimeOffset SkipUntilUtc,
+    TimeSpan Age,
+    TimeSpan RemainingWait,
+    int SkipCount,
+    DateTimeOffset? EscalatedAtUtc);
+
 public sealed record GoalWorktreeRemoveResult(
     string Message,
     string? LeftoverPath,
@@ -159,11 +171,23 @@ public static class GoalWorktrees
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
+    private const int CleanupDebtEscalationSkipThreshold = 3;
     private const string CleanupBackoffTableSql = """
         CREATE TABLE IF NOT EXISTS worktree_cleanup_backoff (
             path TEXT PRIMARY KEY NOT NULL,
             skip_until_utc TEXT NOT NULL,
             reason TEXT NOT NULL
+        );
+        """;
+    private const string CleanupDebtJournalTableSql = """
+        CREATE TABLE IF NOT EXISTS worktree_cleanup_journal (
+            path TEXT PRIMARY KEY NOT NULL,
+            first_seen_utc TEXT NOT NULL,
+            last_seen_utc TEXT NOT NULL,
+            last_operation TEXT NOT NULL,
+            last_reason TEXT NOT NULL,
+            skip_count INTEGER NOT NULL DEFAULT 0,
+            escalated_at_utc TEXT NULL
         );
         """;
 
@@ -990,6 +1014,76 @@ public static class GoalWorktrees
     public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
         TryReadOrphanCleanupBackoff(path, out var entry) ? ToCleanupBackoff(entry) : null;
 
+    public static IReadOnlyList<GoalWorktreeCleanupDebt> ListCleanupDebt(string executionDirectory)
+    {
+        var statePath = CleanupStateStorePathForRoot(executionDirectory);
+        if (!File.Exists(statePath))
+        {
+            return [];
+        }
+
+        var debts = new List<GoalWorktreeCleanupDebt>();
+        try
+        {
+            using var conn = OpenCleanupStateConnection(statePath);
+            using var command = conn.CreateCommand();
+            command.CommandText = """
+                SELECT b.path, b.reason, b.skip_until_utc,
+                       j.first_seen_utc, j.last_seen_utc, j.last_operation, j.skip_count, j.escalated_at_utc
+                FROM worktree_cleanup_backoff b
+                LEFT JOIN worktree_cleanup_journal j ON j.path = b.path
+                ORDER BY b.path;
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var path = reader.GetString(0);
+                var reason = reader.GetString(1);
+                if (!DateTimeOffset.TryParse(reader.GetString(2), out var skipUntilUtc))
+                {
+                    continue;
+                }
+
+                var firstSeenUtc = ReadOptionalDateTimeOffset(reader, 3) ??
+                    skipUntilUtc - CleanupBackoffDurationFor(reason);
+                var lastSeenUtc = ReadOptionalDateTimeOffset(reader, 4) ?? firstSeenUtc;
+                var lastOperation = reader.IsDBNull(5) ? "(recorded)" : reader.GetString(5);
+                var skipCount = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);
+                var escalatedAtUtc = ReadOptionalDateTimeOffset(reader, 7);
+                var now = CleanupUtcNow();
+                var age = now - firstSeenUtc;
+                if (age < TimeSpan.Zero)
+                {
+                    age = TimeSpan.Zero;
+                }
+
+                var remaining = skipUntilUtc - now;
+                if (remaining < TimeSpan.Zero)
+                {
+                    remaining = TimeSpan.Zero;
+                }
+
+                debts.Add(new GoalWorktreeCleanupDebt(
+                    path,
+                    reason,
+                    lastOperation,
+                    firstSeenUtc,
+                    lastSeenUtc,
+                    skipUntilUtc,
+                    age,
+                    remaining,
+                    skipCount,
+                    escalatedAtUtc));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            WarnCleanupFailure(executionDirectory, "cleanup-status:read", ex);
+        }
+
+        return debts;
+    }
+
     public static GoalWorktreeCleanupBackoff? RecordGoalCleanupNeeded(
         string executionDirectory,
         GoalId goalId,
@@ -1263,10 +1357,7 @@ public static class GoalWorktrees
         var cleanupBudget = GoalWorktreeCleanupBudget.Start(GitCli.DefaultTimeoutMilliseconds, CleanupElapsedMilliseconds);
         if (IsCleanupBackedOff(path, operation, out var backoff))
         {
-            WarnCleanupFailure(
-                path,
-                operation + ":skip-backoff",
-                new IOException(BuildCleanupRetryMessage(path, backoff.Reason)));
+            JournalCleanupBackoffSkip(path, operation + ":skip-backoff", backoff);
             return false;
         }
 
@@ -1485,6 +1576,37 @@ public static class GoalWorktrees
         return $"{reason} Cleanup-needed record persisted in SQLite for conductor retry; path='{path}'.{suffix}";
     }
 
+    private static string BuildCleanupDebtEscalationMessage(
+        string path,
+        string reason,
+        GoalWorktreeCleanupDebt debt,
+        IReadOnlyList<WorktreeLockHolder> lockHolders)
+    {
+        return "cleanup-debt escalation: " +
+            $"path='{path}' reason={reason} age={FormatRemainingWait(debt.Age)} " +
+            $"skip_count={debt.SkipCount} holders={FormatLockHolders(lockHolders)}";
+    }
+
+    private static string FormatLockHolders(IReadOnlyList<WorktreeLockHolder> lockHolders) =>
+        lockHolders.Count == 0
+            ? "none"
+            : string.Join(
+                ",",
+                lockHolders.Select(holder =>
+                    $"{holder.ProcessName}[pid={holder.ProcessId}]{(string.IsNullOrWhiteSpace(holder.CommandLine) ? string.Empty : $" command='{holder.CommandLine}'")}"));
+
+    private static DateTimeOffset? ReadOptionalDateTimeOffset(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return null;
+        }
+
+        return DateTimeOffset.TryParse(reader.GetString(ordinal), out var value)
+            ? value
+            : null;
+    }
+
     private static string CleanupBackoffStorePath(string orphanPath)
     {
         var root = LocateCleanupStateRoot(orphanPath);
@@ -1590,6 +1712,7 @@ public static class GoalWorktrees
             command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(CleanupBackoffDurationFor(reason)).ToString("O"));
             command.Parameters.AddWithValue("$reason", reason);
             command.ExecuteNonQuery();
+            _ = RecordCleanupDebtObserved(conn, path, warningOperation, reason, incrementSkipCount: false);
             WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason, TryGetCleanupBackoff(path, cleanupStateRoot))));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
@@ -1650,6 +1773,10 @@ public static class GoalWorktrees
             command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
             command.Parameters.AddWithValue("$path", NormalizePath(path));
             command.ExecuteNonQuery();
+            using var journalCommand = conn.CreateCommand();
+            journalCommand.CommandText = "DELETE FROM worktree_cleanup_journal WHERE path = $path";
+            journalCommand.Parameters.AddWithValue("$path", NormalizePath(path));
+            journalCommand.ExecuteNonQuery();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -1662,9 +1789,17 @@ public static class GoalWorktrees
             ? CleanupBackoffStorePath(path)
             : Path.Combine(Path.GetFullPath(cleanupStateRoot), ".orchestrator", "state.db");
 
+    private static string CleanupStateStorePathForRoot(string executionDirectory) =>
+        Path.Combine(Path.GetFullPath(executionDirectory), ".orchestrator", "state.db");
+
     private static SqliteConnection OpenCleanupBackoffConnection(string path, string? cleanupStateRoot = null)
     {
         var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
+        return OpenCleanupStateConnection(statePath);
+    }
+
+    private static SqliteConnection OpenCleanupStateConnection(string statePath)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -1674,12 +1809,137 @@ public static class GoalWorktrees
         }.ToString());
         conn.Open();
         using var command = conn.CreateCommand();
-        command.CommandText = CleanupBackoffTableSql;
+        command.CommandText = CleanupBackoffTableSql + Environment.NewLine + CleanupDebtJournalTableSql;
         command.ExecuteNonQuery();
         return conn;
     }
 
+    private static void JournalCleanupBackoffSkip(
+        string path,
+        string operation,
+        OrphanCleanupBackoffEntry backoff,
+        string? cleanupStateRoot = null)
+    {
+        try
+        {
+            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
+            var observation = RecordCleanupDebtObserved(conn, path, operation, backoff.Reason, incrementSkipCount: true);
+            if (observation.EscalatedNow)
+            {
+                var lockHolders = FindLockHoldersForCleanup(path);
+                WarnCleanupFailure(
+                    path,
+                    operation.Replace(":skip-backoff", ":cleanup-debt-escalated", StringComparison.OrdinalIgnoreCase),
+                    new IOException(BuildCleanupDebtEscalationMessage(path, backoff.Reason, observation.Debt, lockHolders)));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            WarnCleanupFailure(path, "orphan-sweep:journal-write", ex);
+        }
+    }
+
+    private static CleanupDebtObservation RecordCleanupDebtObserved(
+        SqliteConnection conn,
+        string path,
+        string operation,
+        string reason,
+        bool incrementSkipCount)
+    {
+        var normalizedPath = NormalizePath(path);
+        var now = CleanupUtcNow();
+        var wasEscalated = HasCleanupDebtEscalation(conn, normalizedPath);
+        using var command = conn.CreateCommand();
+        command.CommandText = """
+            INSERT INTO worktree_cleanup_journal(
+                path,
+                first_seen_utc,
+                last_seen_utc,
+                last_operation,
+                last_reason,
+                skip_count,
+                escalated_at_utc)
+            VALUES (
+                $path,
+                $now,
+                $now,
+                $operation,
+                $reason,
+                $skipIncrement,
+                NULL)
+            ON CONFLICT(path) DO UPDATE SET
+                last_seen_utc = excluded.last_seen_utc,
+                last_operation = excluded.last_operation,
+                last_reason = excluded.last_reason,
+                skip_count = worktree_cleanup_journal.skip_count + $skipIncrement,
+                escalated_at_utc = CASE
+                    WHEN worktree_cleanup_journal.escalated_at_utc IS NULL
+                         AND worktree_cleanup_journal.skip_count + $skipIncrement >= $escalationThreshold
+                    THEN $now
+                    ELSE worktree_cleanup_journal.escalated_at_utc
+                END;
+            """;
+        command.Parameters.AddWithValue("$path", normalizedPath);
+        command.Parameters.AddWithValue("$now", now.ToString("O"));
+        command.Parameters.AddWithValue("$operation", operation);
+        command.Parameters.AddWithValue("$reason", reason);
+        command.Parameters.AddWithValue("$skipIncrement", incrementSkipCount ? 1 : 0);
+        command.Parameters.AddWithValue("$escalationThreshold", CleanupDebtEscalationSkipThreshold);
+        command.ExecuteNonQuery();
+
+        using var read = conn.CreateCommand();
+        read.CommandText = """
+            SELECT first_seen_utc, last_seen_utc, last_operation, skip_count, escalated_at_utc
+            FROM worktree_cleanup_journal
+            WHERE path = $path;
+            """;
+        read.Parameters.AddWithValue("$path", normalizedPath);
+        using var reader = read.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvalidOperationException("Cleanup journal write succeeded but no row was readable.");
+        }
+
+        var firstSeen = DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture);
+        var lastSeen = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture);
+        var skipCount = reader.GetInt32(3);
+        var escalatedAt = ReadOptionalDateTimeOffset(reader, 4);
+        var age = now - firstSeen;
+        if (age < TimeSpan.Zero)
+        {
+            age = TimeSpan.Zero;
+        }
+
+        var debt = new GoalWorktreeCleanupDebt(
+            normalizedPath,
+            reason,
+            reader.GetString(2),
+            firstSeen,
+            lastSeen,
+            now.Add(CleanupBackoffDurationFor(reason)),
+            age,
+            CleanupBackoffDurationFor(reason),
+            skipCount,
+            escalatedAt);
+        var escalatedNow = incrementSkipCount &&
+            !wasEscalated &&
+            escalatedAt is not null &&
+            skipCount >= CleanupDebtEscalationSkipThreshold;
+        return new CleanupDebtObservation(debt, escalatedNow);
+    }
+
+    private static bool HasCleanupDebtEscalation(SqliteConnection conn, string normalizedPath)
+    {
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT escalated_at_utc FROM worktree_cleanup_journal WHERE path = $path";
+        command.Parameters.AddWithValue("$path", normalizedPath);
+        var value = command.ExecuteScalar();
+        return value is not null && value != DBNull.Value && !string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.InvariantCulture));
+    }
+
     private sealed record OrphanCleanupBackoffEntry(DateTimeOffset SkipUntilUtc, string Reason);
+
+    private sealed record CleanupDebtObservation(GoalWorktreeCleanupDebt Debt, bool EscalatedNow);
 
     private static TimeSpan CleanupBackoffDurationFor(string reason) =>
         IsBudgetExhaustedCleanupNeededReason(reason) ? CleanupBudgetExhaustedBackoffDuration : CleanupBackoffDuration;
