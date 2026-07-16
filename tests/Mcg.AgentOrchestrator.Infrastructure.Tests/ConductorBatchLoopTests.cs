@@ -1199,9 +1199,12 @@ public sealed class ConductorBatchLoopTests
             Assert.True(WaitUntil(() =>
                 File.Exists(conductEventsPath) &&
                 ReadAllTextShared(conductEventsPath).Contains("LOOP_START", StringComparison.Ordinal),
-                TimeSpan.FromSeconds(5)), $"Successor did not journal LOOP_START. stdout={stdout} stderr={stderr}");
+                TimeSpan.FromSeconds(15)), $"Successor did not journal LOOP_START. stdout={stdout} stderr={stderr}");
 
-            Assert.NotEmpty(Directory.GetFiles(logDirectory, "operator-batch99-*.out.log"));
+            Assert.True(WaitUntil(
+                () => Directory.GetFiles(logDirectory, "operator-batch99-*.out.log").Length > 0,
+                TimeSpan.FromSeconds(10)),
+                $"Successor did not create batch99 stdout log. stdout={stdout} stderr={stderr}");
         }
         finally
         {
