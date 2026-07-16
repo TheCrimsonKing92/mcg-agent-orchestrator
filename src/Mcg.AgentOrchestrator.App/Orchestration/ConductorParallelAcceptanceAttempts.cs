@@ -745,18 +745,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 null,
                 null,
                 run.Candidate.BranchHeadSha,
-                run.Candidate.MainHeadSha);
+                run.Candidate.MainHeadSha,
+                null,
+                null);
         }
 
         if (run.EarlyResult is { Outcome: var outcome })
         {
             return outcome switch
             {
-                ConductorAdvanceOutcome.Held held => new("early-held", null, null, held.State.ToString(), held.Reason, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
-                ConductorAdvanceOutcome.Escalated escalated => new("early-escalated", null, null, escalated.State.ToString(), escalated.Reason, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
-                ConductorAdvanceOutcome.Done done => new("early-done", null, null, done.State.ToString(), null, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
-                ConductorAdvanceOutcome.Executed executed => new("early-executed", null, null, executed.FromState.ToString(), executed.Description, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
-                _ => new("fault", "exception", "unknown early acceptance result", null, null, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha)
+                ConductorAdvanceOutcome.Held held => EarlyArtifact("early-held", held.State, held.Reason, run),
+                ConductorAdvanceOutcome.Escalated escalated => EarlyArtifact("early-escalated", escalated.State, escalated.Reason, run),
+                ConductorAdvanceOutcome.Done done => EarlyArtifact("early-done", done.State, run.EarlyOutcome?.Detail, run),
+                ConductorAdvanceOutcome.Executed executed => EarlyArtifact("early-executed", executed.FromState, executed.Description, run),
+                _ => new("fault", "exception", "unknown early acceptance result", null, null, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha, null, null)
             };
         }
 
@@ -768,8 +770,27 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             null,
             run.Acceptance,
             run.Candidate.BranchHeadSha,
-            run.Candidate.MainHeadSha);
+            run.Candidate.MainHeadSha,
+            null,
+            null);
     }
+
+    private static ConductorParallelAcceptanceRunArtifact EarlyArtifact(
+        string kind,
+        GoalLifecycleState state,
+        string? message,
+        ConductorParallelAcceptanceRunResult run) =>
+        new(
+            kind,
+            null,
+            null,
+            state.ToString(),
+            message,
+            null,
+            run.Candidate.BranchHeadSha,
+            run.Candidate.MainHeadSha,
+            run.EarlyOutcome?.Kind,
+            run.EarlyOutcome?.Detail);
 
     private static ConductorParallelAcceptanceRunResult FromArtifact(
         ConductorParallelAcceptanceCandidate candidate,
@@ -792,32 +813,45 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     effectiveCandidate.Goal.Id.Value,
                     effectiveCandidate.GoalPrefix,
                     string.Empty,
-                    new ConductorAdvanceOutcome.Held(ParseState(artifact.State), artifact.Message ?? "held"))),
+                    new ConductorAdvanceOutcome.Held(ParseState(artifact.State), artifact.Message ?? "held")),
+                RehydrateEarlyOutcome(artifact)),
             "early-escalated" => ConductorParallelAcceptanceRunResult.Early(
                 effectiveCandidate,
                 new ConductorAdvanceResult(
                     effectiveCandidate.Goal.Id.Value,
                     effectiveCandidate.GoalPrefix,
                     string.Empty,
-                    new ConductorAdvanceOutcome.Escalated(ParseState(artifact.State), artifact.Message ?? "escalated"))),
+                    new ConductorAdvanceOutcome.Escalated(ParseState(artifact.State), artifact.Message ?? "escalated")),
+                RehydrateEarlyOutcome(artifact)),
             "early-done" => ConductorParallelAcceptanceRunResult.Early(
                 effectiveCandidate,
                 new ConductorAdvanceResult(
                     effectiveCandidate.Goal.Id.Value,
                     effectiveCandidate.GoalPrefix,
                     string.Empty,
-                    new ConductorAdvanceOutcome.Done(ParseState(artifact.State)))),
+                    new ConductorAdvanceOutcome.Done(ParseState(artifact.State))),
+                RehydrateEarlyOutcome(artifact)),
             "early-executed" => ConductorParallelAcceptanceRunResult.Early(
                 effectiveCandidate,
                 new ConductorAdvanceResult(
                     effectiveCandidate.Goal.Id.Value,
                     effectiveCandidate.GoalPrefix,
                     string.Empty,
-                    new ConductorAdvanceOutcome.Executed(ParseState(artifact.State), artifact.Message ?? "executed"))),
+                    new ConductorAdvanceOutcome.Executed(ParseState(artifact.State), artifact.Message ?? "executed")),
+                RehydrateEarlyOutcome(artifact)),
             "fault" => ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, RehydrateFault(artifact)),
             _ => throw new InvalidOperationException("unrecognized acceptance attempt result artifact")
         };
     }
+
+    private static ConductorParallelAcceptanceEarlyOutcome? RehydrateEarlyOutcome(
+        ConductorParallelAcceptanceRunArtifact artifact) =>
+        string.IsNullOrWhiteSpace(artifact.EarlyOutcomeKind)
+            ? null
+            : new ConductorParallelAcceptanceEarlyOutcome(
+                artifact.EarlyOutcomeKind,
+                ParseState(artifact.State),
+                artifact.EarlyOutcomeDetail ?? artifact.Message ?? artifact.EarlyOutcomeKind);
 
     private static Exception RehydrateFault(ConductorParallelAcceptanceRunArtifact artifact) =>
         artifact.FaultKind switch
@@ -889,7 +923,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (run.EarlyResult is not null)
         {
-            return run.EarlyResult.Outcome.ToString() ?? "early result";
+            return run.EarlyOutcome?.Detail ?? run.EarlyResult.Outcome.ToString() ?? "early result";
         }
 
         return run.Acceptance?.Passed == true ? "acceptance passed" : "acceptance failed";
@@ -977,4 +1011,6 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? Message,
     AcceptanceVerificationSummary? Acceptance,
     string? BranchHeadSha,
-    string? MainHeadSha);
+    string? MainHeadSha,
+    string? EarlyOutcomeKind,
+    string? EarlyOutcomeDetail);

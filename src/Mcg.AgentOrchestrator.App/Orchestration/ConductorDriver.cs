@@ -876,10 +876,15 @@ internal sealed class ConductorDriver
         var effectiveCandidate = candidate;
         try
         {
-            var early = RebaseBeforeAcceptance(candidate.Goal, candidate.GoalPrefix, policy);
+            var early = RebaseBeforeAcceptance(
+                candidate.Goal,
+                candidate.GoalPrefix,
+                policy,
+                applySideEffects: false,
+                out var earlyOutcome);
             if (early is not null)
             {
-                return ConductorParallelAcceptanceRunResult.Early(candidate, early);
+                return ConductorParallelAcceptanceRunResult.Early(candidate, early, earlyOutcome);
             }
 
             effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
@@ -914,6 +919,40 @@ internal sealed class ConductorDriver
 
         var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy);
         return rebase ?? CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+    }
+
+    internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorAdvanceResult earlyResult,
+        ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
+    {
+        if (earlyOutcome is null)
+        {
+            return earlyResult;
+        }
+
+        return earlyOutcome.Kind switch
+        {
+            ConductorParallelAcceptanceEarlyOutcome.MissingBranchRetiredKind =>
+                ReplayMissingBranchRetirement(candidate, policy, earlyOutcome),
+            ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalatedKind =>
+                Escalate(candidate.Goal, candidate.GoalPrefix, policy, earlyOutcome.State, earlyOutcome.Detail),
+            _ => earlyResult
+        };
+    }
+
+    private ConductorAdvanceResult ReplayMissingBranchRetirement(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceEarlyOutcome earlyOutcome)
+    {
+        _recordMissingBranchRetirement(candidate.Goal, earlyOutcome.Detail);
+        return MakeResult(
+            candidate.Goal.Id.Value,
+            candidate.GoalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Done(earlyOutcome.State));
     }
 
     private ConductorAdvanceResult ExecuteCreateWorkspace(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
@@ -1305,7 +1344,7 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var early = RebaseBeforeAcceptance(goal, goalPrefix, policy);
+        var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
         if (early is not null)
         {
             return early;
@@ -1344,7 +1383,12 @@ internal sealed class ConductorDriver
         return $"path={attribution.Path}; holders: {holders}";
     }
 
-    private ConductorAdvanceResult? RebaseBeforeAcceptance(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
+    private ConductorAdvanceResult? RebaseBeforeAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        bool applySideEffects,
+        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
     {
         // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
         // criteria, landing) operates on the ACTUAL integrated result that will land — not the
@@ -1352,22 +1396,25 @@ internal sealed class ConductorDriver
         // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
         // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
         // a wasted (expensive) acceptance run when the branch cannot integrate at all.
-        return RebaseOrRetire(goal, goalPrefix, policy, "pre-landing");
+        return RebaseOrRetire(goal, goalPrefix, policy, "pre-landing", applySideEffects, out earlyOutcome);
     }
 
     private ConductorAdvanceResult? RebaseBeforeMerge(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
         // In a parallel acceptance batch, a sibling goal may advance main after this goal's
         // acceptance finished. Re-check the branch immediately before the serialized merge.
-        return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge");
+        return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge", applySideEffects: true, out _);
     }
 
     private ConductorAdvanceResult? RebaseOrRetire(
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy,
-        string phase)
+        string phase,
+        bool applySideEffects,
+        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
     {
+        earlyOutcome = null;
         var rebase = _rebaseOntoMain(goal);
         if (rebase.UpdatedBranch)
         {
@@ -1377,14 +1424,22 @@ internal sealed class ConductorDriver
         if (rebase.Status == GoalWorktreeRebaseStatus.MissingBranch)
         {
             var detail = $"Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: {rebase.Message}";
-            _recordMissingBranchRetirement(goal, detail);
+            earlyOutcome = ConductorParallelAcceptanceEarlyOutcome.MissingBranchRetired(GoalLifecycleState.CleanedUp, detail);
+            if (applySideEffects)
+            {
+                _recordMissingBranchRetirement(goal, detail);
+            }
+
             return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp));
         }
 
         var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
             ? $"{phase} rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
             : $"{phase} rebase failed: {rebase.Message}";
-        return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason);
+        earlyOutcome = ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalated(GoalLifecycleState.Verified, rebaseReason);
+        return applySideEffects
+            ? Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason)
+            : MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, rebaseReason));
     }
 
     private ConductorAdvanceResult CompleteLandingAfterAcceptance(

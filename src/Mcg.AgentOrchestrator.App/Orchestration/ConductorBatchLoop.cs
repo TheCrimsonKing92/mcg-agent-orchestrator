@@ -1062,7 +1062,7 @@ internal sealed class ConductorBatchLoop
 
         if (run.EarlyResult is not null)
         {
-            return run.EarlyResult;
+            return driver.ReplayParallelLandingEarlyOutcome(run.Candidate, policy, run.EarlyResult, run.EarlyOutcome);
         }
 
         if (run.Acceptance is null)

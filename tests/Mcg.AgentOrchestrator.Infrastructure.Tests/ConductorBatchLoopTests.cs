@@ -882,6 +882,156 @@ public sealed class ConductorBatchLoopTests
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock);
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_serialized_early_done_replays_parent_missing_branch_retirement")]
+    public void ParallelAcceptanceSerializedEarlyDoneReplaysParentMissingBranchRetirement()
+    {
+        var root = CreateSeededGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/MissingReplay.cs");
+            var policy = ConductorAutonomyPolicy.Conservative;
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/MissingReplay.cs"]);
+            var startCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7101));
+            var started = startCoordinator.Evaluate(candidate, policy, PassingRun);
+            var detail = "child observed missing branch before landing";
+            var childCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false);
+            childCoordinator.RunAttemptForTests(
+                started.Attempt,
+                candidate,
+                policy,
+                (attemptCandidate, attemptPolicy) => ConductorParallelAcceptanceRunResult.Early(
+                    attemptCandidate,
+                    new ConductorAdvanceResult(
+                        attemptCandidate.Goal.Id.Value,
+                        attemptCandidate.GoalPrefix,
+                        attemptPolicy.Name,
+                        new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp)),
+                    ConductorParallelAcceptanceEarlyOutcome.MissingBranchRetired(GoalLifecycleState.CleanedUp, detail)));
+
+            var retiredDetails = new List<string>();
+            var escalationReasons = new List<string>();
+            var parentCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("parent should reconcile, not launch"));
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                writeEscalation: (_, _, reason) => escalationReasons.Add(reason),
+                recordMissingBranchRetirement: (retiredGoal, retirementDetail) =>
+                {
+                    retiredDetails.Add(retirementDetail);
+                    GoalOperationJournal.RecordTerminalDisposition(
+                        root,
+                        retiredGoal,
+                        new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, retirementDetail));
+                    kernel.CompleteGoal(retiredGoal.Id, retirementDetail);
+                },
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/MissingReplay.cs"],
+                parallelAcceptanceAttemptCoordinator: parentCoordinator);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                policy,
+                NoStopPath(),
+                maxIterations: 1);
+            var reconciled = ReadAttempt(started.Attempt.MetadataPath);
+
+            Assert.Equal(1, summary.Done);
+            Assert.Empty(escalationReasons);
+            Assert.Equal([detail], retiredDetails);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, goal.Id)));
+            Assert.NotNull(reconciled.ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_serialized_early_escalation_replays_parent_escalation_record")]
+    public void ParallelAcceptanceSerializedEarlyEscalationReplaysParentEscalationRecord()
+    {
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/EscalateReplay.cs");
+            var policy = ConductorAutonomyPolicy.Conservative;
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/EscalateReplay.cs"]);
+            var startCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7102));
+            var started = startCoordinator.Evaluate(candidate, policy, PassingRun);
+            var detail = "pre-landing rebase conflict (src/EscalateReplay.cs); use 'workspace rebase' to resolve";
+            var childCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false);
+            childCoordinator.RunAttemptForTests(
+                started.Attempt,
+                candidate,
+                policy,
+                (attemptCandidate, attemptPolicy) => ConductorParallelAcceptanceRunResult.Early(
+                    attemptCandidate,
+                    new ConductorAdvanceResult(
+                        attemptCandidate.Goal.Id.Value,
+                        attemptCandidate.GoalPrefix,
+                        attemptPolicy.Name,
+                        new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, detail)),
+                    ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalated(GoalLifecycleState.Verified, detail)));
+
+            var retired = false;
+            var escalationReasons = new List<string>();
+            var parentCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("parent should reconcile, not launch"));
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                writeEscalation: (_, state, reason) =>
+                {
+                    Assert.Equal(GoalLifecycleState.Verified, state);
+                    escalationReasons.Add(reason);
+                },
+                recordMissingBranchRetirement: (_, _) => retired = true,
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/EscalateReplay.cs"],
+                parallelAcceptanceAttemptCoordinator: parentCoordinator);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                policy,
+                NoStopPath(),
+                maxIterations: 1);
+            var reconciled = ReadAttempt(started.Attempt.MetadataPath);
+
+            Assert.Equal(1, summary.Escalated);
+            Assert.False(retired);
+            Assert.Equal([detail], escalationReasons);
+            Assert.NotNull(reconciled.ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     // Creates a stop file and returns its path.
     private static string ExistingStopPath()
     {
