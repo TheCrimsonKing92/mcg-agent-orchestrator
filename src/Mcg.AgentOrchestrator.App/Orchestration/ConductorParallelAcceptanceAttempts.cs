@@ -1140,7 +1140,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts);
 
     private static bool IsTransientAttemptIo(Exception ex) =>
-        ex is not BuildLockBlockedException &&
+        ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException &&
         (ex is IOException or UnauthorizedAccessException ||
             ex.InnerException is not null && IsTransientAttemptIo(ex.InnerException));
 

@@ -927,6 +927,12 @@ internal sealed class ConductorDriver
         return rebase ?? CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
     }
 
+    internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        string reason) =>
+        Escalate(candidate.Goal, candidate.GoalPrefix, policy, GoalLifecycleState.Verified, reason);
+
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&
         goal.Tasks.All(task =>

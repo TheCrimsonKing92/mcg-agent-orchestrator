@@ -973,7 +973,7 @@ internal sealed class ConductorBatchLoop
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun:
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
-                        ParallelAcceptanceTerminal(candidate, policy, decision.Attempt),
+                        ParallelAcceptanceTerminal(driver, candidate, policy, decision.Attempt),
                         candidate.SlotIndex);
                     driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
                     RecordParallelAcceptanceProgress(
@@ -1053,7 +1053,7 @@ internal sealed class ConductorBatchLoop
                         $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(buildLock.Attribution)}"));
             }
 
-            return ParallelAcceptanceFault(run.Candidate, policy, run.Exception);
+            return ParallelAcceptanceFault(driver, run.Candidate, policy, run.Exception);
         }
 
         if (run.EarlyResult is not null)
@@ -1064,6 +1064,7 @@ internal sealed class ConductorBatchLoop
         if (run.Acceptance is null)
         {
             return ParallelAcceptanceFault(
+                driver,
                 run.Candidate,
                 policy,
                 new InvalidOperationException("Parallel acceptance produced no result."));
@@ -1075,7 +1076,7 @@ internal sealed class ConductorBatchLoop
         }
         catch (Exception ex)
         {
-            return ParallelAcceptanceFault(run.Candidate, policy, ex);
+            return ParallelAcceptanceFault(driver, run.Candidate, policy, ex);
         }
     }
 
@@ -1090,6 +1091,7 @@ internal sealed class ConductorBatchLoop
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason));
 
     private static ConductorAdvanceResult ParallelAcceptanceTerminal(
+        ConductorDriver driver,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceAttempt attempt)
@@ -1119,26 +1121,21 @@ internal sealed class ConductorBatchLoop
                 $"Transient background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)} ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. attempt={attempt.AttemptId}: {Sanitize(attempt.Detail ?? "transient artifact fault")}");
         }
 
-        return new ConductorAdvanceResult(
-            candidate.Goal.Id.Value,
-            candidate.GoalPrefix,
-            policy.Name,
-            new ConductorAdvanceOutcome.Escalated(
-                GoalLifecycleState.Verified,
-                $"background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {Sanitize(attempt.Detail ?? attempt.AttemptId)}"));
+        return driver.EscalateParallelLandingAcceptance(
+            candidate,
+            policy,
+            $"background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {Sanitize(attempt.Detail ?? attempt.AttemptId)}");
     }
 
     private static ConductorAdvanceResult ParallelAcceptanceFault(
+        ConductorDriver driver,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         Exception exception) =>
-        new(
-            candidate.Goal.Id.Value,
-            candidate.GoalPrefix,
-            policy.Name,
-            new ConductorAdvanceOutcome.Escalated(
-                GoalLifecycleState.Verified,
-                $"parallel acceptance fault: {Sanitize(exception.Message)}"));
+        driver.EscalateParallelLandingAcceptance(
+            candidate,
+            policy,
+            $"parallel acceptance fault: {Sanitize(exception.Message)}");
 
     private static string AcceptanceRunDisposition(ConductorParallelAcceptanceRunResult run)
     {
