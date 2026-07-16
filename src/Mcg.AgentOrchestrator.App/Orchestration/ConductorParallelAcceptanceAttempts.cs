@@ -420,10 +420,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
-        if (TryBuildDurablePassedCompletion(attempt, candidate, out var durablePassed))
-        {
-            return durablePassed;
-        }
+        ConductorParallelAcceptanceAttemptDecision durablePassed;
 
         if (File.Exists(attempt.ResultPath))
         {
@@ -1143,8 +1140,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts);
 
     private static bool IsTransientAttemptIo(Exception ex) =>
-        ex is IOException or UnauthorizedAccessException ||
-        ex.InnerException is not null && IsTransientAttemptIo(ex.InnerException);
+        ex is not BuildLockBlockedException &&
+        (ex is IOException or UnauthorizedAccessException ||
+            ex.InnerException is not null && IsTransientAttemptIo(ex.InnerException));
 
     private static string ReadAllTextSharedWithRetry(string path)
     {
