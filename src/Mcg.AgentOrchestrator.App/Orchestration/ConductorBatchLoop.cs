@@ -560,6 +560,7 @@ internal sealed class ConductorBatchLoop
             "LOCK" => "lock-blocker",
             "LOOP_HANDOFF" => "loop-handoff",
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
+            "LOOP_HANDOFF_PENDING" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",

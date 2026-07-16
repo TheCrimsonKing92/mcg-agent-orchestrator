@@ -912,16 +912,14 @@ public sealed class ConductorBatchLoopTests
                     return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
                 });
 
-            Assert.False(result.Started);
-            Assert.True(result.Failed);
+            Assert.True(result.Started);
             Assert.Equal(1, attempts);
-            Assert.Equal("successor-timeout", result.Reason);
-            Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("terminalReason=timeout", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("terminalReason=loop-start", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_PENDING", outWriter.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
         }
         finally
         {
