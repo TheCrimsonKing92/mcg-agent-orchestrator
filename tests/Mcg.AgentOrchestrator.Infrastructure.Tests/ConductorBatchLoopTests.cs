@@ -2025,6 +2025,37 @@ public sealed class ConductorBatchLoopTests
             OwnedProcessIds: [processId]));
     }
 
+    private static void CompleteDispatchedTask(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset completedAt,
+        string resultCommit)
+    {
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, resultCommit);
+        var process = kernel.GetTask(goal.Id, task.Id).LastProcess!;
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            process with { CompletedAt = completedAt, ExitCode = 0 },
+            null);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("manual", process.WorkingDirectory, 0, "ok", "", completedAt));
+    }
+
+    private static ConductorAutonomyPolicy PolicyEscalatingAtVerified()
+    {
+        var transitionMap = ConductorAutonomyPolicy.Conservative.TransitionMap.ToDictionary();
+        transitionMap[GoalLifecycleState.Verified] = ConductorTransitionDecision.Escalate;
+        return ConductorAutonomyPolicy.Conservative with
+        {
+            Name = "VerifiedEscalates",
+            TransitionMap = transitionMap
+        };
+    }
+
     private static ConductorWatchProgressReporter FakeWatchReporter(
         DateTimeOffset now,
         long stdoutBytes,
@@ -4597,13 +4628,110 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("Planner=✓", transition);
         Assert.Contains("commit=deadbeefcafe", transition);
         Assert.Contains("files=2", transition);
+        Assert.Contains("elapsed=3m0s", transition);
         Assert.Contains("next=Developer", transition);
+        Assert.Contains("task=2/2", transition);
         Assert.True(ticks.SelectMany(t => t.ProgressLines ?? []).Any(l => l.Contains("role=Developer", StringComparison.Ordinal)));
 
         var human = ticks.SelectMany(t => t.ProgressLines ?? []).Single(l => l.StartsWith($"[{goal.Id.Value[..8]}] Planner - committed", StringComparison.Ordinal));
         Assert.Contains("committed deadbee", human);
         Assert.Contains("(2 files changed, 3m0s)", human);
         Assert.Contains("-> Developer dispatched", human);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_emits_final_transition_before_gated_lifecycle_event")]
+    public void WatchProgressEmitsFinalTransitionBeforeGatedLifecycleEvent()
+    {
+        var (kernel, goal) = SimpleGoal("watch final gated transition");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-3), "abc123");
+        var calls = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            calls++;
+            if (calls == 2)
+            {
+                CompleteDispatchedTask(loopKernel, goal, task, now, "feedfacecafebabe");
+            }
+        };
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111], [111], ["src/A.cs", "src/B.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(sweep: sweep, watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        var terminalTick = Assert.Single(ticks.Where(t => (t.ProgressLines ?? [])
+            .Any(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal))));
+        var lines = terminalTick.ProgressLines!.ToList();
+        var transitionIndex = lines.FindIndex(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal));
+        var lifecycleIndex = lines.FindIndex(l => l.StartsWith($"GOAL goal={goal.Id.Value[..8]} ", StringComparison.Ordinal));
+        Assert.True(transitionIndex >= 0);
+        Assert.True(lifecycleIndex >= 0);
+        Assert.True(transitionIndex < lifecycleIndex);
+
+        var transition = lines[transitionIndex];
+        Assert.Contains($"{task.RequiredRole}=✓", transition);
+        Assert.Contains("commit=feedfacecafe", transition);
+        Assert.Contains("files=2", transition);
+        Assert.Contains("elapsed=3m0s", transition);
+        Assert.Contains("next=acceptance-gate", transition);
+        Assert.Contains("task=1/1", transition);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_emits_final_transition_before_ungated_lifecycle_event")]
+    public void WatchProgressEmitsFinalTransitionBeforeUngatedLifecycleEvent()
+    {
+        var (kernel, goal) = SimpleGoal("watch final ungated transition");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-3), "abc123");
+        var calls = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            calls++;
+            if (calls == 2)
+            {
+                CompleteDispatchedTask(loopKernel, goal, task, now, "0123456789abcdef");
+            }
+        };
+        var policy = PolicyEscalatingAtVerified();
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111], [111], ["src/A.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(sweep: sweep, watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            policy,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        var terminalTick = Assert.Single(ticks.Where(t => (t.ProgressLines ?? [])
+            .Any(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal))));
+        var lines = terminalTick.ProgressLines!.ToList();
+        var transitionIndex = lines.FindIndex(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal));
+        var lifecycleIndex = lines.FindIndex(l => l.StartsWith($"GOAL goal={goal.Id.Value[..8]} ", StringComparison.Ordinal));
+        Assert.True(transitionIndex >= 0);
+        Assert.True(lifecycleIndex >= 0);
+        Assert.True(transitionIndex < lifecycleIndex);
+
+        var transition = lines[transitionIndex];
+        Assert.Contains($"{task.RequiredRole}=✓", transition);
+        Assert.Contains("commit=0123456789ab", transition);
+        Assert.Contains("files=1", transition);
+        Assert.Contains("elapsed=3m0s", transition);
+        Assert.Contains("next=none", transition);
+        Assert.Contains("task=1/1", transition);
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_uses_operator_supplied_stall_warning_threshold")]
