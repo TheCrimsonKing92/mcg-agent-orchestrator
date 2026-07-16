@@ -7,7 +7,9 @@ internal sealed record ConductorParallelAcceptanceCandidate(
     Goal Goal,
     int SlotIndex,
     IReadOnlyList<string> ScopePaths,
-    IReadOnlyList<string> ResourceKeys)
+    IReadOnlyList<string> ResourceKeys,
+    string? BranchHeadSha = null,
+    string? MainHeadSha = null)
 {
     public string GoalPrefix => Goal.Id.Value[..8];
 
@@ -21,7 +23,15 @@ internal sealed record ConductorParallelAcceptanceCandidate(
         return ScopePaths.Any(left => other.ScopePaths.Any(right => PathsOverlap(left, right)));
     }
 
-    public static ConductorParallelAcceptanceCandidate Create(Goal goal, int slotIndex, IReadOnlyList<string> fileScopes)
+    public string CandidateKey =>
+        $"{Goal.Id.Value}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
+
+    public static ConductorParallelAcceptanceCandidate Create(
+        Goal goal,
+        int slotIndex,
+        IReadOnlyList<string> fileScopes,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null)
     {
         var paths = fileScopes
             .Where(scope => !string.IsNullOrWhiteSpace(scope))
@@ -40,7 +50,7 @@ internal sealed record ConductorParallelAcceptanceCandidate(
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-        return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources);
+        return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources, branchHeadSha, mainHeadSha);
     }
 
     private static bool PathsOverlap(string left, string right) =>
@@ -56,7 +66,8 @@ internal sealed record ConductorParallelAcceptanceRunResult(
     ConductorParallelAcceptanceCandidate Candidate,
     AcceptanceVerificationSummary? Acceptance,
     ConductorAdvanceResult? EarlyResult,
-    Exception? Exception)
+    Exception? Exception,
+    ConductorParallelAcceptanceEarlyOutcome? EarlyOutcome = null)
 {
     public static ConductorParallelAcceptanceRunResult Accepted(
         ConductorParallelAcceptanceCandidate candidate,
@@ -65,11 +76,31 @@ internal sealed record ConductorParallelAcceptanceRunResult(
 
     public static ConductorParallelAcceptanceRunResult Early(
         ConductorParallelAcceptanceCandidate candidate,
-        ConductorAdvanceResult result) =>
-        new(candidate, null, result, null);
+        ConductorAdvanceResult result,
+        ConductorParallelAcceptanceEarlyOutcome? outcome = null) =>
+        new(candidate, null, result, null, outcome);
 
     public static ConductorParallelAcceptanceRunResult Fault(
         ConductorParallelAcceptanceCandidate candidate,
         Exception exception) =>
         new(candidate, null, null, exception);
+}
+
+internal sealed record ConductorParallelAcceptanceEarlyOutcome(
+    string Kind,
+    GoalLifecycleState State,
+    string Detail)
+{
+    public const string MissingBranchRetiredKind = "missing-branch-retired";
+    public const string PreLandingEscalatedKind = "pre-landing-escalated";
+
+    public static ConductorParallelAcceptanceEarlyOutcome MissingBranchRetired(
+        GoalLifecycleState state,
+        string detail) =>
+        new(MissingBranchRetiredKind, state, detail);
+
+    public static ConductorParallelAcceptanceEarlyOutcome PreLandingEscalated(
+        GoalLifecycleState state,
+        string detail) =>
+        new(PreLandingEscalatedKind, state, detail);
 }
