@@ -67,6 +67,28 @@ public static class WorkerResultBlockers
         return hasNeedsWorkVerdict && !string.IsNullOrWhiteSpace(blocker);
     }
 
+    public static bool TryFindEvidenceRequest(TaskVerificationRecord? verification, out string request)
+    {
+        request = string.Empty;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "evidence-request", out var value) &&
+                !string.IsNullOrWhiteSpace(value) &&
+                !IsNoBlockerValue(value))
+            {
+                request = value;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool TryFindHardFailureBlocker(TaskVerificationRecord? verification, out string blocker)
     {
         blocker = string.Empty;

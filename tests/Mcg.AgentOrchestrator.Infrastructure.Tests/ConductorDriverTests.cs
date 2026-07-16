@@ -54,19 +54,27 @@ public sealed class ConductorDriverTests
         Goal goal,
         TaskSpec reviewer,
         string blocker,
+        string? evidenceRequest = null,
         string? stdoutPath = "C:\\tmp\\reviewer.out.log")
     {
         DispatchTask(kernel, goal, reviewer, "review");
-        var stdout = $"""
-            Findings first.
-            WORKER_RESULT:
-            files: none
-            commands: review
-            tests: pass - inspected evidence
-            blockers: {blocker}
-            verdict: needs-work
-            END_WORKER_RESULT
-            """;
+        var lines = new List<string>
+        {
+            "Findings first.",
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            $"blockers: {blocker}"
+        };
+        if (!string.IsNullOrWhiteSpace(evidenceRequest))
+        {
+            lines.Add($"evidence-request: {evidenceRequest}");
+        }
+
+        lines.Add("verdict: needs-work");
+        lines.Add("END_WORKER_RESULT");
+        var stdout = string.Join(Environment.NewLine, lines);
         var verification = new TaskVerificationRecord(
             "review",
             "C:\\tmp",
@@ -128,8 +136,11 @@ public sealed class ConductorDriverTests
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, AcceptanceVerificationSummary>? runAcceptanceSummary = null,
         Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance = null,
+        Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
         Action<GoalId, TaskId, string>? recordTaskNote = null,
+        Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
+        Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<GoalId, TaskId>? clearCriterionRetryFeedback = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
@@ -175,7 +186,10 @@ public sealed class ConductorDriverTests
             completeGoal: completeGoal,
             normalizeLifecycleState: normalizeLifecycleState,
             recoverSandboxPrep: recoverSandboxPrep,
-            hasGateReadyGoal: hasGateReadyGoal);
+            hasGateReadyGoal: hasGateReadyGoal,
+            runFocusedEvidence: runFocusedEvidence,
+            recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
+            recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -188,6 +202,27 @@ public sealed class ConductorDriverTests
             DotnetBuildEnvironmentLease? stableSlotLease = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "focused evidence passed",
+                Checks: [
+                    new AcceptanceCheckResult(
+                        "reviewer focused evidence",
+                        true,
+                        0,
+                        null,
+                        ArtifactsPath: "C:\\tmp\\focused-evidence.trx")
+                ]));
     }
 
     private sealed class ThrowingAcceptanceVerifier(Exception exception) : IGoalAcceptanceVerifier
@@ -200,6 +235,15 @@ public sealed class ConductorDriverTests
             DotnetBuildEnvironmentLease? stableSlotLease = null,
             CancellationToken cancellationToken = default) =>
             Task.FromException<AcceptanceVerificationResult>(exception);
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<FocusedEvidenceRunResult>(exception);
     }
 
     private sealed class CountingModelProvider(string providerName, string text) : IModelProvider
@@ -1302,6 +1346,205 @@ public sealed class ConductorDriverTests
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
+    public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var request = "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests";
+        FailReviewerNeedsWork(kernel, goal, reviewer, "missing focused conductor evidence", request);
+        var focusedRuns = 0;
+        var retriedTaskIds = new List<TaskId>();
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            runFocusedEvidence: (_, actualRequest) =>
+            {
+                focusedRuns++;
+                Assert.Equal(request, actualRequest);
+                return new FocusedEvidenceRunResult(
+                    actualRequest,
+                    Accepted: true,
+                    Passed: true,
+                    Summary: "focused evidence passed: 1 check; receipts: C:\\tmp\\trx",
+                    Checks:
+                    [
+                        new AcceptanceCheckResult(
+                            "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~ConductorDriverTests",
+                            true,
+                            0,
+                            null,
+                            ArtifactsPath: "C:\\tmp\\trx")
+                    ]);
+            },
+            retryTask: (gid, tid, msg) =>
+            {
+                retriedTaskIds.Add(tid);
+                retryMessage = msg;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
+            recordReviewerEvidenceRunRecorded: (gid, tid, msg) => kernel.RecordReviewerEvidenceRunRecorded(gid, tid, msg));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.Equal([reviewer.Id], retriedTaskIds);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Contains("reviewer evidence-on-demand", retryMessage);
+        Assert.Contains("C:\\tmp\\trx", retryMessage);
+        Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived);
+        Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_second_reviewer_evidence_request_same_round_escalates")]
+    public void ConductorDriverSecondReviewerEvidenceRequestSameRoundEscalates()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "prior reviewer evidence request");
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "still missing focused conductor evidence",
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+        var focusedRuns = 0;
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runFocusedEvidence: (_, _) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult("", true, true, "should not run", []);
+            },
+            retryTask: (gid, tid, msg) =>
+            {
+                retried = true;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.False(retried);
+        Assert.Contains("repeated in the same review round", escalation);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_unbounded_reviewer_evidence_request_escalates")]
+    public void ConductorDriverUnboundedReviewerEvidenceRequestEscalates()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "missing full test evidence", "Infrastructure.Tests: all");
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: false,
+                Passed: false,
+                Summary: "unbounded evidence request rejected",
+                Checks: []),
+            retryTask: (gid, tid, msg) =>
+            {
+                retried = true;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
+            recordReviewerEvidenceRunRecorded: (gid, tid, msg) => kernel.RecordReviewerEvidenceRunRecorded(gid, tid, msg),
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.Contains("evidence request rejected", escalation);
+        Assert.Contains("unbounded evidence request rejected", escalation);
+        Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_failing_reviewer_evidence_run_escalates_with_receipts")]
+    public void ConductorDriverFailingReviewerEvidenceRunEscalatesWithReceipts()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "missing focused conductor evidence",
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: false,
+                Summary: "focused evidence failed: reviewer focused evidence exit 1; receipts: C:\\tmp\\failed-trx",
+                Checks:
+                [
+                    new AcceptanceCheckResult(
+                        "reviewer focused evidence",
+                        false,
+                        1,
+                        "Failed! - Failed: 1",
+                        ArtifactsPath: "C:\\tmp\\failed-trx")
+                ]),
+            retryTask: (gid, tid, msg) =>
+            {
+                retried = true;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
+            recordReviewerEvidenceRunRecorded: (gid, tid, msg) => kernel.RecordReviewerEvidenceRunRecorded(gid, tid, msg),
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.Contains("focused evidence failed", escalation);
+        Assert.Contains("C:\\tmp\\failed-trx", escalation);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded &&
+            evt.Message.Contains("C:\\tmp\\failed-trx", StringComparison.Ordinal));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_round_7_stops_and_escalates")]

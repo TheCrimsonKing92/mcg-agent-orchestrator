@@ -734,6 +734,20 @@ public abstract class CliCommandTestBase
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.", DurationMilliseconds: 7)]));
         }
 
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "probe focused evidence passed",
+                Checks: [new AcceptanceCheckResult("probe focused evidence", true, 0, null, ArtifactsPath: Path.Combine(worktreePath, "artifacts"))]));
+
         public DotnetBuildEnvironmentLease? LastStableSlotLease { get; private set; }
     }
 

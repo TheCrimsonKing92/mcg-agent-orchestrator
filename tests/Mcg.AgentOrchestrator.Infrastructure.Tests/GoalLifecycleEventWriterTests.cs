@@ -483,5 +483,19 @@ public sealed class GoalLifecycleEventWriterTests
             DotnetBuildEnvironmentLease? stableSlotLease = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "focused evidence passed",
+                Checks: []));
     }
 }

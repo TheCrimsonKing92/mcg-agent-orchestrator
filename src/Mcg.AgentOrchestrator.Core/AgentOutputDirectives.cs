@@ -43,6 +43,7 @@ public static class AgentOutputDirectives
         }
         else if (role == AgentRole.Reviewer)
         {
+            lines.Add("evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>");
             lines.Add("verdict: <pass|needs-work|fail>");
         }
 

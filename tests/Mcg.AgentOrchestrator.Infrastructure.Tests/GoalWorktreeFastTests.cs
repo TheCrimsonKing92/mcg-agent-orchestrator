@@ -386,6 +386,25 @@ public sealed class GoalWorktreeTests
             return Task.FromResult(AddPolicyRequiredChecks(configuredResult, changedFiles ?? []));
         }
 
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (exception is not null)
+                throw exception;
+
+            return Task.FromResult(new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "focused evidence passed",
+                Checks: []));
+        }
+
         private static AcceptanceVerificationResult AddPolicyRequiredChecks(
             AcceptanceVerificationResult result,
             IReadOnlyList<string> changedFiles)
