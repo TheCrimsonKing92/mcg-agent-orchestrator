@@ -861,6 +861,11 @@ internal sealed class ConductorDriver
             return null;
         }
 
+        if (!HasCompletedPassedVerificationForAllTasks(goal))
+        {
+            return null;
+        }
+
         return ConductorParallelAcceptanceCandidate.Create(
             goal,
             slotIndex,
@@ -912,6 +917,7 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
+        acceptance = NormalizeNamedFailedChecksForRetry(acceptance);
         if (!acceptance.Passed || acceptance.UnmetCriteria.Count > 0)
         {
             return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
@@ -919,6 +925,38 @@ internal sealed class ConductorDriver
 
         var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy);
         return rebase ?? CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+    }
+
+    private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
+        goal.Tasks.Count > 0 &&
+        goal.Tasks.All(task =>
+            task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is { Succeeded: true });
+
+    private static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
+    {
+        if (acceptance.Passed ||
+            acceptance.RequiredUnmetCriteria.Count > 0 ||
+            acceptance.FailedChecks is not { Count: > 0 } failedChecks)
+        {
+            return acceptance;
+        }
+
+        var output = string.Join(Environment.NewLine, failedChecks);
+        var summary = $"Named failing acceptance checks: {string.Join(", ", failedChecks)}";
+        var check = new AcceptanceCheckResult(
+            "acceptance failed checks",
+            false,
+            1,
+            string.IsNullOrWhiteSpace(acceptance.FailureDetail) ? output : acceptance.FailureDetail,
+            ResultSummary: summary);
+        return new AcceptanceVerificationSummary(
+            false,
+            [check],
+            acceptance.FailureDetail,
+            acceptance.FailedChecks,
+            acceptance.BranchHeadSha,
+            acceptance.MainHeadSha);
     }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
@@ -1344,6 +1382,14 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        if (!HasCompletedPassedVerificationForAllTasks(goal))
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    "Goal is not ready for acceptance: complete every task with a passed verification before accepting this gate."));
+        }
+
         var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
         if (early is not null)
         {

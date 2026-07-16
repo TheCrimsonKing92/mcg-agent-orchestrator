@@ -51,7 +51,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     IReadOnlyList<string>? ScopePaths = null,
     DateTimeOffset? CompletedAt = null,
     DateTimeOffset? ReconciledAt = null,
-    string? Detail = null)
+    string? Detail = null,
+    int TransientFailureCount = 0)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -226,11 +227,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
         catch (Exception ex)
         {
+            var transientFailureCount = IsTransientAttemptIo(ex)
+                ? CountConsecutiveTransientFailures(attempt) + 1
+                : 0;
             var failed = attempt with
             {
                 Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
                 CompletedAt = _utcNow(),
-                Detail = ex.Message
+                Detail = ex.Message,
+                TransientFailureCount = transientFailureCount
             };
             Persist(failed);
             TryAppend(attempt.StderrPath, $"launch failed: {ex}{Environment.NewLine}");
@@ -254,7 +259,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
-                File.ReadAllText(metadataPath),
+                ReadAllTextSharedWithRetry(metadataPath),
                 JsonOptions);
             if (attempt is null)
             {
@@ -316,7 +321,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? Environment.CurrentDirectory,
                     attempt.ExecutionDirectory);
-                coordinator.CompleteWithoutResult(attempt with { OwnerProcessId = Environment.ProcessId }, ConductorParallelAcceptanceAttemptOutcome.Failed, ex.Message);
+                coordinator.CompleteWithoutResult(
+                    attempt with { OwnerProcessId = Environment.ProcessId },
+                    IsTransientAttemptIo(ex)
+                        ? ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
+                        : ConductorParallelAcceptanceAttemptOutcome.Failed,
+                    ex.Message,
+                    transient: IsTransientAttemptIo(ex));
             }
             else
             {
@@ -356,6 +367,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             CompleteWithoutResult(attempt, ConductorParallelAcceptanceAttemptOutcome.Cancelled, ex.Message);
         }
+        catch (Exception ex) when (IsTransientAttemptIo(ex))
+        {
+            CompleteWithoutResult(
+                attempt,
+                ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts,
+                ex.Message,
+                transient: true);
+        }
         catch (Exception ex)
         {
             var run = ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
@@ -379,14 +398,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private void CompleteWithoutResult(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceAttemptOutcome outcome,
-        string detail)
+        string detail,
+        bool transient = false)
     {
         TryPersistTerminal(attempt, current => current with
         {
             Outcome = outcome,
             CompletedAt = _utcNow(),
             LastHeartbeatAt = _utcNow(),
-            Detail = detail
+            Detail = detail,
+            TransientFailureCount = transient
+                ? CountConsecutiveTransientFailures(current) + 1
+                : current.TransientFailureCount
         });
         TryWriteExit(attempt.ExitCodePath, 1);
         TryAppend(attempt.StderrPath, $"{outcome}: {detail}{Environment.NewLine}");
@@ -397,12 +420,17 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
+        if (TryBuildDurablePassedCompletion(attempt, candidate, out var durablePassed))
+        {
+            return durablePassed;
+        }
+
         if (File.Exists(attempt.ResultPath))
         {
             try
             {
                 var artifact = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
-                    File.ReadAllText(attempt.ResultPath),
+                    ReadAllTextSharedWithRetry(attempt.ResultPath),
                     JsonOptions);
                 if (artifact is null)
                 {
@@ -417,7 +445,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 if (ex is IOException or UnauthorizedAccessException)
                 {
-                    return _isProcessAlive(attempt.OwnerProcessId) ? null : MarkCorrupt(attempt, ex.Message);
+                    if (TryBuildDurablePassedCompletion(attempt, candidate, out durablePassed))
+                    {
+                        return durablePassed;
+                    }
+
+                    return _isProcessAlive(attempt.OwnerProcessId) ? null : MarkTransientArtifactReadFailure(attempt, ex.Message);
                 }
 
                 return MarkCorrupt(attempt, ex.Message);
@@ -427,6 +460,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (File.Exists(attempt.ExitCodePath))
         {
             var latest = TryReadAttemptFile(attempt.MetadataPath);
+            if (latest is not null && TryBuildDurablePassedCompletion(latest, candidate, out durablePassed))
+            {
+                return durablePassed;
+            }
+
             if (latest is not null && IsTerminalWithoutRunOutcome(latest.Outcome))
             {
                 return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(latest);
@@ -438,6 +476,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (!_isProcessAlive(attempt.OwnerProcessId))
         {
             var latest = TryReadAttemptFile(attempt.MetadataPath);
+            if (latest is not null && TryBuildDurablePassedCompletion(latest, candidate, out durablePassed))
+            {
+                return durablePassed;
+            }
+
             if (latest is not null && IsTerminalWithoutRunOutcome(latest.Outcome))
             {
                 return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(latest);
@@ -465,6 +508,36 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ReconciledAt = _utcNow(),
             Detail = "candidate branch/main SHA moved before reconciliation"
         });
+    }
+
+    private bool TryBuildDurablePassedCompletion(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        out ConductorParallelAcceptanceAttemptDecision decision)
+    {
+        decision = null!;
+        var latest = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+        if (latest.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed)
+        {
+            return false;
+        }
+
+        var effectiveCandidate = ConductorParallelAcceptanceCandidate.Create(
+            candidate.Goal,
+            latest.SlotIndex,
+            latest.ScopePaths ?? candidate.ScopePaths,
+            latest.BranchHeadSha ?? candidate.BranchHeadSha,
+            latest.MainHeadSha ?? candidate.MainHeadSha);
+        var run = ConductorParallelAcceptanceRunResult.Accepted(
+            effectiveCandidate,
+            new AcceptanceVerificationSummary(
+                true,
+                [],
+                BranchHeadSha: latest.BranchHeadSha,
+                MainHeadSha: latest.MainHeadSha));
+        var completed = PersistResultCandidate(latest, run);
+        decision = ConductorParallelAcceptanceAttemptDecision.Completed(completed, run);
+        return true;
     }
 
     private ConductorParallelAcceptanceAttempt PersistResultCandidate(
@@ -507,6 +580,21 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         };
         Persist(corrupt);
         return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(corrupt);
+    }
+
+    private ConductorParallelAcceptanceAttemptDecision MarkTransientArtifactReadFailure(
+        ConductorParallelAcceptanceAttempt attempt,
+        string detail)
+    {
+        var transient = attempt with
+        {
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts,
+            CompletedAt = _utcNow(),
+            Detail = detail,
+            TransientFailureCount = CountConsecutiveTransientFailures(attempt) + 1
+        };
+        Persist(transient);
+        return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(transient);
     }
 
     private ConductorParallelAcceptanceAttempt CreateAttempt(
@@ -555,7 +643,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ConductorParallelAcceptanceAttempt? attempt;
             try
             {
-                attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(path), JsonOptions);
+                attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                    ReadAllTextSharedWithRetry(path),
+                    JsonOptions);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
@@ -944,7 +1034,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             return File.Exists(path)
-                ? JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(path), JsonOptions)
+                ? JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                    ReadAllTextSharedWithRetry(path),
+                    JsonOptions)
                 : null;
         }
         catch
@@ -995,7 +1087,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         try
         {
-            return File.Exists(path) ? new FileInfo(path).Length : 0L;
+            if (!File.Exists(path))
+            {
+                return 0L;
+            }
+
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return stream.Length;
         }
         catch
         {
@@ -1013,6 +1111,62 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         try { File.AppendAllText(path, text); }
         catch { }
+    }
+
+    private int CountConsecutiveTransientFailures(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var directory = Path.GetDirectoryName(attempt.MetadataPath);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            return 0;
+        }
+
+        foreach (var prior in Directory.EnumerateFiles(directory, "*.attempt.json")
+            .Select(TryReadAttemptFile)
+            .OfType<ConductorParallelAcceptanceAttempt>()
+            .Where(candidate =>
+                string.Equals(candidate.CandidateKey, attempt.CandidateKey, StringComparison.Ordinal) &&
+                !string.Equals(candidate.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+            .OrderByDescending(candidate => candidate.StartedAt))
+        {
+            return IsTransientTerminalFailure(prior)
+                ? Math.Max(1, prior.TransientFailureCount)
+                : 0;
+        }
+
+        return 0;
+    }
+
+    internal static bool IsTransientTerminalFailure(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.TransientFailureCount > 0 &&
+        (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed ||
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts);
+
+    private static bool IsTransientAttemptIo(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException ||
+        ex.InnerException is not null && IsTransientAttemptIo(ex.InnerException);
+
+    private static string ReadAllTextSharedWithRetry(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException ex) when (IsSharingViolation(ex) && attempt < 5)
+            {
+                Thread.Sleep(TimeSpan.FromMilliseconds(25 * (attempt + 1)));
+            }
+        }
+    }
+
+    private static bool IsSharingViolation(IOException ex)
+    {
+        var code = ex.HResult & 0xFFFF;
+        return code is 32 or 33;
     }
 }
 
