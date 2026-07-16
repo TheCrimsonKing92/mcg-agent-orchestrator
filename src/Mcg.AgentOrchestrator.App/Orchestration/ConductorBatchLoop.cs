@@ -132,8 +132,12 @@ internal sealed class ConductorBatchLoop
             var nextTick = totalTicks + 1;
             var preTickTimingLines = new List<string>();
             var sweepClock = Stopwatch.StartNew();
-            var sweepResult = _sweep(kernel);
-            _recoverInterruptedDispatches(kernel);
+            var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel));
+            RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
+            {
+                _recoverInterruptedDispatches(kernel);
+                return true;
+            });
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, escalatedGoals, reapedGoals, goalProjectionCache);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
             sweepClock.Stop();
@@ -523,6 +527,19 @@ internal sealed class ConductorBatchLoop
         Console.WriteLine($"[conduct --loop] Handoff skipped: {handoff.Reason ?? "not-started"}");
     }
 
+    private static T? RunJanitorialPhase<T>(string phase, int tick, Func<T> action)
+    {
+        try
+        {
+            return action();
+        }
+        catch (Exception ex)
+        {
+            EmitProgress($"LOOP_JANITORIAL_FAILED tick={tick} phase={SanitizeHandoffDetail(phase)} exception={ex.GetType().Name} message={SanitizeHandoffDetail(ex.Message)}");
+            return default;
+        }
+    }
+
     // Emit a compact progress line to stdout with immediate flush; optionally accumulate in a list.
     private static void EmitProgress(string line, List<string>? accumulator = null)
     {
@@ -563,6 +580,7 @@ internal sealed class ConductorBatchLoop
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
             "LOOP_HANDOFF_PENDING" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
+            "LOOP_JANITORIAL_FAILED" => "loop-janitorial-failure",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
             "TICK_WRITE_BUSY" => "lock-blocker",

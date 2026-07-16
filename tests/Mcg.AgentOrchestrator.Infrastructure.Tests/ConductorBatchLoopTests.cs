@@ -4504,6 +4504,43 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(records, record => record.EventKind == "goal" && record.GoalId is not null);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_skips_janitorial_phase_failure_and_journals_event")]
+    public void BatchLoopSkipsJanitorialPhaseFailureAndJournalsEvent()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-janitorial");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var writer = new ConductEventLogWriter(logPath);
+        var kernel = new AgentOrchestratorKernel();
+        var driver = MakeDriver();
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            var summary = new ConductorBatchLoop(
+                measuredSweep: _ => throw new InvalidOperationException("janitorial access denied"),
+                conductEventLogWriter: writer).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.False(summary.StopRequested);
+        });
+
+        Assert.Contains("LOOP_JANITORIAL_FAILED", output, StringComparison.Ordinal);
+        Assert.Contains("LOOP_STOP", output, StringComparison.Ordinal);
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+
+        Assert.Contains(records, record =>
+            record.EventKind == "loop-janitorial-failure" &&
+            record.Detail.Contains("exception=InvalidOperationException", StringComparison.Ordinal) &&
+            record.Detail.Contains("janitorial_access_denied", StringComparison.Ordinal));
+        Assert.Contains(records, record => record.EventKind == "loop-stop");
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_shared_stream_records_escalation_reason")]
     public void ConductEventsSharedStreamRecordsEscalationReason()
     {

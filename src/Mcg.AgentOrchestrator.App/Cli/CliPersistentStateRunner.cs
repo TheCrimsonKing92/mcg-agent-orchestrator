@@ -422,9 +422,18 @@ internal static class CliPersistentStateRunner
         using var conductLoopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
         var kernel = LoadConductLoopKernel(stateRepository);
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
-        var sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
-        ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
-        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        TerminalGoalSweepResult? sweep = null;
+        try
+        {
+            sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
+            ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
+            GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        }
+        catch (Exception ex)
+        {
+            EmitPreLoopJanitorialFailure(workspace, ex);
+        }
+
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
@@ -463,7 +472,7 @@ internal static class CliPersistentStateRunner
             }
         }
 
-        if (sweep.Changed)
+        if (sweep?.Changed == true)
         {
             Persist(kernel);
         }
@@ -486,6 +495,25 @@ internal static class CliPersistentStateRunner
         Persist(kernel);
         return shouldSave;
     }
+
+    private static void EmitPreLoopJanitorialFailure(OrchestratorWorkspace workspace, Exception ex)
+    {
+        var line = $"LOOP_JANITORIAL_FAILED tick=0 phase=pre-loop-sweep exception={ex.GetType().Name} message={SanitizeConductToken(ex.Message)}";
+        Console.WriteLine(line);
+        Console.Out.Flush();
+        try
+        {
+            new ConductEventLogWriter(workspace.ConductEventsLogPath)
+                .Append("loop-janitorial-failure", null, line);
+        }
+        catch
+        {
+            // Shared event streaming is advisory; stdout remains the primary conduct log.
+        }
+    }
+
+    private static string SanitizeConductToken(string value) =>
+        value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
         ITransactionalOrchestratorStateRepository stateRepository)

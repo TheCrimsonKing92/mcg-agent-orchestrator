@@ -1260,6 +1260,51 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_remove_defers_when_acl_reset_is_access_denied")]
+    public void GoalWorktreesRemoveDefersWhenAclResetIsAccessDenied()
+    {
+        var repo = CreateSeededRepository();
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            Directory.CreateDirectory(Path.Combine(path, ".mcg-sandbox"));
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.SandboxAclHelper = new AccessDeniedSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
+
+            var result = GoalWorktrees.Remove(repo, goalId);
+
+            Assert.False(result.IsComplete);
+            Assert.Equal(path, result.LeftoverPath);
+            Assert.Equal("remove:cleanup-budget-exhausted", result.CleanupBackoff?.Reason);
+            Assert.True(Directory.Exists(path));
+            Assert.True(HasCleanupNeededRecord(repo, path, "remove:cleanup-budget-exhausted"));
+            Assert.Contains(warnings, warning =>
+                warning.Path == path &&
+                warning.Operation == "remove:acl-reset" &&
+                warning.Exception is System.ComponentModel.Win32Exception);
+            Assert.Contains(warnings, warning => warning.Operation == "remove:cleanup-needed");
+        }
+        finally
+        {
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_defers_when_build_server_cleanup_exhausts_budget")]
     public void GoalWorktreesRemoveDefersWhenBuildServerCleanupExhaustsBudget()
     {
@@ -1714,6 +1759,14 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             GoalWorktrees.BuildServerShutdown = originalShutdown;
             Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, originalProtectedPid);
             DeleteDirectory(repo);
+        }
+    }
+
+    private sealed class AccessDeniedSandboxAclHelper : ISandboxAclHelper
+    {
+        public void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds)
+        {
+            throw new System.ComponentModel.Win32Exception(5, "Access is denied.");
         }
     }
 }
