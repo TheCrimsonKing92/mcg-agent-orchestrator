@@ -124,11 +124,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             current = null;
         }
 
-        if (current is not null && IsTerminalWithoutRunOutcome(current.Outcome))
-        {
-            return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
-        }
-
         if (current is not null &&
             !IsReconciled(current) &&
             !string.Equals(current.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
@@ -141,6 +136,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = "candidate branch/main SHA moved before reconciliation"
             });
             current = null;
+        }
+
+        if (current is not null && IsTerminalWithoutRunOutcome(current.Outcome))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
         }
 
         if (current is not null && !IsReconciled(current))

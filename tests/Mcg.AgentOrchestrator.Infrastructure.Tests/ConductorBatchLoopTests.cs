@@ -619,6 +619,55 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_stale_terminal_without_run_attempt_does_not_block_moved_candidate")]
+    public void ParallelAcceptanceStaleTerminalWithoutRunAttemptDoesNotBlockMovedCandidate()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/StaleTerminal.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var launchAttempts = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            launchOwnedProcess: _ =>
+            {
+                launchAttempts++;
+                if (launchAttempts == 1)
+                {
+                    throw new InvalidOperationException("spawn failed");
+                }
+
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7010);
+            });
+        var candidateA = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/StaleTerminal.cs"],
+            "branch-a",
+            "main-a");
+        var candidateB = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/StaleTerminal.cs"],
+            "branch-b",
+            "main-a");
+
+        try
+        {
+            var failed = coordinator.Evaluate(candidateA, ConductorAutonomyPolicy.Conservative, PassingRun);
+            var moved = coordinator.Evaluate(candidateB, ConductorAutonomyPolicy.Conservative, PassingRun);
+            var stale = ReadAttempt(failed.Attempt.MetadataPath);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun, failed.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.LaunchFailed, failed.Attempt.Outcome);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, moved.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, stale.Outcome);
+            Assert.Contains("candidate branch/main SHA moved", stale.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_running_attempt_without_live_process_records_process_died")]
     public void ParallelAcceptanceRunningAttemptWithoutLiveProcessRecordsProcessDied()
     {
