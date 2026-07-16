@@ -186,7 +186,7 @@ internal static class CliPersistentStateRunner
             // process sweep — keeps them fully concurrent with a running conductor instead of
             // contending on the per-tick write transaction. A future backlog command that DOES touch
             // the kernel must NOT be listed here.
-            "backlog-list" or "backlog-add" or "backlog-show" or "backlog-close" or
+            "backlog-list" or "backlog-add" or "backlog-show" or "backlog-annotate" or "backlog-close" or
             "backlog-reopen" or "backlog-view" or
             "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "gate-status" or

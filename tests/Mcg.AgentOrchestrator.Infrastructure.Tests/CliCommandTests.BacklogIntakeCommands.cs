@@ -518,6 +518,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-annotate", "abc", "receipt"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-close", "abc"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--help"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--loop", "--help"]));
@@ -875,6 +876,174 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(BacklogItemStatus.Done, closed!.Status);
         Xunit.Assert.Contains("Original body", closed.Body);
         Xunit.Assert.Contains(reasonContent, closed.Body);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_annotate_open_item_show_renders_ordered_notes")]
+    public async Task CliBacklogAnnotateOpenItemShowRendersOrderedNotes()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Annotate open item", "Original body");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"backlog-annotate {item.Id[..8]} First discovered receipt"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand($"backlog-annotate {item.Id[..8]} Second discovered receipt"),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", item.Id[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Notes:", output);
+        Xunit.Assert.Contains("First discovered receipt", output);
+        Xunit.Assert.Contains("Second discovered receipt", output);
+        Xunit.Assert.True(
+            output.IndexOf("First discovered receipt", StringComparison.Ordinal) <
+            output.IndexOf("Second discovered receipt", StringComparison.Ordinal));
+        var annotated = await store.GetByExactIdAsync(item.Id);
+        Xunit.Assert.Equal("Original body", annotated!.Body);
+        Xunit.Assert.Equal(BacklogItemStatus.Open, annotated.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_annotate_text_file_preserves_multiline_note")]
+    public async Task CliBacklogAnnotateTextFilePreservesMultilineNote()
+    {
+        var root = CreateTempDirectory();
+        var noteContent = "Root cause receipt line 1\n\nRoot cause receipt line 3";
+        var notePath = Path.Combine(root, "note.md");
+        File.WriteAllText(notePath, noteContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Annotate from file");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-annotate", item.Id[..8], "--text-file", notePath],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var show = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", item.Id[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var annotated = await store.GetByExactIdAsync(item.Id);
+
+        Xunit.Assert.Equal(noteContent, Xunit.Assert.Single(annotated!.Notes).Text);
+        Xunit.Assert.Contains(noteContent, show);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_annotate_unknown_and_ambiguous_prefix_fail_without_mutation")]
+    public async Task CliBacklogAnnotateUnknownAndAmbiguousPrefixFailWithoutMutation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var now = DateTimeOffset.UtcNow;
+        await store.UpsertAsync(new BacklogItem("ambiguous-alpha", "Ambiguous alpha", "Alpha body", BacklogItemStatus.Open, now, now, null));
+        await store.UpsertAsync(new BacklogItem("ambiguous-beta", "Ambiguous beta", "Beta body", BacklogItemStatus.Open, now, now, null));
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var missing = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-annotate", "missing", "Should not land"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var ambiguous = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-annotate", "ambiguous", "Should not land"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("No backlog item found with id prefix 'missing'", missing.Message);
+        Xunit.Assert.Contains("Ambiguous id prefix 'ambiguous'", ambiguous.Message);
+        var alpha = await store.GetByExactIdAsync("ambiguous-alpha");
+        var beta = await store.GetByExactIdAsync("ambiguous-beta");
+        Xunit.Assert.Equal("Alpha body", alpha!.Body);
+        Xunit.Assert.Empty(alpha.Notes);
+        Xunit.Assert.Equal("Beta body", beta!.Body);
+        Xunit.Assert.Empty(beta.Notes);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_annotate_closed_item_succeeds_and_show_renders_note")]
+    public async Task CliBacklogAnnotateClosedItemSucceedsAndShowRendersNote()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Closed receipt item", "Closed body");
+        await store.CloseAsync(item.Id);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-annotate", item.Id[..8], "Receipt after closure"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", item.Id[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var annotated = await store.GetByExactIdAsync(item.Id);
+
+        Xunit.Assert.Equal(BacklogItemStatus.Done, annotated!.Status);
+        Xunit.Assert.Contains("Receipt after closure", output);
+        Xunit.Assert.Contains("Status:  Done", output);
     }
 
 

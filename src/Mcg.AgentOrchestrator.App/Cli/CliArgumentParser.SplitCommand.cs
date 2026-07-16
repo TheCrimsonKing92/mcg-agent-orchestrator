@@ -136,6 +136,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitTargetTextCommandWithFileFlags(command, remainder, "--reason-file", "--text-file");
     }
 
+    if (command.Equals("backlog-annotate", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
+    }
+
     if (command.Equals("goal", StringComparison.OrdinalIgnoreCase))
     {
         return SplitObjectiveCommandWithFlags(command, remainder);

@@ -69,6 +69,29 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 Console.WriteLine();
                 Console.WriteLine(item.Body);
             }
+            if (item.Notes.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Notes:");
+                foreach (var note in item.Notes)
+                {
+                    Console.WriteLine($"- {note.CreatedAt:O}");
+                    Console.WriteLine(note.Text);
+                }
+            }
+            return false;
+        }
+
+        case "backlog-annotate":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>");
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
+            var note = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: null, "--text-file")
+                ?? throw new ArgumentException("Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>");
+            var annotated = store.AppendNoteAsync(item.Id, note).GetAwaiter().GetResult();
+            Console.WriteLine($"Annotated: [{annotated.Id}] {annotated.Title}");
             return false;
         }
 
