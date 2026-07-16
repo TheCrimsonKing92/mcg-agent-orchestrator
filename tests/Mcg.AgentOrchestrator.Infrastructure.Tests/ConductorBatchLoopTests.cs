@@ -644,6 +644,43 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_reconciliation_preserves_typed_terminal_outcome")]
+    public void ParallelAcceptanceReconciliationPreservesTypedTerminalOutcome()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/Reconciled.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var launches = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: launch =>
+            {
+                launches[launch.Attempt.AttemptId] = launch;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7025 + launches.Count);
+            });
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Reconciled.cs"], "branch", "main");
+
+        try
+        {
+            var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            launches[started.Attempt.AttemptId].ExecuteInCurrentProcess(started.Attempt.OwnerProcessId);
+            var completed = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            coordinator.MarkReconciled(completed.Attempt);
+            var reconciled = ReadAttempt(completed.Attempt.MetadataPath);
+            var next = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, reconciled.Outcome);
+            Assert.NotNull(reconciled.ReconciledAt);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, next.Kind);
+            Assert.NotEqual(completed.Attempt.AttemptId, next.Attempt.AttemptId);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_corrupt_result_artifact_records_corrupt_outcome")]
     public void ParallelAcceptanceCorruptResultArtifactRecordsCorruptOutcome()
     {

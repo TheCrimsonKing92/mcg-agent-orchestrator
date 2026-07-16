@@ -62,7 +62,7 @@ internal sealed class ConductorDriver
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(dir, "acceptance-gate-attempts"),
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         kernel.SetEventWriter(eventWriter);

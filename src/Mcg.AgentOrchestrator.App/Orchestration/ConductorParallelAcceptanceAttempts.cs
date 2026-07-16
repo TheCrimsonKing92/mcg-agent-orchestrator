@@ -119,13 +119,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
+        if (current is not null && IsReconciled(current))
+        {
+            current = null;
+        }
+
         if (current is not null && IsTerminalWithoutRunOutcome(current.Outcome))
         {
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
         }
 
         if (current is not null &&
-            current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Reconciled &&
+            !IsReconciled(current) &&
             !string.Equals(current.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
         {
             Persist(current with
@@ -138,7 +143,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             current = null;
         }
 
-        if (current is not null && current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Reconciled)
+        if (current is not null && !IsReconciled(current))
         {
             var terminal = TryCompleteRunningAttempt(current, candidate);
             if (terminal is { Run: not null })
@@ -169,7 +174,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             WriteAttemptFile(current with
             {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.Reconciled,
                 ReconciledAt = _utcNow(),
                 LastHeartbeatAt = _utcNow()
             });
@@ -806,6 +810,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             or ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
             or ConductorParallelAcceptanceAttemptOutcome.Cancelled
             or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
+
+    private static bool IsReconciled(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.ReconciledAt.HasValue ||
+        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Reconciled;
 
     private static string AcceptanceRunDetail(ConductorParallelAcceptanceRunResult run)
     {
