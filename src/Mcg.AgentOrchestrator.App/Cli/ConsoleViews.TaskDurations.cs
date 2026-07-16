@@ -35,7 +35,9 @@ internal static partial class ConsoleViews
                 $"attemptsPerTask={record.AttemptsPerTask:0.0} " +
                 $"legit median={medianRuntime} p90={p90Runtime} " +
                 $"overhead median={medianOverhead} " +
-                $"failureRate={record.FailureRate:P0}");
+                $"failureRate={record.FailureRate:P0} " +
+                $"realFailureRate={record.RealFailureRate:P0} environmentalRate={record.EnvironmentalFailureRate:P0} " +
+                $"manufacturedFixedRate={record.ManufacturedFixedFailureRate:P0} unknownEraRate={record.UnknownEraFailureRate:P0}");
         }
 
         if (trend is { Count: > 0 })

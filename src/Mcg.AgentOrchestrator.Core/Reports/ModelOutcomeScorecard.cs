@@ -17,7 +17,14 @@ public sealed record ModelOutcomeRecord(
     int SelfRatedUnderpowered,
     int Divergence,
     ModelOutcomeRecommendation Recommendation,
-    string Reason);
+    string Reason,
+    int RealFailures = 0,
+    int EnvironmentalFailures = 0,
+    int ManufacturedFixedFailures = 0,
+    int UnknownEraFailures = 0)
+{
+    public int NonRealFailures => EnvironmentalFailures + ManufacturedFixedFailures + UnknownEraFailures;
+}
 
 public static class ModelOutcomeScorecard
 {
@@ -67,6 +74,9 @@ public static class ModelOutcomeScorecard
         }
 
         var fit = ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task));
+        var outcomeClass = task.Status == WorkTaskStatus.Completed
+            ? TaskOutcomeClass.Success
+            : TaskOutcomeClass.RealFailure;
         return new ModelFitHistoryRow(
             string.Empty,
             task.Id.Value,
@@ -77,7 +87,9 @@ public static class ModelOutcomeScorecard
             fit?.TaskShape,
             task.Status,
             ModelFitHistory.NormalizeSelfRating(fit?.Fit),
-            task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt);
+            task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt,
+            null,
+            outcomeClass);
     }
 
     private static ModelOutcomeRecord BuildRecord(
@@ -98,16 +110,20 @@ public static class ModelOutcomeScorecard
         var adequate = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Adequate);
         var overkill = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Overkill);
         var underpowered = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Underpowered);
+        var realFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.RealFailure);
+        var environmentalFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.Environmental);
+        var manufacturedFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.ManufacturedFixed);
+        var unknownEraFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.UnknownEra);
         var divergence = pairs.Count(p => p.row.SelfRating is ModelFitHistory.Divergence ||
-            (p.row.SelfRating == ModelFitHistory.Adequate && p.row.IsFailed));
+            (p.row.SelfRating == ModelFitHistory.Adequate && p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.RealFailure));
 
         var totalWeight = pairs.Sum(p => p.weight);
-        var weightedFailed = pairs.Where(p => p.row.IsFailed).Sum(p => p.weight);
+        var weightedFailed = pairs.Where(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.RealFailure).Sum(p => p.weight);
         var weightedCompleted = pairs.Where(p => p.row.IsCompleted).Sum(p => p.weight);
         var weightedUnderpowered = pairs.Where(p => p.row.SelfRating == ModelFitHistory.Underpowered).Sum(p => p.weight);
 
         var (recommendation, reason) = BuildRecommendation(
-            n, completed, failed, underpowered, divergence,
+            n, completed, failed, realFailures, environmentalFailures, manufacturedFailures, unknownEraFailures, underpowered, divergence,
             totalWeight, weightedFailed, weightedCompleted, weightedUnderpowered);
 
         return new ModelOutcomeRecord(
@@ -120,13 +136,21 @@ public static class ModelOutcomeScorecard
             underpowered,
             divergence,
             recommendation,
-            reason);
+            reason,
+            realFailures,
+            environmentalFailures,
+            manufacturedFailures,
+            unknownEraFailures);
     }
 
     private static (ModelOutcomeRecommendation Recommendation, string Reason) BuildRecommendation(
         int total,
         int completed,
         int failed,
+        int realFailures,
+        int environmentalFailures,
+        int manufacturedFailures,
+        int unknownEraFailures,
         int underpowered,
         int divergence,
         int totalWeight,
@@ -146,7 +170,8 @@ public static class ModelOutcomeScorecard
                 ? $" {divergence} self-rated adequate dispatch(es) failed."
                 : string.Empty;
             return (ModelOutcomeRecommendation.Avoid,
-                $"{failed}/{total} recent dispatches failed.{divergenceNote}");
+                $"{realFailures}/{total} recent dispatches failed for real/code reasons; " +
+                $"{environmentalFailures} environmental, {manufacturedFailures} manufactured-fixed, {unknownEraFailures} unknown-era failure(s) excluded from avoidance.{divergenceNote}");
         }
 
         if (weightedCompleted == totalWeight && weightedUnderpowered == 0)
@@ -156,9 +181,24 @@ public static class ModelOutcomeScorecard
         }
 
         var parts = new List<string>();
-        if (failed > 0)
+        if (realFailures > 0)
         {
-            parts.Add($"{failed}/{total} dispatches failed");
+            parts.Add($"{realFailures}/{total} real/code failure(s)");
+        }
+
+        if (environmentalFailures > 0)
+        {
+            parts.Add($"{environmentalFailures} environmental failure(s)");
+        }
+
+        if (manufacturedFailures > 0)
+        {
+            parts.Add($"{manufacturedFailures} manufactured-fixed failure(s)");
+        }
+
+        if (unknownEraFailures > 0)
+        {
+            parts.Add($"{unknownEraFailures} unknown-era failure(s)");
         }
 
         if (underpowered > 0)

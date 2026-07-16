@@ -10,7 +10,9 @@ public sealed record ModelFitHistoryRow(
     string? TaskShape,
     WorkTaskStatus Outcome,
     string SelfRating,
-    DateTimeOffset Timestamp)
+    DateTimeOffset Timestamp,
+    string? OutcomeRule = null,
+    TaskOutcomeClass OutcomeClass = TaskOutcomeClass.UnknownEra)
 {
     public bool IsCompleted => Outcome == WorkTaskStatus.Completed;
     public bool IsFailed => Outcome == WorkTaskStatus.Failed;
@@ -41,6 +43,11 @@ public static class ModelFitHistory
 
         var observation = ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task));
         var selfRating = NormalizeSelfRating(observation?.Fit);
+        var outcome = TaskOutcomeClassifier.FromTimeline(
+            goal.Timeline,
+            task.Id,
+            task.Status,
+            task.Status == WorkTaskStatus.Failed ? null : task.LastVerification?.CompletedAt);
 
         return new ModelFitHistoryRow(
             goal.Id.Value,
@@ -52,7 +59,9 @@ public static class ModelFitHistory
             observation?.TaskShape,
             task.Status,
             selfRating,
-            task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt);
+            task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt,
+            outcome.Rule,
+            outcome.Class);
     }
 
     public static IReadOnlyList<ModelFitHistoryRow> FromGoals(IEnumerable<Goal> goals)

@@ -34,7 +34,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["goals", "human_input_requests", "meta", "model_fit_history"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_role"],
+            ["ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND (name = 'ix_goals_status' OR name LIKE 'ix_model_fit_history_%') ORDER BY name"));
         Xunit.Assert.Equal(
             ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
@@ -473,6 +473,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("implementation", row.TaskShape);
         Assert.Equal(WorkTaskStatus.Completed, row.Outcome);
         Assert.Equal(ModelFitHistory.Adequate, row.SelfRating);
+        Assert.Equal(TaskOutcomeClass.Success, row.OutcomeClass);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_persists_outcome_rule_and_class")]
+    public async Task PersistsOutcomeRuleAndClass()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = RecordDispatchOutcome(
+            kernel,
+            AgentRole.Developer,
+            "OpenAI",
+            "gpt-5.5",
+            TaskComplexity.Complex,
+            exitCode: 1,
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskNote(goal.Id, task.Id, "CLASSIFIER rule=provider-connectivity; verdict=ProviderConnectivity");
+
+        await repo.SaveAsync(kernel);
+
+        var row = Assert.Single(await repo.ListModelFitHistoryAsync());
+        Assert.Equal("provider-connectivity", row.OutcomeRule);
+        Assert.Equal(TaskOutcomeClass.Environmental, row.OutcomeClass);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_updates_model_fit_history_rows")]
@@ -569,8 +594,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(ModelOutcomeRecommendation.Prefer, best.Recommendation);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_version_column")]
-    public void IdempotentSchemaMigrationAddsVersionColumn()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_version_and_outcome_columns")]
+    public void IdempotentSchemaMigrationAddsVersionAndOutcomeColumns()
     {
         // Simulate a DB created by an old binary (no version column) by creating schema manually.
         var db = TempDb();
@@ -594,6 +619,50 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         checkConn.Open();
         var columns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('goals') ORDER BY cid");
         Assert.Contains("version", columns);
+        var historyColumns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('model_fit_history') ORDER BY cid");
+        Assert.Contains("outcome_rule", historyColumns);
+        Assert.Contains("outcome_class", historyColumns);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
+    public async Task BackfillsOutcomeColumnsFromClassifierTimeline()
+    {
+        var db = TempDb();
+        var kernel = new AgentOrchestratorKernel();
+        var known = RecordDispatchOutcome(
+            kernel,
+            AgentRole.Developer,
+            "OpenAI",
+            "gpt-5.5",
+            TaskComplexity.Complex,
+            exitCode: 1,
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
+        var knownTask = known.Tasks.Single();
+        kernel.RecordTaskNote(known.Id, knownTask.Id, "CLASSIFIER rule=provider-connectivity; verdict=ProviderConnectivity");
+        var unknown = RecordDispatchOutcome(
+            kernel,
+            AgentRole.Developer,
+            "OpenAI",
+            "gpt-5.5",
+            TaskComplexity.Complex,
+            exitCode: 1,
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - old failure");
+
+        SeedOldSchemaState(db, kernel, unknown.Id.Value);
+        var before = ReadOutcomeClassCounts(db, hasOutcomeColumns: false);
+
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var after = ReadOutcomeClassCounts(db, hasOutcomeColumns: true);
+        var rows = await repo.ListModelFitHistoryAsync();
+
+        Assert.Equal("before: missing outcome columns", before);
+        Assert.Equal("environmental=1; unknown-era=1", after);
+        Assert.Contains(rows, row => row.TaskId == knownTask.Id.Value &&
+            row.OutcomeRule == "provider-connectivity" &&
+            row.OutcomeClass == TaskOutcomeClass.Environmental);
+        Assert.Contains(rows, row => row.GoalId == unknown.Id.Value &&
+            row.OutcomeRule is null &&
+            row.OutcomeClass == TaskOutcomeClass.UnknownEra);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadGoalAsync_returns_snapshot_for_existing_goal")]
@@ -1003,6 +1072,89 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         while (reader.Read())
             results.Add(reader.GetString(0));
         return results;
+    }
+
+    private static void SeedOldSchemaState(string db, AgentOrchestratorKernel kernel, string? stripClassifierTimelineForGoalId = null)
+    {
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
+        conn.Open();
+        Exec(conn, "PRAGMA journal_mode=WAL");
+        Exec(conn, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+        Exec(conn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, source_backlog_item_id TEXT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
+        Exec(conn, "CREATE TABLE human_input_requests (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
+        Exec(conn, "CREATE TABLE model_fit_history (goal_id TEXT NOT NULL, task_id TEXT NOT NULL, role TEXT NOT NULL, provider_name TEXT NOT NULL, model_name TEXT NOT NULL, complexity TEXT NULL, task_shape TEXT NULL, outcome TEXT NOT NULL, self_rating TEXT NOT NULL, timestamp TEXT NOT NULL, PRIMARY KEY (goal_id, task_id, timestamp))");
+        Exec(conn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
+
+        var options = new JsonSerializerOptions { WriteIndented = false };
+        options.Converters.Add(new JsonStringEnumConverter());
+        var updatedAt = DateTimeOffset.UtcNow.ToString("O");
+        foreach (var exportedGoal in kernel.ExportSnapshot().Goals)
+        {
+            var goal = string.Equals(exportedGoal.Id, stripClassifierTimelineForGoalId, StringComparison.Ordinal)
+                ? exportedGoal with
+                {
+                    Timeline = exportedGoal.Timeline
+                        .Where(evt => !evt.Message.Contains("CLASSIFIER rule=", StringComparison.OrdinalIgnoreCase))
+                        .ToArray()
+                }
+                : exportedGoal;
+            using var goalCmd = conn.CreateCommand();
+            goalCmd.CommandText = """
+                INSERT INTO goals (id, status, objective, source_backlog_item_id, updated_at, snapshot_json)
+                VALUES ($id, $status, $objective, $source_backlog_item_id, $updated_at, $json)
+                """;
+            goalCmd.Parameters.AddWithValue("$id", goal.Id);
+            goalCmd.Parameters.AddWithValue("$status", goal.Status.ToString());
+            goalCmd.Parameters.AddWithValue("$objective", goal.Objective);
+            goalCmd.Parameters.AddWithValue("$source_backlog_item_id", (object?)goal.SourceBacklogItemId ?? DBNull.Value);
+            goalCmd.Parameters.AddWithValue("$updated_at", updatedAt);
+            goalCmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(goal, options));
+            goalCmd.ExecuteNonQuery();
+        }
+
+        foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
+        {
+            using var rowCmd = conn.CreateCommand();
+            rowCmd.CommandText = """
+                INSERT INTO model_fit_history (goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp)
+                VALUES ($goal_id, $task_id, $role, $provider_name, $model_name, $complexity, $task_shape, $outcome, $self_rating, $timestamp)
+                """;
+            rowCmd.Parameters.AddWithValue("$goal_id", row.GoalId);
+            rowCmd.Parameters.AddWithValue("$task_id", row.TaskId);
+            rowCmd.Parameters.AddWithValue("$role", row.Role.ToString());
+            rowCmd.Parameters.AddWithValue("$provider_name", row.ProviderName);
+            rowCmd.Parameters.AddWithValue("$model_name", row.ModelName);
+            rowCmd.Parameters.AddWithValue("$complexity", row.Complexity?.ToString() ?? (object)DBNull.Value);
+            rowCmd.Parameters.AddWithValue("$task_shape", row.TaskShape ?? (object)DBNull.Value);
+            rowCmd.Parameters.AddWithValue("$outcome", row.Outcome.ToString());
+            rowCmd.Parameters.AddWithValue("$self_rating", row.SelfRating);
+            rowCmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
+            rowCmd.ExecuteNonQuery();
+        }
+
+        static void Exec(SqliteConnection c, string sql)
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static string ReadOutcomeClassCounts(string db, bool hasOutcomeColumns)
+    {
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        conn.Open();
+        if (!hasOutcomeColumns)
+        {
+            var columns = QueryStrings(conn, "SELECT name FROM pragma_table_info('model_fit_history') ORDER BY cid");
+            return columns.Contains("outcome_class", StringComparer.Ordinal)
+                ? "before: unexpected outcome columns"
+                : "before: missing outcome columns";
+        }
+
+        return string.Join("; ", QueryStrings(
+            conn,
+            "SELECT outcome_class || '=' || COUNT(*) FROM model_fit_history GROUP BY outcome_class ORDER BY outcome_class"));
     }
 
     private static Goal RecordDispatchOutcome(

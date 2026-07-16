@@ -166,6 +166,30 @@ public sealed class TaskDurationReportTests
         Xunit.Assert.Equal(2.0, record.AttemptsPerTask);
     }
 
+    [Xunit.Fact(DisplayName = "TaskDurationReport_segments_failed_attempts_by_classifier_rule_class")]
+    public void TaskDurationReportSegmentsFailedAttemptsByClassifierRuleClass()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        AddFailedThenSuccessfulTask(kernel, clock, "succeeded-worker-result-failing-tests");
+        AddFailedThenSuccessfulTask(kernel, clock, "provider-connectivity");
+        AddFailedThenSuccessfulTask(kernel, clock, "retry-round-produced-no-commit-and-no-deferral");
+
+        var record = TaskDurationReport.BuildByRoleAndComplexity(kernel.Goals).Single();
+
+        Xunit.Assert.Equal(6, record.AttemptCount);
+        Xunit.Assert.Equal(3, record.FailedAttemptCount);
+        Xunit.Assert.Equal(1, record.RealFailureAttemptCount);
+        Xunit.Assert.Equal(1, record.EnvironmentalFailureAttemptCount);
+        Xunit.Assert.Equal(1, record.ManufacturedFixedFailureAttemptCount);
+        Xunit.Assert.Equal(0, record.UnknownEraFailureAttemptCount);
+        Xunit.Assert.Equal(0.5, record.FailureRate);
+        Xunit.Assert.Equal(1.0 / 6.0, record.RealFailureRate);
+        Xunit.Assert.Equal(1.0 / 6.0, record.EnvironmentalFailureRate);
+        Xunit.Assert.Equal(1.0 / 6.0, record.ManufacturedFixedFailureRate);
+        Xunit.Assert.Equal(0, record.UnknownEraFailureRate);
+    }
+
     [Xunit.Fact(DisplayName = "TaskDurationReport_daily_trend_rows_are_ordered")]
     public void TaskDurationReportDailyTrendRowsAreOrdered()
     {
@@ -232,6 +256,22 @@ public sealed class TaskDurationReportTests
         var task = goal.Tasks.Single();
         kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
         clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
+    }
+
+    private static void AddFailedThenSuccessfulTask(AgentOrchestratorKernel kernel, FakeClock clock, string rule)
+    {
+        var goal = kernel.CreateGoal($"Implement classified report {rule}", [new TaskSpec(TaskId.New(), "Implement src/App.cs with tests", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 1, clock.UtcNow));
+        kernel.RecordTaskNote(goal.Id, task.Id, $"CLASSIFIER rule={rule}; verdict=UnknownFailure");
+        clock.Advance(TimeSpan.FromMinutes(1));
+        kernel.RetryTask(goal.Id, task.Id, "retry after classified failure");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(10));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
     }
 }

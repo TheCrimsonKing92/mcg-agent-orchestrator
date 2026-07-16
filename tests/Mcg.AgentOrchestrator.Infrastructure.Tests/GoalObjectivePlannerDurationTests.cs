@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 public sealed class GoalObjectivePlannerDurationTests
 {
@@ -24,7 +25,13 @@ public sealed class GoalObjectivePlannerDurationTests
                 MedianLegitimateRuntime: TimeSpan.FromMinutes(10),
                 P90LegitimateRuntime: TimeSpan.FromMinutes(10),
                 MedianFailureInterventionOverhead: TimeSpan.FromMinutes(43),
-                FailureRate: 0.5)
+                FailureRate: 0.5,
+                RealFailureAttemptCount: 1,
+                EnvironmentalFailureAttemptCount: 1,
+                ManufacturedFixedFailureAttemptCount: 0,
+                UnknownEraFailureAttemptCount: 0,
+                RealFailureRate: 0.25,
+                EnvironmentalFailureRate: 0.25)
         };
 
         var plan = GoalObjectivePlanner.Build(
@@ -34,7 +41,12 @@ public sealed class GoalObjectivePlannerDurationTests
 
         Xunit.Assert.NotNull(plan.HistoricalTimeEstimate);
         Xunit.Assert.Contains("~10 min legitimate runtime", plan.HistoricalTimeEstimate);
+        Xunit.Assert.Contains("real/code failure rate 25%", plan.HistoricalTimeEstimate);
+        Xunit.Assert.Contains("environmental/infrastructure rate 25%", plan.HistoricalTimeEstimate);
         Xunit.Assert.Contains("excludes 43 min median failure/intervention overhead", plan.HistoricalTimeEstimate);
+        Xunit.Assert.NotNull(plan.HistoricalOutcomeRates);
+        Xunit.Assert.Equal(0.25, plan.HistoricalOutcomeRates!.RealFailureRate);
+        Xunit.Assert.Equal(0.25, plan.HistoricalOutcomeRates.EnvironmentalFailureRate);
         Xunit.Assert.Contains("Historical estimate:", plan.Recommendation);
     }
 
@@ -91,6 +103,8 @@ public sealed class GoalObjectivePlannerDurationTests
         Xunit.Assert.Contains("legit median=11m", output);
         Xunit.Assert.Contains("overhead median=20m", output);
         Xunit.Assert.Contains("failureRate=", output);
+        Xunit.Assert.Contains("realFailureRate=", output);
+        Xunit.Assert.Contains("environmentalRate=", output);
         Xunit.Assert.Contains("Daily trend:", output);
 
         var windowedOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
@@ -143,6 +157,42 @@ public sealed class GoalObjectivePlannerDurationTests
         Xunit.Assert.All(currentGoal!.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
     }
 
+    [Xunit.Fact(DisplayName = "Goal_plan_json_contains_segmented_historical_failure_rates")]
+    public void GoalPlanJsonContainsSegmentedHistoricalFailureRates()
+    {
+        var root = InfrastructureTestSupport.CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var clock = new TestClock(new DateTimeOffset(2026, 06, 19, 12, 00, 00, TimeSpan.Zero));
+        var kernel = new AgentOrchestratorKernel(clock);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        AddClassifiedHistorySample(kernel, clock, "succeeded-worker-result-failing-tests");
+        AddClassifiedHistorySample(kernel, clock, "provider-connectivity");
+        AddSuccessfulHistorySample(kernel, clock);
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Design and implement production architecture across src/Mcg.AgentOrchestrator.App/Reports.cs tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ReportsTests.cs with integration tests"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var jsonLine = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.TrimStart().StartsWith("{", StringComparison.Ordinal));
+        using var document = JsonDocument.Parse(jsonLine);
+        var rates = document.RootElement.GetProperty("historicalOutcomeRates");
+        Xunit.Assert.Equal(0.2, rates.GetProperty("realFailureRate").GetDouble(), precision: 6);
+        Xunit.Assert.Equal(0.2, rates.GetProperty("environmentalFailureRate").GetDouble(), precision: 6);
+        Xunit.Assert.Equal(0.4, rates.GetProperty("aggregateFailureRate").GetDouble(), precision: 6);
+        Xunit.Assert.Contains("real/code failure rate 20%", output);
+        Xunit.Assert.Contains("environmental/infrastructure rate 20%", output);
+    }
+
     private static TaskDispatchRecord Dispatch(DateTimeOffset at) =>
         new(
             "codex-cli",
@@ -161,6 +211,32 @@ public sealed class GoalObjectivePlannerDurationTests
             exitCode == 0 ? "ok" : "failed",
             exitCode == 0 ? string.Empty : "error",
             at);
+
+    private static void AddClassifiedHistorySample(AgentOrchestratorKernel kernel, TestClock clock, string rule)
+    {
+        var goal = kernel.CreateGoal($"Implement historical classified report {rule}", [new TaskSpec(TaskId.New(), "Implement src/History.cs with tests and integration coverage", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 1, clock.UtcNow));
+        kernel.RecordTaskNote(goal.Id, task.Id, $"CLASSIFIER rule={rule}; verdict=UnknownFailure");
+        clock.Advance(TimeSpan.FromMinutes(1));
+        kernel.RetryTask(goal.Id, task.Id, "retry after classified failure");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(10));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
+    }
+
+    private static void AddSuccessfulHistorySample(AgentOrchestratorKernel kernel, TestClock clock)
+    {
+        var goal = kernel.CreateGoal("Implement historical successful report", [new TaskSpec(TaskId.New(), "Implement src/History.cs with tests and integration coverage", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(10));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(exitCode: 0, clock.UtcNow));
+    }
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {

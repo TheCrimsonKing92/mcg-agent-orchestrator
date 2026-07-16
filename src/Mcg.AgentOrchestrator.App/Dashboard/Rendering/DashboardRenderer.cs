@@ -246,7 +246,7 @@ public static partial class DashboardRenderer
             return;
         }
 
-        html.AppendLine("<table><thead><tr><th>Scope</th><th>Tasks</th><th>Attempts</th><th>Legit median</th><th>P90</th><th>Overhead median</th><th>Failure rate</th></tr></thead><tbody>");
+        html.AppendLine("<table><thead><tr><th>Scope</th><th>Tasks</th><th>Attempts</th><th>Legit median</th><th>P90</th><th>Overhead median</th><th>Failure rate</th><th>Real</th><th>Environmental</th><th>Manufactured</th><th>Unknown era</th></tr></thead><tbody>");
         foreach (var record in records)
         {
             html.AppendLine("<tr>");
@@ -257,6 +257,10 @@ public static partial class DashboardRenderer
             html.AppendLine($"<td>{Encode(record.P90LegitimateRuntime)}</td>");
             html.AppendLine($"<td>{Encode(record.MedianFailureInterventionOverhead)}</td>");
             html.AppendLine($"<td>{record.FailureRate:P0}</td>");
+            html.AppendLine($"<td>{record.RealFailureRate:P0}</td>");
+            html.AppendLine($"<td>{record.EnvironmentalFailureRate:P0}</td>");
+            html.AppendLine($"<td>{record.ManufacturedFixedFailureRate:P0}</td>");
+            html.AppendLine($"<td>{record.UnknownEraFailureRate:P0}</td>");
             html.AppendLine("</tr>");
         }
 

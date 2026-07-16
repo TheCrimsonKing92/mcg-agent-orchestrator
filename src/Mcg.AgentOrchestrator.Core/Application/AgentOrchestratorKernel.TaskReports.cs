@@ -214,8 +214,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public IReadOnlyList<ModelOutcomeRecord> BuildModelOutcomeScorecard(int windowSize = ModelOutcomeScorecard.DefaultWindowSize)
     {
-        var allTasks = Goals.SelectMany(goal => goal.Tasks);
-        return ModelOutcomeScorecard.Build(allTasks, windowSize);
+        return ModelOutcomeScorecard.Build(ModelFitHistory.FromGoals(Goals), windowSize);
     }
 
     public IReadOnlyList<TaskDurationStatsRecord> BuildTaskDurationStats(bool includeModel = false, DateTimeOffset? since = null)

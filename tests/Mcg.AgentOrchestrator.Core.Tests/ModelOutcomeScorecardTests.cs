@@ -79,6 +79,30 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Equal(r1.Reason, r2.Reason);
     }
 
+    [Xunit.Fact(DisplayName = "ModelOutcomeScorecard_segments_real_and_environmental_failures")]
+    public void ModelOutcomeScorecardSegmentsRealAndEnvironmentalFailures()
+    {
+        var rows = new[]
+        {
+            Row(0, WorkTaskStatus.Failed, "succeeded-worker-result-failing-tests"),
+            Row(1, WorkTaskStatus.Failed, "provider-connectivity"),
+            Row(2, WorkTaskStatus.Failed, "retry-round-produced-no-commit-and-no-deferral"),
+            Row(3, WorkTaskStatus.Completed, "committed-worker-result-evidence")
+        };
+
+        var record = ModelOutcomeScorecard.Build(rows, windowSize: 4).Single();
+
+        Assert.Equal(1, record.Completed);
+        Assert.Equal(3, record.Failed);
+        Assert.Equal(1, record.RealFailures);
+        Assert.Equal(1, record.EnvironmentalFailures);
+        Assert.Equal(1, record.ManufacturedFixedFailures);
+        Assert.Equal(0, record.UnknownEraFailures);
+        Assert.Equal(ModelOutcomeRecommendation.Neutral, record.Recommendation);
+        Assert.Contains("1/4 real/code failure", record.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 environmental", record.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void Dispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -97,6 +121,24 @@ public sealed class ModelOutcomeScorecardTests
                 exitCode,
                 exitCode == 0 ? "ok" : "failed",
                 exitCode == 0 ? string.Empty : "error",
-                at));
+            at));
+    }
+
+    private static ModelFitHistoryRow Row(int seconds, WorkTaskStatus outcome, string rule)
+    {
+        var classification = TaskOutcomeClassifier.Classify(outcome, rule);
+        return new ModelFitHistoryRow(
+            "goal",
+            $"task-{seconds}",
+            AgentRole.Developer,
+            "OpenAI",
+            "gpt-5.5",
+            TaskComplexity.Complex,
+            "implementation",
+            outcome,
+            ModelFitHistory.Adequate,
+            new DateTimeOffset(2026, 1, 1, 0, 0, seconds, TimeSpan.Zero),
+            classification.Rule,
+            classification.Class);
     }
 }

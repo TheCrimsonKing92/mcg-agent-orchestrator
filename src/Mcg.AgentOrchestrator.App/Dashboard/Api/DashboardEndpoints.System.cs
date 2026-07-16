@@ -71,7 +71,15 @@ internal static partial class DashboardEndpoints
             record.HasPublishedStats ? FormatDuration(record.MedianLegitimateRuntime) : insufficient,
             record.HasPublishedStats ? FormatDuration(record.P90LegitimateRuntime) : insufficient,
             record.HasPublishedStats ? FormatDuration(record.MedianFailureInterventionOverhead) : insufficient,
-            record.FailureRate);
+            record.FailureRate,
+            record.RealFailureAttemptCount,
+            record.EnvironmentalFailureAttemptCount,
+            record.ManufacturedFixedFailureAttemptCount,
+            record.UnknownEraFailureAttemptCount,
+            record.RealFailureRate,
+            record.EnvironmentalFailureRate,
+            record.ManufacturedFixedFailureRate,
+            record.UnknownEraFailureRate);
     }
 
     private static string FormatDuration(TimeSpan? duration)
