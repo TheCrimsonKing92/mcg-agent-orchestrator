@@ -79,6 +79,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly Dictionary<string, Task> RunningTasks = new(StringComparer.Ordinal);
     private static readonly object RunningTasksGate = new();
+    private static readonly object MetadataWriteGate = new();
 
     private readonly string _rootDirectory;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -116,6 +117,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
                 CompletedAt = _utcNow(),
+                ReconciledAt = _utcNow(),
                 Detail = "candidate branch/main SHA moved before reconciliation"
             });
             current = null;
@@ -282,6 +284,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
             {
+                if (ex is IOException or UnauthorizedAccessException)
+                {
+                    return _isProcessAlive(attempt.OwnerProcessId) ? null : MarkCorrupt(attempt, ex.Message);
+                }
+
                 return MarkCorrupt(attempt, ex.Message);
             }
         }
@@ -401,9 +408,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.MetadataPath) ?? _rootDirectory);
         var current = attempt with { LastHeartbeatAt = _utcNow() };
-        var tmp = attempt.MetadataPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(current, JsonOptions));
-        File.Move(tmp, attempt.MetadataPath, overwrite: true);
+        var tmp = TemporarySiblingPath(attempt.MetadataPath);
+        lock (MetadataWriteGate)
+        {
+            File.WriteAllText(tmp, JsonSerializer.Serialize(current, JsonOptions));
+            File.Move(tmp, attempt.MetadataPath, overwrite: true);
+        }
     }
 
     private void WriteHeartbeat(ConductorParallelAcceptanceAttempt attempt, string state)
@@ -426,7 +436,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         try
         {
-            var tmp = attempt.HeartbeatPath + ".tmp";
+            var tmp = TemporarySiblingPath(attempt.HeartbeatPath);
             File.WriteAllText(tmp, JsonSerializer.Serialize(payload, JsonOptions));
             File.Move(tmp, attempt.HeartbeatPath, overwrite: true);
         }
@@ -578,10 +588,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static void WriteResult(string path, ConductorParallelAcceptanceRunArtifact artifact)
     {
-        var tmp = path + ".tmp";
+        var tmp = TemporarySiblingPath(path);
         File.WriteAllText(tmp, JsonSerializer.Serialize(artifact, JsonOptions));
         File.Move(tmp, path, overwrite: true);
     }
+
+    private static string TemporarySiblingPath(string path) =>
+        $"{path}.{Guid.NewGuid():N}.tmp";
 
     private static bool IsProcessAlive(int processId)
     {

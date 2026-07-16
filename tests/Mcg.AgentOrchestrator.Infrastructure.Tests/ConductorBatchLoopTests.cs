@@ -55,7 +55,8 @@ public sealed class ConductorBatchLoopTests
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
-        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null) =>
+        Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -82,7 +83,8 @@ public sealed class ConductorBatchLoopTests
             classifyRisk ?? (_ => null),
             recordMissingBranchRetirement: recordMissingBranchRetirement,
             getLandingFileScopes: getLandingFileScopes,
-            runAcceptanceVerificationWithSlot: runAcceptanceWithSlot);
+            runAcceptanceVerificationWithSlot: runAcceptanceWithSlot,
+            parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -103,73 +105,107 @@ public sealed class ConductorBatchLoopTests
         var goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
         using var release = new ManualResetEventSlim(false);
         using var bothStarted = new CountdownEvent(2);
+        using var bothFinished = new CountdownEvent(2);
         var running = 0;
         var maxRunning = 0;
         var slots = new ConcurrentDictionary<string, int?>();
         var rebaseCounts = new ConcurrentDictionary<string, int>();
         var landOrder = new List<string>();
+        var landed = new HashSet<string>(StringComparer.Ordinal);
         object gate = new();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
 
-        var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            rebaseOntoMain: goal =>
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: goal => landed.Contains(goal.Id.Value)
+                    ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+                rebaseOntoMain: goal =>
+                {
+                    rebaseCounts.AddOrUpdate(goal.Id.Value, 1, (_, count) => count + 1);
+                    return DefaultRebaseSuccess();
+                },
+                runAcceptanceWithSlot: (goal, slot) =>
+                {
+                    slots[goal.Id.Value] = slot;
+                    lock (gate)
+                    {
+                        running++;
+                        maxRunning = Math.Max(maxRunning, running);
+                    }
+
+                    bothStarted.Signal();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                    lock (gate)
+                    {
+                        running--;
+                    }
+
+                    bothFinished.Signal();
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                land: goal =>
+                {
+                    lock (landOrder)
+                    {
+                        landOrder.Add(goal.Id.Value);
+                        landed.Add(goal.Id.Value);
+                    }
+
+                    return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
+                },
+                getLandingFileScopes: goal => goal.Id == goalA.Id
+                    ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
+                    : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
+                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot));
+
+            BatchTickSummary? startTick = null;
+            var startClock = Stopwatch.StartNew();
+            var startSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: t => startTick = t);
+            startClock.Stop();
+
+            Assert.True(startClock.Elapsed < TimeSpan.FromSeconds(1), $"background acceptance start tick took {startClock.Elapsed}.");
+            Assert.Equal(0, startSummary.Advanced);
+            Assert.Equal(2, startSummary.Held);
+            Assert.True(bothStarted.Wait(TimeSpan.FromSeconds(5)));
+            release.Set();
+            Assert.True(bothFinished.Wait(TimeSpan.FromSeconds(5)));
+
+            BatchTickSummary? reconcileTick = null;
+            var totalAdvanced = 0;
+            for (var tick = 0; tick < 4 && totalAdvanced < 2; tick++)
             {
-                rebaseCounts.AddOrUpdate(goal.Id.Value, 1, (_, count) => count + 1);
-                return DefaultRebaseSuccess();
-            },
-            runAcceptanceWithSlot: (goal, slot) =>
-            {
-                slots[goal.Id.Value] = slot;
-                lock (gate)
-                {
-                    running++;
-                    maxRunning = Math.Max(maxRunning, running);
-                }
+                var reconcileSummary = new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    onTick: t => reconcileTick = t);
+                totalAdvanced += reconcileSummary.Advanced;
+                Thread.Sleep(50);
+            }
 
-                bothStarted.Signal();
-                if (bothStarted.CurrentCount == 0)
-                {
-                    release.Set();
-                }
-
-                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
-                lock (gate)
-                {
-                    running--;
-                }
-
-                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-            },
-            land: goal =>
-            {
-                lock (landOrder)
-                {
-                    landOrder.Add(goal.Id.Value);
-                }
-
-                return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
-            },
-            getLandingFileScopes: goal => goal.Id == goalA.Id
-                ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
-                : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"]);
-
-        BatchTickSummary? tick = null;
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 1,
-            onTick: t => tick = t);
-
-        Assert.Equal(2, summary.Advanced);
-        Assert.Equal(2, maxRunning);
-        Assert.Equal(2, slots.Values.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
-        Assert.Equal(2, rebaseCounts[goalA.Id.Value]);
-        Assert.Equal(2, rebaseCounts[goalB.Id.Value]);
-        Assert.Equal([goalA.Id.Value, goalB.Id.Value], landOrder);
-        Assert.Contains(tick!.ProgressLines!, line => line.Contains("ACCEPTANCE", StringComparison.Ordinal) && line.Contains("slot=slot-0", StringComparison.Ordinal));
-        Assert.Contains(tick.ProgressLines!, line => line.Contains("GOAL", StringComparison.Ordinal) && line.Contains("slot=slot-1", StringComparison.Ordinal));
+            Assert.Equal(2, totalAdvanced);
+            Assert.Equal(2, maxRunning);
+            Assert.Equal(2, slots.Values.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+            Assert.Equal(2, rebaseCounts[goalA.Id.Value]);
+            Assert.Equal(2, rebaseCounts[goalB.Id.Value]);
+            Assert.Equal([goalA.Id.Value, goalB.Id.Value], landOrder);
+            Assert.Contains(startTick!.ProgressLines!, line => line.Contains("ACCEPTANCE", StringComparison.Ordinal) && line.Contains("result=started", StringComparison.Ordinal));
+            Assert.Contains(reconcileTick!.ProgressLines!, line => line.Contains("ACCEPTANCE", StringComparison.Ordinal) && line.Contains("result=passed", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_serializes_overlapping_gate_ready_acceptance")]
@@ -181,35 +217,59 @@ public sealed class ConductorBatchLoopTests
         var running = 0;
         var overlapped = false;
         var slots = new ConcurrentQueue<int?>();
+        var landed = new HashSet<string>(StringComparer.Ordinal);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
 
-        var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            runAcceptanceWithSlot: (_, slot) =>
-            {
-                slots.Enqueue(slot);
-                if (Interlocked.Increment(ref running) > 1)
-                {
-                    overlapped = true;
-                }
-
-                Thread.Sleep(25);
-                Interlocked.Decrement(ref running);
-                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-            },
-            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"]);
-
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 1);
-
-        Assert.Equal(2, summary.Advanced);
-        Assert.False(overlapped);
-        foreach (var slot in slots)
+        try
         {
-            Assert.Null(slot);
+            var driver = MakeDriver(
+                getFacts: goal => landed.Contains(goal.Id.Value)
+                    ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, slot) =>
+                {
+                    slots.Enqueue(slot);
+                    if (Interlocked.Increment(ref running) > 1)
+                    {
+                        overlapped = true;
+                    }
+
+                    Thread.Sleep(25);
+                    Interlocked.Decrement(ref running);
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                land: goal =>
+                {
+                    landed.Add(goal.Id.Value);
+                    return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
+                },
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"],
+                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot));
+
+            var totalAdvanced = 0;
+            var totalHeld = 0;
+            for (var tick = 0; tick < 4 && totalAdvanced < 2; tick++)
+            {
+                var summary = new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
+                totalAdvanced += summary.Advanced;
+                totalHeld += summary.Held;
+                Thread.Sleep(50);
+            }
+
+            Assert.Equal(2, totalAdvanced);
+            Assert.True(totalHeld >= 2);
+            Assert.False(overlapped);
+            Assert.Equal(2, slots.Count);
+            Assert.All(slots, slot => Assert.True(slot.HasValue));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
         }
     }
 
@@ -323,57 +383,91 @@ public sealed class ConductorBatchLoopTests
         var maxRunning = 0;
         var slots = new ConcurrentQueue<int?>();
         object gate = new();
+        var landed = new HashSet<string>(StringComparer.Ordinal);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
 
-        var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            runAcceptanceWithSlot: (_, slot) =>
-            {
-                slots.Enqueue(slot);
-                lock (gate)
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: goal => landed.Contains(goal.Id.Value)
+                    ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, slot) =>
                 {
-                    running++;
-                    maxRunning = Math.Max(maxRunning, running);
-                }
-
-                if (slot.HasValue)
-                {
-                    firstWaveStarted.Signal();
-                    if (firstWaveStarted.CurrentCount == 0)
+                    slots.Enqueue(slot);
+                    lock (gate)
                     {
-                        release.Set();
+                        running++;
+                        maxRunning = Math.Max(maxRunning, running);
                     }
 
-                    Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
-                }
+                    if (slot.HasValue && !release.IsSet)
+                    {
+                        firstWaveStarted.Signal();
+                        Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                    }
 
-                lock (gate)
+                    lock (gate)
+                    {
+                        running--;
+                    }
+
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: goal =>
                 {
-                    running--;
-                }
+                    var index = Array.FindIndex(goals, candidate => candidate.Id == goal.Id);
+                    return [$"src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"];
+                },
+                land: goal =>
+                {
+                    landed.Add(goal.Id.Value);
+                    return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
+                },
+                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot));
 
-                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
-            },
-            getLandingFileScopes: goal =>
+            BatchTickSummary? firstTick = null;
+            var firstSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: t => firstTick = t);
+
+            Assert.Equal(0, firstSummary.Advanced);
+            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, firstSummary.Held);
+            Assert.True(firstWaveStarted.Wait(TimeSpan.FromSeconds(5)));
+            release.Set();
+            Thread.Sleep(100);
+
+            var totalAdvanced = 0;
+            for (var tick = 0; tick < 8 && totalAdvanced < DotnetBuildEnvironmentManager.StableSlotCount + 1; tick++)
             {
-                var index = Array.FindIndex(goals, candidate => candidate.Id == goal.Id);
-                return [$"src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"];
-            });
+                var summary = new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
+                totalAdvanced += summary.Advanced;
+                Thread.Sleep(50);
+            }
 
-        BatchTickSummary? tick = null;
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 1,
-            onTick: t => tick = t);
-
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, summary.Advanced);
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, maxRunning);
-        Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
-        Assert.Single(slots.Where(slot => !slot.HasValue));
-        Assert.DoesNotContain(tick!.ProgressLines!, line =>
-            line.Contains("reason=reserved-gate-slot", StringComparison.Ordinal));
+            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, totalAdvanced);
+            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, maxRunning);
+            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+            Assert.DoesNotContain(slots, slot => !slot.HasValue);
+            Assert.Contains(firstTick!.ProgressLines!, line =>
+                line.Contains("ADMISSION", StringComparison.Ordinal) &&
+                line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal));
+            Assert.DoesNotContain(firstTick.ProgressLines!, line =>
+                line.Contains("reason=reserved-gate-slot", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_slots_busy_gate_retries_and_lands_on_later_tick")]
