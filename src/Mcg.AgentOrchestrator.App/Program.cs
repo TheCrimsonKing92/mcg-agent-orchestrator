@@ -11,6 +11,11 @@ if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
     return DispatchProcessHost.Run(args[1]);
 }
 
+if (args.Length >= 2 && args[0] == ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName)
+{
+    return ConductorParallelAcceptanceAttemptCoordinator.RunOwnedProcess(args[1]);
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;

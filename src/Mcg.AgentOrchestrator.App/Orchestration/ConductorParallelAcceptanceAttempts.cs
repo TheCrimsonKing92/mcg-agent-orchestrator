@@ -46,6 +46,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     string HeartbeatPath,
     string ResultPath,
     string MetadataPath,
+    string? ExecutionDirectory = null,
+    string? PolicyName = null,
+    IReadOnlyList<string>? ScopePaths = null,
     DateTimeOffset? CompletedAt = null,
     DateTimeOffset? ReconciledAt = null,
     string? Detail = null)
@@ -74,27 +77,39 @@ internal sealed record ConductorParallelAcceptanceAttemptDecision(
         new(ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun, attempt);
 }
 
+internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
+    ConductorParallelAcceptanceAttempt Attempt,
+    Action<int> ExecuteInCurrentProcess);
+
+internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
+
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
+    internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private static readonly Dictionary<string, Task> RunningTasks = new(StringComparer.Ordinal);
-    private static readonly object RunningTasksGate = new();
     private static readonly object MetadataWriteGate = new();
 
     private readonly string _rootDirectory;
+    private readonly string? _executionDirectory;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, bool> _isProcessAlive;
+    private readonly Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult> _launchOwnedProcess;
     private readonly bool _runInline;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
+        string? executionDirectory = null,
         Func<DateTimeOffset>? utcNow = null,
         Func<int, bool>? isProcessAlive = null,
+        Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult>? launchOwnedProcess = null,
         bool runInline = false)
     {
         _rootDirectory = rootDirectory;
+        _executionDirectory = executionDirectory;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
+        _launchOwnedProcess = launchOwnedProcess ?? LaunchExternalOwnedProcess;
         _runInline = runInline;
     }
 
@@ -104,7 +119,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
-        if (current is { Outcome: ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts })
+        if (current is not null && IsTerminalWithoutRunOutcome(current.Outcome))
         {
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
         }
@@ -144,11 +159,21 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     internal void MarkReconciled(ConductorParallelAcceptanceAttempt attempt)
     {
-        Persist(attempt with
+        lock (MetadataWriteGate)
         {
-            Outcome = ConductorParallelAcceptanceAttemptOutcome.Reconciled,
-            ReconciledAt = _utcNow()
-        });
+            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            if (current.ReconciledAt.HasValue)
+            {
+                return;
+            }
+
+            WriteAttemptFile(current with
+            {
+                Outcome = ConductorParallelAcceptanceAttemptOutcome.Reconciled,
+                ReconciledAt = _utcNow(),
+                LastHeartbeatAt = _utcNow()
+            });
+        }
     }
 
     private ConductorParallelAcceptanceAttemptDecision Launch(
@@ -156,7 +181,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorAutonomyPolicy policy,
         Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
     {
-        var attempt = CreateAttempt(candidate);
+        var attempt = CreateAttempt(candidate, policy);
         try
         {
             Persist(attempt);
@@ -171,13 +196,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     ?? ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(completed);
             }
 
-            var task = Task.Run(() => RunAttempt(attempt, candidate, policy, runAcceptance));
-            lock (RunningTasksGate)
-            {
-                RunningTasks[attempt.AttemptId] = task;
-            }
-
-            return ConductorParallelAcceptanceAttemptDecision.Started(attempt);
+            var launch = _launchOwnedProcess(new ConductorParallelAcceptanceOwnedProcessLaunch(
+                attempt,
+                childPid => RunAttempt(attempt with { OwnerProcessId = childPid }, candidate, policy, runAcceptance)));
+            var launched = attempt with { OwnerProcessId = launch.ProcessId };
+            Persist(launched);
+            WriteHeartbeat(launched, "running");
+            return ConductorParallelAcceptanceAttemptDecision.Started(launched);
         }
         catch (Exception ex)
         {
@@ -194,6 +219,89 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
+    internal void RunAttemptForTests(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+    {
+        RunAttempt(attempt, candidate, policy, runAcceptance);
+    }
+
+    internal static int RunOwnedProcess(string metadataPath)
+    {
+        ConductorParallelAcceptanceAttempt? attempt = null;
+        try
+        {
+            attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(metadataPath),
+                JsonOptions);
+            if (attempt is null)
+            {
+                throw new InvalidOperationException("acceptance attempt metadata was empty");
+            }
+
+            RedirectConsole(attempt);
+            var executionDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
+                ? attempt.ExecutionDirectory!
+                : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
+            var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory, executionDirectory);
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+            var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
+                ?? throw new InvalidOperationException($"goal {attempt.GoalPrefix} was not found for acceptance attempt");
+            var providers = ProviderRegistryFactory.CreateDefaultProviders();
+            var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
+            var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
+            var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                new GoalAcceptanceVerifier(),
+                agents,
+                profiles,
+                NullOperatorChannel.Instance,
+                providers);
+            var policy = ConductorAutonomyPolicy.All.FirstOrDefault(candidatePolicy =>
+                    string.Equals(candidatePolicy.Name, attempt.PolicyName, StringComparison.OrdinalIgnoreCase))
+                ?? ConductorAutonomyPolicy.Default;
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                attempt.SlotIndex,
+                attempt.ScopePaths ?? [],
+                attempt.BranchHeadSha,
+                attempt.MainHeadSha);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory,
+                executionDirectory);
+            coordinator.Persist(attempt with { OwnerProcessId = Environment.ProcessId });
+            coordinator.RunAttempt(
+                attempt with { OwnerProcessId = Environment.ProcessId },
+                candidate,
+                policy,
+                driver.RunParallelLandingAcceptance);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            if (attempt is not null)
+            {
+                TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
+                TryWriteExit(attempt.ExitCodePath, 1);
+                var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? Environment.CurrentDirectory,
+                    attempt.ExecutionDirectory);
+                coordinator.CompleteWithoutResult(attempt with { OwnerProcessId = Environment.ProcessId }, ConductorParallelAcceptanceAttemptOutcome.Failed, ex.Message);
+            }
+            else
+            {
+                Console.Error.WriteLine(ex);
+            }
+
+            return 1;
+        }
+    }
+
     private void RunAttempt(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
@@ -207,7 +315,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             WriteResult(attempt.ResultPath, ToArtifact(run));
             var outcome = OutcomeFor(run);
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
-            Persist(attempt with
+            TryPersistTerminal(attempt, current => current with
             {
                 Outcome = outcome,
                 CompletedAt = _utcNow(),
@@ -227,7 +335,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             WriteResult(attempt.ResultPath, ToArtifact(run));
             var outcome = OutcomeFor(run);
             TryWriteExit(attempt.ExitCodePath, 1);
-            Persist(attempt with
+            TryPersistTerminal(attempt, current => current with
             {
                 Outcome = outcome,
                 CompletedAt = _utcNow(),
@@ -237,13 +345,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
         }
-        finally
-        {
-            lock (RunningTasksGate)
-            {
-                RunningTasks.Remove(attempt.AttemptId);
-            }
-        }
     }
 
     private void CompleteWithoutResult(
@@ -251,14 +352,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttemptOutcome outcome,
         string detail)
     {
-        TryWriteExit(attempt.ExitCodePath, 1);
-        Persist(attempt with
+        TryPersistTerminal(attempt, current => current with
         {
             Outcome = outcome,
             CompletedAt = _utcNow(),
             LastHeartbeatAt = _utcNow(),
             Detail = detail
         });
+        TryWriteExit(attempt.ExitCodePath, 1);
         TryAppend(attempt.StderrPath, $"{outcome}: {detail}{Environment.NewLine}");
         WriteHeartbeat(attempt, "exiting");
     }
@@ -295,11 +396,23 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (File.Exists(attempt.ExitCodePath))
         {
+            var latest = TryReadAttemptFile(attempt.MetadataPath);
+            if (latest is not null && IsTerminalWithoutRunOutcome(latest.Outcome))
+            {
+                return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(latest);
+            }
+
             return MarkCorrupt(attempt, "exit artifact exists without a result artifact");
         }
 
         if (!_isProcessAlive(attempt.OwnerProcessId))
         {
+            var latest = TryReadAttemptFile(attempt.MetadataPath);
+            if (latest is not null && IsTerminalWithoutRunOutcome(latest.Outcome))
+            {
+                return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(latest);
+            }
+
             var dead = attempt with
             {
                 Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
@@ -327,7 +440,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(corrupt);
     }
 
-    private ConductorParallelAcceptanceAttempt CreateAttempt(ConductorParallelAcceptanceCandidate candidate)
+    private ConductorParallelAcceptanceAttempt CreateAttempt(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy)
     {
         var startedAt = _utcNow();
         var rawId = $"{candidate.GoalPrefix}-{candidate.SlotIndex}-{startedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
@@ -351,7 +466,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             prefix + ".exit.txt",
             prefix + ".heartbeat.json",
             prefix + ".result.json",
-            prefix + ".attempt.json");
+            prefix + ".attempt.json",
+            _executionDirectory,
+            policy.Name,
+            candidate.ScopePaths);
     }
 
     private ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId)
@@ -407,12 +525,29 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private void Persist(ConductorParallelAcceptanceAttempt attempt)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.MetadataPath) ?? _rootDirectory);
-        var current = attempt with { LastHeartbeatAt = _utcNow() };
-        var tmp = TemporarySiblingPath(attempt.MetadataPath);
         lock (MetadataWriteGate)
         {
-            File.WriteAllText(tmp, JsonSerializer.Serialize(current, JsonOptions));
-            File.Move(tmp, attempt.MetadataPath, overwrite: true);
+            WriteAttemptFile(attempt with { LastHeartbeatAt = _utcNow() });
+        }
+    }
+
+    private bool TryPersistTerminal(
+        ConductorParallelAcceptanceAttempt attempt,
+        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceAttempt> transition)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null ||
+                !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
+                current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                TryAppend(attempt.StderrPath, $"terminal outcome ignored because durable attempt is no longer running{Environment.NewLine}");
+                return false;
+            }
+
+            WriteAttemptFile(transition(current));
+            return true;
         }
     }
 
@@ -422,8 +557,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var payload = new
         {
             pid = Environment.ProcessId,
-            childPid = (int?)null,
-            ownedPids = Array.Empty<int>(),
+            childPid = attempt.OwnerProcessId > 0 ? attempt.OwnerProcessId : (int?)null,
+            ownedPids = attempt.OwnerProcessId > 0 ? new[] { attempt.OwnerProcessId } : Array.Empty<int>(),
             startedAt = attempt.StartedAt.ToString("O"),
             lastObservedAt = now.ToString("O"),
             lastProgressAt = now.ToString("O"),
@@ -444,6 +579,49 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             // Heartbeat is evidence, not the gate result.
         }
+    }
+
+    private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
+        ConductorParallelAcceptanceOwnedProcessLaunch launch)
+    {
+        if (string.IsNullOrWhiteSpace(launch.Attempt.ExecutionDirectory))
+        {
+            throw new InvalidOperationException("acceptance attempt execution directory was not recorded");
+        }
+
+        var commandLineArgs = Environment.GetCommandLineArgs();
+        var executable = Environment.ProcessPath ?? "dotnet";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = launch.Attempt.ExecutionDirectory
+        };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            commandLineArgs.Length > 0)
+        {
+            startInfo.ArgumentList.Add(commandLineArgs[0]);
+        }
+
+        startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
+        startInfo.ArgumentList.Add(launch.Attempt.MetadataPath);
+        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = launch.Attempt.ExecutionDirectory;
+
+        var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+        var processId = process.Id;
+        process.Dispose();
+        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId);
+    }
+
+    private static void RedirectConsole(ConductorParallelAcceptanceAttempt attempt)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(attempt.StdoutPath) ?? ".");
+        var stdout = new StreamWriter(new FileStream(attempt.StdoutPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
+        var stderr = new StreamWriter(new FileStream(attempt.StderrPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
     }
 
     private static ConductorParallelAcceptanceRunArtifact ToArtifact(ConductorParallelAcceptanceRunResult run)
@@ -571,6 +749,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             : ConductorParallelAcceptanceAttemptOutcome.Failed;
     }
 
+    private static bool IsTerminalWithoutRunOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
+        outcome is ConductorParallelAcceptanceAttemptOutcome.StaleCandidate
+            or ConductorParallelAcceptanceAttemptOutcome.ProcessDied
+            or ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
+            or ConductorParallelAcceptanceAttemptOutcome.Cancelled
+            or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
+
     private static string AcceptanceRunDetail(ConductorParallelAcceptanceRunResult run)
     {
         if (run.Exception is not null)
@@ -595,6 +780,27 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static string TemporarySiblingPath(string path) =>
         $"{path}.{Guid.NewGuid():N}.tmp";
+
+    private static ConductorParallelAcceptanceAttempt? TryReadAttemptFile(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                ? JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(path), JsonOptions)
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteAttemptFile(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var tmp = TemporarySiblingPath(attempt.MetadataPath);
+        File.WriteAllText(tmp, JsonSerializer.Serialize(attempt, JsonOptions));
+        File.Move(tmp, attempt.MetadataPath, overwrite: true);
+    }
 
     private static bool IsProcessAlive(int processId)
     {
