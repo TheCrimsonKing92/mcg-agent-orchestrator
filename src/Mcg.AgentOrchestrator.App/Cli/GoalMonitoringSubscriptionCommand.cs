@@ -521,7 +521,7 @@ internal static class GoalMonitoringSubscriptionCommand
             snapshotWritten = true;
 
             var reachedTerminalState = options.WaitTerminal && IsTerminalForWait(state);
-            if ((options.Once && eligibleEvents.Count > 0) || reachedTerminalState)
+            if (options.Once || reachedTerminalState)
             {
                 var fallbackWritten = PrintCurrentSnapshotWhenNoEligibleEvent(
                     eligibleEvents.Count,
