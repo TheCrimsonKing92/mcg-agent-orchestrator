@@ -392,6 +392,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
     Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
     Assert.Equal("high", task.LastDispatch.ReasoningEffort);
+    Assert.Equal("base", task.LastDispatch.ReasoningEffortReason);
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
     Assert.True(task.LastDispatch.PromptCharacterCount > 0);
     Xunit.Assert.Null(risk);

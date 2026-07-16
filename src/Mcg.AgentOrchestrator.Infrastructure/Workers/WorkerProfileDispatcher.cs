@@ -1019,6 +1019,11 @@ public static class WorkerProfileDispatcher
         TaskSpec task,
         SubscriptionModelSelection selection)
     {
+        if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
+        {
+            return new EffectiveReasoningEffortSelection(HighRiskReviewerReasoningEffort, "intake-risk");
+        }
+
         if (!selection.UsesSubscriptionLaunchProfile)
         {
             return new EffectiveReasoningEffortSelection(ResolveEffectiveSubscriptionReasoningEffort(agent, selection), "base");
@@ -1028,11 +1033,6 @@ public static class WorkerProfileDispatcher
             ? selection.Model.ReasoningEffort ?? agent.Subscription?.ReasoningEffort ?? agent.Model.ReasoningEffort
             : agent.Subscription?.ReasoningEffort ?? selection.Model.ReasoningEffort;
         var policy = agent.ReasoningEffortPolicy ?? new ReasoningEffortPolicy();
-
-        if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
-        {
-            return new EffectiveReasoningEffortSelection(HighRiskReviewerReasoningEffort, "intake-risk");
-        }
 
         if (HasClassFindingRetryFeedback(task))
         {

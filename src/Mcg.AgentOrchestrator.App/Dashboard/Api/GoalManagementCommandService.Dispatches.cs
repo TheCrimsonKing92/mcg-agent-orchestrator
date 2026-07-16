@@ -62,6 +62,7 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         reasoningEffort: subscriptionMetadata?.ReasoningEffort,
         taskComplexity: subscriptionMetadata?.Complexity,
         usesComplexModel: false,
+        reasoningEffortReason: subscriptionMetadata?.ReasoningEffortReason,
         preflightFindings: null,
         allowPendingRecordedDispatchRefresh: allowPendingRecordedDispatchRefresh);
 }
@@ -179,10 +180,11 @@ private static ProfileSubscriptionMetadata? TryBuildProfileSubscriptionMetadata(
     var providerName = variables.GetValueOrDefault("providerName");
     var modelName = variables.GetValueOrDefault("subscriptionModelName");
     var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");
+    var reasoningEffortReason = variables.GetValueOrDefault("reasoningEffortSelectionReason");
     var complexity = Enum.TryParse<TaskComplexity>(variables.GetValueOrDefault("taskComplexity"), out var parsedComplexity)
         ? parsedComplexity
         : (TaskComplexity?)null;
-    return new ProfileSubscriptionMetadata(variables, providerName, modelName, reasoningEffort, complexity);
+    return new ProfileSubscriptionMetadata(variables, providerName, modelName, reasoningEffort, reasoningEffortReason, complexity);
 }
 
 private sealed record ProfileSubscriptionMetadata(
@@ -190,6 +192,7 @@ private sealed record ProfileSubscriptionMetadata(
     string? ProviderName,
     string? ModelName,
     string? ReasoningEffort,
+    string? ReasoningEffortReason,
     TaskComplexity? Complexity);
 
 public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchReadyTasks(

@@ -841,6 +841,80 @@ public sealed class AdvanceLoopTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_uses_xhigh_reasoning_for_high_risk_reviewer")]
+    public async Task StartSubscriptionReadyTasksUsesXhighReasoningForHighRiskReviewer()
+{
+    using var sandboxScope = ClearWorkerSandboxEnvironment();
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var kernel = new AgentOrchestratorKernel();
+    var planner = new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner);
+    var researcher = new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher);
+    var developer = new TaskSpec(TaskId.New(), "Implement the work", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Test the work", AgentRole.Tester);
+    var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = CreateRefinedGoal(kernel, "Dispatch high-risk Reviewer from live loop shape", [planner, researcher, developer, tester, reviewer]);
+    AgentDefinition[] agents =
+    [
+        CreateSubscriptionAgent(AgentRole.Planner),
+        CreateSubscriptionAgent(AgentRole.Researcher),
+        CreateSubscriptionAgent(AgentRole.Developer),
+        CreateSubscriptionAgent(AgentRole.Tester),
+        CreateSubscriptionAgent(AgentRole.Reviewer)
+    ];
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk, scope-implicit.");
+    kernel.ActivateGoal(goal.Id, agents);
+    foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+    {
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} complete.");
+    }
+
+    EnsureGoalWorktree(root, goal.Id);
+    await repository.SaveAsync(kernel);
+    var loopKernel = await repository.LoadGoalsAsync([goal.Id]);
+    var loopGoal = loopKernel.GetGoal(goal.Id);
+    var loopReviewer = loopGoal.Tasks.Single(task => task.Id == reviewer.Id);
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output model_reasoning_effort={subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'"),
+        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand)
+    ]);
+
+    try
+    {
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            loopKernel,
+            workspace,
+            loopGoal,
+            agents,
+            profiles);
+
+        var reloadedReviewer = loopKernel.GetGoal(goal.Id).Tasks.Single(task => task.Id == reviewer.Id);
+        Assert.Single(result.Dispatches);
+        Assert.Equal(reviewer.Id, result.Dispatches[0].Task.Id);
+        Assert.Equal("codex-cli", reloadedReviewer.LastDispatch!.WorkerName);
+        Assert.Equal("xhigh", reloadedReviewer.LastDispatch.ReasoningEffort);
+        Assert.Equal("intake-risk", reloadedReviewer.LastDispatch.ReasoningEffortReason);
+        Assert.Contains("model_reasoning_effort='xhigh'", reloadedReviewer.LastDispatch.Command, StringComparison.Ordinal);
+        Assert.Contains("reasoning-effort: xhigh (intake-risk)", File.ReadAllText(Path.Combine(
+            reloadedReviewer.LastDispatch.WorkingDirectory,
+            ".orchestrator-context",
+            goal.Id.Value,
+            "subscription-preflight.md")), StringComparison.Ordinal);
+        Assert.True(reloadedReviewer.LastProcess is { IsRunning: true });
+    }
+    finally
+    {
+        if (loopReviewer.LastProcess is { IsRunning: true })
+        {
+            new BackgroundDispatchRunner().CancelLatestProcess(loopKernel, goal.Id, reviewer.Id);
+        }
+    }
+}
+
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_does_not_prepare_already_running_tasks")]
     public void StartSubscriptionReadyTasksDoesNotPrepareAlreadyRunningTasks()
 {
