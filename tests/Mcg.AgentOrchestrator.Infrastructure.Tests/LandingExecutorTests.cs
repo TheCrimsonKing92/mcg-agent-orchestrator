@@ -222,12 +222,12 @@ public sealed class LandingExecutorTests
             var landing = LandingExecutor.Execute(kernel, goal, workspace);
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
             Assert.NotEmpty(RemoteGitMirror.ReadState(repo).Entries);
-            var mirror = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var mirror = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
 
             Assert.True(landing.MainAdvanced);
             var stateEntry = RemoteGitMirror.ReadState(repo).Entries.Single();
             Assert.True(stateEntry.Status == RemoteMirrorEntryStatus.Succeeded, stateEntry.LastError);
-            Assert.Contains(mirror.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-pushed"));
+            Assert.Contains(mirror.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded);
             AssertGitRef(remote, "refs/heads/main");
             AssertGitRef(remote, $"refs/heads/{goalBranch}");
             AssertGitRef(remote, "refs/tags/mirror-test-tag");
@@ -266,15 +266,59 @@ public sealed class LandingExecutorTests
 
             var landing = LandingExecutor.Execute(kernel, goal, workspace);
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
-            var mirror = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var mirror = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
 
             Assert.True(landing.MainAdvanced);
-            Assert.Empty(mirror.Goals.Where(item => item.Repairs.Any(repair => repair.Kind.StartsWith("mirror-", StringComparison.Ordinal))));
+            Assert.Empty(mirror.Outcomes);
             AssertGitMissingRef(remote, "refs/heads/main");
             Assert.False(File.Exists(RemoteGitMirror.StatePath(repo)));
         }
         finally
         {
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(remote);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Terminal_sweep_does_not_run_remote_mirror_push_inline")]
+    public void TerminalSweepDoesNotRunRemoteMirrorPushInline()
+    {
+        var repo = CreateGitRepository();
+        var remote = CreateBareRepository();
+        using var hooks = WithMirrorTestHooks();
+        var pushCount = 0;
+        var oldGitRunner = RemoteGitMirror.GitRunner;
+        RemoteGitMirror.GitRunner = (workingDirectory, args) =>
+        {
+            if (args.Count > 0 && args[0] == "push")
+            {
+                Interlocked.Increment(ref pushCount);
+            }
+
+            return oldGitRunner(workingDirectory, args);
+        };
+
+        try
+        {
+            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            WriteMirrorConfig(repo, "mirror");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "not-inline.txt", "not inline");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Equal(0, pushCount);
+            Assert.Equal(RemoteMirrorEntryStatus.Pending, RemoteGitMirror.ReadState(repo).Entries.Single().Status);
+            AssertGitMissingRef(remote, "refs/heads/main");
+        }
+        finally
+        {
+            RemoteGitMirror.GitRunner = oldGitRunner;
             TryDeleteDirectory(repo);
             TryDeleteDirectory(remote);
         }
@@ -298,11 +342,11 @@ public sealed class LandingExecutorTests
             var landing = LandingExecutor.Execute(kernel, goal, workspace);
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
             Assert.NotEmpty(RemoteGitMirror.ReadState(repo).Entries);
-            var first = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var first = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
 
             Assert.True(landing.MainAdvanced);
             Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
-            Assert.Contains(first.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-deferred"));
+            Assert.Contains(first.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorFailed);
             var failed = GoalOperationJournal.Read(repo, goal.Id).LatestByOperation.Single(entry =>
                 entry.Operation == "conductor:mirror:mirror");
             Assert.Equal(GoalOperationStatus.Failed, failed.Status);
@@ -310,10 +354,51 @@ public sealed class LandingExecutorTests
 
             Directory.CreateDirectory(remote);
             RunGit(remote, "init", "--bare");
-            var second = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var second = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
 
-            Assert.Contains(second.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-pushed"));
+            Assert.Contains(second.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded);
             AssertGitRef(remote, "refs/heads/main");
+            AssertGitRef(remote, $"refs/heads/{goalBranch}");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(remote);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Remote_mirror_retry_uses_landed_branch_tip_after_cleanup_deletes_goal_branch")]
+    public void RemoteMirrorRetryUsesLandedBranchTipAfterCleanupDeletesGoalBranch()
+    {
+        var repo = CreateGitRepository();
+        var remote = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        using var _ = WithMirrorTestHooks();
+        try
+        {
+            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            WriteMirrorConfig(repo, "mirror");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "retry-after-cleanup.txt", "retry after cleanup");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            var first = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
+            GoalOperationJournal.Completed(repo, goal, "conductor:land", "landed");
+            kernel.CompleteGoal(goal.Id, "Completed after durable landing.");
+            var cleanup = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Contains(first.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorFailed);
+            Assert.Contains(cleanup.Goals, item => item.Repairs.Any(repair => repair.Kind == "merged-branch-cleanup"));
+            Assert.False(GitCli.Run(repo, "show-ref", "--verify", $"refs/heads/{goalBranch}").Succeeded);
+
+            Directory.CreateDirectory(remote);
+            RunGit(remote, "init", "--bare");
+            var second = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
+
+            Assert.Contains(second.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded);
             AssertGitRef(remote, $"refs/heads/{goalBranch}");
         }
         finally
@@ -343,11 +428,11 @@ public sealed class LandingExecutorTests
             var landing = LandingExecutor.Execute(kernel, goal, workspace);
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
             Assert.NotEmpty(RemoteGitMirror.ReadState(repo).Entries);
-            var mirror = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var mirror = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
 
             Assert.True(landing.MainAdvanced);
-            Assert.Contains(mirror.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-pushed" && repair.Evidence.Contains("remote=reachable", StringComparison.Ordinal)));
-            Assert.Contains(mirror.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-deferred" && repair.Evidence.Contains("remote=missing", StringComparison.Ordinal)));
+            Assert.Contains(mirror.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded && outcome.Remote == "reachable");
+            Assert.Contains(mirror.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorFailed && outcome.Remote == "missing");
             AssertGitRef(reachable, "refs/heads/main");
             AssertGitRef(reachable, $"refs/heads/{goalBranch}");
         }
@@ -555,15 +640,20 @@ public sealed class LandingExecutorTests
 
     private static GitCli.GitResult PushRefForTest(string workingDirectory, string remotePath, string refspec)
     {
-        var source = GitCli.Run(workingDirectory, "rev-parse", refspec);
+        var refspecParts = refspec.Split(':', 2);
+        var sourceRef = refspecParts[0];
+        var targetRef = refspecParts.Length == 2 && !string.IsNullOrWhiteSpace(refspecParts[1])
+            ? refspecParts[1]
+            : refspec;
+        var source = GitCli.Run(workingDirectory, "rev-parse", sourceRef);
         if (!source.Succeeded)
         {
             return source;
         }
 
-        var targetRef = refspec.StartsWith("refs/", StringComparison.Ordinal)
-            ? refspec
-            : $"refs/heads/{refspec}";
+        targetRef = targetRef.StartsWith("refs/", StringComparison.Ordinal)
+            ? targetRef
+            : $"refs/heads/{targetRef}";
         CopyGitObjectsForTest(workingDirectory, remotePath);
         return GitCli.Run(remotePath, "update-ref", targetRef, source.Output.Trim());
     }

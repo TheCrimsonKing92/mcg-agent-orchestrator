@@ -317,7 +317,7 @@ Remote mirroring is disabled unless `config/mirror.json` opts in. The file names
 }
 ```
 
-After a durable landing, the conductor enqueues mirror debt and the terminal sweep processes it off the landing critical path. Each remote is independent: reachable remotes can push while unreachable/auth-failing remotes record `conductor:mirror:<remote>` as `MirrorFailed classification=TRANSIENT` and retry on later ticks with backoff. Mirror state lives in `.orchestrator/git-mirror-state.json`; mirror failure never escalates the goal or blocks record/cleanup.
+After a durable landing, the conductor enqueues mirror debt and starts a trusted background mirror worker; later conduct/reconcile ticks start the same background worker for due retries. The terminal sweep does not run `git push` inline. Each remote is independent: reachable remotes can push while unreachable/auth-failing remotes record `conductor:mirror:<remote>` as `MirrorFailed classification=TRANSIENT` and retry on later ticks with backoff. Mirror state lives in `.orchestrator/git-mirror-state.json`; mirror failure never escalates the goal or blocks record/cleanup.
 
 ### 6.3 Concurrency caps
 

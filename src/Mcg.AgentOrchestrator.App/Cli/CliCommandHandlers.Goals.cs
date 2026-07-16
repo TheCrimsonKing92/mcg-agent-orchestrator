@@ -837,6 +837,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }
                 var loopReaper = new BackgroundDispatchRunner();
@@ -898,6 +899,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
 
                     watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
+                    RemoteGitMirror.TryStartBackgroundProcessing(wk, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }
                 };

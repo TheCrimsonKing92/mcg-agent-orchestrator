@@ -29,6 +29,8 @@ internal static class RemoteGitMirror
 {
     private const int StoreVersion = 1;
     private const string OperationPrefix = "conductor:mirror";
+    private static readonly object BackgroundGate = new();
+    private static readonly Dictionary<string, Task> BackgroundTasksByDirectory = new(StringComparer.OrdinalIgnoreCase);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -40,6 +42,7 @@ internal static class RemoteGitMirror
     internal static Func<int, TimeSpan> BackoffForAttempt { get; set; } = DefaultBackoffForAttempt;
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
+    internal static Action<string> StatusWriter { get; set; } = Console.WriteLine;
 
     static RemoteGitMirror()
     {
@@ -56,6 +59,7 @@ internal static class RemoteGitMirror
 
         var state = LoadState(executionDirectory);
         var goalBranch = GoalWorktrees.BranchName(goal.Id);
+        var goalBranchCommit = ResolveCommit(executionDirectory, goalBranch);
         var enqueued = 0;
         var changed = false;
         foreach (var remote in config.Remotes)
@@ -65,7 +69,7 @@ internal static class RemoteGitMirror
                 entry.Remote.Equals(remote, StringComparison.OrdinalIgnoreCase));
             if (existing is null)
             {
-                state.Entries.Add(RemoteMirrorStateEntry.Create(goal.Id.Value, goalBranch, remote, config.Push));
+                state.Entries.Add(RemoteMirrorStateEntry.Create(goal.Id.Value, goalBranch, goalBranchCommit, remote, config.Push));
                 enqueued++;
                 changed = true;
                 continue;
@@ -74,6 +78,7 @@ internal static class RemoteGitMirror
             if (existing.Status != RemoteMirrorEntryStatus.Succeeded)
             {
                 existing.GoalBranch = goalBranch;
+                existing.GoalBranchCommit = goalBranchCommit;
                 existing.PushMain = config.Push.Main;
                 existing.PushGoalBranch = config.Push.GoalBranch;
                 existing.PushTags = config.Push.Tags;
@@ -98,8 +103,67 @@ internal static class RemoteGitMirror
         }
     }
 
+    public static bool TryStartBackgroundProcessing(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalId? onlyGoalId = null)
+    {
+        if (!HasDueWork(executionDirectory, onlyGoalId))
+        {
+            return false;
+        }
+
+        var normalizedDirectory = Normalize(executionDirectory);
+        var goalsSnapshot = kernel.Goals.ToArray();
+        lock (BackgroundGate)
+        {
+            if (BackgroundTasksByDirectory.TryGetValue(normalizedDirectory, out var existing) &&
+                !existing.IsCompleted)
+            {
+                return false;
+            }
+
+            Task? task = null;
+            task = Task.Run(() =>
+            {
+                try
+                {
+                    var result = ProcessDue(goalsSnapshot, normalizedDirectory, onlyGoalId);
+                    foreach (var outcome in result.Outcomes)
+                    {
+                        StatusWriter(FormatStatusLine(outcome));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    StatusWriter($"[mirror] result=failed exception={ex.GetType().Name} message={TrimDetail(ex.Message, string.Empty)}");
+                }
+                finally
+                {
+                    lock (BackgroundGate)
+                    {
+                        if (BackgroundTasksByDirectory.TryGetValue(normalizedDirectory, out var current) &&
+                            ReferenceEquals(current, task))
+                        {
+                            BackgroundTasksByDirectory.Remove(normalizedDirectory);
+                        }
+                    }
+                }
+            });
+            BackgroundTasksByDirectory[normalizedDirectory] = task;
+        }
+
+        return true;
+    }
+
     public static RemoteMirrorProcessResult ProcessDue(
         AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalId? onlyGoalId = null) =>
+        ProcessDue(kernel.Goals.ToArray(), executionDirectory, onlyGoalId);
+
+    public static RemoteMirrorProcessResult ProcessDue(
+        IReadOnlyCollection<Goal> goalsSnapshot,
         string executionDirectory,
         GoalId? onlyGoalId = null)
     {
@@ -117,7 +181,7 @@ internal static class RemoteGitMirror
 
         var now = UtcNow();
         var outcomes = new List<RemoteMirrorOutcome>();
-        var goals = kernel.Goals.ToDictionary(goal => goal.Id.Value, StringComparer.OrdinalIgnoreCase);
+        var goals = goalsSnapshot.ToDictionary(goal => goal.Id.Value, StringComparer.OrdinalIgnoreCase);
         foreach (var entry in state.Entries
             .Where(entry => entry.Status != RemoteMirrorEntryStatus.Succeeded)
             .Where(entry => onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase))
@@ -153,6 +217,21 @@ internal static class RemoteGitMirror
 
     internal static string StatePath(string executionDirectory) =>
         Path.Combine(Path.GetFullPath(executionDirectory), ".orchestrator", "git-mirror-state.json");
+
+    private static bool HasDueWork(string executionDirectory, GoalId? onlyGoalId)
+    {
+        var config = LoadConfiguration(executionDirectory);
+        if (!config.Enabled)
+        {
+            return false;
+        }
+
+        var now = UtcNow();
+        return LoadState(executionDirectory).Entries.Any(entry =>
+            entry.Status != RemoteMirrorEntryStatus.Succeeded &&
+            (onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase)) &&
+            (entry.NextAttemptUtc is null || entry.NextAttemptUtc <= now));
+    }
 
     private static RemoteMirrorOutcome ProcessEntry(
         string executionDirectory,
@@ -198,7 +277,8 @@ internal static class RemoteGitMirror
 
         if (entry.PushGoalBranch)
         {
-            yield return RunPush(executionDirectory, entry.Remote, entry.GoalBranch, entry.GoalBranch);
+            var source = string.IsNullOrWhiteSpace(entry.GoalBranchCommit) ? entry.GoalBranch : entry.GoalBranchCommit;
+            yield return RunPush(executionDirectory, entry.Remote, entry.GoalBranch, $"{source}:refs/heads/{entry.GoalBranch}");
         }
 
         if (entry.PushTags)
@@ -278,6 +358,12 @@ internal static class RemoteGitMirror
         File.WriteAllText(path, JsonSerializer.Serialize(state with { Version = StoreVersion }, JsonOptions) + Environment.NewLine);
     }
 
+    private static string ResolveCommit(string executionDirectory, string reference)
+    {
+        var result = GitRunner(executionDirectory, ["rev-parse", "--verify", reference]);
+        return result.Succeeded ? result.Output.Trim() : string.Empty;
+    }
+
     private static TimeSpan DefaultBackoffForAttempt(int attempt) =>
         attempt switch
         {
@@ -302,6 +388,18 @@ internal static class RemoteGitMirror
         text = text.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
         return text.Length <= 600 ? text : text[..600] + "...";
     }
+
+    private static string FormatStatusLine(RemoteMirrorOutcome outcome)
+    {
+        var result = outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded ? "pushed" :
+            outcome.Kind == RemoteMirrorOutcomeKind.MirrorFailed ? "deferred" :
+            outcome.Kind == RemoteMirrorOutcomeKind.MirrorDeferred ? "deferred" :
+            "skipped";
+        return $"[mirror] goal={outcome.GoalPrefix} remote={outcome.Remote} result={result} detail={outcome.Detail}";
+    }
+
+    private static string Normalize(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static string Prefix(string goalId) => goalId[..Math.Min(8, goalId.Length)];
 
@@ -340,6 +438,7 @@ internal sealed class RemoteMirrorStateEntry
 {
     public string GoalId { get; set; } = string.Empty;
     public string GoalBranch { get; set; } = string.Empty;
+    public string GoalBranchCommit { get; set; } = string.Empty;
     public string Remote { get; set; } = string.Empty;
     public RemoteMirrorEntryStatus Status { get; set; }
     public int Attempts { get; set; }
@@ -353,6 +452,7 @@ internal sealed class RemoteMirrorStateEntry
     public static RemoteMirrorStateEntry Create(
         string goalId,
         string goalBranch,
+        string goalBranchCommit,
         string remote,
         RemoteMirrorPushSelection push)
     {
@@ -360,6 +460,7 @@ internal sealed class RemoteMirrorStateEntry
         {
             GoalId = goalId,
             GoalBranch = goalBranch,
+            GoalBranchCommit = goalBranchCommit,
             Remote = remote,
             Status = RemoteMirrorEntryStatus.Pending,
             PushMain = push.Main,
