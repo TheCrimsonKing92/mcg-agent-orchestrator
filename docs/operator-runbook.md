@@ -49,6 +49,24 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 
 **Stop a loop** by creating a `.conduct-stop` file in the repo root (graceful) or Ctrl-C. The loop is now interrupt-safe — a stop no longer cancels in-flight worker tasks. Remove `.conduct-stop` before starting a new loop.
 
+### Auto-resume after reboot or loop crash
+
+Long-running unattended drives can opt into a reboot/crash watchdog. Launch the drive through `scripts\Start-OrchestratorCommand.ps1`; when the command is `conduct --loop`, the script overwrites `.orchestrator\last-drive.json` with the batch name, `AppDll` if any, original conduct arguments, policy, poll interval, and duration cap. This is a dumb last-drive journal: it is replaced on every new loop launch and is not a queue.
+
+Install the watchdog only when you explicitly want it:
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Install-OrchestratorAutoResume.ps1
+```
+
+The installer registers one per-user scheduled task in the operator's interactive logon context. It has two triggers: at logon and a 10-minute repetition trigger. Remove it cleanly with:
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Install-OrchestratorAutoResume.ps1 -Remove
+```
+
+The scheduled task runs `scripts\Resume-OrchestratorLoop.ps1`. The resume script is idempotent: if `Get-RepoProcessInfo.ps1 -ConductLoop` finds a running loop, or `.conduct-stop` exists, it exits 0 with a `RESUME_SKIPPED` reason and launches nothing. With no running loop and no stop file, it reads `.orchestrator\last-drive.json`, increments the batch suffix (`batch60` -> `batch61`, otherwise appends `-handoff-1`), relaunches through `Start-OrchestratorCommand.ps1`, and prints the launch receipt JSON. A deliberate stop therefore stays stopped until you remove `.conduct-stop`.
+
 ---
 
 ## 2. Policies (the gate you choose)

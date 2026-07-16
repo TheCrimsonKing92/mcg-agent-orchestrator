@@ -158,6 +158,120 @@ public sealed class LauncherScriptTests
         Assert.Equal("launcher workspace remove abc12345", File.ReadAllText(sandbox.InvocationPath).Trim());
     }
 
+    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_writes_last_drive_journal_for_conduct_loop")]
+    public void StartOrchestratorCommandWritesLastDriveJournalForConductLoop()
+    {
+        using var sandbox = CreateStartJournalSandbox();
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath },
+            "-Name",
+            "batch055",
+            "-AppDll",
+            sandbox.EchoScriptPath,
+            "conduct",
+            "--loop",
+            "--watch",
+            "--policy",
+            "Permissive",
+            "--poll-seconds",
+            "15",
+            "--max-duration",
+            "5400");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+
+        var journalPath = Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "last-drive.json");
+        Assert.True(File.Exists(journalPath), $"Expected journal: {journalPath}");
+        using var document = JsonDocument.Parse(File.ReadAllText(journalPath));
+        var root = document.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("batch055", root.GetProperty("name").GetString());
+        Assert.Equal(sandbox.EchoScriptPath, root.GetProperty("appDll").GetString());
+        Assert.Equal("Permissive", root.GetProperty("policy").GetString());
+        Assert.Equal("15", root.GetProperty("pollSeconds").GetString());
+        Assert.Equal("5400", root.GetProperty("maxDuration").GetString());
+        Assert.True(root.GetProperty("watch").GetBoolean());
+
+        var args = root.GetProperty("arguments").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        Assert.Equal(
+            new[] { "conduct", "--loop", "--watch", "--policy", "Permissive", "--poll-seconds", "15", "--max-duration", "5400" },
+            args);
+    }
+
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_noops_when_conduct_loop_is_running")]
+    public void ResumeOrchestratorLoopNoopsWhenConductLoopIsRunning()
+    {
+        using var sandbox = CreateResumeSandbox("Write-Output 'PROCESS id=123 kind=conduct-loop command=conduct --loop'");
+        WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60");
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Contains("RESUME_SKIPPED reason=conduct-loop-running", result.Stdout, StringComparison.Ordinal);
+        Assert.False(File.Exists(sandbox.StartInvocationPath), "Resume should not relaunch when a conduct loop is running.");
+    }
+
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_noops_when_stop_file_exists")]
+    public void ResumeOrchestratorLoopNoopsWhenStopFileExists()
+    {
+        using var sandbox = CreateResumeSandbox("throw 'process helper should not run while stop file exists'");
+        WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60");
+        File.WriteAllText(Path.Combine(sandbox.RepositoryRoot, ".conduct-stop"), "stop");
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Contains("RESUME_SKIPPED reason=conduct-stop", result.Stdout, StringComparison.Ordinal);
+        Assert.False(File.Exists(sandbox.StartInvocationPath), "Resume should not relaunch while .conduct-stop exists.");
+    }
+
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_relaunches_from_journal_with_incremented_batch_name")]
+    public void ResumeOrchestratorLoopRelaunchesFromJournalWithIncrementedBatchName()
+    {
+        using var sandbox = CreateResumeSandbox("Write-Output 'No matching repo processes found.'");
+        WriteLastDriveJournal(sandbox.RepositoryRoot, "batch009");
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.Contains("RESUME_LAUNCH", result.Stdout, StringComparison.Ordinal);
+
+        using var receipt = JsonDocument.Parse(File.ReadAllText(sandbox.StartInvocationPath));
+        var root = receipt.RootElement;
+        Assert.Equal("batch010", root.GetProperty("name").GetString());
+        var args = root.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+        Assert.Equal(
+            new[] { "conduct", "--loop", "--watch", "--policy", "Permissive", "--poll-seconds", "15", "--max-duration", "5400" },
+            args);
+        Assert.Contains("\"pid\":4242", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "AutoResume_scripts_document_idempotency_and_scheduled_task_contract")]
+    public void AutoResumeScriptsDocumentIdempotencyAndScheduledTaskContract()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var resume = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Resume-OrchestratorLoop.ps1"));
+        var installer = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Install-OrchestratorAutoResume.ps1"));
+
+        Assert.Contains(".SYNOPSIS", resume, StringComparison.Ordinal);
+        Assert.Contains("RESUME_SKIPPED reason=conduct-loop-running", resume, StringComparison.Ordinal);
+        Assert.Contains("RESUME_SKIPPED reason=conduct-stop", resume, StringComparison.Ordinal);
+        Assert.Contains("Start-OrchestratorCommand.ps1", resume, StringComparison.Ordinal);
+        Assert.Contains(".SYNOPSIS", installer, StringComparison.Ordinal);
+        Assert.Contains("New-ScheduledTaskTrigger -AtLogOn", installer, StringComparison.Ordinal);
+        Assert.Contains("-RepetitionInterval (New-TimeSpan -Minutes 10)", installer, StringComparison.Ordinal);
+        Assert.Contains("New-ScheduledTaskPrincipal", installer, StringComparison.Ordinal);
+        Assert.Contains("-LogonType Interactive", installer, StringComparison.Ordinal);
+        Assert.Contains("Unregister-ScheduledTask", installer, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_defaults_to_launcher_refresh_path")]
     public void InvokeOrchestratorCommandDefaultsToLauncherRefreshPath()
     {
@@ -822,6 +936,109 @@ public sealed class LauncherScriptTests
         return new StaleMarkerLauncherSandbox(repositoryRoot, dotnetShimPath, dotnetLogPath, markerPath, expectedHead);
     }
 
+    private static StartJournalSandbox CreateStartJournalSandbox()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"start-journal-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        var shimPath = Path.Combine(repositoryRoot, "shim");
+        Directory.CreateDirectory(scriptsPath);
+        Directory.CreateDirectory(shimPath);
+
+        var sourceRoot = FindLauncherSourceRoot();
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
+            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Start-OrchestratorCommand.ps1"),
+            Path.Combine(scriptsPath, "Start-OrchestratorCommand.ps1"));
+
+        var hostPath = Path.Combine(shimPath, "fake-dotnet.cmd");
+        File.WriteAllText(hostPath, """
+            @echo off
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File %*
+            """.Replace("\n", "\r\n", StringComparison.Ordinal));
+
+        var echoScriptPath = Path.Combine(repositoryRoot, "echo-args.ps1");
+        File.WriteAllText(echoScriptPath, """
+            param(
+                [Parameter(ValueFromRemainingArguments = $true)]
+                [string[]]$Arguments
+            )
+
+            $Arguments | ConvertTo-Json -Compress
+            """);
+
+        return new StartJournalSandbox(repositoryRoot, hostPath, echoScriptPath);
+    }
+
+    private static ResumeSandbox CreateResumeSandbox(string processHelperBody)
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"resume-loop-{Guid.NewGuid():N}");
+        var scriptsPath = Path.Combine(repositoryRoot, "scripts");
+        Directory.CreateDirectory(scriptsPath);
+
+        var sourceRoot = FindLauncherSourceRoot();
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Invoke-RepoScript.ps1"),
+            Path.Combine(scriptsPath, "Invoke-RepoScript.ps1"));
+        File.Copy(
+            Path.Combine(sourceRoot, "scripts", "Resume-OrchestratorLoop.ps1"),
+            Path.Combine(scriptsPath, "Resume-OrchestratorLoop.ps1"));
+
+        File.WriteAllText(
+            Path.Combine(scriptsPath, "Get-RepoProcessInfo.ps1"),
+            $"""
+            param(
+                [switch]$ConductLoop,
+                [int]$Newest = 10
+            )
+            {processHelperBody}
+            """);
+
+        var startInvocationPath = Path.Combine(repositoryRoot, "start-invocation.json");
+        File.WriteAllText(
+            Path.Combine(scriptsPath, "Start-OrchestratorCommand.ps1"),
+            $$"""
+            [CmdletBinding(PositionalBinding = $false)]
+            param(
+                [string]$Name,
+                [string]$AppDll,
+                [Parameter(ValueFromRemainingArguments = $true)]
+                [string[]]$Arguments
+            )
+
+            [pscustomobject]@{
+                name = $Name
+                appDll = $AppDll
+                args = @($Arguments)
+            } | ConvertTo-Json -Compress | Set-Content -LiteralPath '{{EscapePowerShellSingleQuoted(startInvocationPath)}}'
+
+            [pscustomobject]@{
+                pid = 4242
+                stdoutPath = 'out.log'
+                stderrPath = 'err.log'
+                args = @($Arguments)
+                startedAt = '2026-07-16T00:00:00.0000000Z'
+            } | ConvertTo-Json -Compress
+            """);
+
+        return new ResumeSandbox(repositoryRoot, startInvocationPath);
+    }
+
+    private static void WriteLastDriveJournal(string repositoryRoot, string batchName)
+    {
+        var journalPath = Path.Combine(repositoryRoot, ".orchestrator", "last-drive.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+        var json = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            name = batchName,
+            appDll = (string?)null,
+            arguments = new[] { "conduct", "--loop", "--watch", "--policy", "Permissive", "--poll-seconds", "15", "--max-duration", "5400" }
+        });
+        File.WriteAllText(journalPath, json);
+    }
+
     private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments) =>
         RunInvokeRepoScript(repositoryRoot, relativeScriptPath, environment: null, arguments);
 
@@ -1126,6 +1343,50 @@ public sealed class LauncherScriptTests
             try
             {
                 Directory.Delete(sandboxPath, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class StartJournalSandbox(
+        string repositoryRoot,
+        string hostPath,
+        string echoScriptPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string HostPath { get; } = hostPath;
+        public string EchoScriptPath { get; } = echoScriptPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed class ResumeSandbox(string repositoryRoot, string startInvocationPath) : IDisposable
+    {
+        public string RepositoryRoot { get; } = repositoryRoot;
+        public string StartInvocationPath { get; } = startInvocationPath;
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RepositoryRoot, recursive: true);
             }
             catch (IOException)
             {
