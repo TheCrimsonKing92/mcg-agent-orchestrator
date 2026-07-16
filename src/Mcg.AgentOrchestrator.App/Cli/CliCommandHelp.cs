@@ -18,6 +18,7 @@ internal static class CliCommandHelp
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string ParkGoalUsage = "Usage: park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]";
+    public const string UnparkGoalUsage = "Usage: unpark-goal <goal-id-prefix> <reason> [--confirm-goal-unpark] | unpark-goal <goal-id-prefix> --text-file <path> [--confirm-goal-unpark]";
     public const string StopUsage = "Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede";
     public const string SubscriptionDispatchUsage = "Usage: subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]";
     public const string AgentUsage = "Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
@@ -126,8 +127,13 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry ParkGoal = new(
         ParkGoalUsage,
-        "Park a goal.",
+        "Park a goal. Use unpark-goal to resume it later.",
         ["--text-file", "--confirm-goal-park", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry UnparkGoal = new(
+        UnparkGoalUsage,
+        "Resume a Parked goal.",
+        ["--text-file", "--confirm-goal-unpark", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Stop = new(
         StopUsage,
@@ -382,6 +388,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase))
         {
             entry = ParkGoal;
+            return true;
+        }
+
+        if (args[0].Equals("unpark-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = UnparkGoal;
             return true;
         }
 

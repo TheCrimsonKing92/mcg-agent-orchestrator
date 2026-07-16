@@ -271,6 +271,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return HasCliConfirmation(parts, "--confirm-goal-park") ||
                 parts[2].Contains("--confirm-goal-park", StringComparison.OrdinalIgnoreCase);
 
+        case "unpark-goal":
+            CliArgumentParser.RequirePartCount(parts, 3, "unpark-goal <goal-id-prefix> <reason> [--confirm-goal-unpark] | unpark-goal <goal-id-prefix> --text-file <path> [--confirm-goal-unpark]");
+            context.CurrentGoal = HandleGoalUnparkCommand(context, parts);
+            return HasCliConfirmation(parts, "--confirm-goal-unpark") ||
+                parts[2].Contains("--confirm-goal-unpark", StringComparison.OrdinalIgnoreCase);
+
         case "rollback-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
@@ -2663,6 +2669,39 @@ private static Goal HandleGoalParkCommand(CliExecutionContext context, IReadOnly
     Console.WriteLine($"Cancelled running dispatches: {runningTasks.Length}");
     Console.WriteLine($"Resolved human waits: {resolvedHumanWaits}");
     Console.WriteLine($"Resolved attention items: {resolvedAttentionItems}");
+    return goal;
+}
+
+private static Goal HandleGoalUnparkCommand(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+    var textParts = RemoveStandaloneFlag(parts, "--confirm-goal-unpark");
+    var reason = ResolveTextArgument(textParts, inlineIndex: 2, "unpark-goal <goal-id-prefix> <reason> [--confirm-goal-unpark] | unpark-goal <goal-id-prefix> --text-file <path> [--confirm-goal-unpark]", "--text-file");
+    if (string.IsNullOrWhiteSpace(reason))
+    {
+        throw new ArgumentException("Goal unpark reason cannot be empty.", nameof(parts));
+    }
+
+    if (goal.Status != GoalStatus.Parked)
+    {
+        throw new InvalidOperationException(
+            $"unpark-goal only applies to Parked goals; goal '{goal.Id.Value[..8]}' is {goal.Status}. " +
+            "No state changed. Use status <goal> to inspect the current lifecycle state.");
+    }
+
+    if (!HasCliConfirmation(parts, "--confirm-goal-unpark") &&
+        !parts[2].Contains("--confirm-goal-unpark", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine($"Goal unpark dry run {goal.Id.Value[..8]}:");
+        Console.WriteLine($"  reason: {reason}");
+        Console.WriteLine($"  status change: Parked -> Active");
+        Console.WriteLine($"  command: unpark-goal {goal.Id.Value[..8]} <reason> --confirm-goal-unpark");
+        return goal;
+    }
+
+    _ = context.Kernel.UnparkGoal(goal.Id, reason);
+    Console.WriteLine($"Goal unparked {goal.Id.Value[..8]}.");
+    Console.WriteLine("Status change: Parked -> Active");
     return goal;
 }
 

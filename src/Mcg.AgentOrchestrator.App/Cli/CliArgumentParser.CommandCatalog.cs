@@ -66,6 +66,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "goal-mark-landed",
     "acceptance-repair",
     "park-goal",
+    "unpark-goal",
     "rollback-goal",
     "cancel-goal",
     "supersede-goal",

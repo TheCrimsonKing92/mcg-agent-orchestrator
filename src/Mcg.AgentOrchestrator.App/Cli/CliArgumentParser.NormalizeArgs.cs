@@ -24,6 +24,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("unpark-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("recover", StringComparison.OrdinalIgnoreCase) ||
