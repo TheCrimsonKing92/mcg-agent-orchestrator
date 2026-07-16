@@ -81,7 +81,7 @@ public static class ModelFitHistory
         return ModelOutcomeScorecard.Build(rows.Where(row => row.Role == role), windowSize)
             .Where(record => record.Recommendation != ModelOutcomeRecommendation.Avoid)
             .Where(record => record.SelfRatedUnderpowered == 0)
-            .Where(record => record.Completed > record.Failed)
+            .Where(record => record.Completed > record.RealFailures)
             .OrderBy(record => record.Recommendation == ModelOutcomeRecommendation.Prefer ? 0 : 1)
             .ThenByDescending(record => record.Completed)
             .ThenByDescending(record => record.SelfRatedAdequate)

@@ -26,6 +26,7 @@ public static class TaskOutcomeClassifier
         "preflight-failure",
         "provider-authentication",
         "provider-connectivity",
+        "provider-neutral-progress-stall",
         "provider-model-rejection",
         "provider-rate-limit",
         "recoverable-subscription-limit",

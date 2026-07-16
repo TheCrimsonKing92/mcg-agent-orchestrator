@@ -103,6 +103,35 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Contains("1 environmental", record.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_provider_neutral_progress_stall_is_environmental")]
+    public void TaskOutcomeClassifierProviderNeutralProgressStallIsEnvironmental()
+    {
+        var classification = TaskOutcomeClassifier.Classify(
+            WorkTaskStatus.Failed,
+            "provider-neutral-progress-stall");
+
+        Assert.Equal("provider-neutral-progress-stall", classification.Rule);
+        Assert.Equal(TaskOutcomeClass.Environmental, classification.Class);
+    }
+
+    [Xunit.Fact(DisplayName = "ModelFitHistory_best_fit_uses_real_failures_not_total_failures")]
+    public void ModelFitHistoryBestFitUsesRealFailuresNotTotalFailures()
+    {
+        var rows = new[]
+        {
+            Row(0, WorkTaskStatus.Failed, "provider-connectivity"),
+            Row(1, WorkTaskStatus.Failed, "provider-neutral-progress-stall"),
+            Row(2, WorkTaskStatus.Completed, "committed-worker-result-evidence")
+        };
+
+        var best = ModelFitHistory.QueryBestFitForRole(rows, AgentRole.Developer, windowSize: 3);
+
+        Assert.NotNull(best);
+        Assert.Equal("OpenAI", best!.ProviderName);
+        Assert.Equal("gpt-5.5", best.ModelName);
+        Assert.Equal(ModelOutcomeRecommendation.Neutral, best.Recommendation);
+    }
+
     private static void Dispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,
