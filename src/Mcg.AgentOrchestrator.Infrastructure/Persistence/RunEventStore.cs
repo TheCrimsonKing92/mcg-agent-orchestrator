@@ -41,15 +41,37 @@ public sealed record RunEventRecord(
     string? Detail,
     string? PayloadJson);
 
+public sealed record RunEventMaintenanceOptions(
+    TimeSpan ConductorTickMaxAge,
+    int MinConductorTickRowsToKeep = 5000,
+    bool Vacuum = false,
+    DateTimeOffset? UtcNow = null)
+{
+    public static RunEventMaintenanceOptions Default { get; } = new(TimeSpan.FromDays(7));
+}
+
+public sealed record RunEventMaintenanceResult(
+    bool Deferred,
+    string? DeferredReason,
+    int ConductorTickRowsDeleted,
+    long BytesBefore,
+    long BytesAfter,
+    bool VacuumRequested,
+    bool VacuumCompleted,
+    bool VacuumDeferred);
+
 public sealed class SqliteRunEventStore : IRunEventStore
 {
     private const int MaxBusyRetries = 6;
     private readonly string _dbPath;
 
-    public SqliteRunEventStore(string dbPath)
+    public SqliteRunEventStore(string dbPath, bool ensureSchema = true)
     {
         _dbPath = dbPath;
-        EnsureSchema();
+        if (ensureSchema)
+        {
+            EnsureSchema();
+        }
     }
 
     private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
@@ -137,11 +159,89 @@ public sealed class SqliteRunEventStore : IRunEventStore
         }, cancellationToken);
     }
 
+    public async Task<RunEventMaintenanceResult> MaintainAsync(
+        RunEventMaintenanceOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= RunEventMaintenanceOptions.Default;
+        var bytesBefore = GetDatabaseBytes();
+        await using var conn = OpenConnection(busyTimeoutMilliseconds: 0);
+        try
+        {
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken).ConfigureAwait(false);
+        }
+        catch (SqliteException ex) when (IsTransientLock(ex))
+        {
+            return new RunEventMaintenanceResult(
+                Deferred: true,
+                DeferredReason: "database-busy",
+                ConductorTickRowsDeleted: 0,
+                BytesBefore: bytesBefore,
+                BytesAfter: GetDatabaseBytes(),
+                VacuumRequested: options.Vacuum,
+                VacuumCompleted: false,
+                VacuumDeferred: false);
+        }
+
+        var committed = false;
+        var deleted = 0;
+        try
+        {
+            deleted = await PruneConductorTicksAsync(conn, options, cancellationToken).ConfigureAwait(false);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken).ConfigureAwait(false);
+            committed = true;
+        }
+        finally
+        {
+            if (!committed)
+            {
+                try
+                {
+                    await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken).ConfigureAwait(false);
+                }
+                catch (SqliteException)
+                {
+                }
+            }
+        }
+
+        var vacuumCompleted = false;
+        var vacuumDeferred = false;
+        if (options.Vacuum)
+        {
+            try
+            {
+                await RunNonQueryAsync(conn, "PRAGMA wal_checkpoint(TRUNCATE)", cancellationToken).ConfigureAwait(false);
+                await RunNonQueryAsync(conn, "VACUUM", cancellationToken).ConfigureAwait(false);
+                vacuumCompleted = true;
+            }
+            catch (SqliteException ex) when (IsTransientLock(ex))
+            {
+                vacuumDeferred = true;
+            }
+        }
+
+        return new RunEventMaintenanceResult(
+            Deferred: false,
+            DeferredReason: null,
+            ConductorTickRowsDeleted: deleted,
+            BytesBefore: bytesBefore,
+            BytesAfter: GetDatabaseBytes(),
+            VacuumRequested: options.Vacuum,
+            VacuumCompleted: vacuumCompleted,
+            VacuumDeferred: vacuumDeferred);
+    }
+
     private SqliteConnection OpenConnection()
+    {
+        return OpenConnection(30000);
+    }
+
+    private SqliteConnection OpenConnection(int busyTimeoutMilliseconds)
     {
         var conn = new SqliteConnection(ConnectionString);
         conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        RunNonQuery(conn, $"PRAGMA busy_timeout={Math.Max(0, busyTimeoutMilliseconds)}");
         return conn;
     }
 
@@ -172,11 +272,64 @@ public sealed class SqliteRunEventStore : IRunEventStore
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_type_seq ON run_events(event_type, seq)");
     }
 
+    private async Task<int> PruneConductorTicksAsync(
+        SqliteConnection conn,
+        RunEventMaintenanceOptions options,
+        CancellationToken cancellationToken)
+    {
+        var keepRows = Math.Max(0, options.MinConductorTickRowsToKeep);
+        var cutoff = (options.UtcNow ?? DateTimeOffset.UtcNow)
+            .Subtract(options.ConductorTickMaxAge)
+            .ToString("O", CultureInfo.InvariantCulture);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM run_events
+            WHERE event_type = $event_type
+              AND occurred_at < $cutoff
+              AND seq NOT IN (
+                  SELECT seq
+                  FROM run_events
+                  WHERE event_type = $event_type
+                  ORDER BY seq DESC
+                  LIMIT $keep_rows
+              )
+            """;
+        cmd.Parameters.AddWithValue("$event_type", RunEventTypes.ConductorTick);
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        cmd.Parameters.AddWithValue("$keep_rows", keepRows);
+        return await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static void RunNonQuery(SqliteConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static async Task RunNonQueryAsync(SqliteConnection conn, string sql, CancellationToken cancellationToken)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private long GetDatabaseBytes()
+    {
+        var total = File.Exists(_dbPath) ? new FileInfo(_dbPath).Length : 0;
+        var wal = _dbPath + "-wal";
+        if (File.Exists(wal))
+        {
+            total += new FileInfo(wal).Length;
+        }
+
+        var shm = _dbPath + "-shm";
+        if (File.Exists(shm))
+        {
+            total += new FileInfo(shm).Length;
+        }
+
+        return total;
     }
 
     private static bool IsTransientLock(SqliteException ex) =>

@@ -1,6 +1,8 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 public sealed class RunEventStoreTests
 {
@@ -106,6 +108,141 @@ public sealed class RunEventStoreTests
         Assert.Equal("conduct:tick", evt.Operation);
         Assert.True(evt.Detail?.Contains("advanced=2", StringComparison.Ordinal) == true);
         Assert.True(evt.PayloadJson?.Contains("TICK_END tick=3", StringComparison.Ordinal) == true);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorTickPusher_persists_bounded_tick_payload_without_full_disposition_snapshot")]
+    public async Task ConductorTickPusherPersistsBoundedTickPayloadWithoutFullDispositionSnapshot()
+    {
+        var db = TempDb();
+        var longLine = "TICK " + new string('x', 1000);
+        var progressLines = Enumerable.Range(0, ConductorTickPusher.MaxPersistedProgressLines + 20)
+            .Select(index => $"{longLine} {index}")
+            .ToArray();
+
+        ConductorTickPusher.TryRecord(
+            db,
+            new BatchTickSummary(9, Advanced: 1, Held: 2, Escalated: 3, Retried: 4, Done: 5, WatchSleeping: false)
+            {
+                ProgressLines = progressLines,
+                OperatorDispositions =
+                [
+                    new ConductorOperatorDispositionSnapshot(
+                        "goal-1",
+                        OperatorDispositionState.Wait,
+                        OperatorDispositionConfidence.High,
+                        new string('r', 100_000),
+                        "next",
+                        DateTimeOffset.Parse("2026-07-16T12:00:00Z"),
+                        [new string('b', 10_000)],
+                        [new ConductorOperatorEvidenceSnapshot("log", "path", new string('e', 50_000))],
+                        [])
+                ]
+            });
+
+        var evt = Assert.Single(await new SqliteRunEventStore(db).ReadSinceAsync());
+        Assert.NotNull(evt.PayloadJson);
+        Assert.True(evt.PayloadJson!.Length < 10_000);
+        using var doc = JsonDocument.Parse(evt.PayloadJson);
+        var root = doc.RootElement;
+        Assert.Equal(9, root.GetProperty("Tick").GetInt32());
+        Assert.Equal(1, root.GetProperty("operatorDispositionCount").GetInt32());
+        Assert.False(root.TryGetProperty("operatorDispositions", out _));
+        var storedLines = root.GetProperty("progressLines").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Equal(ConductorTickPusher.MaxPersistedProgressLines, storedLines.Length);
+        Assert.All(storedLines, line => Assert.True(line!.Length <= ConductorTickPusher.MaxPersistedProgressLineChars));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_prunes_old_ticks_and_preserves_goal_operations_for_cursor_reads")]
+    public async Task SqliteRunEventStoreMaintenancePrunesOldTicksAndPreservesGoalOperationsForCursorReads()
+    {
+        var store = new SqliteRunEventStore(TempDb());
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var goalId = "goal-1";
+        var firstGoalOperation = await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            goalId,
+            "conductor:dispatch",
+            "Begin",
+            "before prune",
+            null,
+            OccurredAt: now.AddDays(-30)));
+        var oldTick = await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.ConductorTick,
+            null,
+            "conduct:tick",
+            "Active",
+            "old tick",
+            "{}",
+            OccurredAt: now.AddDays(-20)));
+        var recentTick = await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.ConductorTick,
+            null,
+            "conduct:tick",
+            "Active",
+            "recent tick",
+            "{}",
+            OccurredAt: now.AddDays(-1)));
+        var secondGoalOperation = await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            goalId,
+            "conductor:dispatch",
+            "Completed",
+            "after prune",
+            null,
+            OccurredAt: now.AddDays(-20)));
+
+        var result = await store.MaintainAsync(new RunEventMaintenanceOptions(
+            TimeSpan.FromDays(7),
+            MinConductorTickRowsToKeep: 1,
+            Vacuum: false,
+            UtcNow: now));
+
+        Assert.False(result.Deferred);
+        Assert.Equal(1, result.ConductorTickRowsDeleted);
+        var all = await store.ReadSinceAsync(maxCount: 20);
+        Assert.DoesNotContain(all, evt => evt.Sequence == oldTick.Sequence);
+        Assert.Contains(all, evt => evt.Sequence == recentTick.Sequence);
+        Assert.Contains(all, evt => evt.Sequence == firstGoalOperation.Sequence);
+        Assert.Contains(all, evt => evt.Sequence == secondGoalOperation.Sequence);
+
+        var afterFirst = await store.ReadSinceAsync(firstGoalOperation.Sequence, goalId: goalId);
+        var resumed = Assert.Single(afterFirst);
+        Assert.Equal(secondGoalOperation.Sequence, resumed.Sequence);
+        Assert.Equal(RunEventTypes.GoalOperation, resumed.EventType);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_defers_when_database_write_lock_is_active")]
+    public async Task SqliteRunEventStoreMaintenanceDefersWhenDatabaseWriteLockIsActive()
+    {
+        var db = TempDb();
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.ConductorTick,
+            null,
+            "conduct:tick",
+            "Active",
+            "old tick",
+            "{}",
+            OccurredAt: DateTimeOffset.Parse("2026-07-01T12:00:00Z")));
+        await using var blocker = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
+        await blocker.OpenAsync();
+        await using var begin = blocker.CreateCommand();
+        begin.CommandText = "BEGIN IMMEDIATE";
+        await begin.ExecuteNonQueryAsync();
+
+        var result = await store.MaintainAsync(new RunEventMaintenanceOptions(
+            TimeSpan.FromDays(1),
+            MinConductorTickRowsToKeep: 0,
+            Vacuum: true,
+            UtcNow: DateTimeOffset.Parse("2026-07-16T12:00:00Z")));
+
+        Assert.True(result.Deferred);
+        Assert.Equal("database-busy", result.DeferredReason);
+        Assert.Equal(0, result.ConductorTickRowsDeleted);
+
+        await using var rollback = blocker.CreateCommand();
+        rollback.CommandText = "ROLLBACK";
+        await rollback.ExecuteNonQueryAsync();
     }
 
     private static string TempDb() => Path.Combine(CreateTempDirectory(), "run-events.db");

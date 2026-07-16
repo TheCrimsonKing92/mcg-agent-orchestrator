@@ -53,9 +53,7 @@ public sealed class DashboardRenderingTests
 
     var records = await new SqliteRunEventStore(db).ReadSinceAsync();
     var tick = Assert.Single(DashboardMonitoringEvents.BuildConductorTickEvents(records));
-    var disposition = Assert.Single(tick.OperatorDispositions!);
-    Assert.Equal(OperatorDispositionState.Wait, disposition.State);
-    Assert.Equal("conductor-owned wait", disposition.Reason);
+    Assert.Null(tick.OperatorDispositions);
 
     using var stream = new MemoryStream();
     await DashboardMonitoringEvents.WriteServerSentEventAsync(
@@ -75,8 +73,7 @@ public sealed class DashboardRenderingTests
     Assert.True(sse.Contains("id: run-", StringComparison.Ordinal));
     Assert.True(sse.Contains("event: conductor.tick", StringComparison.Ordinal));
     Assert.True(sse.Contains("\"Tick\": 4", StringComparison.Ordinal));
-    Assert.True(sse.Contains("\"OperatorDispositions\"", StringComparison.Ordinal));
-    Assert.True(sse.Contains("conductor-owned wait", StringComparison.Ordinal));
+    Assert.DoesNotContain("conductor-owned wait", sse, StringComparison.Ordinal);
     Assert.True(sse.Contains("event: conductor.progress", StringComparison.Ordinal));
     Assert.True(sse.Contains("\"Line\": \"GOAL goal=abc12345 result=done state=Complete\"", StringComparison.Ordinal));
     Assert.True(sse.Contains("GOAL goal=abc12345 result=done state=Complete", StringComparison.Ordinal));
