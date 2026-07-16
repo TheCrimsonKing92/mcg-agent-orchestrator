@@ -10,6 +10,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$driveJournalSchemaVersion = 1
+
 function ConvertTo-SafeName {
     param([string]$Value)
     $safe = ($Value.Trim().ToLowerInvariant().ToCharArray() | ForEach-Object {
@@ -64,6 +66,78 @@ function ConvertTo-CommandLineArgument {
 
     [void]$quoted.Append('"')
     return $quoted.ToString()
+}
+
+function Get-ArgumentValue {
+    param(
+        [string[]]$Values,
+        [string]$Name
+    )
+
+    for ($i = 0; $i -lt $Values.Count; $i++) {
+        if ($Values[$i].Equals($Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (($i + 1) -lt $Values.Count) {
+                return $Values[$i + 1]
+            }
+
+            return $null
+        }
+    }
+
+    return $null
+}
+
+function Test-HasArgument {
+    param(
+        [string[]]$Values,
+        [string]$Name
+    )
+
+    foreach ($value in $Values) {
+        if ($value.Equals($Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Write-LastDriveJournal {
+    param(
+        [string]$RepositoryRoot,
+        [string]$JournalPath,
+        [string]$BatchName,
+        [string]$ApplicationDll,
+        [string[]]$CommandArguments
+    )
+
+    if ($CommandArguments.Count -lt 2 -or
+        -not $CommandArguments[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-HasArgument -Values $CommandArguments -Name "--loop")) {
+        return
+    }
+
+    $orchestratorRoot = Split-Path -Parent $JournalPath
+    New-Item -ItemType Directory -Force -Path $orchestratorRoot | Out-Null
+
+    $journal = [ordered]@{
+        schemaVersion = $driveJournalSchemaVersion
+        writtenAt = (Get-Date).ToUniversalTime().ToString("O", [System.Globalization.CultureInfo]::InvariantCulture)
+        repoRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
+        name = $BatchName
+        appDll = if ([string]::IsNullOrWhiteSpace($ApplicationDll)) { $null } else { [System.IO.Path]::GetFullPath($ApplicationDll) }
+        arguments = @($CommandArguments)
+        policy = Get-ArgumentValue -Values $CommandArguments -Name "--policy"
+        pollSeconds = Get-ArgumentValue -Values $CommandArguments -Name "--poll-seconds"
+        watchInterval = Get-ArgumentValue -Values $CommandArguments -Name "--watch-interval"
+        maxDuration = Get-ArgumentValue -Values $CommandArguments -Name "--max-duration"
+        maxIterations = Get-ArgumentValue -Values $CommandArguments -Name "--max-iterations"
+        watch = Test-HasArgument -Values $CommandArguments -Name "--watch"
+        daemon = Test-HasArgument -Values $CommandArguments -Name "--daemon"
+    }
+
+    $json = $journal | ConvertTo-Json -Depth 8
+    Set-Content -LiteralPath $JournalPath -Value $json -Encoding UTF8
 }
 
 function Write-LaunchFailure {
@@ -143,11 +217,21 @@ try {
 
     $processArgumentLine = ($launchArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
 
+    $journalPath = Join-Path $repoRoot ".orchestrator\last-drive.json"
+    Write-LastDriveJournal `
+        -RepositoryRoot $repoRoot `
+        -JournalPath $journalPath `
+        -BatchName $Name `
+        -ApplicationDll $AppDll `
+        -CommandArguments $Arguments
+
     $previousStdoutLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", "Process")
     $previousStderrLogPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", "Process")
+    $previousBatchName = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", "Process")
     $startedAt = (Get-Date).ToUniversalTime().ToString("O", [System.Globalization.CultureInfo]::InvariantCulture)
     [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $stdoutPath, "Process")
     [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $stderrPath, "Process")
+    [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", $Name, "Process")
 
     try {
         $process = Start-Process `
@@ -162,6 +246,7 @@ try {
     finally {
         [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH", $previousStdoutLogPath, "Process")
         [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH", $previousStderrLogPath, "Process")
+        [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", $previousBatchName, "Process")
     }
 
     [pscustomobject]@{
