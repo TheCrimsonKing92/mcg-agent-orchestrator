@@ -111,8 +111,8 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Equal("focused CLI infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
         Assert.False(check.Command.Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
-        Assert.False(check.Command.Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
     }
 
@@ -127,6 +127,8 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Equal("focused dashboard infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
     }
 
@@ -143,8 +145,8 @@ public sealed class RepositoryChangeClassifierTests
         Assert.DoesNotContain("--filter", check.Command);
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_multiple_app_subsystems")]
-    public void RepositoryTestImpactPlannerFallsBackToFullInfrastructureTestsForMultipleAppSubsystems()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_union_filter_for_multiple_mapped_app_subsystems")]
+    public void RepositoryTestImpactPlannerSelectsUnionFilterForMultipleMappedAppSubsystems()
     {
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs",
@@ -152,8 +154,14 @@ public sealed class RepositoryChangeClassifierTests
         ]);
 
         var check = Assert.Single(plan.Checks);
-        Assert.Equal("infrastructure tests", check.Name);
-        Assert.DoesNotContain("--filter", check.Command);
+        Assert.Equal("focused CLI+dashboard infrastructure tests", check.Name);
+        Assert.Contains("--filter", check.Command);
+        Assert.Contains(check.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+        Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_disables_focused_app_filter_when_shared_infrastructure_changes")]

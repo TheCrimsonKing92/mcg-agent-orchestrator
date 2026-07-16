@@ -1552,8 +1552,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Contains("--filter", calls[2]);
         Assert.Contains(calls[2], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains(calls[2], argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
         Assert.False(calls[2].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
-        Assert.False(calls[2].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
         Assert.Contains(result.Checks!, check => check.Name == "focused CLI infrastructure tests");
         Assert.Contains(result.Checks!, check =>
@@ -1608,19 +1608,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains("covered by: focused changed infrastructure tests", infrastructureReceipt.ResultSummary, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_infrastructure_suite_for_multiple_app_subsystems")]
-    public async Task GoalAcceptanceVerifierPartitionsInfrastructureSuiteForMultipleAppSubsystems()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_union_filter_for_multiple_mapped_app_subsystems")]
+    public async Task GoalAcceptanceVerifierRunsUnionFilterForMultipleMappedAppSubsystems()
     {
         var root = CreateStandardManifestWorkspace();
         var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Focused App tests passed.")
+        ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
-            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                0,
-                args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                    ? "Infrastructure partition passed."
-                    : ""));
+            return Task.FromResult(responses.Dequeue());
         });
 
         var result = await verifier.RunAsync(
@@ -1638,22 +1639,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call[1] == "test" &&
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
-        Assert.Equal(18, infrastructureCalls.Length);
+        var call = Assert.Single(infrastructureCalls);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
-        foreach (var call in infrastructureCalls)
-            Assert.Contains("--filter", call);
-        Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
-        Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardRenderingTests"));
-        Assert.Contains(infrastructureCalls, call =>
-            call.Any(argument => argument.Contains("FullyQualifiedName!~DashboardHostTests", StringComparison.Ordinal) &&
-                argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Dashboard rendering");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        Assert.Contains("--filter", call);
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardValidationHarnessTests", StringComparison.Ordinal));
+        Assert.Contains(result.Checks!, check => check.Name == "focused CLI+dashboard infrastructure tests");
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == "covered by 18 partitioned checks");
+            check.ResultSummary == "covered by: focused CLI+dashboard infrastructure tests");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_safety_valves_force_full_policy_shards")]
