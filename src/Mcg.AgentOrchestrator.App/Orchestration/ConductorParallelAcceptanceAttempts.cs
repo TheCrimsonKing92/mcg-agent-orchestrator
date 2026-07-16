@@ -198,10 +198,22 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             var launch = _launchOwnedProcess(new ConductorParallelAcceptanceOwnedProcessLaunch(
                 attempt,
-                childPid => RunAttempt(attempt with { OwnerProcessId = childPid }, candidate, policy, runAcceptance)));
-            var launched = attempt with { OwnerProcessId = launch.ProcessId };
-            Persist(launched);
-            WriteHeartbeat(launched, "running");
+                childPid =>
+                {
+                    var activeAttempt = TryPersistOwnerProcess(attempt, childPid);
+                    if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+                    {
+                        return;
+                    }
+
+                    RunAttempt(activeAttempt, candidate, policy, runAcceptance);
+                }));
+            var launched = TryPersistOwnerProcess(attempt, launch.ProcessId);
+            if (launched.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                WriteHeartbeat(launched, "running");
+            }
+
             return ConductorParallelAcceptanceAttemptDecision.Started(launched);
         }
         catch (Exception ex)
@@ -274,9 +286,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory,
                 executionDirectory);
-            coordinator.Persist(attempt with { OwnerProcessId = Environment.ProcessId });
+            var activeAttempt = coordinator.TryPersistOwnerProcess(attempt, Environment.ProcessId);
+            if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                return 0;
+            }
+
             coordinator.RunAttempt(
-                attempt with { OwnerProcessId = Environment.ProcessId },
+                activeAttempt,
                 candidate,
                 policy,
                 driver.RunParallelLandingAcceptance);
@@ -548,6 +565,40 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             WriteAttemptFile(transition(current));
             return true;
+        }
+    }
+
+    private ConductorParallelAcceptanceAttempt TryPersistOwnerProcess(
+        ConductorParallelAcceptanceAttempt attempt,
+        int ownerProcessId)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null ||
+                !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+            {
+                var missing = attempt with
+                {
+                    OwnerProcessId = ownerProcessId,
+                    LastHeartbeatAt = _utcNow()
+                };
+                WriteAttemptFile(missing);
+                return missing;
+            }
+
+            if (current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                return current;
+            }
+
+            var updated = current with
+            {
+                OwnerProcessId = ownerProcessId,
+                LastHeartbeatAt = _utcNow()
+            };
+            WriteAttemptFile(updated);
+            return updated;
         }
     }
 

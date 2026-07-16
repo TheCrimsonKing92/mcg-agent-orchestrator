@@ -694,6 +694,38 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_fast_child_terminal_outcome_survives_parent_pid_update")]
+    public void ParallelAcceptanceFastChildTerminalOutcomeSurvivesParentPidUpdate()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/FastCancel.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            launchOwnedProcess: launch =>
+            {
+                launch.ExecuteInCurrentProcess(7030);
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7030);
+            });
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/FastCancel.cs"], "branch", "main");
+
+        try
+        {
+            var started = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                (_, _) => throw new OperationCanceledException("operator cancelled"));
+            var persisted = ReadAttempt(started.Attempt.MetadataPath);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Cancelled, persisted.Outcome);
+            Assert.Equal(7030, persisted.OwnerProcessId);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_background_cancellation_and_build_blocks_are_typed")]
     public void ParallelAcceptanceBackgroundCancellationAndBuildBlocksAreTyped()
     {
