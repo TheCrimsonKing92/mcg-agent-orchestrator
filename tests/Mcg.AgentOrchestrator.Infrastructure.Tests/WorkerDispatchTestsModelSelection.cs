@@ -1513,6 +1513,65 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model-selection: full-profile: role is write-capable or gate-heavy", preflight, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "Reviewer_subscription_dispatch_uses_xhigh_reasoning_only_for_high_risk_intake_labels")]
+    public void ReviewerSubscriptionDispatchUsesXhighReasoningOnlyForHighRiskIntakeLabels()
+{
+    var highRiskWorkingDirectory = CreateSeededDispatchRepository();
+    var normalWorkingDirectory = CreateSeededDispatchRepository();
+    WriteSkill(highRiskWorkingDirectory, "orchestrator-worker-verification");
+    WriteSkill(normalWorkingDirectory, "orchestrator-worker-verification");
+    var highRiskPromptRoot = Path.Combine(highRiskWorkingDirectory, "prompts");
+    var normalPromptRoot = Path.Combine(normalWorkingDirectory, "prompts");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox read-only --cd {workingDirectory}")
+    ]);
+    var agents = AgentCatalog.Default().Agents;
+    var highRiskKernel = new AgentOrchestratorKernel();
+    var normalKernel = new AgentOrchestratorKernel();
+    var highRiskTask = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var normalTask = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var highRiskGoal = highRiskKernel.CreateGoal("Review stored intake labels", [highRiskTask]);
+    var normalGoal = normalKernel.CreateGoal("Review stored intake labels", [normalTask]);
+    highRiskKernel.RecordGoalPolicyDecision(
+        highRiskGoal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: high-risk, multi-scope.");
+    normalKernel.RecordGoalPolicyDecision(
+        normalGoal.Id,
+        "Intake pipeline decision (auto): developer-only; reasons: simple code objective; risk labels: low-risk.");
+    highRiskKernel.ActivateGoal(highRiskGoal.Id, agents);
+    normalKernel.ActivateGoal(normalGoal.Id, agents);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        highRiskKernel,
+        highRiskGoal,
+        highRiskTask,
+        agents,
+        profiles,
+        highRiskPromptRoot,
+        highRiskWorkingDirectory,
+        dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        normalKernel,
+        normalGoal,
+        normalTask,
+        agents,
+        profiles,
+        normalPromptRoot,
+        normalWorkingDirectory,
+        dispatchedAt);
+
+    Assert.Equal("codex-cli", highRiskTask.LastDispatch!.WorkerName);
+    Assert.Equal("xhigh", highRiskTask.LastDispatch.ReasoningEffort);
+    Assert.Contains("model_reasoning_effort='xhigh'", highRiskTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Equal("intake-risk", highRiskTask.LastDispatch.ReasoningEffortReason);
+    Assert.Equal("codex-cli", normalTask.LastDispatch!.WorkerName);
+    Assert.Equal("low", normalTask.LastDispatch.ReasoningEffort);
+    Assert.Contains("model_reasoning_effort='low'", normalTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Equal("base", normalTask.LastDispatch.ReasoningEffortReason);
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_explicit_codex_oss_profile_uses_codex_stdin_delivery")]
     public void SubscriptionDispatchExplicitCodexOssProfileUsesCodexStdinDelivery()
 {

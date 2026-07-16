@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -31,6 +32,7 @@ internal sealed class ConductorWatchProgressReporter
     public IReadOnlyList<string> BuildLines(
         Goal goal,
         bool quiet,
+        ConductorAutonomyPolicy policy,
         TimeSpan? watchInterval = null,
         TimeSpan? stallThreshold = null)
     {
@@ -40,15 +42,24 @@ internal sealed class ConductorWatchProgressReporter
         }
 
         var now = _now();
-        var active = GetActiveTask(goal);
-        if (active is null || active.LastDispatch is null)
-        {
-            return [];
-        }
-
         var lines = new List<string>();
         var goalKey = goal.Id.Value;
         var previous = _lastEmitted.GetValueOrDefault(goalKey);
+        var active = GetActiveTask(goal);
+        if (active is null || active.LastDispatch is null)
+        {
+            var priorTask = previous is null
+                ? null
+                : goal.Tasks.FirstOrDefault(task => task.Id.Value == previous.TaskId);
+            if (previous is not null && ShouldEmitTerminalTransition(goal, priorTask))
+            {
+                lines.AddRange(FormatTerminalTransition(goal, previous, priorTask!, ResolveTerminalNext(goal, policy)));
+                _lastEmitted.Remove(goalKey);
+            }
+
+            return lines;
+        }
+
         if (previous is not null && previous.TaskId != active.Id.Value)
         {
             var priorTask = goal.Tasks.FirstOrDefault(task => task.Id.Value == previous.TaskId);
@@ -208,6 +219,42 @@ internal sealed class ConductorWatchProgressReporter
         var humanCommit = commit == "unknown" ? commit : commit[..Math.Min(7, commit.Length)];
         var human =
             $"[{previous.GoalPrefix}] {previous.Role} - committed {humanCommit} ({FormatFileCount(previous.ChangedFileCount)}, {FormatDuration(previous.Elapsed)}) -> {next.RequiredRole} dispatched";
+        return [machine, human];
+    }
+
+    private static bool ShouldEmitTerminalTransition(Goal goal, TaskSpec? priorTask) =>
+        priorTask is { Status: WorkTaskStatus.Completed } &&
+        goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed);
+
+    private static string ResolveTerminalNext(Goal goal, ConductorAutonomyPolicy policy)
+    {
+        return goal.Status == GoalStatus.Verified &&
+            policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Auto
+                ? "acceptance-gate"
+                : "none";
+    }
+
+    private static IReadOnlyList<string> FormatTerminalTransition(
+        Goal goal,
+        EmittedSnapshot previous,
+        TaskSpec priorTask,
+        string next)
+    {
+        var commitValue = priorTask.LastDispatch?.ResultCommit ?? previous.ResultCommit;
+        var commit = string.IsNullOrWhiteSpace(commitValue) ? "unknown" : commitValue;
+        if (commit.Length > 12)
+        {
+            commit = commit[..12];
+        }
+
+        var taskNumber = ConsoleViews.GetTaskDisplayNumber(goal, priorTask.Id);
+        var machine =
+            $"WATCH_TRANSITION goal={previous.GoalPrefix} {previous.Role}=✓ commit={commit} " +
+            $"files={previous.ChangedFileCount} elapsed={FormatDuration(previous.Elapsed)} next={next} task={taskNumber}/{goal.Tasks.Count}";
+        var humanCommit = commit == "unknown" ? commit : commit[..Math.Min(7, commit.Length)];
+        var humanNext = next == "none" ? "complete" : next;
+        var human =
+            $"[{previous.GoalPrefix}] {previous.Role} - committed {humanCommit} ({FormatFileCount(previous.ChangedFileCount)}, {FormatDuration(previous.Elapsed)}) -> {humanNext}";
         return [machine, human];
     }
 

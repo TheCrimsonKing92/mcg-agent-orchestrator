@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class SdlcRolePromptRequirements
 {
+    private const string IntakeRiskLabelsMarker = "risk labels:";
+
     public static IReadOnlyList<string> Build(AgentRole role)
     {
         return role switch
@@ -78,6 +80,23 @@ internal static class SdlcRolePromptRequirements
         return complexity == TaskComplexity.Complex ? Build(role) : BuildCompact(role);
     }
 
+    public static IReadOnlyList<string> Build(
+        AgentRole role,
+        TaskComplexity complexity,
+        bool includeHighRiskReviewerEnumerationContract)
+    {
+        var requirements = Build(role, complexity);
+        if (!includeHighRiskReviewerEnumerationContract || role != AgentRole.Reviewer)
+        {
+            return requirements;
+        }
+
+        var lines = requirements.ToList();
+        lines.Add("- High-risk review enumeration contract: if your verdict is needs-work, list all acceptance-blocking findings you discover in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
+        lines.Add("- Keep the WORKER_RESULT blockers field format unchanged; put the complete ranked blocker list in that existing field.");
+        return lines;
+    }
+
     public static string BuildPlainText(AgentRole role)
     {
         return string.Join(Environment.NewLine, Build(role));
@@ -86,6 +105,21 @@ internal static class SdlcRolePromptRequirements
     public static string BuildPlainText(AgentRole role, TaskComplexity complexity)
     {
         return string.Join(Environment.NewLine, Build(role, complexity));
+    }
+
+    public static string BuildPlainText(
+        AgentRole role,
+        TaskComplexity complexity,
+        bool includeHighRiskReviewerEnumerationContract)
+    {
+        return string.Join(Environment.NewLine, Build(role, complexity, includeHighRiskReviewerEnumerationContract));
+    }
+
+    public static bool HasHighRiskOrComplexIntakeRiskLabel(Goal goal)
+    {
+        return EnumerateStoredIntakeRiskLabels(goal).Any(label =>
+            label.Equals("high-risk", StringComparison.OrdinalIgnoreCase) ||
+            label.Equals("complex", StringComparison.OrdinalIgnoreCase));
     }
 
     private static IReadOnlyList<string> BuildCompact(AgentRole role)
@@ -140,5 +174,29 @@ internal static class SdlcRolePromptRequirements
             ],
             _ => []
         };
+    }
+
+    private static IEnumerable<string> EnumerateStoredIntakeRiskLabels(Goal goal)
+    {
+        foreach (var evt in goal.Timeline.Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision))
+        {
+            var markerIndex = evt.Message.IndexOf(IntakeRiskLabelsMarker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0)
+            {
+                continue;
+            }
+
+            var labelsText = evt.Message[(markerIndex + IntakeRiskLabelsMarker.Length)..].Trim();
+            var sentenceEnd = labelsText.IndexOf('.');
+            if (sentenceEnd >= 0)
+            {
+                labelsText = labelsText[..sentenceEnd];
+            }
+
+            foreach (var label in labelsText.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                yield return label;
+            }
+        }
     }
 }

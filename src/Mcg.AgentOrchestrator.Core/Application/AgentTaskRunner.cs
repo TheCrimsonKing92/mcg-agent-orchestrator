@@ -230,7 +230,7 @@ public sealed class AgentTaskRunner
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan, complexity)}{Environment.NewLine}" +
             responseGuidance +
             modelFitGuidance +
-            $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity)}" +
+            $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity, SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal))}" +
             priorTaskEvidenceSection +
             workspaceDiffSection +
             timelineSection;

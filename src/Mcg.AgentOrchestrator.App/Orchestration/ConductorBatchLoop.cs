@@ -168,7 +168,7 @@ internal sealed class ConductorBatchLoop
                     EmitProgress($"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
-                        : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal);
+                        : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
                         _sweep(kernel);
@@ -389,7 +389,7 @@ internal sealed class ConductorBatchLoop
             {
                 foreach (var goal in eligible)
                 {
-                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, watchInterval, stallWarningThreshold))
+                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, policy, watchInterval, stallWarningThreshold))
                     {
                         EmitProgress(line, tickLines);
                     }
@@ -460,7 +460,7 @@ internal sealed class ConductorBatchLoop
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
-                    : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal);
+                    : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
@@ -1534,8 +1534,24 @@ internal sealed class ConductorBatchLoop
             (onlyGoalId is null || goal.Id.Value == onlyGoalId)
             && goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }));
 
-    private static WatchSleepResult SleepUntilNextTick(TimeSpan interval, string stopFilePath, IConductorWakeSignal? wakeSignal)
+    private static IReadOnlyList<string> GetRunningDispatchExitCodePaths(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
+        kernel.Goals
+            .Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId)
+            .SelectMany(goal => goal.Tasks)
+            .Select(task => task.LastProcess)
+            .OfType<TaskProcessRecord>()
+            .Where(process => process.IsRunning && !string.IsNullOrWhiteSpace(process.ExitCodePath))
+            .Select(process => process.ExitCodePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static WatchSleepResult SleepUntilNextTick(
+        TimeSpan interval,
+        string stopFilePath,
+        IConductorWakeSignal? wakeSignal,
+        IReadOnlyList<string> trackedExitCodePaths)
     {
+        wakeSignal?.UpdateTrackedExitArtifacts(trackedExitCodePaths);
         var remaining = interval;
         var poll = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
         while (remaining > TimeSpan.Zero)

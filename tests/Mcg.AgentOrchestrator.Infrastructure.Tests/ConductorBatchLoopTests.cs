@@ -114,6 +114,7 @@ public sealed class ConductorBatchLoopTests
         var landed = new HashSet<string>(StringComparer.Ordinal);
         object gate = new();
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        Action waitForAttempts = () => { };
 
         try
         {
@@ -158,7 +159,7 @@ public sealed class ConductorBatchLoopTests
                 getLandingFileScopes: goal => goal.Id == goalA.Id
                     ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
                     : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
-                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot));
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             BatchTickSummary? startTick = null;
             var startClock = Stopwatch.StartNew();
@@ -217,6 +218,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -232,6 +234,7 @@ public sealed class ConductorBatchLoopTests
         var slots = new ConcurrentQueue<int?>();
         var landed = new HashSet<string>(StringComparer.Ordinal);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        Action waitForAttempts = () => { };
 
         try
         {
@@ -257,7 +260,7 @@ public sealed class ConductorBatchLoopTests
                     return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
                 },
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"],
-                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot));
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             var totalAdvanced = 0;
             var totalHeld = 0;
@@ -282,6 +285,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -398,6 +402,7 @@ public sealed class ConductorBatchLoopTests
         object gate = new();
         var landed = new HashSet<string>(StringComparer.Ordinal);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        Action waitForAttempts = () => { };
 
         try
         {
@@ -437,7 +442,7 @@ public sealed class ConductorBatchLoopTests
                     landed.Add(goal.Id.Value);
                     return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
                 },
-                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot));
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             BatchTickSummary? firstTick = null;
             var firstSummary = new ConductorBatchLoop().Run(
@@ -479,6 +484,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -1061,10 +1067,25 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
-    private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(string attemptRoot)
+    private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
+        string attemptRoot,
+        out Action waitForAttempts)
     {
         var nextPid = 8000;
         var alive = new ConcurrentDictionary<int, byte>();
+        var threads = new ConcurrentBag<Thread>();
+        waitForAttempts = () =>
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            foreach (var thread in threads)
+            {
+                var remaining = deadline - DateTime.UtcNow;
+                Assert.True(
+                    remaining > TimeSpan.Zero && thread.Join(remaining),
+                    $"acceptance attempt thread {thread.Name} did not finish before cleanup");
+            }
+        };
+
         return new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
             isProcessAlive: pid => alive.ContainsKey(pid),
@@ -1087,6 +1108,7 @@ public sealed class ConductorBatchLoopTests
                     IsBackground = true,
                     Name = $"acceptance-attempt-test-{pid}"
                 };
+                threads.Add(thread);
                 thread.Start();
                 return new ConductorParallelAcceptanceOwnedProcessLaunchResult(pid);
             });
@@ -1115,7 +1137,7 @@ public sealed class ConductorBatchLoopTests
     {
         var (_, goal) = SimpleGoal($"Update src/Mcg.AgentOrchestrator.App/Orchestration/{fileName}");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
-        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot);
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out var waitForAttempts);
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
             0,
@@ -1133,6 +1155,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -2023,6 +2046,37 @@ public sealed class ConductorBatchLoopTests
             null,
             null,
             OwnedProcessIds: [processId]));
+    }
+
+    private static void CompleteDispatchedTask(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset completedAt,
+        string resultCommit)
+    {
+        kernel.RecordDispatchResultCommit(goal.Id, task.Id, resultCommit);
+        var process = kernel.GetTask(goal.Id, task.Id).LastProcess!;
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            process with { CompletedAt = completedAt, ExitCode = 0 },
+            null);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("manual", process.WorkingDirectory, 0, "ok", "", completedAt));
+    }
+
+    private static ConductorAutonomyPolicy PolicyEscalatingAtVerified()
+    {
+        var transitionMap = ConductorAutonomyPolicy.Conservative.TransitionMap.ToDictionary();
+        transitionMap[GoalLifecycleState.Verified] = ConductorTransitionDecision.Escalate;
+        return ConductorAutonomyPolicy.Conservative with
+        {
+            Name = "VerifiedEscalates",
+            TransitionMap = transitionMap
+        };
     }
 
     private static ConductorWatchProgressReporter FakeWatchReporter(
@@ -3853,6 +3907,8 @@ public sealed class ConductorBatchLoopTests
             wakeSignal: wakeSignal);
 
         Assert.Equal(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds), wakeSignal.Timeouts.Single());
+        Assert.Contains(wakeSignal.TrackedExitCodePathUpdates.Single(),
+            path => string.Equals(path, exit, StringComparison.OrdinalIgnoreCase));
         Assert.True(sweepCalls >= 2);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
         Assert.False(summary.StopRequested);
@@ -3963,6 +4019,104 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WatchMode_no_exit_wake_waits_running_dispatch_fallback_interval")]
+    public void WatchModeNoExitWakeWaitsRunningDispatchFallbackInterval()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-wake-no-event-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var exit = Path.Combine(root, "worker.exit.txt");
+        var stdout = Path.Combine(root, "worker.out.log");
+        var stderr = Path.Combine(root, "worker.err.log");
+        File.WriteAllText(stdout, "still running");
+        File.WriteAllText(stderr, "");
+
+        var (kernel, goal) = SimpleGoal("running goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", root, now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(1234, "test.exe", root, stdout, stderr, exit, now, null, null, OwnedProcessIds: [1234]));
+
+        var wakeSignal = new TestWakeSignal(_ => false);
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
+                wakeSignal: wakeSignal);
+
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal([TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)], wakeSignal.Timeouts);
+            Assert.Contains(wakeSignal.TrackedExitCodePathUpdates.Single(),
+                path => string.Equals(path, exit, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WatchMode_multiple_exit_wakes_coalesce_into_one_immediate_tick")]
+    public void WatchModeMultipleExitWakesCoalesceIntoOneImmediateTick()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-wake-coalesce-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var exitPaths = new List<string>();
+        for (var i = 0; i < 3; i++)
+        {
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), $"running goal {i}");
+            var task = goal.Tasks.Single();
+            var stdout = Path.Combine(root, $"worker-{i}.out.log");
+            var stderr = Path.Combine(root, $"worker-{i}.err.log");
+            var exit = Path.Combine(root, $"worker-{i}.exit.txt");
+            File.WriteAllText(stdout, "done");
+            File.WriteAllText(stderr, "");
+            var now = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", root, now));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+                new TaskProcessRecord(1234 + i, "test.exe", root, stdout, stderr, exit, now, null, null, OwnedProcessIds: [1234 + i]));
+            exitPaths.Add(exit);
+        }
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        var wakeSignal = new TestWakeSignal(() =>
+        {
+            foreach (var exitPath in exitPaths)
+            {
+                File.WriteAllText(exitPath, "0");
+            }
+        });
+
+        try
+        {
+            var summary = new ConductorBatchLoop(loopKernel => runner.SweepExitedProcesses(loopKernel)).Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
+                wakeSignal: wakeSignal);
+
+            Assert.Equal(1, wakeSignal.SignaledWaits);
+            Assert.Single(wakeSignal.Timeouts);
+            Assert.Equal(3, wakeSignal.TrackedExitCodePathUpdates.Single().Count);
+            Assert.All(exitPaths, exitPath => Assert.Contains(wakeSignal.TrackedExitCodePathUpdates.Single(),
+                trackedPath => string.Equals(trackedPath, exitPath, StringComparison.OrdinalIgnoreCase)));
+            Assert.False(kernel.Goals.SelectMany(goal => goal.Tasks).Any(task => task.LastProcess is { IsRunning: true }));
+            Assert.False(summary.StopRequested);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WatchMode_idle_without_running_workers_keeps_default_fallback")]
     public void WatchModeIdleWithoutRunningWorkersKeepsDefaultFallback()
     {
@@ -3991,6 +4145,7 @@ public sealed class ConductorBatchLoopTests
                 keepAliveWhenIdle: true);
 
             Assert.Equal(TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds), TimeSpan.FromTicks(wakeSignal.Timeouts.Sum(t => t.Ticks)));
+            Assert.All(wakeSignal.TrackedExitCodePathUpdates, update => Assert.Empty(update));
             Assert.True(wakeSignal.Timeouts.All(timeout => timeout <= TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)));
             Assert.Equal(0, summary.Ticks);
             Assert.True(summary.StopRequested);
@@ -4066,10 +4221,25 @@ public sealed class ConductorBatchLoopTests
 
         public List<TimeSpan> Timeouts { get; } = [];
 
+        public List<IReadOnlyList<string>> TrackedExitCodePathUpdates { get; } = [];
+
+        public int SignaledWaits { get; private set; }
+
+        public void UpdateTrackedExitArtifacts(IReadOnlyCollection<string> exitCodePaths)
+        {
+            TrackedExitCodePathUpdates.Add(exitCodePaths.ToArray());
+        }
+
         public bool Wait(TimeSpan timeout)
         {
             Timeouts.Add(timeout);
-            return _wait?.Invoke(++_waits) ?? false;
+            var signaled = _wait?.Invoke(++_waits) ?? false;
+            if (signaled)
+            {
+                SignaledWaits++;
+            }
+
+            return signaled;
         }
 
         public void Dispose()
@@ -4481,13 +4651,110 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("Planner=✓", transition);
         Assert.Contains("commit=deadbeefcafe", transition);
         Assert.Contains("files=2", transition);
+        Assert.Contains("elapsed=3m0s", transition);
         Assert.Contains("next=Developer", transition);
+        Assert.Contains("task=2/2", transition);
         Assert.True(ticks.SelectMany(t => t.ProgressLines ?? []).Any(l => l.Contains("role=Developer", StringComparison.Ordinal)));
 
         var human = ticks.SelectMany(t => t.ProgressLines ?? []).Single(l => l.StartsWith($"[{goal.Id.Value[..8]}] Planner - committed", StringComparison.Ordinal));
         Assert.Contains("committed deadbee", human);
         Assert.Contains("(2 files changed, 3m0s)", human);
         Assert.Contains("-> Developer dispatched", human);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_emits_final_transition_before_gated_lifecycle_event")]
+    public void WatchProgressEmitsFinalTransitionBeforeGatedLifecycleEvent()
+    {
+        var (kernel, goal) = SimpleGoal("watch final gated transition");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-3), "abc123");
+        var calls = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            calls++;
+            if (calls == 2)
+            {
+                CompleteDispatchedTask(loopKernel, goal, task, now, "feedfacecafebabe");
+            }
+        };
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111], [111], ["src/A.cs", "src/B.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(sweep: sweep, watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        var terminalTick = Assert.Single(ticks.Where(t => (t.ProgressLines ?? [])
+            .Any(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal))));
+        var lines = terminalTick.ProgressLines!.ToList();
+        var transitionIndex = lines.FindIndex(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal));
+        var lifecycleIndex = lines.FindIndex(l => l.StartsWith($"GOAL goal={goal.Id.Value[..8]} ", StringComparison.Ordinal));
+        Assert.True(transitionIndex >= 0);
+        Assert.True(lifecycleIndex >= 0);
+        Assert.True(transitionIndex < lifecycleIndex);
+
+        var transition = lines[transitionIndex];
+        Assert.Contains($"{task.RequiredRole}=✓", transition);
+        Assert.Contains("commit=feedfacecafe", transition);
+        Assert.Contains("files=2", transition);
+        Assert.Contains("elapsed=3m0s", transition);
+        Assert.Contains("next=acceptance-gate", transition);
+        Assert.Contains("task=1/1", transition);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_emits_final_transition_before_ungated_lifecycle_event")]
+    public void WatchProgressEmitsFinalTransitionBeforeUngatedLifecycleEvent()
+    {
+        var (kernel, goal) = SimpleGoal("watch final ungated transition");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-3), "abc123");
+        var calls = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            calls++;
+            if (calls == 2)
+            {
+                CompleteDispatchedTask(loopKernel, goal, task, now, "0123456789abcdef");
+            }
+        };
+        var policy = PolicyEscalatingAtVerified();
+        var reporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111], [111], ["src/A.cs"]);
+        var ticks = new List<BatchTickSummary>();
+
+        new ConductorBatchLoop(sweep: sweep, watchProgressReporter: reporter).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            policy,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ => false,
+            onTick: ticks.Add);
+
+        var terminalTick = Assert.Single(ticks.Where(t => (t.ProgressLines ?? [])
+            .Any(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal))));
+        var lines = terminalTick.ProgressLines!.ToList();
+        var transitionIndex = lines.FindIndex(l => l.StartsWith("WATCH_TRANSITION ", StringComparison.Ordinal));
+        var lifecycleIndex = lines.FindIndex(l => l.StartsWith($"GOAL goal={goal.Id.Value[..8]} ", StringComparison.Ordinal));
+        Assert.True(transitionIndex >= 0);
+        Assert.True(lifecycleIndex >= 0);
+        Assert.True(transitionIndex < lifecycleIndex);
+
+        var transition = lines[transitionIndex];
+        Assert.Contains($"{task.RequiredRole}=✓", transition);
+        Assert.Contains("commit=0123456789ab", transition);
+        Assert.Contains("files=1", transition);
+        Assert.Contains("elapsed=3m0s", transition);
+        Assert.Contains("next=none", transition);
+        Assert.Contains("task=1/1", transition);
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_uses_operator_supplied_stall_warning_threshold")]
