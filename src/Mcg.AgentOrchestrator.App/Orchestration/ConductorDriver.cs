@@ -394,6 +394,9 @@ internal sealed class ConductorDriver
                 return;
             }
 
+            RemoteGitMirror.EnqueueAfterLanding(dir, goal);
+            RefreshJournal(goal.Id);
+
             if (goal.SourceBacklogItemId is null)
             {
                 return;

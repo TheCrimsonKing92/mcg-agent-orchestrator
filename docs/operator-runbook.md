@@ -305,6 +305,20 @@ git merge --no-ff goal/<goal-prefix>
 
 Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. Pre-landing verification merges happen on a scratch branch such as `verify/<prefix>`, never on `main`; `main` moves only at the actual landing step. Until the c0624af9 verification fix lands, a goal can reach `Verified` without executed self-tests, so before any hand-landing run the goal's own new/changed test classes and keep the receipts. `goal-mark-landed` records the out-of-band merge, writes a durable retired terminal disposition, and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
 
+### 6.2.2 Optional remote mirror
+
+Remote mirroring is disabled unless `config/mirror.json` opts in. The file names git remotes already configured in the repository; the conductor uses plain `git push`, so it works with GitHub, GitLab, Gitea, Bitbucket, and bare SSH/filesystem remotes without forge APIs.
+
+```json
+{
+  "enabled": true,
+  "remotes": ["origin", "backup"],
+  "push": { "main": true, "goalBranch": true, "tags": true }
+}
+```
+
+After a durable landing, the conductor enqueues mirror debt and the terminal sweep processes it off the landing critical path. Each remote is independent: reachable remotes can push while unreachable/auth-failing remotes record `conductor:mirror:<remote>` as `MirrorFailed classification=TRANSIENT` and retry on later ticks with backoff. Mirror state lives in `.orchestrator/git-mirror-state.json`; mirror failure never escalates the goal or blocks record/cleanup.
+
 ### 6.3 Concurrency caps
 
 Two independent constraints bound useful parallelism:

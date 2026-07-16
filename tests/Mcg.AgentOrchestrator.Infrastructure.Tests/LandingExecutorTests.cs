@@ -203,6 +203,162 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Remote_mirror_enabled_pushes_main_goal_branch_and_tags_to_bare_remote")]
+    public void RemoteMirrorEnabledPushesMainGoalBranchAndTagsToBareRemote()
+    {
+        var repo = CreateGitRepository();
+        var remote = CreateBareRepository();
+        using var _ = WithMirrorTestHooks();
+        try
+        {
+            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            WriteMirrorConfig(repo, "mirror");
+            RunGit(repo, "tag", "mirror-test-tag");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "mirrored.txt", "mirrored");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            Assert.NotEmpty(RemoteGitMirror.ReadState(repo).Entries);
+            var mirror = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            var stateEntry = RemoteGitMirror.ReadState(repo).Entries.Single();
+            Assert.True(stateEntry.Status == RemoteMirrorEntryStatus.Succeeded, stateEntry.LastError);
+            Assert.Contains(mirror.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-pushed"));
+            AssertGitRef(remote, "refs/heads/main");
+            AssertGitRef(remote, $"refs/heads/{goalBranch}");
+            AssertGitRef(remote, "refs/tags/mirror-test-tag");
+            Assert.Contains(GoalOperationJournal.Read(repo, goal.Id).LatestByOperation, entry =>
+                entry.Operation == "conductor:mirror:mirror" &&
+                entry.Status == GoalOperationStatus.Completed &&
+                entry.Detail?.Contains("MirrorSucceeded", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(remote);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Remote_mirror_disabled_or_unconfigured_does_not_push")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RemoteMirrorDisabledOrUnconfiguredDoesNotPush(bool writeDisabledConfig)
+    {
+        var repo = CreateGitRepository();
+        var remote = CreateBareRepository();
+        using var _ = WithMirrorTestHooks();
+        try
+        {
+            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            if (writeDisabledConfig)
+            {
+                WriteMirrorConfig(repo, false, "mirror");
+            }
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "no-mirror.txt", "no mirror");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            var mirror = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Empty(mirror.Goals.Where(item => item.Repairs.Any(repair => repair.Kind.StartsWith("mirror-", StringComparison.Ordinal))));
+            AssertGitMissingRef(remote, "refs/heads/main");
+            Assert.False(File.Exists(RemoteGitMirror.StatePath(repo)));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(remote);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Remote_mirror_unreachable_remote_defers_and_later_retry_succeeds")]
+    public void RemoteMirrorUnreachableRemoteDefersAndLaterRetrySucceeds()
+    {
+        var repo = CreateGitRepository();
+        var remote = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        using var _ = WithMirrorTestHooks();
+        try
+        {
+            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            WriteMirrorConfig(repo, "mirror");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "retry-mirror.txt", "retry");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            Assert.NotEmpty(RemoteGitMirror.ReadState(repo).Entries);
+            var first = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Contains(first.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-deferred"));
+            var failed = GoalOperationJournal.Read(repo, goal.Id).LatestByOperation.Single(entry =>
+                entry.Operation == "conductor:mirror:mirror");
+            Assert.Equal(GoalOperationStatus.Failed, failed.Status);
+            Assert.Contains("classification=TRANSIENT", failed.Detail, StringComparison.Ordinal);
+
+            Directory.CreateDirectory(remote);
+            RunGit(remote, "init", "--bare");
+            var second = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.Contains(second.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-pushed"));
+            AssertGitRef(remote, "refs/heads/main");
+            AssertGitRef(remote, $"refs/heads/{goalBranch}");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(remote);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Remote_mirror_two_remotes_pushes_reachable_and_defers_unreachable")]
+    public void RemoteMirrorTwoRemotesPushesReachableAndDefersUnreachable()
+    {
+        var repo = CreateGitRepository();
+        var reachable = CreateBareRepository();
+        var missing = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        using var _ = WithMirrorTestHooks();
+        try
+        {
+            RunGit(repo, "remote", "add", "reachable", ToGitFileUrl(reachable));
+            RunGit(repo, "remote", "add", "missing", ToGitFileUrl(missing));
+            WriteMirrorConfig(repo, "reachable", "missing");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "multi-mirror.txt", "multi");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            Assert.NotEmpty(RemoteGitMirror.ReadState(repo).Entries);
+            var mirror = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Contains(mirror.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-pushed" && repair.Evidence.Contains("remote=reachable", StringComparison.Ordinal)));
+            Assert.Contains(mirror.Goals, item => item.Repairs.Any(repair => repair.Kind == "mirror-deferred" && repair.Evidence.Contains("remote=missing", StringComparison.Ordinal)));
+            AssertGitRef(reachable, "refs/heads/main");
+            AssertGitRef(reachable, $"refs/heads/{goalBranch}");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(reachable);
+            TryDeleteDirectory(missing);
+        }
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateGoal(params AgentRole[] roles)
     {
         var kernel = new AgentOrchestratorKernel();
@@ -305,6 +461,178 @@ public sealed class LandingExecutorTests
         return root;
     }
 
+    private static string CreateBareRepository()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        RunGit(root, "init", "--bare");
+        return root;
+    }
+
+    private static void AddGoalBranchCommit(string repo, string goalBranch, string fileName, string content)
+    {
+        RunGit(repo, "checkout", "-b", goalBranch);
+        File.WriteAllText(Path.Combine(repo, fileName), content + Environment.NewLine);
+        RunGit(repo, "add", fileName);
+        RunGit(repo, "commit", "-m", $"Add {fileName}");
+        RunGit(repo, "checkout", "main");
+    }
+
+    private static void WriteMirrorConfig(string repo, params string[] remotes) =>
+        WriteMirrorConfig(repo, enabled: true, remotes);
+
+    private static void WriteMirrorConfig(string repo, bool enabled, params string[] remotes)
+    {
+        var configDir = Path.Combine(repo, "config");
+        Directory.CreateDirectory(configDir);
+        var remoteList = string.Join(", ", remotes.Select(remote => $"\"{remote}\""));
+        File.WriteAllText(Path.Combine(configDir, "mirror.json"), $$"""
+            {
+              "enabled": {{enabled.ToString().ToLowerInvariant()}},
+              "remotes": [{{remoteList}}],
+              "push": {
+                "main": true,
+                "goalBranch": true,
+                "tags": true
+              }
+            }
+            """);
+    }
+
+    private static void AssertGitRef(string repository, string reference)
+    {
+        var result = GitCli.Run(repository, "show-ref", "--verify", reference);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    private static void AssertGitMissingRef(string repository, string reference)
+    {
+        var result = GitCli.Run(repository, "show-ref", "--verify", reference);
+        Assert.NotEqual(0, result.ExitCode);
+    }
+
+    private static string ToGitFileUrl(string path) => new Uri(Path.GetFullPath(path)).AbsoluteUri;
+
+    private static IDisposable WithMirrorTestHooks()
+    {
+        var oldBackoff = RemoteGitMirror.BackoffForAttempt;
+        var oldGitRunner = RemoteGitMirror.GitRunner;
+        RemoteGitMirror.BackoffForAttempt = _ => TimeSpan.Zero;
+        RemoteGitMirror.GitRunner = TestMirrorGitRunner;
+        return new DelegateDisposable(() =>
+        {
+            RemoteGitMirror.BackoffForAttempt = oldBackoff;
+            RemoteGitMirror.GitRunner = oldGitRunner;
+        });
+    }
+
+    private static GitCli.GitResult TestMirrorGitRunner(string workingDirectory, IReadOnlyList<string> args)
+    {
+        if (args.Count < 3 || args[0] != "push")
+        {
+            return GitCli.Run(workingDirectory, args.ToArray());
+        }
+
+        var remoteResult = GitCli.Run(workingDirectory, "remote", "get-url", args[1]);
+        if (!remoteResult.Succeeded)
+        {
+            return remoteResult;
+        }
+
+        var remotePath = FromGitFileUrl(remoteResult.Output.Trim());
+        if (!Directory.Exists(remotePath))
+        {
+            return new GitCli.GitResult(128, string.Empty, $"fatal: '{remotePath}' does not appear to be a git repository");
+        }
+
+        if (args[2] == "--tags")
+        {
+            return PushTagsForTest(workingDirectory, remotePath);
+        }
+
+        return PushRefForTest(workingDirectory, remotePath, args[2]);
+    }
+
+    private static GitCli.GitResult PushRefForTest(string workingDirectory, string remotePath, string refspec)
+    {
+        var source = GitCli.Run(workingDirectory, "rev-parse", refspec);
+        if (!source.Succeeded)
+        {
+            return source;
+        }
+
+        var targetRef = refspec.StartsWith("refs/", StringComparison.Ordinal)
+            ? refspec
+            : $"refs/heads/{refspec}";
+        CopyGitObjectsForTest(workingDirectory, remotePath);
+        return GitCli.Run(remotePath, "update-ref", targetRef, source.Output.Trim());
+    }
+
+    private static GitCli.GitResult PushTagsForTest(string workingDirectory, string remotePath)
+    {
+        var tags = GitCli.Run(workingDirectory, "for-each-ref", "--format=%(refname)", "refs/tags");
+        if (!tags.Succeeded || string.IsNullOrWhiteSpace(tags.Output))
+        {
+            return tags.Succeeded ? new GitCli.GitResult(0, string.Empty, string.Empty) : tags;
+        }
+
+        foreach (var line in tags.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var source = GitCli.Run(workingDirectory, "rev-parse", line);
+            if (!source.Succeeded)
+            {
+                return source;
+            }
+
+            CopyGitObjectsForTest(workingDirectory, remotePath);
+            var update = GitCli.Run(remotePath, "update-ref", line, source.Output.Trim());
+            if (!update.Succeeded)
+            {
+                return update;
+            }
+        }
+
+        return new GitCli.GitResult(0, string.Empty, string.Empty);
+    }
+
+    private static string FromGitFileUrl(string value) =>
+        value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            ? new Uri(value).LocalPath
+            : value;
+
+    private static void CopyGitObjectsForTest(string workingDirectory, string remotePath)
+    {
+        var gitDirResult = GitCli.Run(workingDirectory, "rev-parse", "--git-dir");
+        if (!gitDirResult.Succeeded)
+        {
+            return;
+        }
+
+        var gitDir = gitDirResult.Output.Trim();
+        if (!Path.IsPathRooted(gitDir))
+        {
+            gitDir = Path.GetFullPath(Path.Combine(workingDirectory, gitDir));
+        }
+
+        var sourceObjects = Path.Combine(gitDir, "objects");
+        var targetObjects = Path.Combine(remotePath, "objects");
+        if (!Directory.Exists(sourceObjects) || !Directory.Exists(targetObjects))
+        {
+            return;
+        }
+
+        foreach (var sourceFile in Directory.EnumerateFiles(sourceObjects, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(sourceObjects, sourceFile);
+            var targetFile = Path.Combine(targetObjects, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
+            if (!File.Exists(targetFile))
+            {
+                File.Copy(sourceFile, targetFile);
+            }
+        }
+    }
+
     private static void RunGit(string workingDirectory, params string[] arguments)
     {
         var result = GitCli.Run(workingDirectory, arguments);
@@ -391,5 +719,10 @@ public sealed class LandingExecutorTests
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default) =>
             inner.TransactGoalAsync(goalId, transaction, cancellationToken);
+    }
+
+    private sealed class DelegateDisposable(Action dispose) : IDisposable
+    {
+        public void Dispose() => dispose();
     }
 }

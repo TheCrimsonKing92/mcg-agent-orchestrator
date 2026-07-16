@@ -275,6 +275,10 @@ internal static class TerminalGoalSweep
         var dispatchRunner = new BackgroundDispatchRunner();
         GoalBranchFactIndex? branchFactIndex = null;
         var results = new List<TerminalGoalSweepGoalResult>();
+        var mirrorOutcomes = RemoteGitMirror.ProcessDue(kernel, executionDirectory, onlyGoalId)
+            .Outcomes
+            .GroupBy(outcome => outcome.GoalId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
         var cacheHits = 0;
         var cacheMisses = 0;
 
@@ -289,6 +293,7 @@ internal static class TerminalGoalSweep
 
             if (cache is not null &&
                 cacheEvidenceKey.Length > 0 &&
+                !mirrorOutcomes.ContainsKey(originalGoal.Id) &&
                 cache.TryMarkHit(kernel, executionDirectory, originalGoal, cacheEvidenceKey))
             {
                 cacheHits++;
@@ -303,6 +308,13 @@ internal static class TerminalGoalSweep
             var repairs = new List<TerminalGoalSweepRepair>();
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
+            if (mirrorOutcomes.TryGetValue(originalGoal.Id, out var goalMirrorOutcomes))
+            {
+                foreach (var outcome in goalMirrorOutcomes)
+                {
+                    repairs.Add(ToMirrorSweepRepair(outcome));
+                }
+            }
 
             var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
             if (reconciled > 0)
@@ -875,6 +887,22 @@ internal static class TerminalGoalSweep
             "owned-ephemeral-cleanup",
             $"removed {ephemeralCleanup.RemovedCount} owned ephemeral director{(ephemeralCleanup.RemovedCount == 1 ? "y" : "ies")}",
             $"conduct {prefix} --loop"));
+    }
+
+    private static TerminalGoalSweepRepair ToMirrorSweepRepair(RemoteMirrorOutcome outcome)
+    {
+        var kind = outcome.Kind switch
+        {
+            RemoteMirrorOutcomeKind.MirrorSucceeded => "mirror-pushed",
+            RemoteMirrorOutcomeKind.MirrorFailed => "mirror-deferred",
+            RemoteMirrorOutcomeKind.MirrorDeferred => "mirror-deferred",
+            RemoteMirrorOutcomeKind.MirrorSkipped => "mirror-skipped",
+            _ => "mirror"
+        };
+        return new TerminalGoalSweepRepair(
+            kind,
+            $"remote={outcome.Remote} {outcome.Detail}",
+            $"conduct {outcome.GoalPrefix} --loop");
     }
 
     private static bool TryBuildGlobalStaleTerminalExclusionEvidence(Goal goal, out string evidence)
