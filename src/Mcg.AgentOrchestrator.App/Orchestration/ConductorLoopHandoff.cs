@@ -64,6 +64,7 @@ internal sealed record ConductLoopHandoffOptions(
     int MaxRenewals,
     Action ReleaseCurrentLease,
     TimeSpan VerificationTimeout = default,
+    TimeSpan VerificationHardTimeout = default,
     Func<ConductLoopHandoffOptions, long, bool>? LoopStartProbe = null);
 
 internal sealed record ConductLoopLaunchRequest(
@@ -87,7 +88,7 @@ internal sealed record ConductLoopHandoffVerification(
     string Detail,
     string TerminalReason = "")
 {
-    public bool Succeeded => ProcessAlive && LoopStartJournaled;
+    public bool Succeeded => LoopStartJournaled;
 }
 
 internal static partial class ConductorLoopHandoff
@@ -95,6 +96,7 @@ internal static partial class ConductorLoopHandoff
     public const string RenewalCountFlag = "--handoff-renewals";
     public const int DefaultMaxRenewalsWithoutLanding = 6;
     public static readonly TimeSpan DefaultVerificationTimeout = TimeSpan.FromSeconds(120);
+    public static readonly TimeSpan DefaultVerificationHardTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan VerificationPollInterval = TimeSpan.FromMilliseconds(250);
     private const string BatchNameEnvironmentVariable = "MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME";
     private const string RenewalCountEnvironmentVariable = "MCG_ORCHESTRATOR_HANDOFF_RENEWALS";
@@ -197,6 +199,7 @@ internal static partial class ConductorLoopHandoff
         verification.TerminalReason switch
         {
             "child-dead" => "successor-child-dead",
+            "alive-timeout" => "successor-alive-timeout",
             "timeout" => "successor-timeout",
             _ => "successor-verification-failed"
         };
@@ -521,18 +524,30 @@ internal static partial class ConductorLoopHandoff
         var timeout = options.VerificationTimeout <= TimeSpan.Zero
             ? DefaultVerificationTimeout
             : options.VerificationTimeout;
-        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        var hardTimeout = options.VerificationHardTimeout <= TimeSpan.Zero
+            ? DefaultVerificationHardTimeout
+            : options.VerificationHardTimeout;
+        if (hardTimeout < timeout)
+            hardTimeout = timeout;
+
+        var started = DateTimeOffset.UtcNow;
+        var pendingDeadline = started.Add(timeout);
+        var hardDeadline = started.Add(hardTimeout);
         var processAlive = false;
         var stdoutLogExists = false;
         var loopStartJournaled = false;
         var terminalReason = "timeout";
+        var pendingEmitted = false;
+        var elapsed = TimeSpan.Zero;
 
-        while (DateTimeOffset.UtcNow <= deadline)
+        while (true)
         {
+            var now = DateTimeOffset.UtcNow;
+            elapsed = now - started;
             processAlive = IsProcessAlive(result.ProcessId);
             stdoutLogExists = File.Exists(result.StdoutPath);
             loopStartJournaled = (options.LoopStartProbe ?? HasLoopStartAfterCursor)(options, eventCursor);
-            if (processAlive && loopStartJournaled)
+            if (loopStartJournaled)
             {
                 terminalReason = "loop-start";
                 break;
@@ -542,17 +557,54 @@ internal static partial class ConductorLoopHandoff
                 terminalReason = "child-dead";
                 break;
             }
+            if (now >= hardDeadline)
+            {
+                terminalReason = "alive-timeout";
+                break;
+            }
+
+            if (!pendingEmitted && now >= pendingDeadline)
+            {
+                pendingEmitted = true;
+                EmitHandoffPending(options, FormatVerificationDetail(
+                    processAlive,
+                    stdoutLogExists,
+                    loopStartJournaled,
+                    "pending",
+                    elapsed,
+                    timeout,
+                    hardTimeout));
+            }
 
             Thread.Sleep(VerificationPollInterval);
         }
 
-        var detail =
-            $"processAlive={ToLowerInvariant(processAlive)} " +
-            $"stdoutLogExists={ToLowerInvariant(stdoutLogExists)} " +
-            $"loopStartJournaled={ToLowerInvariant(loopStartJournaled)} " +
-            $"terminalReason={terminalReason}";
+        var detail = FormatVerificationDetail(
+            processAlive,
+            stdoutLogExists,
+            loopStartJournaled,
+            terminalReason,
+            elapsed,
+            timeout,
+            hardTimeout);
         return new ConductLoopHandoffVerification(processAlive, stdoutLogExists, loopStartJournaled, detail, terminalReason);
     }
+
+    private static string FormatVerificationDetail(
+        bool processAlive,
+        bool stdoutLogExists,
+        bool loopStartJournaled,
+        string terminalReason,
+        TimeSpan elapsed,
+        TimeSpan timeout,
+        TimeSpan hardTimeout) =>
+        $"processAlive={ToLowerInvariant(processAlive)} " +
+        $"stdoutLogExists={ToLowerInvariant(stdoutLogExists)} " +
+        $"loopStartJournaled={ToLowerInvariant(loopStartJournaled)} " +
+        $"terminalReason={terminalReason} " +
+        $"elapsedSeconds={(int)Math.Max(0, elapsed.TotalSeconds)} " +
+        $"legacyTimeoutSeconds={(int)Math.Ceiling(timeout.TotalSeconds)} " +
+        $"hardTimeoutSeconds={(int)Math.Ceiling(hardTimeout.TotalSeconds)}";
 
     private static bool IsProcessAlive(int processId)
     {
@@ -678,6 +730,27 @@ internal static partial class ConductorLoopHandoff
         Console.Error.WriteLine(line);
         Console.Out.Flush();
         Console.Error.Flush();
+    }
+
+    private static void EmitHandoffPending(ConductLoopHandoffOptions options, string detail)
+    {
+        var line = $"LOOP_HANDOFF_PENDING {detail}";
+        Console.WriteLine(line);
+        Console.Out.Flush();
+        TryRecordHandoffEvent(options.RunEventStorePath, "Pending", detail);
+        TryAppendConductEvent(options, line);
+    }
+
+    private static void TryAppendConductEvent(ConductLoopHandoffOptions options, string line)
+    {
+        try
+        {
+            new ConductEventLogWriter(ConductEventsPath(options)).Append("loop-handoff", null, line);
+        }
+        catch
+        {
+            // Handoff pending progress is advisory; stdout and run events remain available.
+        }
     }
 
     private static string ToSafeName(string value)
