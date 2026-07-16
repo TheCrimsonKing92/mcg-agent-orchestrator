@@ -1383,10 +1383,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_template_conforming_reviewer_result_keeps_haiku")]
     public void WorkerProfileDispatcherTemplateConformingReviewerResultKeepsHaiku()
 {
-    var root = CreateTempDirectory();
-    var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
-    Directory.CreateDirectory(workingDirectory);
+    var workingDirectory = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(workingDirectory, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
@@ -1437,10 +1435,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_reviewer_guardrail_requires_verdict_and_blockers_before_light_retry")]
     public void WorkerProfileDispatcherReviewerGuardrailRequiresVerdictAndBlockersBeforeLightRetry()
 {
-    var root = CreateTempDirectory();
-    var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
-    Directory.CreateDirectory(workingDirectory);
+    var workingDirectory = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(workingDirectory, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
@@ -1724,9 +1720,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_profile_replaces_agent_default")]
     public void SubscriptionDispatchOverrideProfileReplacesAgentDefault()
 {
-    var root = CreateTempDirectory();
-    var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
+    var workingDirectory = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(workingDirectory, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1757,9 +1752,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_reasoning_beats_agent_default")]
     public void SubscriptionDispatchOverrideReasoningBeatsAgentDefault()
 {
-    var root = CreateTempDirectory();
-    var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
+    var workingDirectory = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(workingDirectory, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-16T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -1790,9 +1784,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_emits_first_class_subscription_alias_and_reasoning")]
     public void SubscriptionDispatchEmitsFirstClassSubscriptionAliasAndReasoning()
 {
-    var root = CreateTempDirectory();
-    var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
+    var workingDirectory = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(workingDirectory, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-07-15T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(

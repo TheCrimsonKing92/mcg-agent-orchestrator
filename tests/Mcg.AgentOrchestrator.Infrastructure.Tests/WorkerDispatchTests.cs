@@ -389,7 +389,7 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
     protected static string CreateSeededDispatchRepository()
 {
     var root = CreateTempDirectory();
-    RunGit(root, ["init"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    RunGit(root, ["init", "-b", "main"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");

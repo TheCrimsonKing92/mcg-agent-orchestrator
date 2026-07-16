@@ -75,16 +75,14 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     // Hermetic: clear the operator's MCG_WORKER_SANDBOX so this asserts the default dispatch mode
     // regardless of how the suite was launched (see ClearWorkerSandboxEnv).
     using var _sandboxEnv = ClearWorkerSandboxEnv();
-    var root = CreateTempDirectory();
+    var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
-    Directory.CreateDirectory(workingDirectory);
-    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Dispatch subscription-backed workers");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
+    var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
 
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
