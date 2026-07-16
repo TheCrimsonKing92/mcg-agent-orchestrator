@@ -1359,6 +1359,19 @@ public static class GoalWorktrees
         GoalWorktreeCleanupBudget cleanupBudget,
         Action<int> action)
     {
+        return RunBoundedCleanupStep(worktreePath, operation, cleanupBudget, timeout =>
+        {
+            action(timeout);
+            return true;
+        });
+    }
+
+    private static bool RunBoundedCleanupStep(
+        string worktreePath,
+        string operation,
+        GoalWorktreeCleanupBudget cleanupBudget,
+        Func<int, bool> action)
+    {
         if (cleanupBudget.IsExpired)
         {
             WarnCleanupFailure(
@@ -1368,7 +1381,19 @@ public static class GoalWorktrees
             return false;
         }
 
-        action(cleanupBudget.RemainingMilliseconds);
+        try
+        {
+            if (!action(cleanupBudget.RemainingMilliseconds))
+            {
+                return false;
+            }
+        }
+        catch (Exception ex) when (IsJanitorialCleanupDeferralException(ex))
+        {
+            WarnCleanupFailure(worktreePath, operation, ex);
+            return false;
+        }
+
         if (!cleanupBudget.IsExpired)
         {
             return true;
@@ -1381,17 +1406,22 @@ public static class GoalWorktrees
         return false;
     }
 
-    private static void ResetSandboxAcl(string worktreePath, string operation, int timeoutMilliseconds)
+    private static bool ResetSandboxAcl(string worktreePath, string operation, int timeoutMilliseconds)
     {
         try
         {
             SandboxAclHelper.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
         {
             WarnCleanupFailure(worktreePath, operation + ":acl-reset", ex);
+            return false;
         }
     }
+
+    private static bool IsJanitorialCleanupDeferralException(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception;
 
     private static void ReapRecordedWorkerProcesses(AgentOrchestratorKernel? kernel, string worktreePath)
     {
