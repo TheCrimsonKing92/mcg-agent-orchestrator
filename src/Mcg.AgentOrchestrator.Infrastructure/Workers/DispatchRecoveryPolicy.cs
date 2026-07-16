@@ -24,7 +24,7 @@ public sealed class DispatchRecoveryPolicy
 {
     public static readonly TimeSpan DefaultRecentHeartbeatGrace = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan DefaultLiveIdleTimeout = TimeSpan.FromMinutes(30);
-    public const int DefaultStaleDispatchRetries = 1;
+    public const int DefaultStaleDispatchRetries = 2;
 
     private readonly IClock _clock;
     private readonly TimeSpan _recentHeartbeatGrace;
@@ -148,7 +148,7 @@ public sealed class DispatchRecoveryPolicy
 
     public static int GetStaleRetryBudgetRemaining(TaskSpec task)
     {
-        var consumed = task.VerificationHistory.Count(IsStaleDispatchRetryVerification);
+        var consumed = CountConsecutiveStaleDispatchRetries(task);
         return Math.Max(0, DefaultStaleDispatchRetries - consumed);
     }
 
@@ -162,6 +162,22 @@ public sealed class DispatchRecoveryPolicy
         IsStaleDispatchRetryVerification(verification) ||
         verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
         verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
+
+    private static int CountConsecutiveStaleDispatchRetries(TaskSpec task)
+    {
+        var consumed = 0;
+        for (var i = task.VerificationHistory.Count - 1; i >= 0; i--)
+        {
+            if (!IsStaleDispatchRetryVerification(task.VerificationHistory[i]))
+            {
+                break;
+            }
+
+            consumed++;
+        }
+
+        return consumed;
+    }
 
     private static DispatchRecoveryDecision Decision(
         DispatchRecoveryAction action,
