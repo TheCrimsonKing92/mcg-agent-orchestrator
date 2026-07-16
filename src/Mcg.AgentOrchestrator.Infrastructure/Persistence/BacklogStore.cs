@@ -9,7 +9,14 @@ public sealed record BacklogItem(
     BacklogItemStatus Status,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    string? SourceGoalId);
+    string? SourceGoalId)
+{
+    public IReadOnlyList<BacklogNote> Notes { get; init; } = [];
+}
+
+public sealed record BacklogNote(
+    DateTimeOffset CreatedAt,
+    string Text);
 
 public enum BacklogItemStatus { Open, Done }
 
@@ -81,6 +88,16 @@ public sealed class BacklogStore
                 source_goal_id TEXT
             )
             """);
+        RunNonQuery(conn, """
+            CREATE TABLE IF NOT EXISTS backlog_notes (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                backlog_item_id TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                FOREIGN KEY(backlog_item_id) REFERENCES backlog(id) ON DELETE CASCADE
+            )
+            """);
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_notes_item_created ON backlog_notes(backlog_item_id, created_at, id)");
     }
 
     public async Task<BacklogItem> AddAsync(
@@ -132,18 +149,25 @@ public sealed class BacklogStore
         CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, title, body, status, created_at, updated_at, source_goal_id FROM backlog WHERE id LIKE $prefix ORDER BY created_at ASC LIMIT 2";
-        cmd.Parameters.AddWithValue("$prefix", prefix + "%");
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         BacklogItem? first = null;
-        if (await reader.ReadAsync(cancellationToken))
-            first = ReadItem(reader);
+        var ambiguous = false;
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, title, body, status, created_at, updated_at, source_goal_id FROM backlog WHERE id LIKE $prefix ORDER BY created_at ASC LIMIT 2";
+            cmd.Parameters.AddWithValue("$prefix", prefix + "%");
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+                first = ReadItem(reader);
+            ambiguous = first is not null && await reader.ReadAsync(cancellationToken);
+        }
+
         if (first is null)
             return null;
-        if (await reader.ReadAsync(cancellationToken))
+        if (ambiguous)
             throw new InvalidOperationException($"Ambiguous id prefix '{prefix}' matches multiple items.");
-        return first;
+
+        var notes = await LoadNotesAsync(conn, first.Id, cancellationToken);
+        return first with { Notes = notes };
     }
 
     public async Task<BacklogItem> CloseAsync(
@@ -237,6 +261,56 @@ public sealed class BacklogStore
                 var result = await LoadItemByIdAsync(conn, id, cancellationToken);
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return result!;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
+    }
+
+    public async Task<BacklogItem> AppendNoteAsync(
+        string id,
+        string text,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException("Backlog note text cannot be empty.", nameof(text));
+
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                var item = await LoadItemByIdAsync(conn, id, cancellationToken, includeNotes: false)
+                    ?? throw new InvalidOperationException($"No backlog item found with id '{id}'.");
+                var createdAt = DateTimeOffset.UtcNow.ToString("O");
+                await using (var insert = conn.CreateCommand())
+                {
+                    insert.CommandText = """
+                        INSERT INTO backlog_notes (backlog_item_id, created_at, text)
+                        VALUES ($backlog_item_id, $created_at, $text)
+                        """;
+                    insert.Parameters.AddWithValue("$backlog_item_id", id);
+                    insert.Parameters.AddWithValue("$created_at", createdAt);
+                    insert.Parameters.AddWithValue("$text", text);
+                    await insert.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await using (var update = conn.CreateCommand())
+                {
+                    update.CommandText = "UPDATE backlog SET updated_at = $updated_at WHERE id = $id";
+                    update.Parameters.AddWithValue("$updated_at", createdAt);
+                    update.Parameters.AddWithValue("$id", id);
+                    await update.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                var result = (await LoadItemByIdAsync(conn, item.Id, cancellationToken))!;
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return result;
             }
             catch
             {
@@ -348,13 +422,53 @@ public sealed class BacklogStore
             DateTimeOffset.Parse(reader.GetString(5)),
             reader.IsDBNull(6) ? null : reader.GetString(6));
 
-    private static async Task<BacklogItem?> LoadItemByIdAsync(SqliteConnection conn, string id, CancellationToken cancellationToken)
+    private static async Task<BacklogItem?> LoadItemByIdAsync(
+        SqliteConnection conn,
+        string id,
+        CancellationToken cancellationToken,
+        bool includeNotes = true)
     {
+        BacklogItem? item;
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, title, body, status, created_at, updated_at, source_goal_id FROM backlog WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", id);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            item = await reader.ReadAsync(cancellationToken) ? ReadItem(reader) : null;
+        }
+
+        if (item is null || !includeNotes)
+        {
+            return item;
+        }
+
+        var notes = await LoadNotesAsync(conn, id, cancellationToken);
+        return item with { Notes = notes };
+    }
+
+    private static async Task<IReadOnlyList<BacklogNote>> LoadNotesAsync(
+        SqliteConnection conn,
+        string itemId,
+        CancellationToken cancellationToken)
+    {
+        var notes = new List<BacklogNote>();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, title, body, status, created_at, updated_at, source_goal_id FROM backlog WHERE id = $id";
-        cmd.Parameters.AddWithValue("$id", id);
+        cmd.CommandText = """
+            SELECT created_at, text
+            FROM backlog_notes
+            WHERE backlog_item_id = $backlog_item_id
+            ORDER BY created_at ASC, id ASC
+            """;
+        cmd.Parameters.AddWithValue("$backlog_item_id", itemId);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadItem(reader) : null;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            notes.Add(new BacklogNote(
+                DateTimeOffset.Parse(reader.GetString(0)),
+                reader.GetString(1)));
+        }
+
+        return notes;
     }
 
     private static async Task InsertItemAsync(SqliteConnection conn, BacklogItem item, CancellationToken cancellationToken)

@@ -116,6 +116,26 @@ public sealed class BacklogStoreTests
         Assert.Equal(goalId, items[0].SourceGoalId);
     }
 
+    [Xunit.Fact(DisplayName = "BacklogStore_append_note_persists_ordered_notes_without_mutating_item_text")]
+    public async Task AppendNotePersistsOrderedNotesWithoutMutatingItemText()
+    {
+        var dbPath = TempDb();
+        var store = new BacklogStore(dbPath);
+        var item = await store.AddAsync("Annotated item", "Original body");
+
+        await store.AppendNoteAsync(item.Id, "First receipt");
+        await store.AppendNoteAsync(item.Id, "Second receipt");
+
+        var reloaded = await new BacklogStore(dbPath).GetByExactIdAsync(item.Id);
+
+        Assert.NotNull(reloaded);
+        Assert.Equal("Annotated item", reloaded!.Title);
+        Assert.Equal("Original body", reloaded.Body);
+        Assert.Equal(BacklogItemStatus.Open, reloaded.Status);
+        Assert.Equal(["First receipt", "Second receipt"], reloaded.Notes.Select(note => note.Text));
+        Assert.True(reloaded.Notes[0].CreatedAt <= reloaded.Notes[1].CreatedAt);
+    }
+
     // ── TryCloseByIdAsync (idempotent close) ──────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_try_close_returns_true_and_closes_open_item")]

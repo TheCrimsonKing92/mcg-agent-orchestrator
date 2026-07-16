@@ -95,6 +95,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeTargetTextCommandWithFileFlags(args, 1, "--reason-file", "--text-file");
     }
 
+    if (command.Equals("backlog-annotate", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file");
+    }
+
     if (command.Equals("backlog-reopen", StringComparison.OrdinalIgnoreCase))
     {
         return args.Length >= 3

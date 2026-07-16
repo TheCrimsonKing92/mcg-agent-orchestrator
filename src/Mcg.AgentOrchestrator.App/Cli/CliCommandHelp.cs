@@ -29,6 +29,7 @@ internal static class CliCommandHelp
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
+    public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
@@ -181,6 +182,11 @@ internal static class CliCommandHelp
         BacklogShowUsage,
         "Show a backlog item by id prefix.",
         ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogAnnotate = new(
+        BacklogAnnotateUsage,
+        "Append a timestamped note to a backlog item by id prefix.",
+        ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogClose = new(
         BacklogCloseUsage,
@@ -418,6 +424,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-show", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogShow;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-annotate", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogAnnotate;
             return true;
         }
 
