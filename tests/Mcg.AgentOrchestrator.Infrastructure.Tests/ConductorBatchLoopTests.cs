@@ -3853,6 +3853,8 @@ public sealed class ConductorBatchLoopTests
             wakeSignal: wakeSignal);
 
         Assert.Equal(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds), wakeSignal.Timeouts.Single());
+        Assert.Contains(wakeSignal.TrackedExitCodePathUpdates.Single(),
+            path => string.Equals(path, exit, StringComparison.OrdinalIgnoreCase));
         Assert.True(sweepCalls >= 2);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
         Assert.False(summary.StopRequested);
@@ -3963,6 +3965,104 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "WatchMode_no_exit_wake_waits_running_dispatch_fallback_interval")]
+    public void WatchModeNoExitWakeWaitsRunningDispatchFallbackInterval()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-wake-no-event-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var exit = Path.Combine(root, "worker.exit.txt");
+        var stdout = Path.Combine(root, "worker.out.log");
+        var stderr = Path.Combine(root, "worker.err.log");
+        File.WriteAllText(stdout, "still running");
+        File.WriteAllText(stderr, "");
+
+        var (kernel, goal) = SimpleGoal("running goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", root, now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(1234, "test.exe", root, stdout, stderr, exit, now, null, null, OwnedProcessIds: [1234]));
+
+        var wakeSignal = new TestWakeSignal(_ => false);
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
+                wakeSignal: wakeSignal);
+
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal([TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)], wakeSignal.Timeouts);
+            Assert.Contains(wakeSignal.TrackedExitCodePathUpdates.Single(),
+                path => string.Equals(path, exit, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WatchMode_multiple_exit_wakes_coalesce_into_one_immediate_tick")]
+    public void WatchModeMultipleExitWakesCoalesceIntoOneImmediateTick()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-wake-coalesce-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var exitPaths = new List<string>();
+        for (var i = 0; i < 3; i++)
+        {
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), $"running goal {i}");
+            var task = goal.Tasks.Single();
+            var stdout = Path.Combine(root, $"worker-{i}.out.log");
+            var stderr = Path.Combine(root, $"worker-{i}.err.log");
+            var exit = Path.Combine(root, $"worker-{i}.exit.txt");
+            File.WriteAllText(stdout, "done");
+            File.WriteAllText(stderr, "");
+            var now = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("test-worker", "test.exe", root, now));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+                new TaskProcessRecord(1234 + i, "test.exe", root, stdout, stderr, exit, now, null, null, OwnedProcessIds: [1234 + i]));
+            exitPaths.Add(exit);
+        }
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        var wakeSignal = new TestWakeSignal(() =>
+        {
+            foreach (var exitPath in exitPaths)
+            {
+                File.WriteAllText(exitPath, "0");
+            }
+        });
+
+        try
+        {
+            var summary = new ConductorBatchLoop(loopKernel => runner.SweepExitedProcesses(loopKernel)).Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
+                wakeSignal: wakeSignal);
+
+            Assert.Equal(1, wakeSignal.SignaledWaits);
+            Assert.Single(wakeSignal.Timeouts);
+            Assert.Equal(3, wakeSignal.TrackedExitCodePathUpdates.Single().Count);
+            Assert.All(exitPaths, exitPath => Assert.Contains(wakeSignal.TrackedExitCodePathUpdates.Single(),
+                trackedPath => string.Equals(trackedPath, exitPath, StringComparison.OrdinalIgnoreCase)));
+            Assert.False(kernel.Goals.SelectMany(goal => goal.Tasks).Any(task => task.LastProcess is { IsRunning: true }));
+            Assert.False(summary.StopRequested);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WatchMode_idle_without_running_workers_keeps_default_fallback")]
     public void WatchModeIdleWithoutRunningWorkersKeepsDefaultFallback()
     {
@@ -3991,6 +4091,7 @@ public sealed class ConductorBatchLoopTests
                 keepAliveWhenIdle: true);
 
             Assert.Equal(TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds), TimeSpan.FromTicks(wakeSignal.Timeouts.Sum(t => t.Ticks)));
+            Assert.All(wakeSignal.TrackedExitCodePathUpdates, update => Assert.Empty(update));
             Assert.True(wakeSignal.Timeouts.All(timeout => timeout <= TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)));
             Assert.Equal(0, summary.Ticks);
             Assert.True(summary.StopRequested);
@@ -4066,10 +4167,25 @@ public sealed class ConductorBatchLoopTests
 
         public List<TimeSpan> Timeouts { get; } = [];
 
+        public List<IReadOnlyList<string>> TrackedExitCodePathUpdates { get; } = [];
+
+        public int SignaledWaits { get; private set; }
+
+        public void UpdateTrackedExitArtifacts(IReadOnlyCollection<string> exitCodePaths)
+        {
+            TrackedExitCodePathUpdates.Add(exitCodePaths.ToArray());
+        }
+
         public bool Wait(TimeSpan timeout)
         {
             Timeouts.Add(timeout);
-            return _wait?.Invoke(++_waits) ?? false;
+            var signaled = _wait?.Invoke(++_waits) ?? false;
+            if (signaled)
+            {
+                SignaledWaits++;
+            }
+
+            return signaled;
         }
 
         public void Dispose()
