@@ -1499,38 +1499,38 @@ public sealed class ConductorBatchLoopTests
     public void ConductorLoopHandoffJournalFailureIsLoudAndStillLaunchesSuccessor()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-journal-failure");
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
-        using var outWriter = new StringWriter();
-        using var errorWriter = new StringWriter();
         try
         {
-            Console.SetOut(outWriter);
-            Console.SetError(errorWriter);
-            var launched = false;
+            string outText = "";
+            var errorText = CaptureConsoleError(() =>
+            {
+                outText = CaptureConsole(() =>
+                {
+                    var launched = false;
 
-            var result = ConductorLoopHandoff.TryStartSuccessor(
-                HandoffOptions(root, runEventStorePath: root),
-                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
-                request =>
-                {
-                    launched = true;
-                    return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
-                },
-                (_, _) =>
-                {
-                    return new ConductLoopHandoffVerification(true, true, true, "processAlive=true stdoutLogExists=true loopStartJournaled=true");
+                    var result = ConductorLoopHandoff.TryStartSuccessor(
+                        HandoffOptions(root, runEventStorePath: root),
+                        new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                        request =>
+                        {
+                            launched = true;
+                            return new ConductLoopLaunchResult(4567, request.StdoutPath, request.StderrPath);
+                        },
+                        (_, _) =>
+                        {
+                            return new ConductLoopHandoffVerification(true, true, true, "processAlive=true stdoutLogExists=true loopStartJournaled=true");
+                        });
+
+                    Assert.True(result.Started);
+                    Assert.True(launched);
                 });
+            });
 
-            Assert.True(result.Started);
-            Assert.True(launched);
-            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", outWriter.ToString(), StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", outText, StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_JOURNAL_FAILED", errorText, StringComparison.Ordinal);
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
             TryDeleteDirectory(root);
         }
     }
@@ -1539,44 +1539,44 @@ public sealed class ConductorBatchLoopTests
     public void ConductorLoopHandoffDoesNotRetryWhileSuccessorIsAlive()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-slow-handoff");
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
-        using var outWriter = new StringWriter();
-        using var errorWriter = new StringWriter();
         try
         {
-            Console.SetOut(outWriter);
-            Console.SetError(errorWriter);
-            var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
-            var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
-            var stopwatch = Stopwatch.StartNew();
-            var attempts = 0;
-            var result = ConductorLoopHandoff.TryStartSuccessor(
-                HandoffOptions(
-                    root,
-                    verificationTimeout: scaledOldTimeout,
-                    loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
-                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
-                request =>
+            string outText = "";
+            var errorText = CaptureConsoleError(() =>
+            {
+                outText = CaptureConsole(() =>
                 {
-                    attempts++;
-                    File.WriteAllText(request.StdoutPath, "successor booting");
-                    return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
-                });
+                    var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
+                    var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
+                    var stopwatch = Stopwatch.StartNew();
+                    var attempts = 0;
+                    var result = ConductorLoopHandoff.TryStartSuccessor(
+                        HandoffOptions(
+                            root,
+                            verificationTimeout: scaledOldTimeout,
+                            loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
+                        new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                        request =>
+                        {
+                            attempts++;
+                            File.WriteAllText(request.StdoutPath, "successor booting");
+                            return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
+                        });
 
-            Assert.True(result.Started);
-            Assert.Equal(1, attempts);
-            Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("terminalReason=loop-start", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_PENDING", outWriter.ToString(), StringComparison.Ordinal);
-            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
-            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+                    Assert.True(result.Started);
+                    Assert.Equal(1, attempts);
+                    Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("terminalReason=loop-start", result.VerificationOutcome, StringComparison.Ordinal);
+                });
+            });
+
+            Assert.Contains("LOOP_HANDOFF_PENDING", outText, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", outText, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", errorText, StringComparison.Ordinal);
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
             TryDeleteDirectory(root);
         }
     }
@@ -1621,36 +1621,38 @@ public sealed class ConductorBatchLoopTests
     public void ConductorLoopHandoffDeadSuccessorFailsWithOwnEvidence()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-failed-handoff");
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
-        using var outWriter = new StringWriter();
-        using var errorWriter = new StringWriter();
         try
         {
-            Console.SetOut(outWriter);
-            Console.SetError(errorWriter);
-            var attempts = 0;
-            var result = ConductorLoopHandoff.TryStartSuccessor(
-                HandoffOptions(root),
-                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
-                request =>
+            string outText = "";
+            var errorText = CaptureConsoleError(() =>
+            {
+                outText = CaptureConsole(() =>
                 {
-                    attempts++;
-                    return new ConductLoopLaunchResult(int.MaxValue, request.StdoutPath, request.StderrPath);
-                });
+                    var attempts = 0;
+                    var result = ConductorLoopHandoff.TryStartSuccessor(
+                        HandoffOptions(root),
+                        new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                        request =>
+                        {
+                            attempts++;
+                            return new ConductLoopLaunchResult(int.MaxValue, request.StdoutPath, request.StderrPath);
+                        });
 
-            Assert.False(result.Started);
-            Assert.True(result.Failed);
-            Assert.Equal(1, attempts);
-            Assert.Equal("successor-child-dead", result.Reason);
-            Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains($"pid={int.MaxValue}", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("terminalReason=child-dead", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_FAILED", outWriter.ToString(), StringComparison.Ordinal);
-            Assert.Contains("LOOP_HANDOFF_FAILED", errorWriter.ToString(), StringComparison.Ordinal);
+                    Assert.False(result.Started);
+                    Assert.True(result.Failed);
+                    Assert.Equal(1, attempts);
+                    Assert.Equal("successor-child-dead", result.Reason);
+                    Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains($"pid={int.MaxValue}", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("terminalReason=child-dead", result.VerificationOutcome, StringComparison.Ordinal);
+                });
+            });
+
+            Assert.Contains("LOOP_HANDOFF_FAILED", outText, StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF_FAILED", errorText, StringComparison.Ordinal);
 
             var records = new SqliteRunEventStore(Path.Combine(root, ".orchestrator", "run-events.db"))
                 .ReadSinceAsync()
@@ -1671,8 +1673,6 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
             TryDeleteDirectory(root);
         }
     }

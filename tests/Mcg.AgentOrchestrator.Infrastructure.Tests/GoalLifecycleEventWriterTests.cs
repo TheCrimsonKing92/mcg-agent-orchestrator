@@ -448,18 +448,7 @@ public sealed class GoalLifecycleEventWriterTests
 
     private static string CaptureConsole(Action action)
     {
-        var original = Console.Out;
-        using var writer = new StringWriter();
-        try
-        {
-            Console.SetOut(writer);
-            action();
-            return writer.ToString();
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
+        return AsyncLocalConsoleRouter.Capture(action);
     }
 
     private static void DeleteDirectory(string path)

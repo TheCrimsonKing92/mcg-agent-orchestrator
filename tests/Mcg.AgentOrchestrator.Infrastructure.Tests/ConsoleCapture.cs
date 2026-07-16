@@ -48,9 +48,27 @@ internal sealed class AsyncLocalConsoleRouter : TextWriter
         return writer.ToString();
     }
 
+    internal async Task<string> CaptureLocalAsync(Func<Task> action)
+    {
+        var writer = new StringWriter();
+        var previous = _current.Value;
+        _current.Value = writer;
+        try
+        {
+            await action().ConfigureAwait(false);
+        }
+        finally
+        {
+            _current.Value = previous;
+        }
+        return writer.ToString();
+    }
+
     internal static string Capture(Action action) => Out.CaptureLocal(action);
 
     internal static string CaptureError(Action action) => Error.CaptureLocal(action);
+
+    internal static Task<string> CaptureErrorAsync(Func<Task> action) => Error.CaptureLocalAsync(action);
 }
 
 internal static class ConsoleCaptureInitializer

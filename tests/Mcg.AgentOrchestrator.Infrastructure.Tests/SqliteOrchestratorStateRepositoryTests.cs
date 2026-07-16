@@ -302,18 +302,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             update.ExecuteNonQuery();
         }
 
-        using var error = new StringWriter();
-        var originalError = Console.Error;
-        Console.SetError(error);
-        AgentOrchestratorKernel restored;
-        try
+        AgentOrchestratorKernel restored = null!;
+        var errorText = await AsyncLocalConsoleRouter.CaptureErrorAsync(async () =>
         {
             restored = await repo.LoadAsync();
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        });
 
         Assert.Contains(restored.Goals, goal => goal.Id == good.Id);
         Assert.DoesNotContain(restored.Goals, goal => goal.Id == bad.Id);
@@ -321,7 +314,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var row = Assert.Single(quarantined);
         Assert.Equal(bad.Id.Value, row.Id);
         Assert.Contains("JsonException", row.Error);
-        Assert.Contains($"QUARANTINED goal {bad.Id.Value[..8]}: JsonException", error.ToString());
+        Assert.Contains($"QUARANTINED goal {bad.Id.Value[..8]}: JsonException", errorText);
 
         var diagnostics = RunSqliteTool(
             "diagnostics",
@@ -978,22 +971,17 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
     private static (int ExitCode, string Output) RunSqliteTool(params string[] arguments)
     {
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        var originalOutput = Console.Out;
-        var originalError = Console.Error;
-        Console.SetOut(output);
-        Console.SetError(error);
-        try
+        var exitCode = 0;
+        string outputText = "";
+        var errorText = CaptureConsoleError(() =>
         {
-            var exitCode = OrchestratorSqliteTools.RunAsync(arguments).GetAwaiter().GetResult();
-            return (exitCode, output.ToString() + error.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOutput);
-            Console.SetError(originalError);
-        }
+            outputText = CaptureConsole(() =>
+            {
+                exitCode = OrchestratorSqliteTools.RunAsync(arguments).GetAwaiter().GetResult();
+            });
+        });
+
+        return (exitCode, outputText + errorText);
     }
 
     private static bool IsWriteCategoryStartupStatement(string sql)
