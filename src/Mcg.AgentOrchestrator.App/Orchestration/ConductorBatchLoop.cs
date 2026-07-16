@@ -176,8 +176,12 @@ internal sealed class ConductorBatchLoop
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
-                        _sweep(kernel);
-                        _recoverInterruptedDispatches(kernel);
+                        RunJanitorialPhase("idle-wake-sweep", nextTick, () => _sweep(kernel));
+                        RunJanitorialPhase("idle-wake-recover-interrupted-dispatches", nextTick, () =>
+                        {
+                            _recoverInterruptedDispatches(kernel);
+                            return true;
+                        });
                         TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "idle-wake-sweep", null, busyWriteDelay);
                     }
 
@@ -469,8 +473,12 @@ internal sealed class ConductorBatchLoop
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
-                    _sweep(kernel);
-                    _recoverInterruptedDispatches(kernel);
+                    RunJanitorialPhase("wake-sweep", totalTicks, () => _sweep(kernel));
+                    RunJanitorialPhase("wake-recover-interrupted-dispatches", totalTicks, () =>
+                    {
+                        _recoverInterruptedDispatches(kernel);
+                        return true;
+                    });
                     TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "wake-sweep", tickLines, busyWriteDelay);
                 }
 
