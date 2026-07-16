@@ -58,6 +58,7 @@ $partitions = [ordered]@{
         Filters = @(
             'FullyQualifiedName~AdvanceLoopTests',
             'FullyQualifiedName~ConductorBatchLoopTests',
+            'FullyQualifiedName~ConductorBatchLoopVerificationReconcileTests',
             'FullyQualifiedName~ConductorDriverTests',
             'FullyQualifiedName~ConductWatchSweepScopingTests'
         )

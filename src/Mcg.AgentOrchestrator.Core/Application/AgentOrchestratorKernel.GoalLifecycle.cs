@@ -220,6 +220,39 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
+    public bool ReconcileGoalVerificationStatus(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status is GoalStatus.Verified or GoalStatus.Parked or GoalStatus.WaitingForHuman)
+        {
+            return false;
+        }
+
+        if (IsTerminalGoalStatus(goal.Status) && goal.Status != GoalStatus.Completed)
+        {
+            return false;
+        }
+
+        if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
+        {
+            return false;
+        }
+
+        if (!goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed))
+        {
+            return false;
+        }
+
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
     public TaskSpec RequeueInterruptedDispatch(GoalId goalId, TaskId taskId, string message)
     {
         var goal = GetGoal(goalId);
