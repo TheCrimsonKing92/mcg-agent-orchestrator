@@ -914,15 +914,13 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
     public void WorkerProfileDispatcherClaudeResolvesPlanForReviewerAndBypassPermissionsForDeveloper()
 {
-    var root = CreateTempDirectory();
+    var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
-    Directory.CreateDirectory(workingDirectory);
-    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var developerGoal = kernel.CreateGoal("Implement the change", [new TaskSpec(TaskId.New(), "Add the feature.", AgentRole.Developer)]);
     var reviewerGoal = kernel.CreateGoal("Review the change", [new TaskSpec(TaskId.New(), "Review the implementation.", AgentRole.Reviewer)]);
+    var workingDirectory = GoalWorktrees.Ensure(root, developerGoal.Id);
     var reviewerAgent = new AgentDefinition(
         new AgentId("anthropic-reviewer"),
         "Anthropic reviewer",
