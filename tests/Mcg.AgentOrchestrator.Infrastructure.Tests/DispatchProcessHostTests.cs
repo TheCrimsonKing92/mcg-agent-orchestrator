@@ -418,7 +418,7 @@ public sealed class DispatchProcessHostTests
 
             Assert.False(result.WorktreeRecursiveRelabel);
             Assert.False(result.SandboxRecursiveRelabel);
-            Assert.False(result.PrepReceiptHit);
+            Assert.True(result.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
         }
         finally
@@ -471,7 +471,7 @@ public sealed class DispatchProcessHostTests
             Assert.False(second.WorktreeRecursiveRelabel);
             Assert.False(second.SandboxRecursiveRelabel);
             Assert.False(first.PrepReceiptHit);
-            Assert.False(second.PrepReceiptHit);
+            Assert.True(second.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
         }
         finally

@@ -130,8 +130,7 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
             return new WorkerSandboxPreparationResult(
                 false,
                 false,
-                PrepReceiptHit: receipt.SkippedProtectionPhases.Length > 0 &&
-                    skippedProtectionPhases.Length == receipt.SkippedProtectionPhases.Length,
+                PrepReceiptHit: true,
                 ReceiptSkippedProtectionPhases: skippedProtectionPhases);
         }
 
