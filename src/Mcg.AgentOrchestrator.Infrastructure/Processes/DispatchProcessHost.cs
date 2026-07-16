@@ -129,14 +129,20 @@ public static class DispatchProcessHost
         protectWorkspaceBoundary ??= ProtectWorkspaceBoundary;
         protectGitMetadata ??= ProtectGitMetadata;
 
-        if (parameters.SandboxWorktreeWritable &&
-            !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase))
+        var shouldProtectWorkspaceBoundary = parameters.SandboxWorktreeWritable &&
+            !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase);
+        var shouldProtectGitMetadata = parameters.SandboxWorktreeWritable &&
+            !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase);
+        var receiptFastPath = preparation.PrepReceiptHit &&
+            !shouldProtectWorkspaceBoundary &&
+            !shouldProtectGitMetadata;
+
+        if (shouldProtectWorkspaceBoundary)
         {
             TrackAction(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, () => protectWorkspaceBoundary(parameters.WorkingDirectory));
         }
 
-        if (parameters.SandboxWorktreeWritable &&
-            !preparation.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectGitMetadataPhase))
+        if (shouldProtectGitMetadata)
         {
             TrackAction(WorkerSandboxPreparer.ProtectGitMetadataPhase, () => protectGitMetadata(parameters.WorkingDirectory));
         }
@@ -146,7 +152,8 @@ public static class DispatchProcessHost
             WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
         }
 
-        if (preparation.PrepReceiptHit)
+        var effectivePreparation = preparation with { PrepReceiptHit = receiptFastPath };
+        if (receiptFastPath)
         {
             // The receipt verifies the prepared root identity, schema, Low inheritable integrity, and
             // explicit protection-phase coverage. Covered phases skip the medium-integrity icacls calls
@@ -174,7 +181,7 @@ public static class DispatchProcessHost
             startInfo.Environment["TEMP"] = tempDir;
             startInfo.Environment["TMP"] = tempDir;
             startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
-            WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, preparation);
+            WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
 
             // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
             // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
@@ -187,7 +194,7 @@ public static class DispatchProcessHost
             }
         });
 
-        return preparation;
+        return effectivePreparation;
     }
 
     internal static void SeedProviderEnvironment(
