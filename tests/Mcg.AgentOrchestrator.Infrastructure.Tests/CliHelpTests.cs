@@ -308,6 +308,15 @@ public sealed class CliHelpTests
                 Xunit.Assert.Contains("Closed:", result.StandardOutput);
             },
             seedBacklogItem: true);
+
+        await AssertCliSkipsOrphanWorktreeCleanupAsync(
+            ["cleanup-status"],
+            result =>
+            {
+                Xunit.Assert.Equal(0, result.ExitCode);
+                Xunit.Assert.Equal("Cleanup status: no pending cleanup debt.", result.StandardOutput.Trim());
+                Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
+            });
     }
 
     [Xunit.Fact(DisplayName = "Cli_help_unknown_command_startup_exits_one_with_suggestion")]

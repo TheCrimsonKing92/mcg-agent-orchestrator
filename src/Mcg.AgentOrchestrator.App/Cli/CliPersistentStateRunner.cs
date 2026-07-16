@@ -188,6 +188,7 @@ internal static class CliPersistentStateRunner
             // the kernel must NOT be listed here.
             "backlog-list" or "backlog-add" or "backlog-show" or "backlog-annotate" or "backlog-close" or
             "backlog-reopen" or "backlog-view" or
+            "cleanup-status" or
             "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "gate-status" or
             "project" => true,
