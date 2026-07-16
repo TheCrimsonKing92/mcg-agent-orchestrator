@@ -606,12 +606,58 @@ public sealed class ConductorBatchLoopTests
             var first = coordinator.Evaluate(candidateA, ConductorAutonomyPolicy.Conservative, PassingRun);
             var second = coordinator.Evaluate(candidateB, ConductorAutonomyPolicy.Conservative, PassingRun);
             launches[first.Attempt.AttemptId].ExecuteInCurrentProcess(first.Attempt.OwnerProcessId);
+            var moved = coordinator.Evaluate(candidateB, ConductorAutonomyPolicy.Conservative, PassingRun);
             var stale = ReadAttempt(first.Attempt.MetadataPath);
 
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, first.Kind);
-            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, second.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, moved.Kind);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, stale.Outcome);
             Assert.Contains("candidate branch/main SHA moved", stale.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_rebased_attempt_updates_candidate_key_before_reconciliation")]
+    public void ParallelAcceptanceRebasedAttemptUpdatesCandidateKeyBeforeReconciliation()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/Rebased.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var launches = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: launch =>
+            {
+                launches[launch.Attempt.AttemptId] = launch;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7005 + launches.Count);
+            });
+        var preRebase = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Rebased.cs"], "branch-before", "main-a");
+        var postRebase = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Rebased.cs"], "branch-after", "main-a");
+
+        try
+        {
+            var started = coordinator.Evaluate(
+                preRebase,
+                ConductorAutonomyPolicy.Conservative,
+                (candidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    postRebase,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+            launches[started.Attempt.AttemptId].ExecuteInCurrentProcess(started.Attempt.OwnerProcessId);
+            var completed = coordinator.Evaluate(postRebase, ConductorAutonomyPolicy.Conservative, PassingRun);
+            var persisted = ReadAttempt(started.Attempt.MetadataPath);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, completed.Attempt.Outcome);
+            Assert.Equal("branch-after", completed.Attempt.BranchHeadSha);
+            Assert.Equal("main-a", completed.Attempt.MainHeadSha);
+            Assert.Equal("branch-after", completed.Run!.Candidate.BranchHeadSha);
+            Assert.Null(persisted.ReconciledAt);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, persisted.Outcome);
+            Assert.Equal("branch-after", persisted.BranchHeadSha);
         }
         finally
         {

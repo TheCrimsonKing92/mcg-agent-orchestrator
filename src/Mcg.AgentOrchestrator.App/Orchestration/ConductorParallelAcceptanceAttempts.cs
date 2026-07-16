@@ -124,22 +124,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             current = null;
         }
 
-        if (current is not null &&
-            !IsReconciled(current) &&
-            !string.Equals(current.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
-        {
-            Persist(current with
-            {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
-                CompletedAt = _utcNow(),
-                ReconciledAt = _utcNow(),
-                Detail = "candidate branch/main SHA moved before reconciliation"
-            });
-            current = null;
-        }
-
         if (current is not null && IsTerminalWithoutRunOutcome(current.Outcome))
         {
+            if (!string.Equals(current.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+            {
+                MarkStale(current);
+                return Launch(candidate, policy, runAcceptance);
+            }
+
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
         }
 
@@ -148,11 +140,23 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var terminal = TryCompleteRunningAttempt(current, candidate);
             if (terminal is { Run: not null })
             {
+                if (!string.Equals(terminal.Attempt.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+                {
+                    MarkStale(terminal.Attempt);
+                    return Launch(candidate, policy, runAcceptance);
+                }
+
                 return terminal;
             }
 
             if (terminal is not null)
             {
+                if (!string.Equals(terminal.Attempt.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+                {
+                    MarkStale(terminal.Attempt);
+                    return Launch(candidate, policy, runAcceptance);
+                }
+
                 return terminal;
             }
 
@@ -338,6 +342,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
             TryPersistTerminal(attempt, current => current with
             {
+                BranchHeadSha = run.Candidate.BranchHeadSha,
+                MainHeadSha = run.Candidate.MainHeadSha,
                 Outcome = outcome,
                 CompletedAt = _utcNow(),
                 LastHeartbeatAt = _utcNow(),
@@ -358,6 +364,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             TryWriteExit(attempt.ExitCodePath, 1);
             TryPersistTerminal(attempt, current => current with
             {
+                BranchHeadSha = run.Candidate.BranchHeadSha,
+                MainHeadSha = run.Candidate.MainHeadSha,
                 Outcome = outcome,
                 CompletedAt = _utcNow(),
                 LastHeartbeatAt = _utcNow(),
@@ -402,7 +410,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 }
 
                 var run = FromArtifact(candidate, artifact);
-                return ConductorParallelAcceptanceAttemptDecision.Completed(attempt, run);
+                var completed = PersistResultCandidate(attempt, run);
+                return ConductorParallelAcceptanceAttemptDecision.Completed(completed, run);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
             {
@@ -445,6 +454,45 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
 
         return null;
+    }
+
+    private void MarkStale(ConductorParallelAcceptanceAttempt attempt)
+    {
+        Persist(attempt with
+        {
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
+            CompletedAt = _utcNow(),
+            ReconciledAt = _utcNow(),
+            Detail = "candidate branch/main SHA moved before reconciliation"
+        });
+    }
+
+    private ConductorParallelAcceptanceAttempt PersistResultCandidate(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceRunResult run)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            if (!string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+            {
+                return current;
+            }
+
+            var updated = current with
+            {
+                BranchHeadSha = run.Candidate.BranchHeadSha,
+                MainHeadSha = run.Candidate.MainHeadSha,
+                Outcome = current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running
+                    ? OutcomeFor(run)
+                    : current.Outcome,
+                CompletedAt = current.CompletedAt ?? _utcNow(),
+                LastHeartbeatAt = _utcNow(),
+                Detail = current.Detail ?? AcceptanceRunDetail(run)
+            };
+            WriteAttemptFile(updated);
+            return updated;
+        }
     }
 
     private ConductorParallelAcceptanceAttemptDecision MarkCorrupt(
@@ -696,62 +744,77 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 null,
                 null,
                 null,
-                null,
-                null);
+                run.Candidate.BranchHeadSha,
+                run.Candidate.MainHeadSha);
         }
 
         if (run.EarlyResult is { Outcome: var outcome })
         {
             return outcome switch
             {
-                ConductorAdvanceOutcome.Held held => new("early-held", null, null, held.State.ToString(), held.Reason, null, null, null),
-                ConductorAdvanceOutcome.Escalated escalated => new("early-escalated", null, null, escalated.State.ToString(), escalated.Reason, null, null, null),
-                ConductorAdvanceOutcome.Done done => new("early-done", null, null, done.State.ToString(), null, null, null, null),
-                ConductorAdvanceOutcome.Executed executed => new("early-executed", null, null, executed.FromState.ToString(), executed.Description, null, null, null),
-                _ => new("fault", "exception", "unknown early acceptance result", null, null, null, null, null)
+                ConductorAdvanceOutcome.Held held => new("early-held", null, null, held.State.ToString(), held.Reason, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
+                ConductorAdvanceOutcome.Escalated escalated => new("early-escalated", null, null, escalated.State.ToString(), escalated.Reason, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
+                ConductorAdvanceOutcome.Done done => new("early-done", null, null, done.State.ToString(), null, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
+                ConductorAdvanceOutcome.Executed executed => new("early-executed", null, null, executed.FromState.ToString(), executed.Description, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha),
+                _ => new("fault", "exception", "unknown early acceptance result", null, null, null, run.Candidate.BranchHeadSha, run.Candidate.MainHeadSha)
             };
         }
 
-        return new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null, run.Acceptance, null, null);
+        return new ConductorParallelAcceptanceRunArtifact(
+            "accepted",
+            null,
+            null,
+            null,
+            null,
+            run.Acceptance,
+            run.Candidate.BranchHeadSha,
+            run.Candidate.MainHeadSha);
     }
 
     private static ConductorParallelAcceptanceRunResult FromArtifact(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorParallelAcceptanceRunArtifact artifact)
     {
+        var effectiveCandidate = ConductorParallelAcceptanceCandidate.Create(
+            candidate.Goal,
+            candidate.SlotIndex,
+            candidate.ScopePaths,
+            artifact.BranchHeadSha ?? candidate.BranchHeadSha,
+            artifact.MainHeadSha ?? candidate.MainHeadSha);
+
         return artifact.Kind switch
         {
             "accepted" when artifact.Acceptance is not null =>
-                ConductorParallelAcceptanceRunResult.Accepted(candidate, artifact.Acceptance),
+                ConductorParallelAcceptanceRunResult.Accepted(effectiveCandidate, artifact.Acceptance),
             "early-held" => ConductorParallelAcceptanceRunResult.Early(
-                candidate,
+                effectiveCandidate,
                 new ConductorAdvanceResult(
-                    candidate.Goal.Id.Value,
-                    candidate.GoalPrefix,
+                    effectiveCandidate.Goal.Id.Value,
+                    effectiveCandidate.GoalPrefix,
                     string.Empty,
                     new ConductorAdvanceOutcome.Held(ParseState(artifact.State), artifact.Message ?? "held"))),
             "early-escalated" => ConductorParallelAcceptanceRunResult.Early(
-                candidate,
+                effectiveCandidate,
                 new ConductorAdvanceResult(
-                    candidate.Goal.Id.Value,
-                    candidate.GoalPrefix,
+                    effectiveCandidate.Goal.Id.Value,
+                    effectiveCandidate.GoalPrefix,
                     string.Empty,
                     new ConductorAdvanceOutcome.Escalated(ParseState(artifact.State), artifact.Message ?? "escalated"))),
             "early-done" => ConductorParallelAcceptanceRunResult.Early(
-                candidate,
+                effectiveCandidate,
                 new ConductorAdvanceResult(
-                    candidate.Goal.Id.Value,
-                    candidate.GoalPrefix,
+                    effectiveCandidate.Goal.Id.Value,
+                    effectiveCandidate.GoalPrefix,
                     string.Empty,
                     new ConductorAdvanceOutcome.Done(ParseState(artifact.State)))),
             "early-executed" => ConductorParallelAcceptanceRunResult.Early(
-                candidate,
+                effectiveCandidate,
                 new ConductorAdvanceResult(
-                    candidate.Goal.Id.Value,
-                    candidate.GoalPrefix,
+                    effectiveCandidate.Goal.Id.Value,
+                    effectiveCandidate.GoalPrefix,
                     string.Empty,
                     new ConductorAdvanceOutcome.Executed(ParseState(artifact.State), artifact.Message ?? "executed"))),
-            "fault" => ConductorParallelAcceptanceRunResult.Fault(candidate, RehydrateFault(artifact)),
+            "fault" => ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, RehydrateFault(artifact)),
             _ => throw new InvalidOperationException("unrecognized acceptance attempt result artifact")
         };
     }
@@ -809,6 +872,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             or ConductorParallelAcceptanceAttemptOutcome.ProcessDied
             or ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
             or ConductorParallelAcceptanceAttemptOutcome.Cancelled
+            or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
+            or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
             or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
 
     private static bool IsReconciled(ConductorParallelAcceptanceAttempt attempt) =>
@@ -911,5 +976,5 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? State,
     string? Message,
     AcceptanceVerificationSummary? Acceptance,
-    string? Reserved1,
-    string? Reserved2);
+    string? BranchHeadSha,
+    string? MainHeadSha);

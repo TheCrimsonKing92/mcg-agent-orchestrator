@@ -873,6 +873,7 @@ internal sealed class ConductorDriver
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy)
     {
+        var effectiveCandidate = candidate;
         try
         {
             var early = RebaseBeforeAcceptance(candidate.Goal, candidate.GoalPrefix, policy);
@@ -881,15 +882,25 @@ internal sealed class ConductorDriver
                 return ConductorParallelAcceptanceRunResult.Early(candidate, early);
             }
 
+            effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
             return ConductorParallelAcceptanceRunResult.Accepted(
-                candidate,
-                _runAcceptanceVerification(candidate.Goal, candidate.SlotIndex));
+                effectiveCandidate,
+                _runAcceptanceVerification(effectiveCandidate.Goal, effectiveCandidate.SlotIndex));
         }
         catch (Exception ex)
         {
-            return ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
+            return ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
         }
     }
+
+    private ConductorParallelAcceptanceCandidate RefreshParallelAcceptanceCandidate(
+        ConductorParallelAcceptanceCandidate candidate) =>
+        ConductorParallelAcceptanceCandidate.Create(
+            candidate.Goal,
+            candidate.SlotIndex,
+            candidate.ScopePaths,
+            TryResolveAcceptanceBranchHead(candidate.Goal),
+            _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
 
     internal ConductorAdvanceResult CompleteParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
