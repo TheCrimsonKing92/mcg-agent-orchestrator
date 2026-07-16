@@ -955,9 +955,22 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static void WriteAttemptFile(ConductorParallelAcceptanceAttempt attempt)
     {
-        var tmp = TemporarySiblingPath(attempt.MetadataPath);
-        File.WriteAllText(tmp, JsonSerializer.Serialize(attempt, JsonOptions));
-        File.Move(tmp, attempt.MetadataPath, overwrite: true);
+        var payload = JsonSerializer.Serialize(attempt, JsonOptions);
+        for (var retry = 0; ; retry++)
+        {
+            var tmp = TemporarySiblingPath(attempt.MetadataPath);
+            File.WriteAllText(tmp, payload);
+            try
+            {
+                File.Move(tmp, attempt.MetadataPath, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && retry < 10)
+            {
+                try { File.Delete(tmp); } catch { }
+                Thread.Sleep(TimeSpan.FromMilliseconds(25 * (retry + 1)));
+            }
+        }
     }
 
     private static bool IsProcessAlive(int processId)

@@ -114,6 +114,7 @@ public sealed class ConductorBatchLoopTests
         var landed = new HashSet<string>(StringComparer.Ordinal);
         object gate = new();
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        Action waitForAttempts = () => { };
 
         try
         {
@@ -158,7 +159,7 @@ public sealed class ConductorBatchLoopTests
                 getLandingFileScopes: goal => goal.Id == goalA.Id
                     ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
                     : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
-                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot));
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             BatchTickSummary? startTick = null;
             var startClock = Stopwatch.StartNew();
@@ -217,6 +218,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -232,6 +234,7 @@ public sealed class ConductorBatchLoopTests
         var slots = new ConcurrentQueue<int?>();
         var landed = new HashSet<string>(StringComparer.Ordinal);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        Action waitForAttempts = () => { };
 
         try
         {
@@ -257,7 +260,7 @@ public sealed class ConductorBatchLoopTests
                     return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
                 },
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"],
-                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot));
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             var totalAdvanced = 0;
             var totalHeld = 0;
@@ -282,6 +285,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -398,6 +402,7 @@ public sealed class ConductorBatchLoopTests
         object gate = new();
         var landed = new HashSet<string>(StringComparer.Ordinal);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        Action waitForAttempts = () => { };
 
         try
         {
@@ -437,7 +442,7 @@ public sealed class ConductorBatchLoopTests
                     landed.Add(goal.Id.Value);
                     return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
                 },
-                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot));
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             BatchTickSummary? firstTick = null;
             var firstSummary = new ConductorBatchLoop().Run(
@@ -479,6 +484,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -1061,10 +1067,25 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
-    private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(string attemptRoot)
+    private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
+        string attemptRoot,
+        out Action waitForAttempts)
     {
         var nextPid = 8000;
         var alive = new ConcurrentDictionary<int, byte>();
+        var threads = new ConcurrentBag<Thread>();
+        waitForAttempts = () =>
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            foreach (var thread in threads)
+            {
+                var remaining = deadline - DateTime.UtcNow;
+                Assert.True(
+                    remaining > TimeSpan.Zero && thread.Join(remaining),
+                    $"acceptance attempt thread {thread.Name} did not finish before cleanup");
+            }
+        };
+
         return new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
             isProcessAlive: pid => alive.ContainsKey(pid),
@@ -1087,6 +1108,7 @@ public sealed class ConductorBatchLoopTests
                     IsBackground = true,
                     Name = $"acceptance-attempt-test-{pid}"
                 };
+                threads.Add(thread);
                 thread.Start();
                 return new ConductorParallelAcceptanceOwnedProcessLaunchResult(pid);
             });
@@ -1115,7 +1137,7 @@ public sealed class ConductorBatchLoopTests
     {
         var (_, goal) = SimpleGoal($"Update src/Mcg.AgentOrchestrator.App/Orchestration/{fileName}");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
-        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot);
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out var waitForAttempts);
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
             0,
@@ -1133,6 +1155,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
     }
