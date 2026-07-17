@@ -207,7 +207,7 @@ public sealed class LandingExecutorTests
     public void RemoteMirrorEnabledPushesMainGoalBranchAndTagsToBareRemote()
     {
         var repo = CreateGitRepository();
-        var remote = CreateBareRepository();
+        var remote = CreateBareRepository(repo, "mirror");
         using var _ = WithMirrorTestHooks();
         try
         {
@@ -249,7 +249,7 @@ public sealed class LandingExecutorTests
     public void RemoteMirrorDisabledOrUnconfiguredDoesNotPush(bool writeDisabledConfig)
     {
         var repo = CreateGitRepository();
-        var remote = CreateBareRepository();
+        var remote = CreateBareRepository(repo, "mirror");
         using var _ = WithMirrorTestHooks();
         try
         {
@@ -284,7 +284,7 @@ public sealed class LandingExecutorTests
     public void TerminalSweepDoesNotRunRemoteMirrorPushInline()
     {
         var repo = CreateGitRepository();
-        var remote = CreateBareRepository();
+        var remote = CreateBareRepository(repo, "mirror");
         using var hooks = WithMirrorTestHooks();
         var pushCount = 0;
         var oldGitRunner = RemoteGitMirror.GitRunner;
@@ -328,7 +328,7 @@ public sealed class LandingExecutorTests
     public void RemoteMirrorUnreachableRemoteDefersAndLaterRetrySucceeds()
     {
         var repo = CreateGitRepository();
-        var remote = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        var remote = CreateRemotePath(repo, "mirror");
         using var _ = WithMirrorTestHooks();
         try
         {
@@ -371,7 +371,7 @@ public sealed class LandingExecutorTests
     public void RemoteMirrorRetryUsesLandedBranchTipAfterCleanupDeletesGoalBranch()
     {
         var repo = CreateGitRepository();
-        var remote = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        var remote = CreateRemotePath(repo, "mirror");
         using var _ = WithMirrorTestHooks();
         try
         {
@@ -412,8 +412,8 @@ public sealed class LandingExecutorTests
     public void RemoteMirrorTwoRemotesPushesReachableAndDefersUnreachable()
     {
         var repo = CreateGitRepository();
-        var reachable = CreateBareRepository();
-        var missing = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        var reachable = CreateBareRepository(repo, "reachable");
+        var missing = CreateRemotePath(repo, "missing");
         using var _ = WithMirrorTestHooks();
         try
         {
@@ -448,7 +448,7 @@ public sealed class LandingExecutorTests
     public void RemoteMirrorProcessingPreservesLaterEnqueuedMirrorDebt()
     {
         var repo = CreateGitRepository();
-        var remote = CreateBareRepository();
+        var remote = CreateBareRepository(repo, "mirror");
         using var _ = WithMirrorTestHooks();
         var oldGitRunner = RemoteGitMirror.GitRunner;
         var enqueuedSecondGoal = 0;
@@ -480,7 +480,7 @@ public sealed class LandingExecutorTests
                     RemoteGitMirror.EnqueueAfterLanding(repo, secondGoal);
                 }
 
-                return oldGitRunner(workingDirectory, args);
+                return new GitCli.GitResult(0, string.Empty, string.Empty);
             };
             var mirror = RemoteGitMirror.ProcessDue(kernel, repo, firstGoal.Id);
 
@@ -600,19 +600,23 @@ public sealed class LandingExecutorTests
         RunGit(root, "init", "-b", "main");
         RunGit(root, "config", "user.email", "tests@example.invalid");
         RunGit(root, "config", "user.name", "Tests");
+        File.AppendAllText(Path.Combine(root, ".git", "info", "exclude"), ".orchestrator-test-remotes/" + Environment.NewLine);
         File.WriteAllText(Path.Combine(root, "README.md"), "initial" + Environment.NewLine);
         RunGit(root, "add", "README.md");
         RunGit(root, "commit", "-m", "Initial");
         return root;
     }
 
-    private static string CreateBareRepository()
+    private static string CreateBareRepository(string repo, string name)
     {
-        var root = Path.Combine(Path.GetTempPath(), "mcg-mirror-tests", Guid.NewGuid().ToString("N"));
+        var root = CreateRemotePath(repo, name);
         Directory.CreateDirectory(root);
         RunGit(root, "init", "--bare");
         return root;
     }
+
+    private static string CreateRemotePath(string repo, string name) =>
+        Path.Combine(repo, ".orchestrator-test-remotes", name);
 
     private static void AddGoalBranchCommit(string repo, string goalBranch, string fileName, string content)
     {
