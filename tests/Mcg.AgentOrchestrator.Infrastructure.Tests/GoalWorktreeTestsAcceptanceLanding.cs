@@ -533,6 +533,61 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceQueuePlanner_batches_goal_branch_facts_once_per_plan")]
+    public void AcceptanceQueuePlannerBatchesGoalBranchFactsOncePerPlan()
+    {
+        var repo = CreateSeededRepository();
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var present = kernel.CreateGoal("Present branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            var alsoPresent = kernel.CreateGoal("Also present branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            var missing = kernel.CreateGoal("Missing branch queued acceptance filter", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            RunGit(repo, "branch", GoalWorktrees.BranchName(present.Id));
+            RunGit(repo, "branch", GoalWorktrees.BranchName(alsoPresent.Id));
+            var batchedGitCalls = new List<string>();
+
+            GoalGitFactIndex.GitRunner = (workingDirectory, args) =>
+            {
+                if (Path.GetFullPath(workingDirectory).Equals(Path.GetFullPath(repo), StringComparison.OrdinalIgnoreCase))
+                {
+                    batchedGitCalls.Add(string.Join(" ", args));
+                }
+
+                var command = string.Join(" ", args);
+                if (command == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/")
+                {
+                    return new GitCli.GitResult(
+                        0,
+                        $"""
+                        {GoalWorktrees.BranchName(present.Id)} 1111111111111111111111111111111111111111
+                        {GoalWorktrees.BranchName(alsoPresent.Id)} 2222222222222222222222222222222222222222
+                        """,
+                        string.Empty);
+                }
+
+                return originalRunner(workingDirectory, args);
+            };
+
+            var plan = AcceptanceQueuePlanner.Build(kernel, repo, AutonomyPolicy.SupervisedAuto);
+
+            Assert.Equal(2, plan.Items.Count);
+            Assert.Contains(plan.Items, item => item.GoalId == present.Id);
+            Assert.Contains(plan.Items, item => item.GoalId == alsoPresent.Id);
+            Assert.DoesNotContain(plan.Items, item => item.GoalId == missing.Id);
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
+            Assert.DoesNotContain(batchedGitCalls, call => call.StartsWith("rev-parse --verify --quiet refs/heads/goal/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_conduct_completed_goal_lands_through_persistent_runner_without_command_transaction")]
     public async Task CliConductCompletedGoalLandsThroughPersistentRunnerWithoutCommandTransaction()
     {

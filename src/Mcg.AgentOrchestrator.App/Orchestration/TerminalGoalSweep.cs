@@ -263,8 +263,11 @@ internal sealed class TerminalGoalSweepCache
 
 internal static class TerminalGoalSweep
 {
-    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
-        (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
+    internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner
+    {
+        get => GoalGitFactIndex.GitRunner;
+        set => GoalGitFactIndex.GitRunner = value;
+    }
 
     public static TerminalGoalSweepResult Run(
         AgentOrchestratorKernel kernel,
@@ -273,7 +276,7 @@ internal static class TerminalGoalSweep
         TerminalGoalSweepCache? cache = null)
     {
         var dispatchRunner = new BackgroundDispatchRunner();
-        GoalBranchFactIndex? branchFactIndex = null;
+        GoalGitFactIndex? branchFactIndex = null;
         var results = new List<TerminalGoalSweepGoalResult>();
         var cacheHits = 0;
         var cacheMisses = 0;
@@ -283,7 +286,7 @@ internal static class TerminalGoalSweep
             var cacheEvidenceKey = string.Empty;
             if (cache is not null && IsTerminalSweepStatus(originalGoal.Status))
             {
-                branchFactIndex ??= GoalBranchFactIndex.Build(executionDirectory);
+                branchFactIndex ??= GoalGitFactIndex.Build(executionDirectory);
                 cacheEvidenceKey = branchFactIndex.BuildGoalEvidenceKey(originalGoal);
             }
 
@@ -314,7 +317,7 @@ internal static class TerminalGoalSweep
             }
 
             var goal = kernel.GetGoal(originalGoal.Id);
-            branchFactIndex ??= GoalBranchFactIndex.Build(executionDirectory);
+            branchFactIndex ??= GoalGitFactIndex.Build(executionDirectory);
             var branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
@@ -447,7 +450,12 @@ internal static class TerminalGoalSweep
                 hasDurableLandingIntent &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
-                var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
+                var removeResult = GoalWorktrees.Remove(
+                    executionDirectory,
+                    goal.Id,
+                    kernel,
+                    branchFacts.HasRegisteredWorktree,
+                    branchFacts.HasGoalBranch);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -519,129 +527,6 @@ internal static class TerminalGoalSweep
             CountGlobalStaleTerminalExclusions(results),
             cacheHits,
             cacheMisses);
-    }
-
-    private sealed record GoalBranchFacts(
-        bool IsAcceptedOrVerifiedGitGoal,
-        bool IsCompletedGitGoal,
-        bool HasRegisteredWorktree,
-        bool HasGoalBranch,
-        bool HasGoalBranchArtifact,
-        bool BranchAlreadyLanded)
-    {
-        public bool MissingBranchOrWorktree => IsAcceptedOrVerifiedGitGoal && (!HasRegisteredWorktree || !HasGoalBranch);
-    }
-
-    private sealed class GoalBranchFactIndex(
-        string executionDirectory,
-        bool isGitWorkTree,
-        IReadOnlyDictionary<string, string> goalBranchTips,
-        IReadOnlySet<string> mergedGoalBranches,
-        IReadOnlySet<string> registeredWorktreePaths)
-    {
-        public static GoalBranchFactIndex Build(string executionDirectory)
-        {
-            var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
-            var branchResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
-            if (branchResult.ExitCode != 0)
-            {
-                return new GoalBranchFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet());
-            }
-
-            var mergedResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
-            var worktreeResult = RunGit(fullExecutionDirectory, "worktree", "list", "--porcelain");
-
-            return new GoalBranchFactIndex(
-                fullExecutionDirectory,
-                true,
-                ParseBranchTips(branchResult.Output),
-                mergedResult.ExitCode == 0 ? ParseLines(mergedResult.Output) : EmptySet(),
-                worktreeResult.ExitCode == 0 ? ParseWorktreePaths(worktreeResult.Output) : EmptyPathSet());
-        }
-
-        public GoalBranchFacts BuildGoalBranchFacts(Goal goal)
-        {
-            var branch = GoalWorktrees.BranchName(goal.Id);
-            var isAcceptedOrVerifiedGitGoal = (goal.Status is GoalStatus.Verified or GoalStatus.Completed) && isGitWorkTree;
-            var hasRegisteredWorktree = isAcceptedOrVerifiedGitGoal &&
-                registeredWorktreePaths.Contains(NormalizePath(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)));
-            var hasGoalBranch = isAcceptedOrVerifiedGitGoal && goalBranchTips.ContainsKey(branch);
-            var hasGoalBranchArtifact = hasRegisteredWorktree || hasGoalBranch;
-            var branchAlreadyLanded = isAcceptedOrVerifiedGitGoal &&
-                hasGoalBranchArtifact &&
-                (!hasGoalBranch || mergedGoalBranches.Contains(branch));
-
-            return new GoalBranchFacts(
-                isAcceptedOrVerifiedGitGoal,
-                goal.Status == GoalStatus.Completed && isGitWorkTree,
-                hasRegisteredWorktree,
-                hasGoalBranch,
-                hasGoalBranchArtifact,
-                branchAlreadyLanded);
-        }
-
-        public string BuildGoalEvidenceKey(Goal goal)
-        {
-            var branch = GoalWorktrees.BranchName(goal.Id);
-            var hasTip = goalBranchTips.TryGetValue(branch, out var tip);
-            var registeredWorktree = registeredWorktreePaths.Contains(NormalizePath(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)));
-            var merged = mergedGoalBranches.Contains(branch);
-            return string.Join(
-                "|",
-                $"git={(isGitWorkTree ? "available" : "unavailable")}",
-                $"branch={branch}",
-                $"tip={(hasTip ? tip : "absent")}",
-                $"worktree={(registeredWorktree ? "present" : "absent")}",
-                $"merged={(merged ? "true" : "false")}");
-        }
-
-        private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
-            GitRunner(executionDirectory, args);
-
-        private static IReadOnlySet<string> ParseLines(string output) =>
-            output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToHashSet(StringComparer.Ordinal);
-
-        private static IReadOnlyDictionary<string, string> ParseBranchTips(string output)
-        {
-            var tips = EmptyTipMap();
-            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                var parts = line.Split(' ', 2, StringSplitOptions.TrimEntries);
-                if (parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
-                {
-                    tips[parts[0]] = parts[1];
-                }
-            }
-
-            return tips;
-        }
-
-        private static HashSet<string> ParseWorktreePaths(string output)
-        {
-            var paths = EmptyPathSet();
-            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (line.StartsWith("worktree ", StringComparison.Ordinal))
-                {
-                    paths.Add(NormalizePath(line["worktree ".Length..]));
-                }
-            }
-
-            return paths;
-        }
-
-        private static HashSet<string> EmptySet() =>
-            new(StringComparer.Ordinal);
-
-        private static Dictionary<string, string> EmptyTipMap() =>
-            new(StringComparer.Ordinal);
-
-        private static HashSet<string> EmptyPathSet() =>
-            new(StringComparer.OrdinalIgnoreCase);
-
-        private static string NormalizePath(string path) =>
-            Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     private static bool TryReconcileVerifiedMissingBranchOrWorktree(
@@ -826,7 +711,7 @@ internal static class TerminalGoalSweep
         GoalId? onlyGoalId = null)
     {
         var results = new List<TerminalGoalSweepGoalResult>();
-        var branchFactIndex = GoalBranchFactIndex.Build(executionDirectory);
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory);
 
         foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {

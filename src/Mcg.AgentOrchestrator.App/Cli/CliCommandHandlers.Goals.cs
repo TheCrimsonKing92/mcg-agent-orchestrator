@@ -3401,10 +3401,10 @@ private static bool TryNormalizePrematureCompletedGoalForAcceptance(
         return false;
     }
 
+    var gitFacts = GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory).BuildGoalBranchFacts(goal);
     var hasBranchArtifact = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null ||
-        GoalWorktrees.HasBranch(context.Workspace.ExecutionDirectory, goal.Id);
-    if (!hasBranchArtifact ||
-        GoalWorktrees.IsBranchMergedIntoCurrent(context.Workspace.ExecutionDirectory, goal.Id))
+        gitFacts.HasGoalBranch;
+    if (!hasBranchArtifact || gitFacts.BranchAlreadyLanded)
     {
         detail = $"acceptance normalization skipped: goal {goalPrefix} has no unmerged goal branch.";
         return false;
