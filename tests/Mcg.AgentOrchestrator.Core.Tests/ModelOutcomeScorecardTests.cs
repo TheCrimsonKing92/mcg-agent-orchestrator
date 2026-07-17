@@ -79,6 +79,59 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Equal(r1.Reason, r2.Reason);
     }
 
+    [Xunit.Fact(DisplayName = "ModelOutcomeScorecard_segments_real_and_environmental_failures")]
+    public void ModelOutcomeScorecardSegmentsRealAndEnvironmentalFailures()
+    {
+        var rows = new[]
+        {
+            Row(0, WorkTaskStatus.Failed, "succeeded-worker-result-failing-tests"),
+            Row(1, WorkTaskStatus.Failed, "provider-connectivity"),
+            Row(2, WorkTaskStatus.Failed, "retry-round-produced-no-commit-and-no-deferral"),
+            Row(3, WorkTaskStatus.Completed, "committed-worker-result-evidence")
+        };
+
+        var record = ModelOutcomeScorecard.Build(rows, windowSize: 4).Single();
+
+        Assert.Equal(1, record.Completed);
+        Assert.Equal(3, record.Failed);
+        Assert.Equal(1, record.RealFailures);
+        Assert.Equal(1, record.EnvironmentalFailures);
+        Assert.Equal(1, record.ManufacturedFixedFailures);
+        Assert.Equal(0, record.UnknownEraFailures);
+        Assert.Equal(ModelOutcomeRecommendation.Neutral, record.Recommendation);
+        Assert.Contains("1/4 real/code failure", record.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 environmental", record.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_provider_neutral_progress_stall_is_environmental")]
+    public void TaskOutcomeClassifierProviderNeutralProgressStallIsEnvironmental()
+    {
+        var classification = TaskOutcomeClassifier.Classify(
+            WorkTaskStatus.Failed,
+            "provider-neutral-progress-stall");
+
+        Assert.Equal("provider-neutral-progress-stall", classification.Rule);
+        Assert.Equal(TaskOutcomeClass.Environmental, classification.Class);
+    }
+
+    [Xunit.Fact(DisplayName = "ModelFitHistory_best_fit_uses_real_failures_not_total_failures")]
+    public void ModelFitHistoryBestFitUsesRealFailuresNotTotalFailures()
+    {
+        var rows = new[]
+        {
+            Row(0, WorkTaskStatus.Failed, "provider-connectivity"),
+            Row(1, WorkTaskStatus.Failed, "provider-neutral-progress-stall"),
+            Row(2, WorkTaskStatus.Completed, "committed-worker-result-evidence")
+        };
+
+        var best = ModelFitHistory.QueryBestFitForRole(rows, AgentRole.Developer, windowSize: 3);
+
+        Assert.NotNull(best);
+        Assert.Equal("OpenAI", best!.ProviderName);
+        Assert.Equal("gpt-5.5", best.ModelName);
+        Assert.Equal(ModelOutcomeRecommendation.Neutral, best.Recommendation);
+    }
+
     private static void Dispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -97,6 +150,24 @@ public sealed class ModelOutcomeScorecardTests
                 exitCode,
                 exitCode == 0 ? "ok" : "failed",
                 exitCode == 0 ? string.Empty : "error",
-                at));
+            at));
+    }
+
+    private static ModelFitHistoryRow Row(int seconds, WorkTaskStatus outcome, string rule)
+    {
+        var classification = TaskOutcomeClassifier.Classify(outcome, rule);
+        return new ModelFitHistoryRow(
+            "goal",
+            $"task-{seconds}",
+            AgentRole.Developer,
+            "OpenAI",
+            "gpt-5.5",
+            TaskComplexity.Complex,
+            "implementation",
+            outcome,
+            ModelFitHistory.Adequate,
+            new DateTimeOffset(2026, 1, 1, 0, 0, seconds, TimeSpan.Zero),
+            classification.Rule,
+            classification.Class);
     }
 }

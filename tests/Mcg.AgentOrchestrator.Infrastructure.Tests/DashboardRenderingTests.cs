@@ -1769,7 +1769,15 @@ public sealed class DashboardRenderingTests
                     MedianLegitimateRuntime: "10m",
                     P90LegitimateRuntime: "12m",
                     MedianFailureInterventionOverhead: "20m",
-                    FailureRate: 0.25),
+                    FailureRate: 0.25,
+                    RealFailureAttemptCount: 1,
+                    EnvironmentalFailureAttemptCount: 0,
+                    ManufacturedFixedFailureAttemptCount: 0,
+                    UnknownEraFailureAttemptCount: 0,
+                    RealFailureRate: 0.25,
+                    EnvironmentalFailureRate: 0,
+                    ManufacturedFixedFailureRate: 0,
+                    UnknownEraFailureRate: 0),
                 new TaskDurationStatsDto(
                     "Tester/Simple",
                     AgentRole.Tester,
@@ -1784,7 +1792,15 @@ public sealed class DashboardRenderingTests
                     MedianLegitimateRuntime: "n/a (n=1)",
                     P90LegitimateRuntime: "n/a (n=1)",
                     MedianFailureInterventionOverhead: "n/a (n=1)",
-                    FailureRate: 0)
+                    FailureRate: 0,
+                    RealFailureAttemptCount: 0,
+                    EnvironmentalFailureAttemptCount: 0,
+                    ManufacturedFixedFailureAttemptCount: 0,
+                    UnknownEraFailureAttemptCount: 0,
+                    RealFailureRate: 0,
+                    EnvironmentalFailureRate: 0,
+                    ManufacturedFixedFailureRate: 0,
+                    UnknownEraFailureRate: 0)
             ]));
 
     Assert.Contains("Task Duration Estimates", html, StringComparison.Ordinal);

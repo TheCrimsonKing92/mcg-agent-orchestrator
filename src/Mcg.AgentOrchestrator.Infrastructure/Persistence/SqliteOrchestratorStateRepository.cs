@@ -109,6 +109,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         if (SchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
+            BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
 
@@ -149,11 +150,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 outcome       TEXT NOT NULL,
                 self_rating   TEXT NOT NULL,
                 timestamp     TEXT NOT NULL,
+                outcome_rule  TEXT NULL,
+                outcome_class TEXT NOT NULL DEFAULT 'unknown-era',
                 PRIMARY KEY (goal_id, task_id, timestamp)
             )
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_role ON model_fit_history(role)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_model ON model_fit_history(provider_name, model_name)");
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
@@ -178,6 +182,44 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         if (!IndexExists(conn, "ix_goals_status"))
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
+
+        AddColumnIfMissing(conn, "model_fit_history", "outcome_rule", "ALTER TABLE model_fit_history ADD COLUMN outcome_rule TEXT NULL");
+        AddColumnIfMissing(conn, "model_fit_history", "outcome_class", "ALTER TABLE model_fit_history ADD COLUMN outcome_class TEXT NOT NULL DEFAULT 'unknown-era'");
+
+        if (!IndexExists(conn, "ix_model_fit_history_outcome_class"))
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
+    }
+
+    private void BackfillModelFitHistoryOutcomeColumns(SqliteConnection conn)
+    {
+        var kernel = LoadFromConnectionAsync(conn, goalIds: null, CancellationToken.None).GetAwaiter().GetResult();
+        foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE model_fit_history
+                SET outcome_rule = $outcome_rule,
+                    outcome_class = $outcome_class
+                WHERE goal_id = $goal_id
+                  AND task_id = $task_id
+                  AND timestamp = $timestamp
+                """;
+            cmd.Parameters.AddWithValue("$outcome_rule", row.OutcomeRule ?? (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("$outcome_class", TaskOutcomeClassifier.FormatClass(row.OutcomeClass));
+            cmd.Parameters.AddWithValue("$goal_id", row.GoalId);
+            cmd.Parameters.AddWithValue("$task_id", row.TaskId);
+            cmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private void AddColumnIfMissing(SqliteConnection conn, string tableName, string columnName, string alterSql)
+    {
+        using var check = conn.CreateCommand();
+        check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{tableName}') WHERE name = $name";
+        check.Parameters.AddWithValue("$name", columnName);
+        if (Convert.ToInt32(check.ExecuteScalar()) == 0)
+            RunNonQuery(conn, alterSql);
     }
 
     private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
@@ -455,7 +497,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp
+            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class
             FROM model_fit_history
             ORDER BY timestamp DESC
             """;
@@ -483,7 +525,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp
+            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class
             FROM model_fit_history
             WHERE role = $role
             ORDER BY timestamp DESC
@@ -943,9 +985,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO model_fit_history (
-                goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp)
+                goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class)
             VALUES (
-                $goal_id, $task_id, $role, $provider_name, $model_name, $complexity, $task_shape, $outcome, $self_rating, $timestamp)
+                $goal_id, $task_id, $role, $provider_name, $model_name, $complexity, $task_shape, $outcome, $self_rating, $timestamp, $outcome_rule, $outcome_class)
             ON CONFLICT(goal_id, task_id, timestamp) DO UPDATE SET
                 role          = excluded.role,
                 provider_name = excluded.provider_name,
@@ -953,7 +995,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 complexity    = excluded.complexity,
                 task_shape    = excluded.task_shape,
                 outcome       = excluded.outcome,
-                self_rating   = excluded.self_rating
+                self_rating   = excluded.self_rating,
+                outcome_rule  = excluded.outcome_rule,
+                outcome_class = excluded.outcome_class
             """;
         cmd.Parameters.AddWithValue("$goal_id", row.GoalId);
         cmd.Parameters.AddWithValue("$task_id", row.TaskId);
@@ -965,6 +1009,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$outcome", row.Outcome.ToString());
         cmd.Parameters.AddWithValue("$self_rating", ModelFitHistory.NormalizeSelfRating(row.SelfRating));
         cmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
+        cmd.Parameters.AddWithValue("$outcome_rule", row.OutcomeRule ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("$outcome_class", TaskOutcomeClassifier.FormatClass(row.OutcomeClass));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -992,7 +1038,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             reader.IsDBNull(6) ? null : reader.GetString(6),
             Enum.Parse<WorkTaskStatus>(reader.GetString(7)),
             ModelFitHistory.NormalizeSelfRating(reader.GetString(8)),
-            DateTimeOffset.Parse(reader.GetString(9), null, System.Globalization.DateTimeStyles.RoundtripKind));
+            DateTimeOffset.Parse(reader.GetString(9), null, System.Globalization.DateTimeStyles.RoundtripKind),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            TaskOutcomeClassifier.ParseClass(reader.IsDBNull(11) ? null : reader.GetString(11)));
     }
 
     private static async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)

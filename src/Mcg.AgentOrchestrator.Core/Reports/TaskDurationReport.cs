@@ -10,7 +10,11 @@ public sealed record TaskDurationObservation(
     TimeSpan? LegitimateRuntime,
     TimeSpan FailureInterventionOverhead,
     int AttemptCount,
-    int FailedAttemptCount);
+    int FailedAttemptCount,
+    int RealFailureAttemptCount,
+    int EnvironmentalFailureAttemptCount,
+    int ManufacturedFixedFailureAttemptCount,
+    int UnknownEraFailureAttemptCount);
 
 public sealed record TaskDurationStatsRecord(
     AgentRole Role,
@@ -23,7 +27,15 @@ public sealed record TaskDurationStatsRecord(
     TimeSpan? MedianLegitimateRuntime,
     TimeSpan? P90LegitimateRuntime,
     TimeSpan? MedianFailureInterventionOverhead,
-    double FailureRate)
+    double FailureRate,
+    int RealFailureAttemptCount = 0,
+    int EnvironmentalFailureAttemptCount = 0,
+    int ManufacturedFixedFailureAttemptCount = 0,
+    int UnknownEraFailureAttemptCount = 0,
+    double RealFailureRate = 0.0,
+    double EnvironmentalFailureRate = 0.0,
+    double ManufacturedFixedFailureRate = 0.0,
+    double UnknownEraFailureRate = 0.0)
 {
     public double AttemptsPerTask => TaskCount > 0 ? (double)AttemptCount / TaskCount : 0.0;
 
@@ -105,7 +117,7 @@ public static class TaskDurationReport
                     .Where(attempt => attempt.Succeeded)
                     .LastOrDefault();
                 var failedAttempts = attempts
-                    .Where(attempt => !attempt.Succeeded)
+                    .Where(attempt => attempt.OutcomeClass != TaskOutcomeClass.Success)
                     .ToList();
 
                 return new TaskDurationObservation(
@@ -118,7 +130,11 @@ public static class TaskDurationReport
                     finalSuccessfulAttempt?.LegitimateRuntime,
                     failedAttempts.Aggregate(TimeSpan.Zero, (sum, attempt) => sum + attempt.FailureInterventionOverhead),
                     attempts.Count,
-                    failedAttempts.Count);
+                    failedAttempts.Count,
+                    failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.RealFailure),
+                    failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.Environmental),
+                    failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.ManufacturedFixed),
+                    failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.UnknownEra));
             })
             .ToList();
     }
@@ -182,6 +198,10 @@ public static class TaskDurationReport
                     .ToList();
                 var attempts = items.Sum(item => item.AttemptCount);
                 var failedAttempts = items.Sum(item => item.FailedAttemptCount);
+                var realFailures = items.Sum(item => item.RealFailureAttemptCount);
+                var environmentalFailures = items.Sum(item => item.EnvironmentalFailureAttemptCount);
+                var manufacturedFailures = items.Sum(item => item.ManufacturedFixedFailureAttemptCount);
+                var unknownEraFailures = items.Sum(item => item.UnknownEraFailureAttemptCount);
 
                 return new TaskDurationStatsRecord(
                     group.Key.Role,
@@ -194,7 +214,15 @@ public static class TaskDurationReport
                     Percentile(legitimate, 0.5),
                     Percentile(legitimate, 0.9),
                     Percentile(overhead, 0.5),
-                    attempts > 0 ? (double)failedAttempts / attempts : 0.0);
+                    attempts > 0 ? (double)failedAttempts / attempts : 0.0,
+                    realFailures,
+                    environmentalFailures,
+                    manufacturedFailures,
+                    unknownEraFailures,
+                    attempts > 0 ? (double)realFailures / attempts : 0.0,
+                    attempts > 0 ? (double)environmentalFailures / attempts : 0.0,
+                    attempts > 0 ? (double)manufacturedFailures / attempts : 0.0,
+                    attempts > 0 ? (double)unknownEraFailures / attempts : 0.0);
             })
             .ToList();
     }
@@ -245,6 +273,9 @@ public static class TaskDurationReport
         {
             var start = ResolveAttemptStart(task, attempt, dispatchTimes);
             var succeeded = attempt.Verification?.Succeeded is true;
+            var outcomeClass = succeeded
+                ? TaskOutcomeClass.Success
+                : ResolveAttemptOutcomeClass(goal, task, attempt);
             var legitimateRuntime = succeeded ? PositiveDuration(attempt.End, start) : (TimeSpan?)null;
             var overhead = TimeSpan.Zero;
             if (!succeeded)
@@ -266,6 +297,7 @@ public static class TaskDurationReport
                 attempt.DispatchAt,
                 attempt.End,
                 succeeded,
+                outcomeClass,
                 legitimateRuntime,
                 overhead));
         }
@@ -284,11 +316,23 @@ public static class TaskDurationReport
                 process.StartedAt,
                 cancelledAt,
                 Succeeded: false,
+                TaskOutcomeClass.Environmental,
                 LegitimateRuntime: null,
                 PositiveDuration(cancelledAt, process.StartedAt)));
         }
 
         return observations;
+    }
+
+    private static TaskOutcomeClass ResolveAttemptOutcomeClass(Goal goal, TaskSpec task, AttemptTiming attempt)
+    {
+        var classification = TaskOutcomeClassifier.FromTimeline(
+            goal.Timeline,
+            task.Id,
+            WorkTaskStatus.Failed,
+            attempt.Verification?.CompletedAt ?? attempt.End,
+            attempt.NextDispatchAt);
+        return classification.Class;
     }
 
     private static List<AttemptTiming> PairAttempts(
@@ -387,6 +431,7 @@ public static class TaskDurationReport
         DateTimeOffset DispatchAt,
         DateTimeOffset EndedAt,
         bool Succeeded,
+        TaskOutcomeClass OutcomeClass,
         TimeSpan? LegitimateRuntime,
         TimeSpan FailureInterventionOverhead);
 }

@@ -20,6 +20,8 @@ internal static partial class ConsoleViews
             Console.WriteLine();
             Console.WriteLine($"  {record.ProviderName}/{record.ModelName}: {record.Recommendation}");
             Console.WriteLine($"    completed={record.Completed} failed={record.Failed} " +
+                $"realFailed={record.RealFailures} environmentalFailed={record.EnvironmentalFailures} " +
+                $"manufacturedFixedFailed={record.ManufacturedFixedFailures} unknownEraFailed={record.UnknownEraFailures} " +
                 $"adequate={record.SelfRatedAdequate} overkill={record.SelfRatedOverkill} " +
                 $"underpowered={record.SelfRatedUnderpowered} divergence={record.Divergence}");
             Console.WriteLine($"    reason: {record.Reason}");

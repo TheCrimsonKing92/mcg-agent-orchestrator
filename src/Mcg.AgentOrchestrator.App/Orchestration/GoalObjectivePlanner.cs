@@ -37,12 +37,20 @@ internal sealed record GoalIntakePipelineDecision(
     };
 }
 
+internal sealed record GoalHistoricalOutcomeRates(
+    double AggregateFailureRate,
+    double RealFailureRate,
+    double EnvironmentalFailureRate,
+    double ManufacturedFixedFailureRate,
+    double UnknownEraFailureRate);
+
 internal sealed record GoalObjectivePlan(
     string Objective,
     string Workflow,
     GoalObjectiveDisposition Disposition,
     TaskComplexity EstimatedComplexity,
     string? HistoricalTimeEstimate,
+    GoalHistoricalOutcomeRates? HistoricalOutcomeRates,
     IReadOnlyList<string> RiskLabels,
     IReadOnlyList<string> CapabilityWarnings,
     GoalIntakePipelineDecision PipelineDecision,
@@ -146,7 +154,9 @@ internal static class GoalObjectivePlanner
         var tokens = BuildTokenSet(classificationText);
         var fileScopes = InferFileScopes(classificationText);
         var estimated = TaskComplexityEstimator.Estimate(classificationText, classificationText, AgentRole.Developer);
-        var historicalEstimate = BuildHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
+        var historicalRecord = FindHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
+        var historicalEstimate = BuildHistoricalEstimate(historicalRecord);
+        var historicalOutcomeRates = BuildHistoricalOutcomeRates(historicalRecord);
         var riskLabels = BuildRiskLabels(tokens, fileScopes, estimated);
         var capabilityWarnings = BuildCapabilityWarnings(normalized);
         var pipelineDecision = SelectPipeline(riskLabels, fileScopes, pipelineOverride);
@@ -161,6 +171,7 @@ internal static class GoalObjectivePlanner
             ambiguous ? GoalObjectiveDisposition.NeedsClarification : GoalObjectiveDisposition.Ready,
             estimated,
             historicalEstimate,
+            historicalOutcomeRates,
             riskLabels,
             capabilityWarnings,
             pipelineDecision,
@@ -513,7 +524,7 @@ internal static class GoalObjectivePlanner
             _ => pipeline.ToString()
         };
 
-    private static string? BuildHistoricalEstimate(
+    private static TaskDurationStatsRecord? FindHistoricalEstimate(
         IEnumerable<TaskDurationStatsRecord>? durationStats,
         AgentRole role,
         TaskComplexity complexity)
@@ -523,7 +534,11 @@ internal static class GoalObjectivePlanner
             return null;
         }
 
-        var record = TaskDurationReport.FindEstimate(durationStats, role, complexity);
+        return TaskDurationReport.FindEstimate(durationStats, role, complexity);
+    }
+
+    private static string? BuildHistoricalEstimate(TaskDurationStatsRecord? record)
+    {
         if (record?.MedianLegitimateRuntime is null)
         {
             return null;
@@ -532,7 +547,25 @@ internal static class GoalObjectivePlanner
         var p90 = record.P90LegitimateRuntime is null
             ? string.Empty
             : $" (p90 {FormatDuration(record.P90LegitimateRuntime.Value)})";
-        return $"{record.Role} {record.Complexity} tasks: ~{FormatDuration(record.MedianLegitimateRuntime.Value)} legitimate runtime{p90}, historical failure rate {record.FailureRate:P0}; excludes {FormatDuration(record.MedianFailureInterventionOverhead)} median failure/intervention overhead.";
+        return $"{record.Role} {record.Complexity} tasks: ~{FormatDuration(record.MedianLegitimateRuntime.Value)} legitimate runtime{p90}, " +
+            $"real/code failure rate {record.RealFailureRate:P0}, environmental/infrastructure rate {record.EnvironmentalFailureRate:P0}, " +
+            $"manufactured-fixed rate {record.ManufacturedFixedFailureRate:P0}, unknown-era rate {record.UnknownEraFailureRate:P0} " +
+            $"(legacy aggregate {record.FailureRate:P0}); excludes {FormatDuration(record.MedianFailureInterventionOverhead)} median failure/intervention overhead.";
+    }
+
+    private static GoalHistoricalOutcomeRates? BuildHistoricalOutcomeRates(TaskDurationStatsRecord? record)
+    {
+        if (record is null)
+        {
+            return null;
+        }
+
+        return new GoalHistoricalOutcomeRates(
+            record.FailureRate,
+            record.RealFailureRate,
+            record.EnvironmentalFailureRate,
+            record.ManufacturedFixedFailureRate,
+            record.UnknownEraFailureRate);
     }
 
     private static string FormatDuration(TimeSpan? duration)

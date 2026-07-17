@@ -197,7 +197,15 @@ public sealed record TaskDurationStatsDto(
     string MedianLegitimateRuntime,
     string P90LegitimateRuntime,
     string MedianFailureInterventionOverhead,
-    double FailureRate);
+    double FailureRate,
+    int RealFailureAttemptCount,
+    int EnvironmentalFailureAttemptCount,
+    int ManufacturedFixedFailureAttemptCount,
+    int UnknownEraFailureAttemptCount,
+    double RealFailureRate,
+    double EnvironmentalFailureRate,
+    double ManufacturedFixedFailureRate,
+    double UnknownEraFailureRate);
 
 public sealed record DashboardBuildTestRunSummaryDto(
     string Stamp,
