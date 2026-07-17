@@ -932,7 +932,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var output = CaptureConsole(() =>
         {
             var changed = CliCommandDispatcher.ExecuteCommand(
-                ["recover", goal.Id.Value[..8], "reconcile safe stale dispatch"],
+                ["recover", goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)], "reconcile safe stale dispatch"],
                 kernel,
                 workspace,
                 ref agents,

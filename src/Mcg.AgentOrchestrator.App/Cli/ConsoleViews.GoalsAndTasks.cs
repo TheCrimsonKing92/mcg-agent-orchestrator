@@ -44,7 +44,7 @@ public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? st
     for (var index = 0; index < goal.Tasks.Count; index++)
     {
         var task = goal.Tasks[index];
-        var assignment = task.AssignedAgentId is null ? "unassigned" : task.AssignedAgentId.Value[..8];
+        var assignment = task.AssignedAgentId is null ? "unassigned" : ShortId(task.AssignedAgentId.Value);
         Console.WriteLine($"  {index + 1}. [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment})");
     }
 
@@ -59,7 +59,7 @@ public static void PrintTaskQueryResult(Goal goal, TaskQueryResult result)
 
     foreach (var task in result.Tasks)
     {
-        var assignment = task.AssignedAgentId is null ? "unassigned" : task.AssignedAgentId.Value[..8];
+        var assignment = task.AssignedAgentId is null ? "unassigned" : ShortId(task.AssignedAgentId.Value);
         Console.WriteLine($"  {GetTaskDisplayNumber(goal, task.Id)}. {task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment}) evidence={FormatTaskEvidence(task)}");
     }
 
@@ -95,6 +95,8 @@ public static string FormatTaskEvidence(TaskSpec task)
 
     return "none";
 }
+
+private static string ShortId(string value) => value[..Math.Min(8, value.Length)];
 }
 
 
