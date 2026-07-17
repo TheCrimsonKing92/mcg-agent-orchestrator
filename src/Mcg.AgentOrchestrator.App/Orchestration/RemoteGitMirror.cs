@@ -309,7 +309,7 @@ internal static class RemoteGitMirror
         {
             yield return new RemoteMirrorPushResult(
                 "tags",
-                GitRunner(executionDirectory, ["push", entry.Remote, "--tags"]));
+                RunTagPush(executionDirectory, entry.Remote));
         }
     }
 
@@ -317,8 +317,113 @@ internal static class RemoteGitMirror
         string executionDirectory,
         string remote,
         string step,
-        string refspec) =>
-        new(step, GitRunner(executionDirectory, ["push", remote, refspec]));
+        string refspec)
+    {
+        var result = GitRunner(executionDirectory, ["push", remote, refspec]);
+        return new RemoteMirrorPushResult(
+            step,
+            TryRunLocalFilesystemPushFallback(executionDirectory, remote, step, refspec, result));
+    }
+
+    private static GitCli.GitResult RunTagPush(string executionDirectory, string remote)
+    {
+        var result = GitRunner(executionDirectory, ["push", remote, "--tags"]);
+        return TryRunLocalFilesystemTagPushFallback(executionDirectory, remote, result);
+    }
+
+    private static GitCli.GitResult TryRunLocalFilesystemPushFallback(
+        string executionDirectory,
+        string remote,
+        string step,
+        string refspec,
+        GitCli.GitResult original)
+    {
+        if (original.Succeeded ||
+            !IsBlockedMsysLocalTransportFailure(original) ||
+            !TryResolveLocalBareRemote(executionDirectory, remote, out var remotePath))
+        {
+            return original;
+        }
+
+        var destinationRef = DestinationRefFor(step, refspec);
+        if (string.IsNullOrWhiteSpace(destinationRef))
+        {
+            return original;
+        }
+
+        var source = SourceFor(refspec);
+        var tempRef = $"refs/mcg-mirror/{Guid.NewGuid():N}";
+        var bundlePath = Path.Combine(Path.GetTempPath(), $"mcg-git-mirror-{Guid.NewGuid():N}.bundle");
+        try
+        {
+            var update = GitRunner(executionDirectory, ["update-ref", tempRef, source]);
+            if (!update.Succeeded)
+            {
+                return WithFallbackError(original, "update-ref", update);
+            }
+
+            var bundle = GitRunner(executionDirectory, ["bundle", "create", bundlePath, tempRef]);
+            if (!bundle.Succeeded)
+            {
+                return WithFallbackError(original, "bundle create", bundle);
+            }
+
+            var fetch = GitRunner(remotePath, ["fetch", bundlePath, $"{tempRef}:{destinationRef}"]);
+            return fetch.Succeeded ? fetch : WithFallbackError(original, "bundle fetch", fetch);
+        }
+        finally
+        {
+            GitRunner(executionDirectory, ["update-ref", "-d", tempRef]);
+            TryDeleteFile(bundlePath);
+        }
+    }
+
+    private static GitCli.GitResult TryRunLocalFilesystemTagPushFallback(
+        string executionDirectory,
+        string remote,
+        GitCli.GitResult original)
+    {
+        if (original.Succeeded ||
+            !IsBlockedMsysLocalTransportFailure(original) ||
+            !TryResolveLocalBareRemote(executionDirectory, remote, out var remotePath))
+        {
+            return original;
+        }
+
+        var tagRefs = GitRunner(executionDirectory, ["for-each-ref", "--format=%(refname)", "refs/tags"]);
+        if (!tagRefs.Succeeded)
+        {
+            return WithFallbackError(original, "list tags", tagRefs);
+        }
+
+        var refs = tagRefs.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(refName => refName.StartsWith("refs/tags/", StringComparison.Ordinal))
+            .ToArray();
+        if (refs.Length == 0)
+        {
+            return new GitCli.GitResult(0, string.Empty, string.Empty);
+        }
+
+        var bundlePath = Path.Combine(Path.GetTempPath(), $"mcg-git-mirror-tags-{Guid.NewGuid():N}.bundle");
+        try
+        {
+            var bundleArgs = new List<string> { "bundle", "create", bundlePath };
+            bundleArgs.AddRange(refs);
+            var bundle = GitRunner(executionDirectory, bundleArgs);
+            if (!bundle.Succeeded)
+            {
+                return WithFallbackError(original, "tag bundle create", bundle);
+            }
+
+            var fetch = GitRunner(remotePath, ["fetch", bundlePath, "refs/tags/*:refs/tags/*"]);
+            return fetch.Succeeded ? fetch : WithFallbackError(original, "tag bundle fetch", fetch);
+        }
+        finally
+        {
+            TryDeleteFile(bundlePath);
+        }
+    }
 
     private static RemoteMirrorConfiguration LoadConfiguration(string executionDirectory)
     {
@@ -488,6 +593,111 @@ internal static class RemoteGitMirror
 
     private static string Normalize(string path) =>
         Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static string SourceFor(string refspec)
+    {
+        var separator = refspec.IndexOf(':', StringComparison.Ordinal);
+        return separator < 0 ? refspec : refspec[..separator];
+    }
+
+    private static string DestinationRefFor(string step, string refspec)
+    {
+        var separator = refspec.IndexOf(':', StringComparison.Ordinal);
+        if (separator >= 0)
+        {
+            return refspec[(separator + 1)..];
+        }
+
+        return $"refs/heads/{step}";
+    }
+
+    private static bool IsBlockedMsysLocalTransportFailure(GitCli.GitResult result) =>
+        result.ExitCode != 0 &&
+        result.Error.Contains("NtCreateDirectoryObject", StringComparison.OrdinalIgnoreCase) &&
+        result.Error.Contains("Could not read from remote repository", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryResolveLocalBareRemote(string executionDirectory, string remote, out string remotePath)
+    {
+        remotePath = string.Empty;
+        var remoteUrl = GitRunner(executionDirectory, ["remote", "get-url", remote]);
+        if (!remoteUrl.Succeeded)
+        {
+            return false;
+        }
+
+        if (!TryResolveLocalPath(executionDirectory, remoteUrl.Output.Trim(), out var candidate) ||
+            !Directory.Exists(candidate))
+        {
+            return false;
+        }
+
+        var bare = GitRunner(candidate, ["rev-parse", "--is-bare-repository"]);
+        if (!bare.Succeeded || !bare.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        remotePath = candidate;
+        return true;
+    }
+
+    private static bool TryResolveLocalPath(string executionDirectory, string url, out string path)
+    {
+        path = string.Empty;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            if (!uri.IsFile)
+            {
+                return false;
+            }
+
+            path = Path.GetFullPath(uri.LocalPath);
+            return true;
+        }
+
+        if (Path.IsPathFullyQualified(url))
+        {
+            path = Path.GetFullPath(url);
+            return true;
+        }
+
+        if (url.StartsWith(".", StringComparison.Ordinal))
+        {
+            path = Path.GetFullPath(Path.Combine(executionDirectory, url));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static GitCli.GitResult WithFallbackError(
+        GitCli.GitResult original,
+        string step,
+        GitCli.GitResult fallback) =>
+        new(
+            fallback.ExitCode,
+            fallback.Output,
+            $"local filesystem mirror fallback failed at {step}: {TrimDetail(fallback.Error, fallback.Output)}; " +
+            $"original push failed: {TrimDetail(original.Error, original.Output)}");
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
 
     private static string Prefix(string goalId) => goalId[..Math.Min(8, goalId.Length)];
 
