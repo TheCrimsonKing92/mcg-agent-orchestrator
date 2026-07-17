@@ -10,6 +10,7 @@ internal sealed class SqliteWriteTelemetryOptions
     public TimeSpan CriticalHoldThreshold { get; init; } = TimeSpan.FromSeconds(2);
     public int BusyTimeoutMilliseconds { get; init; } = 30_000;
     public int MaxBusyRetries { get; init; } = 6;
+    public int? BeginImmediateCommandTimeoutSeconds { get; init; }
     public string? DiagnosticsPath { get; init; }
     public bool? MirrorToConductEventStream { get; init; }
     public Func<DateTimeOffset> UtcNow { get; init; } = () => DateTimeOffset.UtcNow;

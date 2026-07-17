@@ -97,31 +97,33 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             DiagnosticsPath = diagnosticsPath,
             BusyTimeoutMilliseconds = 100,
             MaxBusyRetries = 1,
+            BeginImmediateCommandTimeoutSeconds = 1,
             MirrorToConductEventStream = false
         };
-        var holderRepo = new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
-        var blockedRepo = new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
+        ITransactionalOrchestratorStateRepository holderRepo =
+            new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
+        ITransactionalOrchestratorStateRepository blockedRepo =
+            new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
         await holderRepo.SaveAsync(new AgentOrchestratorKernel());
 
         var holderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using (SqliteOrchestratorStateRepository.UseWriteOperationTag("slow-holder-test"))
-        {
-            var holderTask = holderRepo.TransactAsync(async (kernel, _) =>
+        var holderTask = holderRepo.TransactAsync(
+            "slow-holder-test",
+            async (kernel, _) =>
             {
                 holderStarted.SetResult();
                 await Task.Delay(TimeSpan.FromSeconds(3));
                 return (ShouldSave: false, Result: kernel.Goals.Count);
             });
 
-            await holderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await holderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            using (SqliteOrchestratorStateRepository.UseWriteOperationTag("blocked-writer-test"))
-            {
-                await Assert.ThrowsAsync<SqliteException>(() => blockedRepo.SaveAsync(new AgentOrchestratorKernel()));
-            }
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            blockedRepo.TransactAsync(
+                "blocked-writer-test",
+                (kernel, _) => Task.FromResult((ShouldSave: true, Result: kernel.Goals.Count))));
 
-            await holderTask;
-        }
+        await holderTask;
 
         var receipts = File.ReadAllLines(diagnosticsPath)
             .Where(line => !string.IsNullOrWhiteSpace(line))

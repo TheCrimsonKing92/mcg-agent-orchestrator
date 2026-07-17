@@ -60,6 +60,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             ? fallback
             : CurrentWriteOperationTag.Value!;
 
+    private static string ResolveOperationTag(string fallback, string operationName) =>
+        string.IsNullOrWhiteSpace(operationName)
+            ? throw new ArgumentException("Operation name cannot be empty.", nameof(operationName))
+            : operationName.Trim();
+
     private sealed class RestoreWriteOperationTag : IDisposable
     {
         private readonly string? _previous;
@@ -142,7 +147,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 try
                 {
                     await SetBusyTimeoutAsync(conn, cancellationToken);
-                    await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+                    await RunNonQueryAsync(
+                        conn,
+                        "BEGIN IMMEDIATE",
+                        cancellationToken,
+                        _writeTelemetry.Options.BeginImmediateCommandTimeoutSeconds);
                     return conn;
                 }
                 catch
@@ -343,7 +352,15 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
     public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
-        var write = await BeginWriteAsync(ResolveOperationTag(nameof(SaveAsync)), cancellationToken);
+        await SaveAsync(ResolveOperationTag(nameof(SaveAsync)), kernel, cancellationToken);
+    }
+
+    public async Task SaveAsync(
+        string operationName,
+        AgentOrchestratorKernel kernel,
+        CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(SaveAsync), operationName), cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
         try
@@ -366,10 +383,25 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     {
         ArgumentNullException.ThrowIfNull(goals);
 
+        await SaveGoalSnapshotsAsync(
+            ResolveOperationTag($"{nameof(SaveGoalSnapshotsAsync)}({goals.Count})"),
+            goals,
+            cancellationToken);
+    }
+
+    public async Task SaveGoalSnapshotsAsync(
+        string operationName,
+        IReadOnlyCollection<GoalSnapshot> goals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+
         if (goals.Count == 0)
             return;
 
-        var write = await BeginWriteAsync(ResolveOperationTag($"{nameof(SaveGoalSnapshotsAsync)}({goals.Count})"), cancellationToken);
+        var write = await BeginWriteAsync(
+            ResolveOperationTag($"{nameof(SaveGoalSnapshotsAsync)}({goals.Count})", operationName),
+            cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
         try
@@ -471,6 +503,18 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         CancellationToken cancellationToken = default)
     {
         return await TransactAsync(
+            ResolveOperationTag(nameof(TransactAsync)),
+            transaction,
+            cancellationToken);
+    }
+
+    public async Task<T> TransactAsync<T>(
+        string operationName,
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return await TransactAsync(
+            ResolveOperationTag(nameof(TransactAsync), operationName),
             async (kernel, _, token) => await transaction(kernel, token),
             cancellationToken);
     }
@@ -479,7 +523,15 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default)
     {
-        var write = await BeginWriteAsync(ResolveOperationTag(nameof(TransactAsync)), cancellationToken);
+        return await TransactAsync(ResolveOperationTag(nameof(TransactAsync)), transaction, cancellationToken);
+    }
+
+    public async Task<T> TransactAsync<T>(
+        string operationName,
+        Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(TransactAsync), operationName), cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
         try
@@ -972,7 +1024,21 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
         CancellationToken cancellationToken = default)
     {
+        return await TransactGoalAsync(
+            ResolveOperationTag($"{nameof(TransactGoalAsync)}({ShortGoalId(goalId.Value)})"),
+            goalId,
+            transaction,
+            cancellationToken);
+    }
+
+    public async Task<T> TransactGoalAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
         var versionMismatchDelay = 50;
+        var resolvedOperation = ResolveOperationTag($"{nameof(TransactGoalAsync)}({ShortGoalId(goalId.Value)})", operationName);
         for (var attempt = 1; ; attempt++)
         {
             // Load this goal's snapshot and version outside the write transaction.
@@ -986,7 +1052,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 return result;
 
             // Short BEGIN IMMEDIATE: re-read version, write one row if version unchanged.
-            var casSucceeded = await TryCasWriteGoalRowAsync(goalId, newSnapshot, loadedVersion, cancellationToken);
+            var casSucceeded = await TryCasWriteGoalRowAsync(goalId, newSnapshot, loadedVersion, resolvedOperation, cancellationToken);
             if (casSucceeded)
                 return result;
 
@@ -1025,9 +1091,13 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     // writes only if it matches expectedVersion, increments version, then commits.
     // Returns true on success, false when the version has changed (caller should retry).
     private async Task<bool> TryCasWriteGoalRowAsync(
-        GoalId goalId, GoalSnapshot snapshot, int expectedVersion, CancellationToken cancellationToken)
+        GoalId goalId,
+        GoalSnapshot snapshot,
+        int expectedVersion,
+        string operationName,
+        CancellationToken cancellationToken)
     {
-        var write = await BeginWriteAsync(ResolveOperationTag($"{nameof(TransactGoalAsync)}({ShortGoalId(goalId.Value)})"), cancellationToken);
+        var write = await BeginWriteAsync(operationName, cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
         try
@@ -1179,10 +1249,16 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.ExecuteNonQuery();
     }
 
-    private static async Task RunNonQueryAsync(SqliteConnection conn, string sql, CancellationToken cancellationToken)
+    private static async Task RunNonQueryAsync(
+        SqliteConnection conn,
+        string sql,
+        CancellationToken cancellationToken,
+        int? commandTimeoutSeconds = null)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
+        if (commandTimeoutSeconds is { } timeout)
+            cmd.CommandTimeout = timeout;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 

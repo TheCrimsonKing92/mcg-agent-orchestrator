@@ -12,6 +12,12 @@ public interface IOrchestratorStateRepository
 
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
 
+    Task SaveAsync(
+        string operationName,
+        AgentOrchestratorKernel kernel,
+        CancellationToken cancellationToken = default) =>
+        SaveAsync(kernel, cancellationToken);
+
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
@@ -32,8 +38,20 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         CancellationToken cancellationToken = default);
 
     Task<T> TransactAsync<T>(
+        string operationName,
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        TransactAsync(transaction, cancellationToken);
+
+    Task<T> TransactAsync<T>(
         Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default);
+
+    Task<T> TransactAsync<T>(
+        string operationName,
+        Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        TransactAsync(transaction, cancellationToken);
 
     /// <summary>
     /// Returns the stored snapshot for one goal, or null if the goal does not exist.
@@ -48,6 +66,12 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
     Task SaveGoalSnapshotsAsync(
         IReadOnlyCollection<GoalSnapshot> goals,
         CancellationToken cancellationToken = default);
+
+    Task SaveGoalSnapshotsAsync(
+        string operationName,
+        IReadOnlyCollection<GoalSnapshot> goals,
+        CancellationToken cancellationToken = default) =>
+        SaveGoalSnapshotsAsync(goals, cancellationToken);
 
     Task<IReadOnlyList<GoalSnapshotSaveResult>> SaveGoalSnapshotsWithMergeAsync(
         IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
@@ -64,6 +88,13 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         GoalId goalId,
         Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
         CancellationToken cancellationToken = default);
+
+    Task<T> TransactGoalAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        TransactGoalAsync(goalId, transaction, cancellationToken);
 }
 
 public sealed record GoalSnapshotSaveRequest(GoalSnapshot Baseline, GoalSnapshot Current);
