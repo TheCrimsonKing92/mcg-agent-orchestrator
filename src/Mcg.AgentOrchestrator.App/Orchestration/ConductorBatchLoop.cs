@@ -355,11 +355,23 @@ internal sealed class ConductorBatchLoop
                     }
                 }
 
+                if (TryReconcileAwaitingVerificationHold(kernel, goal, result, totalTicks, out var reconciledOutcome))
+                {
+                    changedGoalIds.Add(goal.Id);
+                    result = result with { Outcome = reconciledOutcome };
+                    goalProjectionCache.Invalidate(goal.Id);
+                }
+
                 var goalProgressLine = FormatGoalProgressLine(
                     label,
                     result.Outcome,
                     serialRetryRan ? null : parallelLandingOutcome?.SlotIndex);
-                if (RecordChangedDisposition(goal.Id.Value, goalProgressLine, lastGoalDisposition, changedGoalLines))
+                if (RecordChangedDisposition(
+                    goal.Id.Value,
+                    goalProgressLine,
+                    lastGoalDisposition,
+                    changedGoalLines,
+                    ShouldAlwaysEmitDisposition(result.Outcome)))
                 {
                     // Held goals have no kernel state mutation worth a per-goal CAS write.
                     if (!result.IsHeld)
@@ -876,9 +888,11 @@ internal sealed class ConductorBatchLoop
         string goalId,
         string progressLine,
         Dictionary<string, string> lastGoalDisposition,
-        List<string> changedGoalLines)
+        List<string> changedGoalLines,
+        bool alwaysRecord = false)
     {
-        if (lastGoalDisposition.TryGetValue(goalId, out var previous)
+        if (!alwaysRecord
+            && lastGoalDisposition.TryGetValue(goalId, out var previous)
             && string.Equals(previous, progressLine, StringComparison.Ordinal))
         {
             return false;
@@ -886,6 +900,34 @@ internal sealed class ConductorBatchLoop
 
         lastGoalDisposition[goalId] = progressLine;
         changedGoalLines.Add(progressLine);
+        return true;
+    }
+
+    private static bool ShouldAlwaysEmitDisposition(ConductorAdvanceOutcome outcome) =>
+        outcome is ConductorAdvanceOutcome.Held { State: GoalLifecycleState.AwaitingVerification };
+
+    private static bool TryReconcileAwaitingVerificationHold(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorAdvanceResult result,
+        int tick,
+        out ConductorAdvanceOutcome reconciledOutcome)
+    {
+        reconciledOutcome = result.Outcome;
+        if (result.Outcome is not ConductorAdvanceOutcome.Held { State: GoalLifecycleState.AwaitingVerification })
+        {
+            return false;
+        }
+
+        var reason = $"Batch loop tick {tick}: reconciled all task verification gates; promoted goal to Verified.";
+        if (!kernel.ReconcileGoalVerificationStatus(goal.Id, reason))
+        {
+            return false;
+        }
+
+        reconciledOutcome = new ConductorAdvanceOutcome.Executed(
+            GoalLifecycleState.AwaitingVerification,
+            "Reconciled all task verification gates; goal advanced to Verified");
         return true;
     }
 

@@ -368,12 +368,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                                 reason)));
                     }
 
+                    var normalized = NormalizeStoredVerificationStatus(merged, out var normalizedReason);
+                    var resultReason = normalizedReason is null ? reason : $"{reason}; {normalizedReason}";
                     return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
-                        (true, merged, new GoalSnapshotSaveResult(
+                        (true, normalized, new GoalSnapshotSaveResult(
                             request.Current.Id,
                             GoalSnapshotSaveDisposition.Merged,
-                            merged,
-                            reason)));
+                            normalized,
+                            resultReason)));
                 },
                 cancellationToken);
             results.Add(result);
@@ -664,6 +666,32 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         };
         reason = "stored version advanced during tick; reapplied tick snapshot delta onto fresh goal row";
         return true;
+    }
+
+    private static GoalSnapshot NormalizeStoredVerificationStatus(GoalSnapshot snapshot, out string? reason)
+    {
+        reason = null;
+        if (snapshot.Status is GoalStatus.Verified or GoalStatus.Parked or GoalStatus.WaitingForHuman)
+        {
+            return snapshot;
+        }
+
+        if (snapshot.Status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        {
+            return snapshot;
+        }
+
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []));
+        var goalId = new GoalId(snapshot.Id);
+        if (!kernel.ReconcileGoalVerificationStatus(
+            goalId,
+            "Tick merge reconciled stored all-task verification gates to Verified."))
+        {
+            return snapshot;
+        }
+
+        reason = "reconciled stored all-task verification gates to Verified";
+        return kernel.ExportSnapshot().Goals.Single();
     }
 
     private static bool TryMergeTaskSnapshots(
