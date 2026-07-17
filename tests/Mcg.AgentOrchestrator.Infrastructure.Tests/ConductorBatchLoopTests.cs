@@ -12,6 +12,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 /// auto-retry-recover, auto-retry-escalate, and kill-switch.
 /// END-marker parsing tests live in ChaosGateTests.
 /// </summary>
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTests
 {
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -27,9 +28,14 @@ public sealed class ConductorBatchLoopTests
 
     private static void PassVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
     {
+        PassVerificationAt(kernel, goal, task, DateTimeOffset.UtcNow);
+    }
+
+    private static void PassVerificationAt(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, DateTimeOffset completedAt)
+    {
         var dispatch = new TaskDispatchRecord("test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
-        var verification = new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "ok", "", DateTimeOffset.UtcNow);
+        var verification = new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "ok", "", completedAt);
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
     }
 
@@ -1128,6 +1134,239 @@ public sealed class ConductorBatchLoopTests
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_serves_oldest_verified_goal_first")]
+    public void BatchLoopParallelAcceptanceServesOldestVerifiedGoalFirst()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var newer = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/Newer.cs");
+        var older = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/Older.cs");
+        var now = DateTimeOffset.UtcNow;
+        PassVerificationAt(kernel, newer, newer.Tasks.Single(), now.AddMinutes(1));
+        PassVerificationAt(kernel, older, older.Tasks.Single(), now);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var acceptanceOrder = new List<string>();
+
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (goal, _) =>
+                {
+                    acceptanceOrder.Add(goal.Id.Value);
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                land: goal => new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok"),
+                getLandingFileScopes: goal => goal.Id == older.Id
+                    ? ["src/Mcg.AgentOrchestrator.App/Orchestration/Older.cs"]
+                    : ["src/Mcg.AgentOrchestrator.App/Orchestration/Newer.cs"],
+                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot,
+                    runInline: true));
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(2, summary.Advanced);
+            Assert.Equal([older.Id.Value, newer.Id.Value], acceptanceOrder);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_holds_stable_slot_lease_until_terminal")]
+    public void ParallelAcceptanceAttemptHoldsStableSlotLeaseUntilTerminal()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldLease.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/HoldLease.cs"], "branch", "main");
+        DotnetBuildLeaseAcquisition? reacquireWhileRunning = null;
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (attemptCandidate, _, stableSlotLease, _) =>
+                    {
+                        Assert.NotNull(stableSlotLease);
+                        reacquireWhileRunning = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                            stableSlotLease.Environment,
+                            TimeSpan.Zero);
+                        return PassingRun(attemptCandidate, ConductorAutonomyPolicy.Conservative);
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, decision.Attempt.Outcome);
+            });
+
+            Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(reacquireWhileRunning);
+            Assert.Contains("ACCEPTANCE_LEASE_ACQUIRE", output);
+            Assert.Contains("ACCEPTANCE_LEASE_HANDOFF", output);
+            Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output);
+            Assert.Equal(1, CountOccurrences(output, "ACCEPTANCE_LEASE_RELEASE"));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_second_attempt_yields_without_running_while_first_holds_slot")]
+    public void ParallelAcceptanceSecondAttemptYieldsWithoutRunningWhileFirstHoldsSlot()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, goalA) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldA.cs");
+        var (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldB.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        using var releaseFirst = new ManualResetEventSlim(false);
+        using var firstHasLease = new ManualResetEventSlim(false);
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out var waitForAttempts);
+        var candidateA = ConductorParallelAcceptanceCandidate.Create(goalA, 0, ["src/HoldA.cs"], "branch-a", "main");
+        var candidateB = ConductorParallelAcceptanceCandidate.Create(goalB, 0, ["src/HoldB.cs"], "branch-b", "main");
+        var secondRan = false;
+
+        try
+        {
+            var first = coordinator.Evaluate(
+                candidateA,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, _, stableSlotLease, _) =>
+                {
+                    Assert.NotNull(stableSlotLease);
+                    firstHasLease.Set();
+                    Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(5)));
+                    return PassingRun(attemptCandidate, ConductorAutonomyPolicy.Conservative);
+                });
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, first.Kind);
+            Assert.True(firstHasLease.Wait(TimeSpan.FromSeconds(5)));
+
+            var second = coordinator.Evaluate(
+                candidateB,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, attemptPolicy, _, _) =>
+                {
+                    secondRan = true;
+                    return PassingRun(attemptCandidate, attemptPolicy);
+                });
+            var blocked = WaitForAttemptOutcome(coordinator, candidateB, ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, blocked.Attempt.Outcome);
+            Assert.False(secondRan);
+            releaseFirst.Set();
+        }
+        finally
+        {
+            releaseFirst.Set();
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_yields_to_live_cli_holder_and_reclaims_dead_holder")]
+    public void ParallelAcceptanceAttemptYieldsToLiveCliHolderAndReclaimsDeadHolder()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, liveGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/LiveCli.cs");
+        var (_, deadGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadCli.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var liveCandidate = ConductorParallelAcceptanceCandidate.Create(liveGoal, 0, ["src/LiveCli.cs"], "branch-live", "main");
+        var deadCandidate = ConductorParallelAcceptanceCandidate.Create(deadGoal, 0, ["src/DeadCli.cs"], "branch-dead", "main");
+        var liveEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var liveRan = false;
+        var deadRan = false;
+
+        try
+        {
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(liveEnvironment))
+            {
+                var liveCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+                var liveBlocked = liveCoordinator.Evaluate(
+                    liveCandidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (attemptCandidate, attemptPolicy, _, _) =>
+                    {
+                        liveRan = true;
+                        return PassingRun(attemptCandidate, attemptPolicy);
+                    });
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, liveBlocked.Attempt.Outcome);
+                Assert.False(liveRan);
+            }
+
+            File.WriteAllText(liveEnvironment.ExecutionLockPath, "999999");
+            var deadCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var reclaimed = deadCoordinator.Evaluate(
+                deadCandidate,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, attemptPolicy, stableSlotLease, _) =>
+                {
+                    Assert.NotNull(stableSlotLease);
+                    deadRan = true;
+                    return PassingRun(attemptCandidate, attemptPolicy);
+                });
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, reclaimed.Attempt.Outcome);
+            Assert.True(deadRan);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_cancelled_attempt_records_cancelled_and_releases_lease")]
+    public void ParallelAcceptanceCancelledAttemptRecordsCancelledAndReleasesLease()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CancelAttempt.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/CancelAttempt.cs"], "branch", "main");
+        DotnetBuildEnvironment? leasedEnvironment = null;
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (_, _, stableSlotLease, _) =>
+                    {
+                        leasedEnvironment = stableSlotLease?.Environment;
+                        throw new OperationCanceledException("goal parked");
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Cancelled, decision.Attempt.Outcome);
+            });
+
+            Assert.NotNull(leasedEnvironment);
+            Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output);
+            using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(leasedEnvironment, TimeSpan.Zero);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_serialized_early_done_replays_parent_missing_branch_retirement")]
     public void ParallelAcceptanceSerializedEarlyDoneReplaysParentMissingBranchRetirement()
     {
@@ -1305,6 +1544,49 @@ public sealed class ConductorBatchLoopTests
         var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static IDisposable IsolatedDotnetRootScope() =>
+        new EnvVarScope(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+            Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-batch-loop-{Guid.NewGuid():N}"));
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
+    private sealed class EnvVarScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _previousValue;
+        private readonly string? _value;
+
+        public EnvVarScope(string name, string? value)
+        {
+            _name = name;
+            _value = value;
+            _previousValue = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(_name, _previousValue);
+            if (!string.IsNullOrWhiteSpace(_value) && Directory.Exists(_value))
+            {
+                try { Directory.Delete(_value, recursive: true); }
+                catch { }
+            }
+        }
     }
 
     private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(

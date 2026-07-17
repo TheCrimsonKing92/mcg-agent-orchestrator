@@ -85,6 +85,12 @@ internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
 
+internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptanceRunAcceptance(
+    ConductorParallelAcceptanceCandidate candidate,
+    ConductorAutonomyPolicy policy,
+    DotnetBuildEnvironmentLease? stableSlotLease,
+    CancellationToken cancellationToken);
+
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
@@ -119,7 +125,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
+        Evaluate(candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
+
+    internal ConductorParallelAcceptanceAttemptDecision Evaluate(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsReconciled(current))
@@ -190,7 +202,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceAttemptDecision Launch(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var attempt = CreateAttempt(candidate, policy);
         try
@@ -250,7 +262,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
+        RunAttemptForTests(attempt, candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
+
+    internal void RunAttemptForTests(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         RunAttempt(attempt, candidate, policy, runAcceptance);
     }
@@ -344,12 +363,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
+        DotnetBuildEnvironmentLease? stableSlotLease = null;
         try
         {
             WriteHeartbeat(attempt, "running");
-            var run = RunWithAttemptTelemetryContext(attempt, candidate, policy, runAcceptance);
+            stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
+            var run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
             WriteResult(attempt.ResultPath, ToArtifact(run));
             var outcome = OutcomeFor(run);
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
@@ -397,25 +418,73 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
         }
+        finally
+        {
+            if (stableSlotLease is not null)
+            {
+                stableSlotLease.Dispose();
+                EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+            }
+        }
+    }
+
+    private DotnetBuildEnvironmentLease AcquireAttemptStableSlotLease(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate)
+    {
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(candidate.SlotIndex);
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+        if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
+        {
+            EmitAttemptLeaseReceipt("acquire", attempt, candidate, Environment.ProcessId);
+            EmitAttemptLeaseReceipt("handoff", attempt, candidate, Environment.ProcessId);
+            return acquired.Lease;
+        }
+
+        if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy busy)
+        {
+            var holderPid = busy.BusySlots.FirstOrDefault(slot => slot.SlotIndex == candidate.SlotIndex).OwnerProcessId;
+            EmitAttemptLeaseReceipt("yield", attempt, candidate, holderPid);
+            throw new DotnetBuildSlotsBusyException(busy);
+        }
+
+        if (acquisition is DotnetBuildLeaseAcquisition.BuildLockBlocked blocked)
+        {
+            throw new BuildLockBlockedException(blocked.Attribution);
+        }
+
+        throw new InvalidOperationException("Unknown dotnet build lease acquisition result.");
     }
 
     private static ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        DotnetBuildEnvironmentLease stableSlotLease,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
         Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
         try
         {
-            return runAcceptance(candidate, policy);
+            return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
         }
         finally
         {
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
         }
+    }
+
+    private static void EmitAttemptLeaseReceipt(
+        string action,
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        int? holderPid)
+    {
+        var pid = holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        Console.WriteLine(
+            $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} slot=slot-{candidate.SlotIndex} holderPid={pid}");
     }
 
     private void CompleteWithoutResult(
