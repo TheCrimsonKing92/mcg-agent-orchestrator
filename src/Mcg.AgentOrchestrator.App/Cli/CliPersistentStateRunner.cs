@@ -883,6 +883,7 @@ internal static class CliPersistentStateRunner
 
         if (acceptanceFinalStatePersisted)
         {
+            PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
             return shouldSave;
         }
 
@@ -899,14 +900,19 @@ internal static class CliPersistentStateRunner
         }
         else
         {
-            var currentGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
-            if (!string.Equals(initialGoalJson, currentGoalJson, StringComparison.Ordinal))
-            {
-                Persist(kernel);
-            }
+            PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
         }
 
         return shouldSave;
+
+        void PersistIfTargetGoalChangedSinceLoad(AgentOrchestratorKernel checkpoint, GoalId id, string initialJson)
+        {
+            var currentGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(checkpoint, id));
+            if (!string.Equals(initialJson, currentGoalJson, StringComparison.Ordinal))
+            {
+                Persist(checkpoint);
+            }
+        }
     }
 
     private static bool ExecuteAcceptanceQueueOutsideTransaction(

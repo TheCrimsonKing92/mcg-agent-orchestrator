@@ -250,18 +250,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 new GoalTerminalDisposition(
                     GoalTerminalDispositionKind.Retired,
                     $"Goal {landedGp} was marked landed out-of-band via goal-mark-landed; retire from future terminal sweeps."));
-            if (landedGoal.SourceBacklogItemId is not null)
-            {
-                GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:backlog-close", "Closing linked source backlog item.");
-                var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(
-                    landedGoal,
-                    context.Workspace.BacklogStorePath,
-                    Console.WriteLine,
-                    context.Kernel,
-                    landedDir);
-                GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:backlog-close",
-                    closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
-            }
+            JournalAutoCloseSourceBacklogItem(context, landedGoal);
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
             context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
@@ -543,12 +532,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     AutoRecordDogfoodEntry(context);
                 }
 
-                GoalLandingPostActions.AutoCloseSourceBacklogItem(
-                    context.CurrentGoal,
-                    context.Workspace.BacklogStorePath,
-                    Console.WriteLine,
-                    context.Kernel,
-                    context.Workspace.ExecutionDirectory);
+                JournalAutoCloseSourceBacklogItem(context, context.CurrentGoal);
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
@@ -1228,12 +1212,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance passed and merge completed.");
-    GoalLandingPostActions.AutoCloseSourceBacklogItem(
-        goal,
-        context.Workspace.BacklogStorePath,
-        Console.WriteLine,
-        context.Kernel,
-        context.Workspace.ExecutionDirectory);
+    JournalAutoCloseSourceBacklogItem(context, goal);
     Console.WriteLine("Stage workspace cleanup:");
     context.Kernel.CompleteGoal(goal.Id, "Lifecycle command completed goal after acceptance merge; cleanup deferred to conductor sweep.");
     RecordDeferredGoalCleanup(context, goal, "remove:lifecycle-deferred", commandName);
@@ -4011,6 +3990,28 @@ private static void CleanupGoalWorkspaceAfterMerge(
     }
 
     RecordDeferredGoalCleanup(context, goal, "remove:acceptance-deferred", "acceptance");
+}
+
+private static bool JournalAutoCloseSourceBacklogItem(CliExecutionContext context, Goal? goal)
+{
+    if (goal?.SourceBacklogItemId is null)
+    {
+        return false;
+    }
+
+    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "conductor:backlog-close", "Closing linked source backlog item.");
+    var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(
+        goal,
+        context.Workspace.BacklogStorePath,
+        Console.WriteLine,
+        context.Kernel,
+        context.Workspace.ExecutionDirectory);
+    GoalOperationJournal.Completed(
+        context.Workspace.ExecutionDirectory,
+        goal,
+        "conductor:backlog-close",
+        closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
+    return closed;
 }
 
 private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
