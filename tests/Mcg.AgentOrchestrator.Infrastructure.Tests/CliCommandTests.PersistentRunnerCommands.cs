@@ -11,6 +11,41 @@ using System.Text.Json;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_backlog_show_loads_kernel_state_for_linked_goals")]
+    public async Task PersistentRunnerBacklogShowLoadsKernelStateForLinkedGoals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Persistent linked item");
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Persistent backlog-show linked goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        await repository.SaveAsync(kernel);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["backlog-show", item.Id[..8]],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Linked goals:", output);
+        Xunit.Assert.Contains(goal.Id.Value[..8], output);
+        Xunit.Assert.Contains("landing=", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_startup_conduct_help_exits_before_workspace_setup")]
     public void CliStartupConductHelpExitsBeforeWorkspaceSetup()
     {
