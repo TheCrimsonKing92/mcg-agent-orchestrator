@@ -174,6 +174,10 @@ internal static partial class CliCommandHandlers
                 HandleRunEventsMaintenance(parts, context);
                 return false;
 
+            case "cleanup-status":
+                PrintCleanupStatus(context.Workspace.ExecutionDirectory);
+                return false;
+
             case "attention":
             {
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
@@ -971,6 +975,40 @@ internal static partial class CliCommandHandlers
         {
             throw new CliExitException(process.ExitCode);
         }
+    }
+
+    private static void PrintCleanupStatus(string executionDirectory)
+    {
+        var debts = GoalWorktrees.ListCleanupDebt(executionDirectory);
+        if (debts.Count == 0)
+        {
+            Console.WriteLine("Cleanup status: no pending cleanup debt.");
+            return;
+        }
+
+        Console.WriteLine("Cleanup status:");
+        foreach (var debt in debts)
+        {
+            var escalated = debt.EscalatedAtUtc is null
+                ? "no"
+                : debt.EscalatedAtUtc.Value.ToString("O", CultureInfo.InvariantCulture);
+            Console.WriteLine(
+                $"  path=\"{debt.Path}\" age={FormatCleanupStatusDuration(debt.Age)} reason={debt.Reason} " +
+                $"last_operation={debt.LastOperation} skip_until_utc={debt.SkipUntilUtc:O} " +
+                $"remaining_wait={FormatCleanupStatusDuration(debt.RemainingWait)} skip_count={debt.SkipCount} escalated={escalated}");
+        }
+    }
+
+    private static string FormatCleanupStatusDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero)
+        {
+            duration = TimeSpan.Zero;
+        }
+
+        return duration.TotalDays >= 1
+            ? $"{(int)duration.TotalDays}.{duration:hh\\:mm\\:ss}"
+            : duration.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
     }
 
     private static DistributedArchitectureDto BuildCliArchitectureReport(CliExecutionContext context)

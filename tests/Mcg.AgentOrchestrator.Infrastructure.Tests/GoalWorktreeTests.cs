@@ -165,6 +165,30 @@ public abstract class GoalWorktreeTestBase
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
+    private protected static int CleanupJournalSkipCount(string repo, string cleanupPath)
+    {
+        var statePath = Path.Combine(repo, ".orchestrator", "state.db");
+        if (!File.Exists(statePath))
+        {
+            return 0;
+        }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = statePath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = """
+            SELECT skip_count
+            FROM worktree_cleanup_journal
+            WHERE path = $path;
+            """;
+        command.Parameters.AddWithValue("$path", NormalizePath(cleanupPath));
+        return Convert.ToInt32(command.ExecuteScalar() ?? 0);
+    }
+
     private protected static Goal CreateCompletedGoal(AgentOrchestratorKernel kernel, string objective, string repo)
     {
         var goal = kernel.CreateGoal(objective, [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
