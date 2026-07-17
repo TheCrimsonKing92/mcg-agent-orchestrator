@@ -1,5 +1,9 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -9,6 +13,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 {
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
+    private readonly SqliteWriteTelemetry _writeTelemetry;
+    private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
     private static readonly string[] SchemaTableNames =
     [
         "meta",
@@ -19,15 +25,59 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
 
     public SqliteOrchestratorStateRepository(string dbPath)
-        : this(dbPath, statementObserver: null)
+        : this(dbPath, statementObserver: null, telemetryOptions: null)
     {
     }
 
     internal SqliteOrchestratorStateRepository(string dbPath, Action<string>? statementObserver)
+        : this(dbPath, statementObserver, telemetryOptions: null)
+    {
+    }
+
+    internal SqliteOrchestratorStateRepository(
+        string dbPath,
+        Action<string>? statementObserver,
+        SqliteWriteTelemetryOptions? telemetryOptions)
     {
         _dbPath = dbPath;
         _statementObserver = statementObserver;
+        _writeTelemetry = new SqliteWriteTelemetry(dbPath, telemetryOptions);
         EnsureSchema();
+    }
+
+    internal static IDisposable UseWriteOperationTag(string operationTag)
+    {
+        if (string.IsNullOrWhiteSpace(operationTag))
+            throw new ArgumentException("Operation tag cannot be empty.", nameof(operationTag));
+
+        var previous = CurrentWriteOperationTag.Value;
+        CurrentWriteOperationTag.Value = operationTag.Trim();
+        return new RestoreWriteOperationTag(previous);
+    }
+
+    private static string ResolveOperationTag(string fallback) =>
+        string.IsNullOrWhiteSpace(CurrentWriteOperationTag.Value)
+            ? fallback
+            : CurrentWriteOperationTag.Value!;
+
+    private sealed class RestoreWriteOperationTag : IDisposable
+    {
+        private readonly string? _previous;
+        private bool _disposed;
+
+        public RestoreWriteOperationTag(string? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            CurrentWriteOperationTag.Value = _previous;
+            _disposed = true;
+        }
     }
 
     // Pooling=False matters under WAL: a POOLED connection can be returned to the pool still holding
@@ -45,7 +95,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         // "database is locked" — so a `backlog-add`/`status`/etc. issued while the conductor holds a
         // brief per-tick write lock errors out instead of waiting. Setting it lets concurrent commands
         // (and concurrent goal drivers) wait out the short write window, which WAL already keeps small.
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        RunNonQuery(conn, BusyTimeoutPragma());
         return conn;
     }
 
@@ -58,7 +108,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
 
-    private static async Task<T> WithBusyRetryAsync<T>(Func<Task<T>> operation, CancellationToken ct)
+    private static async Task<T> WithBusyRetryAsync<T>(
+        Func<Task<T>> operation,
+        CancellationToken ct,
+        int maxBusyRetries = MaxBusyRetries)
     {
         var delayMs = 50;
         for (var attempt = 1; ; attempt++)
@@ -67,7 +120,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             {
                 return await operation();
             }
-            catch (SqliteException ex) when (attempt < MaxBusyRetries && IsTransientLock(ex))
+            catch (SqliteException ex) when (attempt < maxBusyRetries && IsTransientLock(ex))
             {
                 await Task.Delay(delayMs, ct);
                 delayMs = Math.Min(delayMs * 2, 1000);
@@ -78,24 +131,45 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     // Opens a connection and acquires the write lock (BEGIN IMMEDIATE) with bounded retry. Only the
     // lock ACQUISITION is retried — once it returns, the caller runs its body exactly once, so no
     // side-effecting transaction delegate is ever re-executed.
-    private async Task<SqliteConnection> BeginWriteAsync(CancellationToken cancellationToken)
+    private async Task<WriteConnection> BeginWriteAsync(string operation, CancellationToken cancellationToken)
     {
-        return await WithBusyRetryAsync(async () =>
+        var acquisitionStopwatch = Stopwatch.StartNew();
+        try
         {
-            var conn = OpenConnection();
-            try
+            var conn = await WithBusyRetryAsync(async () =>
             {
-                await SetBusyTimeoutAsync(conn, cancellationToken);
-                await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
-                return conn;
-            }
-            catch
-            {
-                await conn.DisposeAsync();
-                throw;
-            }
-        }, cancellationToken);
+                var conn = OpenConnection();
+                try
+                {
+                    await SetBusyTimeoutAsync(conn, cancellationToken);
+                    await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+                    return conn;
+                }
+                catch
+                {
+                    await conn.DisposeAsync();
+                    throw;
+                }
+            }, cancellationToken, _writeTelemetry.Options.MaxBusyRetries);
+            acquisitionStopwatch.Stop();
+            return new WriteConnection(
+                conn,
+                _writeTelemetry.StartScope(operation, acquisitionStopwatch.Elapsed));
+        }
+        catch (SqliteException ex) when (IsTransientLock(ex))
+        {
+            acquisitionStopwatch.Stop();
+            _writeTelemetry.EmitBusyFailure(operation, acquisitionStopwatch.Elapsed, ex);
+            throw;
+        }
     }
+
+    private string BusyTimeoutPragma() =>
+        "PRAGMA busy_timeout=" + _writeTelemetry.Options.BusyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture);
+
+    private sealed record WriteConnection(
+        SqliteConnection Connection,
+        SqliteWriteTelemetry.WriteTelemetryScope Telemetry);
 
     private void EnsureSchema()
     {
@@ -105,7 +179,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         using var conn = new SqliteConnection(ConnectionString);
         conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        RunNonQuery(conn, BusyTimeoutPragma());
         if (SchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
@@ -269,15 +343,19 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
     public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
-        await using var conn = await BeginWriteAsync(cancellationToken);
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(SaveAsync)), cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
         try
         {
-            await WriteSnapshotAsync(conn, kernel, cancellationToken);
+            await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
         }
-        catch
+        catch (Exception ex)
         {
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
             throw;
         }
     }
@@ -291,7 +369,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         if (goals.Count == 0)
             return;
 
-        await using var conn = await BeginWriteAsync(cancellationToken);
+        var write = await BeginWriteAsync(ResolveOperationTag($"{nameof(SaveGoalSnapshotsAsync)}({goals.Count})"), cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
         try
         {
             var updatedAt = DateTimeOffset.UtcNow.ToString("O");
@@ -299,15 +379,17 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             // statement; the bulk boundary is one connection, one BEGIN IMMEDIATE, one COMMIT.
             foreach (var goal in goals)
             {
-                await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken);
-                await UpsertModelFitHistoryRowsAsync(conn, goal, cancellationToken);
+                telemetry.AddWrite(await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken));
+                telemetry.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, goal, cancellationToken));
             }
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
         }
-        catch
+        catch (Exception ex)
         {
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
             throw;
         }
     }
@@ -397,27 +479,31 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default)
     {
-        await using var conn = await BeginWriteAsync(cancellationToken);
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(TransactAsync)), cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
         try
         {
             var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
 
             async Task CheckpointAsync()
             {
-                await WriteSnapshotAsync(conn, kernel, cancellationToken);
+                await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
             }
 
             var (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
 
             if (shouldSave)
-                await WriteSnapshotAsync(conn, kernel, cancellationToken);
+                await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
             return result;
         }
-        catch
+        catch (Exception ex)
         {
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
             throw;
         }
     }
@@ -833,6 +919,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private static async Task WriteSnapshotAsync(
         SqliteConnection conn,
         AgentOrchestratorKernel kernel,
+        SqliteWriteTelemetry.WriteTelemetryScope? telemetry,
         CancellationToken cancellationToken)
     {
         var snapshot = kernel.ExportSnapshot();
@@ -840,7 +927,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         foreach (var goal in snapshot.Goals)
         {
-            await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken);
+            telemetry?.AddWrite(await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken));
         }
 
         foreach (var request in snapshot.HumanInputRequests)
@@ -857,12 +944,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             cmd.Parameters.AddWithValue("$id", request.Id);
             cmd.Parameters.AddWithValue("$goal_id", request.GoalId);
             cmd.Parameters.AddWithValue("$json", json);
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            telemetry?.AddWrite(await cmd.ExecuteNonQueryAsync(cancellationToken), Encoding.UTF8.GetByteCount(json));
         }
 
         foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
         {
-            await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken);
+            telemetry?.AddWrite(await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken));
         }
     }
 
@@ -940,7 +1027,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private async Task<bool> TryCasWriteGoalRowAsync(
         GoalId goalId, GoalSnapshot snapshot, int expectedVersion, CancellationToken cancellationToken)
     {
-        await using var conn = await BeginWriteAsync(cancellationToken);
+        var write = await BeginWriteAsync(ResolveOperationTag($"{nameof(TransactGoalAsync)}({ShortGoalId(goalId.Value)})"), cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
         try
         {
             int currentVersion;
@@ -955,24 +1044,27 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             if (currentVersion != expectedVersion)
             {
                 await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken);
+                telemetry.Emit("rollback");
                 return false;
             }
 
             var updatedAt = DateTimeOffset.UtcNow.ToString("O");
-            await UpsertGoalRowAsync(conn, snapshot, updatedAt, versionSql: "$version", cancellationToken, currentVersion + 1);
-            await UpsertModelFitHistoryRowsAsync(conn, snapshot, cancellationToken);
+            telemetry.AddWrite(await UpsertGoalRowAsync(conn, snapshot, updatedAt, versionSql: "$version", cancellationToken, currentVersion + 1));
+            telemetry.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, snapshot, cancellationToken));
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
             return true;
         }
-        catch
+        catch (Exception ex)
         {
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
             throw;
         }
     }
 
-    private static async Task UpsertGoalRowAsync(
+    private static async Task<(int RowsWritten, long SerializedBytes)> UpsertGoalRowAsync(
         SqliteConnection conn,
         GoalSnapshot goal,
         string updatedAt,
@@ -1002,10 +1094,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
         cmd.Parameters.AddWithValue("$json", json);
         cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+        var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+        return (rows, Encoding.UTF8.GetByteCount(json));
     }
 
-    private static async Task UpsertModelFitHistoryRowAsync(
+    private static async Task<(int RowsWritten, long SerializedBytes)> UpsertModelFitHistoryRowAsync(
         SqliteConnection conn,
         ModelFitHistoryRow row,
         CancellationToken cancellationToken)
@@ -1039,19 +1132,23 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
         cmd.Parameters.AddWithValue("$outcome_rule", row.OutcomeRule ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("$outcome_class", TaskOutcomeClassifier.FormatClass(row.OutcomeClass));
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+        return (await cmd.ExecuteNonQueryAsync(cancellationToken), 0);
     }
 
-    private static async Task UpsertModelFitHistoryRowsAsync(
+    private static async Task<(int RowsWritten, long SerializedBytes)> UpsertModelFitHistoryRowsAsync(
         SqliteConnection conn,
         GoalSnapshot snapshot,
         CancellationToken cancellationToken)
     {
+        var rowsWritten = 0;
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []));
         foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
         {
-            await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken);
+            var written = await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken);
+            rowsWritten += written.RowsWritten;
         }
+
+        return (rowsWritten, 0);
     }
 
     private static ModelFitHistoryRow ReadModelFitHistoryRow(SqliteDataReader reader)
@@ -1071,8 +1168,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             TaskOutcomeClassifier.ParseClass(reader.IsDBNull(11) ? null : reader.GetString(11)));
     }
 
-    private static async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)
-        => await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+    private async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)
+        => await RunNonQueryAsync(conn, BusyTimeoutPragma(), cancellationToken);
 
     private void RunNonQuery(SqliteConnection conn, string sql)
     {

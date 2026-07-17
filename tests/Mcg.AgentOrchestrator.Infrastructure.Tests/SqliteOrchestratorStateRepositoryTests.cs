@@ -68,6 +68,84 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_fast_write_produces_no_write_telemetry_receipt")]
+    public async Task FastWriteProducesNoWriteTelemetryReceipt()
+    {
+        var db = TempDb();
+        var diagnosticsPath = DiagnosticsPath(db);
+        var repo = new SqliteOrchestratorStateRepository(
+            db,
+            statementObserver: null,
+            new SqliteWriteTelemetryOptions
+            {
+                DiagnosticsPath = diagnosticsPath,
+                MirrorToConductEventStream = false
+            });
+
+        await repo.SaveAsync(new AgentOrchestratorKernel());
+
+        Assert.False(File.Exists(diagnosticsPath), File.Exists(diagnosticsPath) ? File.ReadAllText(diagnosticsPath) : diagnosticsPath);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_slow_write_and_blocked_writer_emit_jsonl_receipts")]
+    public async Task SlowWriteAndBlockedWriterEmitJsonlReceipts()
+    {
+        var db = TempDb();
+        var diagnosticsPath = DiagnosticsPath(db);
+        var telemetryOptions = new SqliteWriteTelemetryOptions
+        {
+            DiagnosticsPath = diagnosticsPath,
+            BusyTimeoutMilliseconds = 100,
+            MaxBusyRetries = 1,
+            MirrorToConductEventStream = false
+        };
+        var holderRepo = new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
+        var blockedRepo = new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
+        await holderRepo.SaveAsync(new AgentOrchestratorKernel());
+
+        var holderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (SqliteOrchestratorStateRepository.UseWriteOperationTag("slow-holder-test"))
+        {
+            var holderTask = holderRepo.TransactAsync(async (kernel, _) =>
+            {
+                holderStarted.SetResult();
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                return (ShouldSave: false, Result: kernel.Goals.Count);
+            });
+
+            await holderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            using (SqliteOrchestratorStateRepository.UseWriteOperationTag("blocked-writer-test"))
+            {
+                await Assert.ThrowsAsync<SqliteException>(() => blockedRepo.SaveAsync(new AgentOrchestratorKernel()));
+            }
+
+            await holderTask;
+        }
+
+        var receipts = File.ReadAllLines(diagnosticsPath)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .ToList();
+
+        Assert.All(receipts, receipt => Assert.NotNull(receipt["eventType"]?.GetValue<string>()));
+
+        var criticalHold = Assert.Single(receipts, receipt =>
+            receipt["eventType"]?.GetValue<string>() == "sqlite-state-write-hold");
+        Assert.Equal("critical", criticalHold["severity"]?.GetValue<string>());
+        Assert.Equal("slow-holder-test", criticalHold["operation"]?.GetValue<string>());
+        Assert.Equal("commit", criticalHold["disposition"]?.GetValue<string>());
+        Assert.True(criticalHold["holdMs"]?.GetValue<double>() >= 2_000, criticalHold.ToJsonString());
+        Assert.NotEmpty(criticalHold["stackSummary"]!.AsArray());
+
+        var busyFailure = Assert.Single(receipts, receipt =>
+            receipt["eventType"]?.GetValue<string>() == "sqlite-state-write-busy-failure");
+        Assert.Equal("critical", busyFailure["severity"]?.GetValue<string>());
+        Assert.Equal("blocked-writer-test", busyFailure["operation"]?.GetValue<string>());
+        Assert.Equal("busy-failure", busyFailure["disposition"]?.GetValue<string>());
+        Assert.True(busyFailure["acquisitionWaitMs"]?.GetValue<double>() >= 100, busyFailure.ToJsonString());
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_acceptance_retry_context")]
     public async Task AcceptanceRetryContextRoundtripsThroughSqlite()
     {
@@ -1037,6 +1115,12 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var dir = CreateTempDirectory();
         return Path.Combine(dir, "state.db");
     }
+
+    private static string DiagnosticsPath(string dbPath) =>
+        Path.Combine(
+            Path.GetDirectoryName(dbPath) ?? ".",
+            "logs",
+            SqliteWriteTelemetry.DiagnosticsFileName);
 
     private static (int ExitCode, string Output) RunSqliteTool(params string[] arguments)
     {
