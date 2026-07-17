@@ -390,11 +390,56 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         DotnetBuildEnvironmentLease? stableSlotLease = null;
+        ConductorParallelAcceptanceRunResult? run = null;
+        (ConductorParallelAcceptanceAttemptOutcome Outcome, string Detail, bool Transient)? terminalWithoutResult = null;
+        string? stderrDetail = null;
         try
         {
             WriteHeartbeat(attempt, "running");
             stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
-            var run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+            run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+        }
+        catch (OperationCanceledException ex)
+        {
+            terminalWithoutResult = (ConductorParallelAcceptanceAttemptOutcome.Cancelled, ex.Message, false);
+        }
+        catch (Exception ex) when (IsTransientAttemptIo(ex))
+        {
+            terminalWithoutResult = (ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts, ex.Message, true);
+        }
+        catch (Exception ex)
+        {
+            run = ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
+            stderrDetail = ex.ToString();
+        }
+        finally
+        {
+            if (stableSlotLease is not null)
+            {
+                stableSlotLease.Dispose();
+                EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+            }
+        }
+
+        if (run is not null)
+        {
+            CompleteWithRunResult(attempt, run, stderrDetail);
+            return;
+        }
+
+        if (terminalWithoutResult is { } terminal)
+        {
+            CompleteWithoutResult(attempt, terminal.Outcome, terminal.Detail, terminal.Transient);
+        }
+    }
+
+    private void CompleteWithRunResult(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceRunResult run,
+        string? stderrDetail)
+    {
+        try
+        {
             WriteResult(attempt.ResultPath, ToArtifact(run));
             var outcome = OutcomeFor(run);
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
@@ -408,12 +453,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = run.Acceptance?.TestResultPaths
             });
+            if (!string.IsNullOrWhiteSpace(stderrDetail))
+            {
+                TryAppend(attempt.StderrPath, $"{stderrDetail}{Environment.NewLine}");
+            }
+
             File.AppendAllText(attempt.StdoutPath, $"acceptance attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
-        }
-        catch (OperationCanceledException ex)
-        {
-            CompleteWithoutResult(attempt, ConductorParallelAcceptanceAttemptOutcome.Cancelled, ex.Message);
         }
         catch (Exception ex) when (IsTransientAttemptIo(ex))
         {
@@ -425,30 +471,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
         catch (Exception ex)
         {
-            var run = ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
-            WriteResult(attempt.ResultPath, ToArtifact(run));
-            var outcome = OutcomeFor(run);
-            TryWriteExit(attempt.ExitCodePath, 1);
-            TryPersistTerminal(attempt, current => current with
-            {
-                BranchHeadSha = run.Candidate.BranchHeadSha,
-                MainHeadSha = run.Candidate.MainHeadSha,
-                Outcome = outcome,
-                CompletedAt = _utcNow(),
-                LastHeartbeatAt = _utcNow(),
-                Detail = ex.Message,
-                TestResultPaths = run.Acceptance?.TestResultPaths
-            });
+            CompleteWithoutResult(
+                attempt,
+                ConductorParallelAcceptanceAttemptOutcome.Failed,
+                ex.Message);
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
-            WriteHeartbeat(attempt, "exiting");
-        }
-        finally
-        {
-            if (stableSlotLease is not null)
-            {
-                stableSlotLease.Dispose();
-                EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
-            }
         }
     }
 
