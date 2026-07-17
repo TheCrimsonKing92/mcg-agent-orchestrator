@@ -970,6 +970,7 @@ internal sealed class ConductorBatchLoop
         var deferredByAdmission = 0;
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
+                HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
@@ -1194,6 +1195,12 @@ internal sealed class ConductorBatchLoop
             .DefaultIfEmpty(lastVerification)
             .Min();
     }
+
+    private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
+        goal.Tasks.Count > 0 &&
+        goal.Tasks.All(task =>
+            task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is { Succeeded: true });
 
     private static bool ShouldDeferForParallelAcceptanceFairness(string oldestGoalId)
     {
