@@ -11,6 +11,41 @@ using System.Text.Json;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_backlog_show_loads_kernel_state_for_linked_goals")]
+    public async Task PersistentRunnerBacklogShowLoadsKernelStateForLinkedGoals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Persistent linked item");
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Persistent backlog-show linked goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        await repository.SaveAsync(kernel);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["backlog-show", item.Id[..8]],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Linked goals:", output);
+        Xunit.Assert.Contains(goal.Id.Value[..8], output);
+        Xunit.Assert.Contains("landing=", output);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_startup_conduct_help_exits_before_workspace_setup")]
     public void CliStartupConductHelpExitsBeforeWorkspaceSetup()
     {
@@ -516,13 +551,100 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ref currentGoal));
 
             Xunit.Assert.Equal(1, repository.TransactionCount);
-            Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+            Xunit.Assert.Equal(2, repository.SaveGoalSnapshotsCount);
             Xunit.Assert.False(changed);
             Xunit.Assert.Contains("Acceptance evidence bundle: passed", output);
             Xunit.Assert.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", output);
             var storedGoal = (await repository.LoadAsync()).GetGoal(goal.Id);
             Xunit.Assert.Null(storedGoal.LatestAcceptanceFailure);
             Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_journals_backlog_close_noop_and_persists_missing_warning")]
+    public async Task PersistentRunnerAcceptanceJournalsBacklogCloseNoopAndPersistsMissingWarning()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var store = new BacklogStore(workspace.BacklogStorePath);
+            var closedItem = await store.AddAsync("Already closed linked item");
+            await store.CloseAsync(closedItem.Id);
+
+            var closedKernel = new AgentOrchestratorKernel();
+            var closedTask = new TaskSpec(TaskId.New(), "Implement closed-item landing", AgentRole.Developer);
+            var closedGoal = closedKernel.CreateGoal("Land with already closed source item", [closedTask]);
+            cleanupGoalId = closedGoal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = closedGoal;
+            closedKernel.ActivateGoal(closedGoal.Id, agents);
+            closedKernel.RecordTaskVerification(
+                closedGoal.Id,
+                closedTask.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+            closedKernel.SetGoalSourceBacklogItemId(closedGoal.Id, closedItem.Id);
+            CommitGoalWork(root, closedGoal.Id, "closed-item.txt", "goal work");
+            var closedRepository = new InMemoryTransactionalStateRepository(closedKernel);
+
+            var closedOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
+                closedRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("already closed", closedOutput, StringComparison.OrdinalIgnoreCase);
+            var closeJournal = GoalOperationJournal.Read(root, closedGoal.Id);
+            Xunit.Assert.Contains(closeJournal.Entries, entry =>
+                entry.Operation == "conductor:backlog-close" &&
+                entry.Status == GoalOperationStatus.Completed &&
+                entry.Detail.Contains("No linked source backlog item closed.", StringComparison.Ordinal));
+
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+            cleanupGoalId = null;
+            root = CreateShortAcceptanceRepository();
+            workspace = CreateRefinedWorkspace(root);
+
+            var missingKernel = new AgentOrchestratorKernel();
+            var missingTask = new TaskSpec(TaskId.New(), "Implement missing-item landing", AgentRole.Developer);
+            var missingGoal = missingKernel.CreateGoal("Land with missing source item", [missingTask]);
+            cleanupGoalId = missingGoal.Id;
+            agents = AgentCatalog.Default().Agents;
+            profiles = WorkerProfileCatalog.Default();
+            currentGoal = missingGoal;
+            missingKernel.ActivateGoal(missingGoal.Id, agents);
+            missingKernel.RecordTaskVerification(
+                missingGoal.Id,
+                missingTask.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+            missingKernel.SetGoalSourceBacklogItemId(missingGoal.Id, "deadbeefdeadbeefdeadbeefdeadbeef");
+            CommitGoalWork(root, missingGoal.Id, "missing-item.txt", "goal work");
+            var missingRepository = new InMemoryTransactionalStateRepository(missingKernel);
+
+            var missingOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
+                missingRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("not found", missingOutput, StringComparison.OrdinalIgnoreCase);
+            var restoredGoal = (await missingRepository.LoadAsync()).GetGoal(missingGoal.Id);
+            Xunit.Assert.Contains(restoredGoal.Timeline, entry =>
+                entry.Message.Contains("linked backlog item deadbeefdeadbeefdeadbeefdeadbeef was not found", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

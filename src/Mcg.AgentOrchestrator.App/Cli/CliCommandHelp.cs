@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] | goal --brief-file <path> | goal --text-file <path>";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix>] | goal --brief-file <path> | goal --text-file <path>";
     public const string AddTaskUsage = "Usage: add-task <role> <description> | add-task <role> --text-file <path>";
     public const string RetryUsage = "Usage: retry <task-number> <message> | retry <goal-prefix> <task-number> <message> | retry --goal <goal-prefix> <task-number> <message> | retry <task-number> --text-file <path>";
     public const string NoteUsage = "Usage: note <task-number> <message> | note <goal-prefix> <task-number> <message> | note --goal <goal-prefix> <task-number> <message> | note <task-number> --text-file <path>";
@@ -61,7 +61,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
         "Create a goal.",
-        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--brief-file", "--text-file", "--help", "-h" }
+        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--brief-file", "--text-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
 

@@ -181,12 +181,12 @@ internal static class CliPersistentStateRunner
         {
             _ when CliCommandHelp.IsCommandSpecificHelp(args) => true,
             "operator-listen" or "operator-channel" => true,
-            // Backlog commands operate solely on the independent BacklogStore, never the orchestrator
-            // kernel/state.db. Running them with an empty kernel — no state load, no write lock, no
-            // process sweep — keeps them fully concurrent with a running conductor instead of
-            // contending on the per-tick write transaction. A future backlog command that DOES touch
-            // the kernel must NOT be listed here.
-            "backlog-list" or "backlog-add" or "backlog-show" or "backlog-annotate" or "backlog-close" or
+            // These backlog commands operate solely on the independent BacklogStore, never the
+            // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
+            // write lock, no process sweep — keeps them fully concurrent with a running conductor
+            // instead of contending on the per-tick write transaction. backlog-show intentionally
+            // is not listed because it renders linked goals from kernel state.
+            "backlog-list" or "backlog-add" or "backlog-annotate" or "backlog-close" or
             "backlog-reopen" or "backlog-view" or
             "cleanup-status" or
             "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
@@ -883,6 +883,7 @@ internal static class CliPersistentStateRunner
 
         if (acceptanceFinalStatePersisted)
         {
+            PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
             return shouldSave;
         }
 
@@ -899,14 +900,19 @@ internal static class CliPersistentStateRunner
         }
         else
         {
-            var currentGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
-            if (!string.Equals(initialGoalJson, currentGoalJson, StringComparison.Ordinal))
-            {
-                Persist(kernel);
-            }
+            PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
         }
 
         return shouldSave;
+
+        void PersistIfTargetGoalChangedSinceLoad(AgentOrchestratorKernel checkpoint, GoalId id, string initialJson)
+        {
+            var currentGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(checkpoint, id));
+            if (!string.Equals(initialJson, currentGoalJson, StringComparison.Ordinal))
+            {
+                Persist(checkpoint);
+            }
+        }
     }
 
     private static bool ExecuteAcceptanceQueueOutsideTransaction(
@@ -1192,6 +1198,7 @@ internal static class CliPersistentStateRunner
 
     private static bool IsCliValueFlag(string value) =>
         value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--policy", StringComparison.OrdinalIgnoreCase);
 

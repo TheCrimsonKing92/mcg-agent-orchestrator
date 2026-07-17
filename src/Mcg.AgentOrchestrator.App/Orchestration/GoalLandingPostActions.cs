@@ -78,7 +78,9 @@ internal static class GoalLandingPostActions
     public static bool AutoCloseSourceBacklogItem(
         Goal? goal,
         string backlogStorePath,
-        Action<string>? writeLine = null)
+        Action<string>? writeLine = null,
+        AgentOrchestratorKernel? kernel = null,
+        string? executionDirectory = null)
     {
         if (goal?.SourceBacklogItemId is null)
         {
@@ -88,18 +90,56 @@ internal static class GoalLandingPostActions
         try
         {
             var store = new BacklogStore(backlogStorePath);
-            var closed = store.TryCloseByIdAsync(goal.SourceBacklogItemId, $"Goal {goal.Id.Value[..8]} landed.").GetAwaiter().GetResult();
-            writeLine?.Invoke(closed
-                ? $"Closed backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]} landed)."
-                : $"Backlog item {goal.SourceBacklogItemId} already closed or not found (no-op).");
-            return closed;
+            var commitSha = TryResolveHeadCommit(executionDirectory) ?? "unknown";
+            var note = $"Auto-closed after goal {goal.Id.Value} landed. integrateCommit={commitSha}";
+            var result = store.TryCloseByIdWithResultAsync(goal.SourceBacklogItemId, note: note).GetAwaiter().GetResult();
+            switch (result.Disposition)
+            {
+                case BacklogCloseDisposition.Closed:
+                    writeLine?.Invoke($"Closed backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]} landed, commit {ShortSha(commitSha)}).");
+                    return true;
+                case BacklogCloseDisposition.AlreadyDone:
+                    writeLine?.Invoke($"Backlog item {goal.SourceBacklogItemId} already closed (goal {goal.Id.Value[..8]} landed, no-op).");
+                    return false;
+                case BacklogCloseDisposition.NotFound:
+                    var warning = $"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} was not found; backlog close skipped.";
+                    kernel?.RecordGoalPolicyDecision(goal.Id, warning);
+                    writeLine?.Invoke(warning);
+                    return false;
+                default:
+                    return false;
+            }
         }
         catch (Exception ex)
         {
-            writeLine?.Invoke($"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} was not closed: {ex.Message}");
+            var warning = $"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} was not closed: {ex.Message}";
+            kernel?.RecordGoalPolicyDecision(goal.Id, warning);
+            writeLine?.Invoke(warning);
             return false;
         }
     }
+
+    private static string? TryResolveHeadCommit(string? executionDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(executionDirectory))
+        {
+            return null;
+        }
+
+        try
+        {
+            var result = GitCli.Run(executionDirectory, "rev-parse", "HEAD");
+            return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output)
+                ? result.Output.Trim()
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string ShortSha(string sha) => sha.Length <= 12 ? sha : sha[..12];
 
     private static void PrintSemanticAcceptanceReport(SemanticAcceptanceReport report, Action<string>? writeLine)
     {

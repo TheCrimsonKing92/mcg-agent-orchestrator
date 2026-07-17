@@ -506,15 +506,15 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_commands")]
-    public void RunnerSkipsKernelStateForOperatorAndBacklogCommands()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_store_only_commands")]
+    public void RunnerSkipsKernelStateForOperatorAndBacklogStoreOnlyCommands()
     {
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-listen"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["OPERATOR-LISTEN"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel", "test", "--spine"]));
 
-        // Backlog commands are kernel-independent, so they skip state and stay concurrent with a conductor.
+        // Store-only backlog commands are kernel-independent, so they skip state and stay concurrent with a conductor.
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
@@ -527,6 +527,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["gate-status"]));
 
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-show", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["conduct", "abc123"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
