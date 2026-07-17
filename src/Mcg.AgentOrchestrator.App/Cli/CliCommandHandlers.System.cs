@@ -684,28 +684,66 @@ internal static partial class CliCommandHandlers
             : 7;
         var keepRows = GetFlagValue(parts, "--keep-tick-rows") is { } keepValue
             ? ParsePositiveInteger(keepValue, "--keep-tick-rows")
-            : 5000;
+            : RunEventMaintenanceOptions.Default.MinConductorTickRowsToKeep;
+        var payloadMaxBytes = GetFlagValue(parts, "--payload-max-bytes") is { } payloadValue
+            ? ParsePositiveInteger(payloadValue, "--payload-max-bytes")
+            : RunEventMaintenanceOptions.Default.MaxConductorTickPayloadBytes;
+        var batchSize = GetFlagValue(parts, "--batch-size") is { } batchValue
+            ? ParsePositiveInteger(batchValue, "--batch-size")
+            : RunEventMaintenanceOptions.Default.DeleteBatchSize;
+        var legacyPurge = HasCliConfirmation(parts, "--legacy-purge-oversized-ticks");
         var vacuum = HasCliConfirmation(parts, "--vacuum");
         var store = new SqliteRunEventStore(
             context.Workspace.RunEventStorePath,
             ensureSchema: !File.Exists(context.Workspace.RunEventStorePath));
-        var result = store.MaintainAsync(new RunEventMaintenanceOptions(
-                TimeSpan.FromDays(retentionDays),
-                keepRows,
-                vacuum))
+        var options = new RunEventMaintenanceOptions(
+            TimeSpan.FromDays(retentionDays),
+            keepRows,
+            vacuum,
+            MaxConductorTickPayloadBytes: payloadMaxBytes,
+            DeleteBatchSize: batchSize,
+            LegacyOversizedConductorTickPurge: legacyPurge);
+        var result = store.MaintainAsync(options)
             .GetAwaiter()
             .GetResult();
 
+        var mode = legacyPurge ? "legacy-purge" : "manual";
         var status = result.Deferred ? "deferred" : "completed";
+        var receipt = RunEventMaintenanceCadence.FormatReceipt(mode, options, result);
+        Console.WriteLine(receipt);
+        try
+        {
+            new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                .Append("run-events-maintenance", null, receipt);
+        }
+        catch
+        {
+        }
+
         Console.WriteLine($"run-events-maintenance status={status}");
         Console.WriteLine($"db={context.Workspace.RunEventStorePath}");
-        Console.WriteLine($"tickMaxAgeDays={retentionDays} keepTickRows={keepRows}");
+        Console.WriteLine($"mode={mode} tickMaxAgeDays={retentionDays} keepTickRows={keepRows} payloadMaxBytes={payloadMaxBytes} batchSize={Math.Clamp(batchSize, 1, 1000)}");
         Console.WriteLine($"conductorTickRowsDeleted={result.ConductorTickRowsDeleted}");
+        Console.WriteLine($"agedConductorTickRowsDeleted={result.AgedConductorTickRowsDeleted}");
+        Console.WriteLine($"oversizedConductorTickRowsDeleted={result.OversizedConductorTickRowsDeleted}");
+        Console.WriteLine($"deletedPayloadBytesEstimate={result.DeletedPayloadBytesEstimate}");
+        Console.WriteLine($"maxRowsDeletedInTransaction={result.MaxRowsDeletedInTransaction}");
+        Console.WriteLine($"durationMs={(long)result.Duration.TotalMilliseconds}");
         Console.WriteLine($"bytesBefore={result.BytesBefore} bytesAfter={result.BytesAfter}");
         Console.WriteLine($"vacuumRequested={result.VacuumRequested} vacuumCompleted={result.VacuumCompleted} vacuumDeferred={result.VacuumDeferred}");
         if (!string.IsNullOrWhiteSpace(result.DeferredReason))
         {
             Console.WriteLine($"deferredReason={result.DeferredReason}");
+        }
+
+        if (!result.Deferred)
+        {
+            RunEventMaintenanceCadence.TryAppendRunEventReceipt(
+                store,
+                mode,
+                options,
+                result,
+                DateTimeOffset.UtcNow);
         }
     }
 

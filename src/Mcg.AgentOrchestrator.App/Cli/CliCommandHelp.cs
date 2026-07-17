@@ -37,7 +37,7 @@ internal static class CliCommandHelp
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
     public const string GateStatusUsage = "Usage: gate-status";
-    public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--vacuum]";
+    public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -240,7 +240,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RunEventsMaintenance = new(
         RunEventsMaintenanceUsage,
         "Prune high-churn run-events.db conductor tick rows and optionally reclaim free pages when idle.",
-        ["--tick-max-age-days", "--keep-tick-rows", "--vacuum", "--help", "-h"]);
+        ["--tick-max-age-days", "--keep-tick-rows", "--payload-max-bytes", "--batch-size", "--legacy-purge-oversized-ticks", "--vacuum", "--help", "-h"]);
 
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);

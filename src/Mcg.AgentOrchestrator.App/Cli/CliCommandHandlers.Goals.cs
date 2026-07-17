@@ -852,6 +852,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    RunEventMaintenanceCadence.TryRunIfDue(
+                        context.Workspace.RunEventStorePath,
+                        context.Workspace.ConductEventsLogPath);
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }
