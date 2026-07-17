@@ -409,8 +409,12 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
         CreateNoWindow = true,
         WorkingDirectory = workingDirectory
     };
-    startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
-    startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
+    RemoveAmbientGitRepositoryEnvironment(startInfo);
+    if (arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal)))
+    {
+        startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
+        startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
+    }
 
     foreach (var argument in arguments)
     {
@@ -419,12 +423,14 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
 
     using var process = Process.Start(startInfo)
         ?? throw new InvalidOperationException("Failed to start git.");
-    process.StandardOutput.ReadToEnd();
+    var output = process.StandardOutput.ReadToEnd();
     var error = process.StandardError.ReadToEnd();
     process.WaitForExit(60000);
     if (process.ExitCode != 0)
     {
-        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        var detail = string.Join(Environment.NewLine, [output.Trim(), error.Trim()])
+            .Trim();
+        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {detail}");
     }
 }
 
@@ -439,6 +445,7 @@ protected static string ReadGit(string workingDirectory, string[] arguments)
         CreateNoWindow = true,
         WorkingDirectory = workingDirectory
     };
+    RemoveAmbientGitRepositoryEnvironment(startInfo);
 
     foreach (var argument in arguments)
     {
@@ -456,6 +463,16 @@ protected static string ReadGit(string workingDirectory, string[] arguments)
     }
 
     return output.Trim();
+}
+
+private static void RemoveAmbientGitRepositoryEnvironment(ProcessStartInfo startInfo)
+{
+    startInfo.Environment.Remove("GIT_DIR");
+    startInfo.Environment.Remove("GIT_WORK_TREE");
+    startInfo.Environment.Remove("GIT_INDEX_FILE");
+    startInfo.Environment.Remove("GIT_OBJECT_DIRECTORY");
+    startInfo.Environment.Remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+    startInfo.Environment.Remove("GIT_COMMON_DIR");
 }
 
 protected static (int ExitCode, string StandardOutput, string StandardError) RunPowerShellCommand(string workingDirectory, string command)

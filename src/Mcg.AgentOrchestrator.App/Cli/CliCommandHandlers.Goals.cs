@@ -3765,8 +3765,15 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             var refreshedTask = goal.Tasks.First(candidate => candidate.Id == task.Id);
             actions++;
 
-            if (recoveryDecision.Action == DispatchRecoveryAction.MarkStale &&
-                DispatchRecoveryPolicy.IsStaleDispatchRetryVerification(refreshedTask.LastVerification!))
+            if (outcome.AutoRequeueDisposition is { ShouldRequeue: true })
+            {
+                Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
+                alreadyReset.Add(refreshedTask.Id);
+                actions++;
+            }
+            else if (recoveryDecision.Action == DispatchRecoveryAction.MarkStale &&
+                outcome.Verification is { } refreshVerification &&
+                DispatchRecoveryPolicy.IsStaleDispatchRetryVerification(refreshVerification))
             {
                 context.Kernel.RetryTask(goal.Id, refreshedTask.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask));
                 Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");

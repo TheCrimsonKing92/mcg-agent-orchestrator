@@ -12,12 +12,15 @@ public sealed record DispatchRefreshOutcome(
     string? ResultCommitProvenance = null,
     DispatchRecoveryDecision? RecoveryDecision = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
-    DispatchDiagnosticPayload? DiagnosticPayload = null);
+    DispatchDiagnosticPayload? DiagnosticPayload = null,
+    DispatchAutoRequeueDisposition? AutoRequeueDisposition = null);
 
 public sealed record DispatchDiagnosticPayload(
     int ExitCode,
     string StandardOutput,
     string StandardError);
+
+public sealed record DispatchAutoRequeueDisposition(string EventName, string Message, bool ShouldRequeue = true);
 
 public sealed record DispatchProcessStartResult(
     TaskProcessRecord? ProcessRecord,
@@ -484,6 +487,19 @@ public sealed class BackgroundDispatchRunner
         }
 
         var staleResourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: false);
+        if (TryBuildStaleDispatchAutoRequeueOutcome(
+                kernel,
+                goalId,
+                taskId,
+                task,
+                processRecord,
+                recoveryDecision,
+                staleResourceAccounting,
+                out var autoRequeueOutcome))
+        {
+            return autoRequeueOutcome;
+        }
+
         var staleDiagnostic = BuildRecoveryDiagnostic(recoveryDecision);
         return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, staleDiagnostic, recoveryDecision, staleResourceAccounting);
     }
@@ -614,6 +630,178 @@ public sealed class BackgroundDispatchRunner
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
         }
+
+        if (outcome.AutoRequeueDisposition is { } disposition)
+        {
+            kernel.RecordTaskNote(goalId, taskId, $"{disposition.EventName}: {disposition.Message}");
+            if (disposition.ShouldRequeue)
+            {
+                kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
+            }
+        }
+    }
+
+    private bool TryBuildStaleDispatchAutoRequeueOutcome(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        DispatchRecoveryDecision recoveryDecision,
+        TaskProcessResourceAccounting? resourceAccounting,
+        out DispatchRefreshOutcome outcome)
+    {
+        outcome = default!;
+        if (!IsSafeStaleDispatchCandidate(recoveryDecision))
+        {
+            return false;
+        }
+
+        if (!TryBuildSafeStaleDispatchAutoRequeueDisposition(
+                kernel,
+                goalId,
+                taskId,
+                task,
+                processRecord,
+                out var disposition,
+                out var evidenceDiagnostic))
+        {
+            return false;
+        }
+
+        if (DispatchRecoveryPolicy.GetStaleAutoRequeueBudgetRemaining(task) <= 0)
+        {
+            const string capBlocker = "stale-dispatch auto-requeue cap exhausted";
+            var capEvidenceDiagnostic = evidenceDiagnostic.Replace(
+                "auto-requeueing instead of escalating mechanical recovery",
+                "auto-requeue cap exhausted; escalating mechanical recovery",
+                StringComparison.Ordinal);
+            var capDecision = new DispatchRecoveryDecision(
+                DispatchRecoveryAction.BudgetExhausted,
+                DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.BudgetExhausted),
+                recoveryDecision.EvidencePath,
+                capBlocker,
+                capBlocker);
+            var capDiagnostic = AppendDiagnostic(BuildRecoveryDiagnostic(capDecision), capEvidenceDiagnostic);
+            outcome = BuildCompletedProcessOutcome(
+                kernel,
+                goalId,
+                taskId,
+                processRecord,
+                1,
+                capDiagnostic,
+                capDecision,
+                resourceAccounting) with
+                {
+                    AutoRequeueDisposition = disposition with
+                    {
+                        EventName = "StaleDispatchAutoRequeueCapExhausted",
+                        Message = capEvidenceDiagnostic,
+                        ShouldRequeue = false
+                    }
+                };
+            return true;
+        }
+
+        var retryDecision = WithAction(DispatchRecoveryAction.RetryStale, recoveryDecision, recoveryDecision.Reason);
+        var diagnostic = AppendDiagnostic(BuildRecoveryDiagnostic(retryDecision), evidenceDiagnostic);
+        outcome = BuildCompletedProcessOutcome(
+            kernel,
+            goalId,
+            taskId,
+            processRecord,
+            1,
+            diagnostic,
+            retryDecision,
+            resourceAccounting) with
+            {
+                AutoRequeueDisposition = disposition
+            };
+        return true;
+    }
+
+    private static bool IsSafeStaleDispatchCandidate(DispatchRecoveryDecision recoveryDecision)
+    {
+        if (recoveryDecision.Action == DispatchRecoveryAction.MarkStale)
+        {
+            return string.IsNullOrWhiteSpace(recoveryDecision.Blocker);
+        }
+
+        return recoveryDecision.Action == DispatchRecoveryAction.BudgetExhausted &&
+            string.Equals(recoveryDecision.Blocker, "stale-dispatch retry budget exhausted", StringComparison.Ordinal);
+    }
+
+    private bool TryBuildSafeStaleDispatchAutoRequeueDisposition(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        out DispatchAutoRequeueDisposition disposition,
+        out string diagnostic)
+    {
+        disposition = default!;
+        diagnostic = string.Empty;
+        var heartbeat = ProcessLogReader.ReadHeartbeat(processRecord, _clock.UtcNow);
+        var stdoutFileBytes = SafeFileLength(processRecord.StandardOutputPath);
+        var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
+        var stdout = ReadBestEffort(processRecord.StandardOutputPath);
+        var stderr = ReadBestEffort(processRecord.StandardErrorPath);
+        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout, stderr);
+        var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
+        GoalWorktreeDispatchEvidence? worktreeEvidence = null;
+        var worktreeEvidenceAvailable = false;
+        if (task.LastDispatch is { } dispatch &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var inspectedWorktree))
+        {
+            worktreeEvidenceAvailable = true;
+            worktreeEvidence = inspectedWorktree;
+        }
+
+        var requiresWorktreeProof = RequiresFileChangeEvidence(task);
+        var hasAnyPostDispatchCommit = worktreeEvidence?.HasCommitAfterDispatch == true;
+        var hasRelevantPostDispatchCommit = worktreeEvidence?.HasRelevantCommitAfterDispatch == true;
+        var worktreeClean = worktreeEvidence?.IsClean == true;
+        var commitsAfterDispatch = worktreeEvidence is null
+            ? "n/a"
+            : worktreeEvidence.CommitsAfterDispatch.ToString();
+        var hasOutputBytes =
+            heartbeat.StandardOutputBytes > 0 ||
+            heartbeat.StandardErrorBytes > 0 ||
+            stdoutFileBytes > 0 ||
+            stderrFileBytes > 0;
+
+        if (hasOutputBytes ||
+            workerResultPresent ||
+            taskOutputCommitted ||
+            (requiresWorktreeProof && !worktreeEvidenceAvailable) ||
+            worktreeEvidence?.IsClean == false ||
+            hasAnyPostDispatchCommit)
+        {
+            return false;
+        }
+
+        var autoRequeueBudgetRemaining = DispatchRecoveryPolicy.GetStaleAutoRequeueBudgetRemaining(task);
+        var autoRequeuesSpent = DispatchRecoveryPolicy.DefaultStaleDispatchAutoRequeues - autoRequeueBudgetRemaining;
+        var attempt = autoRequeueBudgetRemaining > 0
+            ? autoRequeuesSpent + 1
+            : autoRequeuesSpent;
+        var inventory =
+            $"heartbeat_state={heartbeat.State}; heartbeat_available={heartbeat.IsAvailable.ToString().ToLowerInvariant()}; " +
+            $"stdout_bytes={heartbeat.StandardOutputBytes}; stderr_bytes={heartbeat.StandardErrorBytes}; " +
+            $"stdout_file_bytes={stdoutFileBytes}; stderr_file_bytes={stderrFileBytes}; " +
+            $"worker_result_present={workerResultPresent.ToString().ToLowerInvariant()}; " +
+            $"task_output_committed={taskOutputCommitted.ToString().ToLowerInvariant()}; " +
+            $"worktree_evidence_available={worktreeEvidenceAvailable.ToString().ToLowerInvariant()}; " +
+            $"worktree_clean={(worktreeEvidenceAvailable ? worktreeClean.ToString().ToLowerInvariant() : "n/a")}; " +
+            $"commits_after_dispatch={commitsAfterDispatch}; " +
+            $"has_relevant_commit={hasRelevantPostDispatchCommit.ToString().ToLowerInvariant()}; " +
+            $"owned_cpu_ms={heartbeat.OwnedCpuMs}; " +
+            $"auto_requeue={attempt}/{DispatchRecoveryPolicy.DefaultStaleDispatchAutoRequeues}";
+        diagnostic = "Stale dispatch corpse produced no worker output, worker result, committed output, or worktree changes; " +
+            "auto-requeueing instead of escalating mechanical recovery. " + inventory + ".";
+        disposition = new DispatchAutoRequeueDisposition("StaleDispatchAutoRequeued", diagnostic);
+        return true;
     }
 
     private static TaskVerificationRecord? MarkCommittedChangesFromResultCommit(TaskSpec task, TaskVerificationRecord? verification)
@@ -1675,6 +1863,35 @@ public sealed class BackgroundDispatchRunner
         {
             return $"[log unreadable at refresh — see {path}]";
         }
+    }
+
+    private static long SafeFileLength(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length : 0L;
+        }
+        catch (IOException)
+        {
+            return 0L;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return 0L;
+        }
+    }
+
+    private static bool HasTaskOutputCommittedForDispatch(Goal goal, TaskId taskId, TaskDispatchRecord? dispatch)
+    {
+        if (dispatch is null)
+        {
+            return false;
+        }
+
+        return goal.Timeline.Any(evt =>
+            evt.TaskId == taskId &&
+            evt.OccurredAt >= dispatch.DispatchedAt &&
+            evt.Message.Contains("TaskOutputCommitted", StringComparison.Ordinal));
     }
 
     private bool TryDetectHungCodexWrapper(TaskSpec task, TaskProcessRecord processRecord, out string diagnostic)

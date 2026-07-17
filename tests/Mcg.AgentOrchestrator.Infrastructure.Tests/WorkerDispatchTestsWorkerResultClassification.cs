@@ -1017,6 +1017,113 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Xunit.Assert.Null(task.LastVerification);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_auto_requeues_safe_stale_dispatch_corpse")]
+    public void BackgroundDispatchRunnerReconcileAutoRequeuesSafeStaleDispatchCorpse()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-16T01:13:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Auto requeue safe stale dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var process = RecordStaleDeveloperDispatch(kernel, goal, task, worktree, root, now.AddMinutes(-40), "first");
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, childPid: null, ownedCpuMs: 953);
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Null(task.LastProcess);
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastVerification);
+    Assert.Single(task.VerificationHistory, verification =>
+        verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal) &&
+        evt.Message.Contains("heartbeat_state=running", StringComparison.Ordinal) &&
+        evt.Message.Contains("stdout_file_bytes=0", StringComparison.Ordinal) &&
+        evt.Message.Contains("commits_after_dispatch=0", StringComparison.Ordinal) &&
+        evt.Message.Contains("auto_requeue=1/2", StringComparison.Ordinal));
+    Assert.Contains(kernel.BuildNextActions(goal.Id).Items, action =>
+        action.TaskId == task.Id && action.Kind == NextActionKind.RunAssignedTask);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_escalates_stale_dispatch_corpse_with_dirty_worktree")]
+    public void BackgroundDispatchRunnerReconcileEscalatesStaleDispatchCorpseWithDirtyWorktree()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-16T01:13:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Escalate ambiguous stale dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted work");
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var process = RecordStaleDeveloperDispatch(kernel, goal, task, worktree, root, now.AddMinutes(-40), "dirty");
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, childPid: null, ownedCpuMs: 953);
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastProcess);
+    Assert.Equal(1, task.LastProcess!.ExitCode);
+    Assert.NotNull(task.LastVerification);
+    Assert.Contains("Dispatch recovery policy action='mark-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("stale-dispatch retry blocked by dirty worktree evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_escalates_third_safe_stale_dispatch_corpse")]
+    public void BackgroundDispatchRunnerReconcileEscalatesThirdSafeStaleDispatchCorpse()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-16T01:13:00Z");
+    var clock = new MutableClock(now);
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Cap repeated safe stale dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    for (var attempt = 1; attempt <= 3; attempt++)
+    {
+        var process = RecordStaleDeveloperDispatch(
+            kernel,
+            goal,
+            task,
+            worktree,
+            root,
+            clock.UtcNow,
+            $"attempt-{attempt}");
+        WriteHeartbeat(process, clock.UtcNow.AddMinutes(-31), clock.UtcNow.AddMinutes(-31), "running", 0, 0, childPid: null, ownedCpuMs: 953);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+        clock.Advance();
+    }
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Contains("Dispatch recovery policy action='budget-exhausted'", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.Contains("stale-dispatch auto-requeue cap exhausted", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("auto_requeue=2/2", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Equal(2, task.VerificationHistory.Count(DispatchRecoveryPolicy.IsStaleDispatchRetryVerification));
+    Assert.Equal(2, goal.Timeline.Count(evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal)));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("StaleDispatchAutoRequeueCapExhausted", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_keeps_stale_file_role_heartbeat_when_worktree_changed")]
     public void BackgroundDispatchRunnerRefreshKeepsStaleFileRoleHeartbeatWhenWorktreeChanged()
 {
@@ -2636,6 +2743,28 @@ private static FixtureIsolatedDotnetRootScope UseFixtureIsolatedDotnetRoot()
         Path.Combine(
             Path.GetTempPath(),
             $"{DotnetBuildEnvironmentManager.RootDirectoryName}-commit-on-behalf-{Guid.NewGuid():N}"));
+}
+
+private static TaskProcessRecord RecordStaleDeveloperDispatch(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    string worktree,
+    string root,
+    DateTimeOffset dispatchedAt,
+    string suffix)
+{
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, $"{suffix}.out.log");
+    var stderr = Path.Combine(logs, $"{suffix}.err.log");
+    var exit = Path.Combine(logs, $"{suffix}.exit.txt");
+    File.WriteAllText(stdout, string.Empty);
+    File.WriteAllText(stderr, string.Empty);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", $"claude prompt {suffix}", worktree, dispatchedAt));
+    var process = new TaskProcessRecord(999999, $"claude prompt {suffix}", worktree, stdout, stderr, exit, dispatchedAt, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    return process;
 }
 
 private sealed class FixtureIsolatedDotnetRootScope : IDisposable
