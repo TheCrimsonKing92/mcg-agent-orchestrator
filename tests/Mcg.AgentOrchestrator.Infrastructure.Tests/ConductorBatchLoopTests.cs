@@ -1532,6 +1532,92 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_parked_goal_cancels_at_next_target_boundary_and_releases_lease")]
+    public void ParallelAcceptanceParkedGoalCancelsAtNextTargetBoundaryAndReleasesLease()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var root = CreateSeededGitRepository();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs");
+        var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var calls = new List<string[]>();
+        var firstTargetCompleted = false;
+
+        try
+        {
+            var worktree = GoalWorktrees.Ensure(root, goal.Id);
+            Directory.CreateDirectory(Path.Combine(worktree, "config"));
+            Directory.CreateDirectory(Path.Combine(worktree, "src", "Mcg.AgentOrchestrator.App", "Orchestration"));
+            File.WriteAllText(
+                Path.Combine(worktree, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ParkBoundary.cs"),
+                "namespace Mcg.AgentOrchestrator.App.Orchestration; internal static class ParkBoundary { }");
+            File.WriteAllText(
+                Path.Combine(worktree, "config", "acceptance-manifest.json"),
+                """
+                {
+                  "version": 1,
+                  "checks": [
+                    { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
+                    { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }
+                  ],
+                  "forbiddenChangedPathGlobs": []
+                }
+                """);
+            RunGit(worktree, "add", "-A");
+            RunGit(worktree, "commit", "-m", "Goal work");
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.Length > 0 && args[0] == "first-target")
+                {
+                    firstTargetCompleted = true;
+                    kernel.ParkGoal(goal.Id, "operator parked during acceptance attempt");
+                    stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "ok"));
+            });
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                verifier,
+                DefaultAgents(),
+                WorkerProfileCatalog.Default());
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs"]);
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    driver.RunParallelLandingAcceptance);
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Cancelled, decision.Attempt.Outcome);
+            });
+
+            Assert.True(firstTargetCompleted);
+            Assert.DoesNotContain(calls, call => call.Length > 0 && call[0] == "second-target");
+            Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output);
+            Assert.Equal(1, CountOccurrences(output, "ACCEPTANCE_LEASE_RELEASE"));
+            using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0),
+                TimeSpan.Zero);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_serialized_early_done_replays_parent_missing_branch_retirement")]
     public void ParallelAcceptanceSerializedEarlyDoneReplaysParentMissingBranchRetirement()
     {
