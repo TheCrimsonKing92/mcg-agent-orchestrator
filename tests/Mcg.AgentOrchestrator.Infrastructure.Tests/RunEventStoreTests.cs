@@ -211,6 +211,130 @@ public sealed class RunEventStoreTests
         Assert.Equal(RunEventTypes.GoalOperation, resumed.EventType);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_default_floor_prunes_aged_ticks_below_old_floor")]
+    public async Task SqliteRunEventStoreMaintenanceDefaultFloorPrunesAgedTicksBelowOldFloor()
+    {
+        var store = new SqliteRunEventStore(TempDb());
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        for (var i = 0; i < 760; i++)
+        {
+            await AppendTickAsync(store, now.AddDays(-20).AddMinutes(i), "{}");
+        }
+
+        var result = await store.MaintainAsync(RunEventMaintenanceOptions.Default with { UtcNow = now });
+
+        Assert.False(result.Deferred);
+        Assert.Equal(10, result.AgedConductorTickRowsDeleted);
+        Assert.Equal(0, result.OversizedConductorTickRowsDeleted);
+        Assert.Equal(10, result.ConductorTickRowsDeleted);
+        var remainingTicks = (await store.ReadSinceAsync(maxCount: 1000))
+            .Count(evt => evt.EventType == RunEventTypes.ConductorTick);
+        Assert.Equal(750, remainingTicks);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_payload_guard_prunes_oversized_tick_under_floor")]
+    public async Task SqliteRunEventStoreMaintenancePayloadGuardPrunesOversizedTickUnderFloor()
+    {
+        var store = new SqliteRunEventStore(TempDb());
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var oversized = await AppendTickAsync(store, now.AddMinutes(-5), new string('x', 60_000));
+        var healthy = await AppendTickAsync(store, now.AddMinutes(-4), "{}");
+
+        var result = await store.MaintainAsync(RunEventMaintenanceOptions.Default with { UtcNow = now });
+
+        Assert.False(result.Deferred);
+        Assert.Equal(0, result.AgedConductorTickRowsDeleted);
+        Assert.Equal(1, result.OversizedConductorTickRowsDeleted);
+        Assert.Equal(1, result.ConductorTickRowsDeleted);
+        Assert.True(result.DeletedPayloadBytesEstimate >= 60_000);
+        var remaining = await store.ReadSinceAsync(maxCount: 10);
+        Assert.DoesNotContain(remaining, evt => evt.Sequence == oversized.Sequence);
+        Assert.Contains(remaining, evt => evt.Sequence == healthy.Sequence);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_honors_delete_batch_size_for_legacy_oversized_purge")]
+    public async Task SqliteRunEventStoreMaintenanceHonorsDeleteBatchSizeForLegacyOversizedPurge()
+    {
+        var store = new SqliteRunEventStore(TempDb());
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        for (var i = 0; i < 1001; i++)
+        {
+            await AppendTickAsync(store, now.AddDays(-20).AddMinutes(i), new string('x', 20));
+        }
+        var oldHealthy = await AppendTickAsync(store, now.AddDays(-20).AddMinutes(1002), "{}");
+
+        var result = await store.MaintainAsync(new RunEventMaintenanceOptions(
+            TimeSpan.FromDays(7),
+            MinConductorTickRowsToKeep: 750,
+            Vacuum: false,
+            UtcNow: now,
+            MaxConductorTickPayloadBytes: 10,
+            DeleteBatchSize: 250,
+            LegacyOversizedConductorTickPurge: true));
+
+        Assert.False(result.Deferred);
+        Assert.Equal(0, result.AgedConductorTickRowsDeleted);
+        Assert.Equal(1001, result.OversizedConductorTickRowsDeleted);
+        Assert.True(result.MaxRowsDeletedInTransaction <= 250);
+        Assert.Equal(1001 * 20, result.DeletedPayloadBytesEstimate);
+        var remaining = await store.ReadSinceAsync(maxCount: 10);
+        Assert.Contains(remaining, evt => evt.Sequence == oldHealthy.Sequence);
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_skips_when_last_marker_is_fresh")]
+    public async Task RunEventMaintenanceCadenceSkipsWhenLastMarkerIsFresh()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.RunEventMaintenance,
+            null,
+            RunEventMaintenanceCadence.Operation,
+            "Completed",
+            "fresh marker",
+            "{}",
+            OccurredAt: now.AddHours(-1)));
+        var oversized = await AppendTickAsync(store, now.AddMinutes(-10), new string('x', 60_000));
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now);
+
+        Assert.True(result.Skipped);
+        Assert.False(result.Attempted);
+        var remaining = await store.ReadSinceAsync(maxCount: 10);
+        Assert.Contains(remaining, evt => evt.Sequence == oversized.Sequence);
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_self_defers_when_database_writer_is_busy")]
+    public async Task RunEventMaintenanceCadenceSelfDefersWhenDatabaseWriterIsBusy()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        await AppendTickAsync(store, now.AddDays(-20), "{}");
+        await using var blocker = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
+        await blocker.OpenAsync();
+        await using var begin = blocker.CreateCommand();
+        begin.CommandText = "BEGIN IMMEDIATE";
+        await begin.ExecuteNonQueryAsync();
+
+        var result = RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now);
+
+        Assert.True(result.Attempted);
+        Assert.True(result.Deferred);
+        Assert.False(result.Failed);
+        Assert.Equal("database-busy", result.Reason);
+        Assert.Contains("run-events-maintenance", File.ReadAllText(logPath), StringComparison.Ordinal);
+
+        await using var rollback = blocker.CreateCommand();
+        rollback.CommandText = "ROLLBACK";
+        await rollback.ExecuteNonQueryAsync();
+    }
+
     [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_defers_when_database_write_lock_is_active")]
     public async Task SqliteRunEventStoreMaintenanceDefersWhenDatabaseWriteLockIsActive()
     {
@@ -244,6 +368,19 @@ public sealed class RunEventStoreTests
         rollback.CommandText = "ROLLBACK";
         await rollback.ExecuteNonQueryAsync();
     }
+
+    private static Task<RunEventRecord> AppendTickAsync(
+        SqliteRunEventStore store,
+        DateTimeOffset occurredAt,
+        string payloadJson) =>
+        store.AppendAsync(new RunEventAppend(
+            RunEventTypes.ConductorTick,
+            null,
+            "conduct:tick",
+            "Active",
+            "tick",
+            payloadJson,
+            OccurredAt: occurredAt));
 
     private static string TempDb() => Path.Combine(CreateTempDirectory(), "run-events.db");
 
