@@ -564,7 +564,13 @@ public sealed partial class AgentOrchestratorKernel
         var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort)
             ? string.Empty
             : $" reasoning {dispatch.ReasoningEffort}";
-        return $" using {dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}";
+        var lane = string.IsNullOrWhiteSpace(dispatch.DispatchLane)
+            ? string.Empty
+            : $" lane {dispatch.DispatchLane}";
+        var reason = string.IsNullOrWhiteSpace(dispatch.ModelSelectionReason)
+            ? string.Empty
+            : $" selection {dispatch.ModelSelectionReason}";
+        return $" using {dispatch.ProviderName}/{dispatch.ModelName}{complexity}{reasoning}{lane}{reason}";
     }
 
     private enum PaidCostWarningSource

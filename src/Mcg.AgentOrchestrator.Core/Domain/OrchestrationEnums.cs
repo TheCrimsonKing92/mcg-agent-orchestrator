@@ -45,6 +45,12 @@ public enum WorkTaskStatus
     Cancelled
 }
 
+public enum RetryRoundKind
+{
+    Standard,
+    Mechanical
+}
+
 public enum HumanWaitKind
 {
     SpecClarification,

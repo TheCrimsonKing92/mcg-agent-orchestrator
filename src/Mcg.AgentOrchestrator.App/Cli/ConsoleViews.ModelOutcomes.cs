@@ -18,7 +18,10 @@ internal static partial class ConsoleViews
         foreach (var record in records)
         {
             Console.WriteLine();
-            Console.WriteLine($"  {record.ProviderName}/{record.ModelName}: {record.Recommendation}");
+            var lane = string.IsNullOrWhiteSpace(record.DispatchLane)
+                ? "unrecorded"
+                : record.DispatchLane;
+            Console.WriteLine($"  {record.ProviderName}/{record.ModelName} lane={lane}: {record.Recommendation}");
             Console.WriteLine($"    completed={record.Completed} failed={record.Failed} " +
                 $"realFailed={record.RealFailures} environmentalFailed={record.EnvironmentalFailures} " +
                 $"manufacturedFixedFailed={record.ManufacturedFixedFailures} unknownEraFailed={record.UnknownEraFailures} " +

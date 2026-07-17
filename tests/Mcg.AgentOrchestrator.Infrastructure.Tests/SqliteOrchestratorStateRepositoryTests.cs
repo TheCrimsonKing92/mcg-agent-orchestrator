@@ -554,6 +554,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(WorkTaskStatus.Completed, row.Outcome);
         Assert.Equal(ModelFitHistory.Adequate, row.SelfRating);
         Assert.Equal(TaskOutcomeClass.Success, row.OutcomeClass);
+        Assert.Equal("worker-cli", row.DispatchLane);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_persists_outcome_rule_and_class")]
@@ -642,6 +643,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
         var scorecard = await repo.BuildModelOutcomeScorecardAsync();
         var record = scorecard.Single(r => r.ProviderName == "OpenAI" && r.ModelName == "gpt-5.5");
+        Assert.Equal("worker-cli", record.DispatchLane);
         Assert.Equal(1, record.Completed);
         Assert.Equal(2, record.Failed);
         Assert.Equal(2, record.SelfRatedAdequate);
@@ -702,6 +704,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var historyColumns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('model_fit_history') ORDER BY cid");
         Assert.Contains("outcome_rule", historyColumns);
         Assert.Contains("outcome_class", historyColumns);
+        Assert.Contains("dispatch_lane", historyColumns);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
@@ -1263,7 +1266,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             at,
             provider,
             model,
-            TaskComplexity: complexity);
+            TaskComplexity: complexity,
+            DispatchLane: "worker-cli");
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             dispatch.Command,

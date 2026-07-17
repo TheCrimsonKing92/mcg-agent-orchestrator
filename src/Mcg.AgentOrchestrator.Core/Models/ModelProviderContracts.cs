@@ -73,7 +73,9 @@ public sealed record TaskDispatchRecord(
     bool SandboxLowIntegrity = false,
     string? PromptPath = null,
     ProviderKind WorkerProviderKind = ProviderKind.Unknown,
-    string? ReasoningEffortReason = null);
+    string? ReasoningEffortReason = null,
+    string? DispatchLane = null,
+    string? ModelSelectionReason = null);
 
 public sealed record TaskProcessRecord(
     int ProcessId,

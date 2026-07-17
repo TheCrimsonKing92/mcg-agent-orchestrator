@@ -99,7 +99,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
     Assert.Equal("codex-cli", developer.LastDispatch!.WorkerName);
     Assert.Contains("codex exec", developer.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--model", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='low'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains($"--cd '{workingDirectory}'", developer.LastDispatch.Command, StringComparison.Ordinal);

@@ -36,6 +36,8 @@ public sealed class TaskSpec
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
 
+    public RetryRoundKind? PendingRetryRoundKind { get; private set; }
+
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
 
     public AgentId? AssignedAgentId { get; private set; }
@@ -125,7 +127,9 @@ public sealed class TaskSpec
                     LastDispatch.SandboxLowIntegrity,
                     LastDispatch.PromptPath,
                     LastDispatch.WorkerProviderKind,
-                    LastDispatch.ReasoningEffortReason),
+                    LastDispatch.ReasoningEffortReason,
+                    LastDispatch.DispatchLane,
+                    LastDispatch.ModelSelectionReason),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -156,7 +160,8 @@ public sealed class TaskSpec
             CriterionRetryCount,
             CriterionRetryFeedback,
             EmptyOutputRetryCount,
-            LatestRetryAt);
+            LatestRetryAt,
+            PendingRetryRoundKind);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -243,7 +248,9 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.SandboxLowIntegrity,
                 snapshot.LastDispatch.PromptPath,
                 snapshot.LastDispatch.WorkerProviderKind,
-                ReasoningEffortReason: snapshot.LastDispatch.ReasoningEffortReason));
+                ReasoningEffortReason: snapshot.LastDispatch.ReasoningEffortReason,
+                DispatchLane: snapshot.LastDispatch.DispatchLane,
+                ModelSelectionReason: snapshot.LastDispatch.ModelSelectionReason));
         }
 
         if (snapshot.LastProcess is not null)
@@ -278,6 +285,7 @@ public sealed class TaskSpec
         task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
+        task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         return task;
     }
 
@@ -294,6 +302,7 @@ public sealed class TaskSpec
     internal void RecordVerification(TaskVerificationRecord verification)
     {
         SubscriptionRetryAfter = null;
+        PendingRetryRoundKind = null;
         EmptyOutputRetryCount = DispatchFailureClassifier.Classify(this, verification).Kind == DispatchOutcomeKind.EmptyOutputFlake
             ? EmptyOutputRetryCount + 1
             : 0;
@@ -318,7 +327,11 @@ public sealed class TaskSpec
 
     internal void ClearSubscriptionRetryAfter() => SubscriptionRetryAfter = null;
 
-    internal void RecordRetry(DateTimeOffset retriedAt) => LatestRetryAt = retriedAt;
+    internal void RecordRetry(DateTimeOffset retriedAt, RetryRoundKind? retryRoundKind = null)
+    {
+        LatestRetryAt = retriedAt;
+        PendingRetryRoundKind = retryRoundKind;
+    }
 
     internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)
     {

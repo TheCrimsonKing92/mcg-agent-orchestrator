@@ -123,6 +123,31 @@ public sealed class TaskVerificationTests
     Assert.Equal(verification, task.LastVerification);
     Assert.True(!goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
 }
+    [Xunit.Fact(DisplayName = "RetryTask_mechanical_round_marker_persists_and_clears_after_verification")]
+    public void RetryTaskMechanicalRoundMarkerPersistsAndClearsAfterVerification()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Retry mechanical receipt");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RetryTask(goal.Id, task.Id, "Rerun named commands and quote receipts.", retryRoundKind: RetryRoundKind.Mechanical);
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+    var restoredTask = restored.GetTask(goal.Id, task.Id);
+    Assert.Equal(RetryRoundKind.Mechanical, restoredTask.PendingRetryRoundKind);
+
+    restored.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("worker", "worker run", "C:\\repo", DateTimeOffset.UtcNow));
+    restored.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        "worker run",
+        "C:\\repo",
+        0,
+        "WORKER_RESULT:\ntests: pass - quoted receipts\nblockers: none\nEND_WORKER_RESULT",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+
+    Assert.Null(restored.GetTask(goal.Id, task.Id).PendingRetryRoundKind);
+}
     [Xunit.Fact(DisplayName = "RetryTask_rejects_running_or_waiting_tasks")]
     public void RetryTaskRejectsRunningOrWaitingTasks()
 {
