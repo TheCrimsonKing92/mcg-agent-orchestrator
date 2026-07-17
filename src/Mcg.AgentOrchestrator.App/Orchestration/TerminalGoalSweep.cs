@@ -450,7 +450,12 @@ internal static class TerminalGoalSweep
                 hasDurableLandingIntent &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
-                var removeResult = GoalWorktrees.Remove(executionDirectory, goal.Id, kernel);
+                var removeResult = GoalWorktrees.Remove(
+                    executionDirectory,
+                    goal.Id,
+                    kernel,
+                    branchFacts.HasRegisteredWorktree,
+                    branchFacts.HasGoalBranch);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(

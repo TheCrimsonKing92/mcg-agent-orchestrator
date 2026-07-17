@@ -394,7 +394,36 @@ public static class GoalWorktrees
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel? kernel,
-        int gitTimeoutMilliseconds)
+        bool hasRegisteredWorktree,
+        bool hasBranch) =>
+        Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            GitCli.DefaultTimeoutMilliseconds,
+            hasRegisteredWorktree,
+            hasBranch);
+
+    public static GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel,
+        int gitTimeoutMilliseconds) =>
+        Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            gitTimeoutMilliseconds,
+            precomputedHasRegisteredWorktree: null,
+            precomputedHasBranch: null);
+
+    private static GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel,
+        int gitTimeoutMilliseconds,
+        bool? precomputedHasRegisteredWorktree,
+        bool? precomputedHasBranch)
     {
         var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, CleanupElapsedMilliseconds);
         var path = WorktreePath(executionDirectory, goalId);
@@ -408,10 +437,12 @@ public static class GoalWorktrees
             RequireGitWorkTree(executionDirectory, cleanupBudget.RemainingMilliseconds);
         }
 
-        var hasRegisteredWorktree = IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds);
+        var hasRegisteredWorktree = precomputedHasRegisteredWorktree ??
+            IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds);
         var hasLeftoverDirectory = Directory.Exists(path);
         var branch = BranchName(goalId);
-        var hasBranch = BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds);
+        var hasBranch = precomputedHasBranch ??
+            BranchExists(executionDirectory, branch, cleanupBudget.RemainingMilliseconds);
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
