@@ -211,7 +211,7 @@ public sealed class LandingExecutorTests
         using var _ = WithMirrorTestHooks();
         try
         {
-            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            RunGit(repo, "remote", "add", "mirror", remote);
             WriteMirrorConfig(repo, "mirror");
             RunGit(repo, "tag", "mirror-test-tag");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
@@ -253,7 +253,7 @@ public sealed class LandingExecutorTests
         using var _ = WithMirrorTestHooks();
         try
         {
-            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            RunGit(repo, "remote", "add", "mirror", remote);
             if (writeDisabledConfig)
             {
                 WriteMirrorConfig(repo, false, "mirror");
@@ -300,7 +300,7 @@ public sealed class LandingExecutorTests
 
         try
         {
-            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            RunGit(repo, "remote", "add", "mirror", remote);
             WriteMirrorConfig(repo, "mirror");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
@@ -332,7 +332,7 @@ public sealed class LandingExecutorTests
         using var _ = WithMirrorTestHooks();
         try
         {
-            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            RunGit(repo, "remote", "add", "mirror", remote);
             WriteMirrorConfig(repo, "mirror");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
@@ -375,7 +375,7 @@ public sealed class LandingExecutorTests
         using var _ = WithMirrorTestHooks();
         try
         {
-            RunGit(repo, "remote", "add", "mirror", ToGitFileUrl(remote));
+            RunGit(repo, "remote", "add", "mirror", remote);
             WriteMirrorConfig(repo, "mirror");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
@@ -417,8 +417,8 @@ public sealed class LandingExecutorTests
         using var _ = WithMirrorTestHooks();
         try
         {
-            RunGit(repo, "remote", "add", "reachable", ToGitFileUrl(reachable));
-            RunGit(repo, "remote", "add", "missing", ToGitFileUrl(missing));
+            RunGit(repo, "remote", "add", "reachable", reachable);
+            RunGit(repo, "remote", "add", "missing", missing);
             WriteMirrorConfig(repo, "reachable", "missing");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
@@ -441,6 +441,66 @@ public sealed class LandingExecutorTests
             TryDeleteDirectory(repo);
             TryDeleteDirectory(reachable);
             TryDeleteDirectory(missing);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Remote_mirror_processing_preserves_later_enqueued_mirror_debt")]
+    public void RemoteMirrorProcessingPreservesLaterEnqueuedMirrorDebt()
+    {
+        var repo = CreateGitRepository();
+        var remote = CreateBareRepository();
+        using var _ = WithMirrorTestHooks();
+        var oldGitRunner = RemoteGitMirror.GitRunner;
+        var enqueuedSecondGoal = 0;
+        try
+        {
+            RunGit(repo, "remote", "add", "mirror", remote);
+            WriteMirrorConfig(repo, "mirror");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, firstGoal) = CreateVerifiedGoal(repo);
+            var secondGoal = kernel.CreateGoal("Second mirror landing", [new TaskSpec(TaskId.New(), "Run Developer task.", AgentRole.Developer)]);
+            kernel.ActivateGoal(secondGoal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(
+                secondGoal.Id,
+                secondGoal.Tasks.Single().Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            var firstBranch = GoalWorktrees.BranchName(firstGoal.Id);
+            var secondBranch = GoalWorktrees.BranchName(secondGoal.Id);
+            AddGoalBranchCommit(repo, firstBranch, "first-mirror.txt", "first");
+            AddGoalBranchCommit(repo, secondBranch, "second-mirror.txt", "second");
+
+            var landing = LandingExecutor.Execute(kernel, firstGoal, workspace);
+            RemoteGitMirror.EnqueueAfterLanding(repo, firstGoal);
+            RemoteGitMirror.GitRunner = (workingDirectory, args) =>
+            {
+                if (args.Count > 0 &&
+                    args[0] == "push" &&
+                    Interlocked.Exchange(ref enqueuedSecondGoal, 1) == 0)
+                {
+                    RemoteGitMirror.EnqueueAfterLanding(repo, secondGoal);
+                }
+
+                return oldGitRunner(workingDirectory, args);
+            };
+            var mirror = RemoteGitMirror.ProcessDue(kernel, repo, firstGoal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Contains(mirror.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded);
+            var state = RemoteGitMirror.ReadState(repo);
+            Assert.Contains(state.Entries, entry =>
+                entry.GoalId == firstGoal.Id.Value &&
+                entry.Remote == "mirror" &&
+                entry.Status == RemoteMirrorEntryStatus.Succeeded);
+            Assert.Contains(state.Entries, entry =>
+                entry.GoalId == secondGoal.Id.Value &&
+                entry.Remote == "mirror" &&
+                entry.Status == RemoteMirrorEntryStatus.Pending);
+        }
+        finally
+        {
+            RemoteGitMirror.GitRunner = oldGitRunner;
+            TryDeleteDirectory(repo);
+            TryDeleteDirectory(remote);
         }
     }
 
@@ -596,131 +656,14 @@ public sealed class LandingExecutorTests
         Assert.NotEqual(0, result.ExitCode);
     }
 
-    private static string ToGitFileUrl(string path) => new Uri(Path.GetFullPath(path)).AbsoluteUri;
-
     private static IDisposable WithMirrorTestHooks()
     {
         var oldBackoff = RemoteGitMirror.BackoffForAttempt;
-        var oldGitRunner = RemoteGitMirror.GitRunner;
         RemoteGitMirror.BackoffForAttempt = _ => TimeSpan.Zero;
-        RemoteGitMirror.GitRunner = TestMirrorGitRunner;
         return new DelegateDisposable(() =>
         {
             RemoteGitMirror.BackoffForAttempt = oldBackoff;
-            RemoteGitMirror.GitRunner = oldGitRunner;
         });
-    }
-
-    private static GitCli.GitResult TestMirrorGitRunner(string workingDirectory, IReadOnlyList<string> args)
-    {
-        if (args.Count < 3 || args[0] != "push")
-        {
-            return GitCli.Run(workingDirectory, args.ToArray());
-        }
-
-        var remoteResult = GitCli.Run(workingDirectory, "remote", "get-url", args[1]);
-        if (!remoteResult.Succeeded)
-        {
-            return remoteResult;
-        }
-
-        var remotePath = FromGitFileUrl(remoteResult.Output.Trim());
-        if (!Directory.Exists(remotePath))
-        {
-            return new GitCli.GitResult(128, string.Empty, $"fatal: '{remotePath}' does not appear to be a git repository");
-        }
-
-        if (args[2] == "--tags")
-        {
-            return PushTagsForTest(workingDirectory, remotePath);
-        }
-
-        return PushRefForTest(workingDirectory, remotePath, args[2]);
-    }
-
-    private static GitCli.GitResult PushRefForTest(string workingDirectory, string remotePath, string refspec)
-    {
-        var refspecParts = refspec.Split(':', 2);
-        var sourceRef = refspecParts[0];
-        var targetRef = refspecParts.Length == 2 && !string.IsNullOrWhiteSpace(refspecParts[1])
-            ? refspecParts[1]
-            : refspec;
-        var source = GitCli.Run(workingDirectory, "rev-parse", sourceRef);
-        if (!source.Succeeded)
-        {
-            return source;
-        }
-
-        targetRef = targetRef.StartsWith("refs/", StringComparison.Ordinal)
-            ? targetRef
-            : $"refs/heads/{targetRef}";
-        CopyGitObjectsForTest(workingDirectory, remotePath);
-        return GitCli.Run(remotePath, "update-ref", targetRef, source.Output.Trim());
-    }
-
-    private static GitCli.GitResult PushTagsForTest(string workingDirectory, string remotePath)
-    {
-        var tags = GitCli.Run(workingDirectory, "for-each-ref", "--format=%(refname)", "refs/tags");
-        if (!tags.Succeeded || string.IsNullOrWhiteSpace(tags.Output))
-        {
-            return tags.Succeeded ? new GitCli.GitResult(0, string.Empty, string.Empty) : tags;
-        }
-
-        foreach (var line in tags.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var source = GitCli.Run(workingDirectory, "rev-parse", line);
-            if (!source.Succeeded)
-            {
-                return source;
-            }
-
-            CopyGitObjectsForTest(workingDirectory, remotePath);
-            var update = GitCli.Run(remotePath, "update-ref", line, source.Output.Trim());
-            if (!update.Succeeded)
-            {
-                return update;
-            }
-        }
-
-        return new GitCli.GitResult(0, string.Empty, string.Empty);
-    }
-
-    private static string FromGitFileUrl(string value) =>
-        value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? new Uri(value).LocalPath
-            : value;
-
-    private static void CopyGitObjectsForTest(string workingDirectory, string remotePath)
-    {
-        var gitDirResult = GitCli.Run(workingDirectory, "rev-parse", "--git-dir");
-        if (!gitDirResult.Succeeded)
-        {
-            return;
-        }
-
-        var gitDir = gitDirResult.Output.Trim();
-        if (!Path.IsPathRooted(gitDir))
-        {
-            gitDir = Path.GetFullPath(Path.Combine(workingDirectory, gitDir));
-        }
-
-        var sourceObjects = Path.Combine(gitDir, "objects");
-        var targetObjects = Path.Combine(remotePath, "objects");
-        if (!Directory.Exists(sourceObjects) || !Directory.Exists(targetObjects))
-        {
-            return;
-        }
-
-        foreach (var sourceFile in Directory.EnumerateFiles(sourceObjects, "*", SearchOption.AllDirectories))
-        {
-            var relative = Path.GetRelativePath(sourceObjects, sourceFile);
-            var targetFile = Path.Combine(targetObjects, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
-            if (!File.Exists(targetFile))
-            {
-                File.Copy(sourceFile, targetFile);
-            }
-        }
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)

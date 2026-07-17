@@ -30,6 +30,7 @@ internal static class RemoteGitMirror
     private const int StoreVersion = 1;
     private const string OperationPrefix = "conductor:mirror";
     private static readonly object BackgroundGate = new();
+    private static readonly object StateGate = new();
     private static readonly Dictionary<string, Task> BackgroundTasksByDirectory = new(StringComparer.OrdinalIgnoreCase);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -57,40 +58,43 @@ internal static class RemoteGitMirror
             return;
         }
 
-        var state = LoadState(executionDirectory);
         var goalBranch = GoalWorktrees.BranchName(goal.Id);
         var goalBranchCommit = ResolveCommit(executionDirectory, goalBranch);
         var enqueued = 0;
-        var changed = false;
-        foreach (var remote in config.Remotes)
+        lock (StateGate)
         {
-            var existing = state.Entries.FirstOrDefault(entry =>
-                entry.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
-                entry.Remote.Equals(remote, StringComparison.OrdinalIgnoreCase));
-            if (existing is null)
+            var state = LoadState(executionDirectory);
+            var changed = false;
+            foreach (var remote in config.Remotes)
             {
-                state.Entries.Add(RemoteMirrorStateEntry.Create(goal.Id.Value, goalBranch, goalBranchCommit, remote, config.Push));
-                enqueued++;
-                changed = true;
-                continue;
+                var existing = state.Entries.FirstOrDefault(entry =>
+                    entry.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                    entry.Remote.Equals(remote, StringComparison.OrdinalIgnoreCase));
+                if (existing is null)
+                {
+                    state.Entries.Add(RemoteMirrorStateEntry.Create(goal.Id.Value, goalBranch, goalBranchCommit, remote, config.Push));
+                    enqueued++;
+                    changed = true;
+                    continue;
+                }
+
+                if (existing.Status != RemoteMirrorEntryStatus.Succeeded)
+                {
+                    existing.GoalBranch = goalBranch;
+                    existing.GoalBranchCommit = goalBranchCommit;
+                    existing.PushMain = config.Push.Main;
+                    existing.PushGoalBranch = config.Push.GoalBranch;
+                    existing.PushTags = config.Push.Tags;
+                    existing.NextAttemptUtc = null;
+                    existing.UpdatedUtc = UtcNow();
+                    changed = true;
+                }
             }
 
-            if (existing.Status != RemoteMirrorEntryStatus.Succeeded)
+            if (changed)
             {
-                existing.GoalBranch = goalBranch;
-                existing.GoalBranchCommit = goalBranchCommit;
-                existing.PushMain = config.Push.Main;
-                existing.PushGoalBranch = config.Push.GoalBranch;
-                existing.PushTags = config.Push.Tags;
-                existing.NextAttemptUtc = null;
-                existing.UpdatedUtc = UtcNow();
-                changed = true;
+                SaveState(executionDirectory, state);
             }
-        }
-
-        if (changed)
-        {
-            SaveState(executionDirectory, state);
         }
 
         if (enqueued > 0)
@@ -173,20 +177,29 @@ internal static class RemoteGitMirror
             return new RemoteMirrorProcessResult([]);
         }
 
-        var state = LoadState(executionDirectory);
-        if (state.Entries.Count == 0)
+        RemoteMirrorStateEntry[] dueEntries;
+        lock (StateGate)
         {
-            return new RemoteMirrorProcessResult([]);
+            var state = LoadState(executionDirectory);
+            if (state.Entries.Count == 0)
+            {
+                return new RemoteMirrorProcessResult([]);
+            }
+
+            var dueNow = UtcNow();
+            dueEntries = state.Entries
+                .Where(entry => entry.Status != RemoteMirrorEntryStatus.Succeeded)
+                .Where(entry => onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase))
+                .Where(entry => entry.NextAttemptUtc is null || entry.NextAttemptUtc <= dueNow)
+                .Select(CloneEntry)
+                .ToArray();
         }
 
         var now = UtcNow();
         var outcomes = new List<RemoteMirrorOutcome>();
+        var processedEntries = new List<RemoteMirrorProcessedEntry>();
         var goals = goalsSnapshot.ToDictionary(goal => goal.Id.Value, StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in state.Entries
-            .Where(entry => entry.Status != RemoteMirrorEntryStatus.Succeeded)
-            .Where(entry => onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase))
-            .Where(entry => entry.NextAttemptUtc is null || entry.NextAttemptUtc <= now)
-            .ToArray())
+        foreach (var entry in dueEntries)
         {
             if (!goals.TryGetValue(entry.GoalId, out var goal))
             {
@@ -199,18 +212,26 @@ internal static class RemoteGitMirror
                 continue;
             }
 
+            var original = CloneEntry(entry);
             outcomes.Add(ProcessEntry(executionDirectory, goal, entry, now));
+            processedEntries.Add(new RemoteMirrorProcessedEntry(original, entry));
         }
 
-        if (outcomes.Count > 0)
+        if (processedEntries.Count > 0)
         {
-            SaveState(executionDirectory, state);
+            ApplyProcessedEntries(executionDirectory, processedEntries);
         }
 
         return new RemoteMirrorProcessResult(outcomes);
     }
 
-    public static RemoteMirrorState ReadState(string executionDirectory) => LoadState(executionDirectory);
+    public static RemoteMirrorState ReadState(string executionDirectory)
+    {
+        lock (StateGate)
+        {
+            return LoadState(executionDirectory);
+        }
+    }
 
     internal static string ConfigPath(string executionDirectory) =>
         Path.Combine(Path.GetFullPath(executionDirectory), "config", "mirror.json");
@@ -226,11 +247,14 @@ internal static class RemoteGitMirror
             return false;
         }
 
-        var now = UtcNow();
-        return LoadState(executionDirectory).Entries.Any(entry =>
-            entry.Status != RemoteMirrorEntryStatus.Succeeded &&
-            (onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase)) &&
-            (entry.NextAttemptUtc is null || entry.NextAttemptUtc <= now));
+        lock (StateGate)
+        {
+            var now = UtcNow();
+            return LoadState(executionDirectory).Entries.Any(entry =>
+                entry.Status != RemoteMirrorEntryStatus.Succeeded &&
+                (onlyGoalId is null || entry.GoalId.Equals(onlyGoalId.Value, StringComparison.OrdinalIgnoreCase)) &&
+                (entry.NextAttemptUtc is null || entry.NextAttemptUtc <= now));
+        }
     }
 
     private static RemoteMirrorOutcome ProcessEntry(
@@ -358,6 +382,70 @@ internal static class RemoteGitMirror
         File.WriteAllText(path, JsonSerializer.Serialize(state with { Version = StoreVersion }, JsonOptions) + Environment.NewLine);
     }
 
+    private static void ApplyProcessedEntries(
+        string executionDirectory,
+        IReadOnlyCollection<RemoteMirrorProcessedEntry> processedEntries)
+    {
+        lock (StateGate)
+        {
+            var state = LoadState(executionDirectory);
+            var changed = false;
+            foreach (var processed in processedEntries)
+            {
+                var current = state.Entries.FirstOrDefault(entry =>
+                    entry.GoalId.Equals(processed.Original.GoalId, StringComparison.OrdinalIgnoreCase) &&
+                    entry.Remote.Equals(processed.Original.Remote, StringComparison.OrdinalIgnoreCase));
+                if (current is null || !CanApplyProcessedEntry(current, processed.Original))
+                {
+                    continue;
+                }
+
+                CopyEntry(processed.Updated, current);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                SaveState(executionDirectory, state);
+            }
+        }
+    }
+
+    private static bool CanApplyProcessedEntry(RemoteMirrorStateEntry current, RemoteMirrorStateEntry original) =>
+        current.GoalBranch.Equals(original.GoalBranch, StringComparison.Ordinal) &&
+        current.GoalBranchCommit.Equals(original.GoalBranchCommit, StringComparison.Ordinal) &&
+        current.Status == original.Status &&
+        current.Attempts == original.Attempts &&
+        current.NextAttemptUtc == original.NextAttemptUtc &&
+        current.LastError == original.LastError &&
+        current.PushMain == original.PushMain &&
+        current.PushGoalBranch == original.PushGoalBranch &&
+        current.PushTags == original.PushTags &&
+        current.UpdatedUtc == original.UpdatedUtc;
+
+    private static RemoteMirrorStateEntry CloneEntry(RemoteMirrorStateEntry source)
+    {
+        var clone = new RemoteMirrorStateEntry();
+        CopyEntry(source, clone);
+        return clone;
+    }
+
+    private static void CopyEntry(RemoteMirrorStateEntry source, RemoteMirrorStateEntry target)
+    {
+        target.GoalId = source.GoalId;
+        target.GoalBranch = source.GoalBranch;
+        target.GoalBranchCommit = source.GoalBranchCommit;
+        target.Remote = source.Remote;
+        target.Status = source.Status;
+        target.Attempts = source.Attempts;
+        target.NextAttemptUtc = source.NextAttemptUtc;
+        target.LastError = source.LastError;
+        target.PushMain = source.PushMain;
+        target.PushGoalBranch = source.PushGoalBranch;
+        target.PushTags = source.PushTags;
+        target.UpdatedUtc = source.UpdatedUtc;
+    }
+
     private static string ResolveCommit(string executionDirectory, string reference)
     {
         var result = GitRunner(executionDirectory, ["rev-parse", "--verify", reference]);
@@ -404,6 +492,7 @@ internal static class RemoteGitMirror
     private static string Prefix(string goalId) => goalId[..Math.Min(8, goalId.Length)];
 
     private sealed record RemoteMirrorPushResult(string Step, GitCli.GitResult Result);
+    private sealed record RemoteMirrorProcessedEntry(RemoteMirrorStateEntry Original, RemoteMirrorStateEntry Updated);
 }
 
 internal sealed record RemoteMirrorConfiguration(
