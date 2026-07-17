@@ -3,8 +3,9 @@
   Print the slowest test durations from one or more TRX files.
 
 .DESCRIPTION
-  Reads explicit TRX files, directories, or wildcard paths and prints a compact
-  globally ranked table. Output is capped to the top 20 tests by default.
+  Reads explicit TRX files, directories, wildcard paths, or the latest
+  acceptance-gate attempt and prints a compact globally ranked table. Output is
+  capped to the top 20 tests by default.
 
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Show-TestDurations.ps1 .\.test-results\*.trx
@@ -14,11 +15,15 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, Position = 0, ValueFromRemainingArguments = $true)]
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Path,
 
     [ValidateRange(1, 10000)]
-    [int]$Top = 20
+    [int]$Top = 20,
+
+    [string]$Goal,
+
+    [string]$AttemptsRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +66,107 @@ function Resolve-TrxInput {
     }
 
     $resolved | Sort-Object FullName -Unique
+}
+
+function Resolve-AttemptsRoot {
+    param([string]$ExplicitRoot)
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitRoot)) {
+        return (Get-Item -LiteralPath $ExplicitRoot -ErrorAction Stop).FullName
+    }
+
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    return Join-Path $repoRoot '.orchestrator\acceptance-gate-attempts'
+}
+
+function Resolve-LatestGateAttemptTrx {
+    param(
+        [string]$Root,
+        [string]$GoalFilter
+    )
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        throw "Acceptance gate attempts root not found: $Root"
+    }
+
+    $goalDirectories = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction Stop)
+    if (-not [string]::IsNullOrWhiteSpace($GoalFilter)) {
+        $goalDirectories = @($goalDirectories | Where-Object {
+            $_.Name.Equals($GoalFilter, [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.StartsWith($GoalFilter, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($goalDirectories.Count -eq 0) {
+            throw "No acceptance gate attempt directory matched goal: $GoalFilter"
+        }
+    }
+
+    $attempts = foreach ($goalDirectory in $goalDirectories) {
+        foreach ($attemptFile in Get-ChildItem -LiteralPath $goalDirectory.FullName -Filter '*.attempt.json' -File -ErrorAction SilentlyContinue) {
+            try {
+                $attempt = Get-Content -LiteralPath $attemptFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                [pscustomobject]@{
+                    Attempt = $attempt
+                    AttemptFile = $attemptFile
+                    StartedAt = if ($attempt.startedAt) { [datetimeoffset]::Parse([string]$attempt.startedAt) } else { [datetimeoffset]$attemptFile.LastWriteTimeUtc }
+                }
+            } catch {
+                [pscustomobject]@{
+                    Attempt = $null
+                    AttemptFile = $attemptFile
+                    StartedAt = [datetimeoffset]$attemptFile.LastWriteTimeUtc
+                }
+            }
+        }
+    }
+
+    $latest = @($attempts | Sort-Object StartedAt -Descending | Select-Object -First 1)
+    if ($latest.Count -eq 0) {
+        throw "No acceptance gate attempt records found under: $Root"
+    }
+
+    $attemptRecord = $latest[0].Attempt
+    $paths = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $attemptRecord -and $attemptRecord.testResultPaths) {
+        foreach ($path in @($attemptRecord.testResultPaths)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+                [void]$paths.Add([string]$path)
+            }
+        }
+    }
+
+    $resultPath = if ($null -ne $attemptRecord -and $attemptRecord.resultPath) {
+        [string]$attemptRecord.resultPath
+    } else {
+        $latest[0].AttemptFile.FullName -replace '\.attempt\.json$', '.result.json'
+    }
+
+    if ($paths.Count -eq 0 -and (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        try {
+            $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($result.acceptance -and $result.acceptance.testResultPaths) {
+                foreach ($path in @($result.acceptance.testResultPaths)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+                        [void]$paths.Add([string]$path)
+                    }
+                }
+            }
+        } catch {
+            throw "Latest acceptance gate result is unreadable: $resultPath"
+        }
+    }
+
+    if ($paths.Count -eq 0) {
+        $prefix = $latest[0].AttemptFile.FullName -replace '\.attempt\.json$', ''
+        foreach ($trx in Get-ChildItem -LiteralPath (Split-Path -Parent $prefix) -Filter ((Split-Path -Leaf $prefix) + '*.trx') -File -ErrorAction SilentlyContinue) {
+            [void]$paths.Add($trx.FullName)
+        }
+    }
+
+    if ($paths.Count -eq 0) {
+        throw "Latest acceptance gate attempt has no referenced TRX paths: $($latest[0].AttemptFile.FullName)"
+    }
+
+    Resolve-TrxInput @($paths)
 }
 
 function Convert-TrxOutcome {
@@ -110,7 +216,11 @@ function Read-TrxDurations {
 }
 
 try {
-    $files = @(Resolve-TrxInput $Path)
+    $files = if ($Path.Count -gt 0) {
+        @(Resolve-TrxInput $Path)
+    } else {
+        @(Resolve-LatestGateAttemptTrx (Resolve-AttemptsRoot $AttemptsRoot) $Goal)
+    }
     $rows = foreach ($file in $files) {
         Read-TrxDurations $file
     }

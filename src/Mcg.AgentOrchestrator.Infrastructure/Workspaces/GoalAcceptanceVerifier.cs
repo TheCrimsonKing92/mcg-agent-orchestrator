@@ -17,7 +17,8 @@ public sealed record AcceptanceCheckResult(
     long? DurationMilliseconds = null,
     bool LockRemediationApplied = false,
     string? ResultSummary = null,
-    bool Advisory = false);
+    bool Advisory = false,
+    IReadOnlyList<string>? TestResultPaths = null);
 
 public sealed record AcceptanceVerificationResult(
     bool Passed,
@@ -26,7 +27,8 @@ public sealed record AcceptanceVerificationResult(
     string? OutputTail,
     bool Retried = false,
     string? ArtifactsPath = null,
-    IReadOnlyList<AcceptanceCheckResult>? Checks = null);
+    IReadOnlyList<AcceptanceCheckResult>? Checks = null,
+    IReadOnlyList<string>? TestResultPaths = null);
 
 public sealed record FocusedEvidenceRunResult(
     string Request,
@@ -85,6 +87,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const int MaxFocusedEvidenceTargets = 4;
+    public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -331,6 +334,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
+        var testResultPaths = CollectTestResultPaths(checks);
 
         return new AcceptanceVerificationResult(
             Passed: failedCheck is null,
@@ -339,7 +343,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             OutputTail: failedCheck?.OutputTail,
             Retried: retried,
             ArtifactsPath: artifactsPath,
-            Checks: checks);
+            Checks: checks,
+            TestResultPaths: testResultPaths);
     }
 
     public async Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
@@ -399,6 +404,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Summary: summary,
             Checks: checks);
     }
+
+    private static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
+        checks
+            .SelectMany(check => check.TestResultPaths ?? [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static bool TryBuildFocusedEvidenceChecks(
         string request,
@@ -1533,6 +1545,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // block a green goal, while never masking a build/compile failure and still surfacing the tail.
             var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
+            var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+            EmitMissingTrxReceiptIfNeeded(passed, telemetry);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -1545,7 +1559,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 environment.LeaseId,
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 lockRemediationApplied,
-                BuildManagedDotnetResultSummary(result, lockRemediationApplied)), lockRemediationApplied);
+                BuildManagedDotnetResultSummary(result, lockRemediationApplied),
+                TestResultPaths: telemetry?.Paths), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -1584,6 +1599,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed.Stop();
             var reportedAllPassed = !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
+            var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+            EmitMissingTrxReceiptIfNeeded(passed, telemetry);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -1596,7 +1613,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 environment.LeaseId,
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 true,
-                BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true)), true);
+                BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true),
+                TestResultPaths: telemetry?.Paths), true);
         }
         finally
         {
@@ -1807,7 +1825,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var effectiveArguments = WithBuildEnvironmentArguments(arguments, environment);
+        var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+        var effectiveArguments = WithBuildEnvironmentArguments(telemetry?.Arguments ?? arguments, environment);
         ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
         return await RunWithGateHeartbeatAsync(
             effectiveArguments,
@@ -2555,6 +2574,67 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return [.. arguments, .. environment.Arguments];
     }
 
+    private static DotnetTestTelemetry? ResolveDotnetTestTelemetry(
+        string[] arguments,
+        AcceptanceManifestCheck check,
+        DotnetBuildEnvironment environment)
+    {
+        if (!IsDotnetTestCommand(arguments))
+        {
+            return null;
+        }
+
+        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        var directory = string.IsNullOrWhiteSpace(attemptPrefix)
+            ? Path.Combine(environment.ArtifactsPath, "TestResults")
+            : Path.GetDirectoryName(attemptPrefix);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            directory = Path.Combine(environment.ArtifactsPath, "TestResults");
+        }
+
+        var filePrefix = string.IsNullOrWhiteSpace(attemptPrefix)
+            ? $"{environment.LeaseId}.{Slug(check.Name)}"
+            : $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}";
+        var fileName = $"{SanitizeFileName(filePrefix)}.trx";
+        var path = Path.Combine(directory, fileName);
+        var effectiveArguments = new List<string>(arguments)
+        {
+            "--logger",
+            $"trx;LogFileName={fileName}",
+            "--results-directory",
+            directory
+        };
+
+        return new DotnetTestTelemetry([path], [.. effectiveArguments]);
+    }
+
+    private static void EmitMissingTrxReceiptIfNeeded(bool passed, DotnetTestTelemetry? telemetry)
+    {
+        if (!passed || telemetry is null)
+        {
+            return;
+        }
+
+        var missing = telemetry.Paths
+            .Where(path => TryGetFileLength(path) <= 0)
+            .ToArray();
+        if (missing.Length == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine($"TRX_TELEMETRY_UNAVAILABLE paths={QuoteProgressToken(string.Join(";", missing))}");
+        Console.Out.Flush();
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new string(value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray()).Trim('-', '.');
+        return string.IsNullOrWhiteSpace(sanitized) ? "acceptance-test-results" : sanitized;
+    }
+
     private static bool IsDotnetCommand(string[] arguments)
     {
         return arguments.Length > 0 && arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase);
@@ -3091,6 +3171,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private sealed record InfrastructureTestLane(string Name, string Filter);
+
+    private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 
     private sealed record GateHeartbeatContext(
         string? GoalId,

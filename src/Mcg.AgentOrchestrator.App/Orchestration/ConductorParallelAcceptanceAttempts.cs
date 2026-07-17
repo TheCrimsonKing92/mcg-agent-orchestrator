@@ -52,7 +52,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     DateTimeOffset? CompletedAt = null,
     DateTimeOffset? ReconciledAt = null,
     string? Detail = null,
-    int TransientFailureCount = 0)
+    int TransientFailureCount = 0,
+    IReadOnlyList<string>? TestResultPaths = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -90,6 +91,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
+    private const int RetainedAttemptCountPerGoal = 20;
 
     private readonly string _rootDirectory;
     private readonly string? _executionDirectory;
@@ -347,7 +349,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             WriteHeartbeat(attempt, "running");
-            var run = runAcceptance(candidate, policy);
+            var run = RunWithAttemptTelemetryContext(attempt, candidate, policy, runAcceptance);
             WriteResult(attempt.ResultPath, ToArtifact(run));
             var outcome = OutcomeFor(run);
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
@@ -358,7 +360,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 Outcome = outcome,
                 CompletedAt = _utcNow(),
                 LastHeartbeatAt = _utcNow(),
-                Detail = AcceptanceRunDetail(run)
+                Detail = AcceptanceRunDetail(run),
+                TestResultPaths = run.Acceptance?.TestResultPaths
             });
             File.AppendAllText(attempt.StdoutPath, $"acceptance attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
@@ -388,10 +391,30 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 Outcome = outcome,
                 CompletedAt = _utcNow(),
                 LastHeartbeatAt = _utcNow(),
-                Detail = ex.Message
+                Detail = ex.Message,
+                TestResultPaths = run.Acceptance?.TestResultPaths
             });
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
+        }
+    }
+
+    private static ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+    {
+        var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
+        Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
+        try
+        {
+            return runAcceptance(candidate, policy);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
         }
     }
 
@@ -531,7 +554,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 true,
                 [],
                 BranchHeadSha: latest.BranchHeadSha,
-                MainHeadSha: latest.MainHeadSha));
+                MainHeadSha: latest.MainHeadSha,
+                TestResultPaths: latest.TestResultPaths));
         var completed = PersistResultCandidate(latest, run);
         decision = ConductorParallelAcceptanceAttemptDecision.Completed(completed, run);
         return true;
@@ -558,7 +582,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     : current.Outcome,
                 CompletedAt = current.CompletedAt ?? _utcNow(),
                 LastHeartbeatAt = _utcNow(),
-                Detail = current.Detail ?? AcceptanceRunDetail(run)
+                Detail = current.Detail ?? AcceptanceRunDetail(run),
+                TestResultPaths = run.Acceptance?.TestResultPaths ?? current.TestResultPaths
             };
             WriteAttemptFile(updated);
             return updated;
@@ -603,6 +628,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var id = rawId[..Math.Min(64, rawId.Length)];
         var directory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
         Directory.CreateDirectory(directory);
+        PruneOldAttempts(directory, RetainedAttemptCountPerGoal - 1);
         var prefix = Path.Combine(directory, id);
         return new ConductorParallelAcceptanceAttempt(
             id,
@@ -1025,6 +1051,39 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static string TemporarySiblingPath(string path) =>
         $"{path}.{Guid.NewGuid():N}.tmp";
+
+    private static void PruneOldAttempts(string directory, int retainCount)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        var staleAttempts = Directory.EnumerateFiles(directory, "*.attempt.json")
+            .Select(path => new
+            {
+                Path = path,
+                Attempt = TryReadAttemptFile(path),
+                Timestamp = File.GetLastWriteTimeUtc(path)
+            })
+            .OrderByDescending(item => item.Attempt?.StartedAt.UtcDateTime ?? item.Timestamp)
+            .Skip(Math.Max(0, retainCount))
+            .ToArray();
+
+        foreach (var item in staleAttempts)
+        {
+            var prefix = item.Path[..^".attempt.json".Length];
+            foreach (var path in Directory.EnumerateFiles(directory, Path.GetFileName(prefix) + ".*"))
+            {
+                TryDeleteFile(path);
+            }
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { File.Delete(path); } catch { }
+    }
 
     private static ConductorParallelAcceptanceAttempt? TryReadAttemptFile(string path)
     {

@@ -1129,6 +1129,61 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.True(check.ResultSummary?.Contains("Failed: 0", StringComparison.Ordinal) == true);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dotnet_test_adds_attempt_trx_logger_and_records_advisory_missing_trx")]
+    public void GoalAcceptanceVerifierDotnetTestAddsAttemptTrxLoggerAndRecordsAdvisoryMissingTrx()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj" }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var goalId = new GoalId("feedfacefeedfacefeedfacefeedface");
+        var attemptDirectory = Path.Combine(Path.GetTempPath(), $"mcg-trx-attempt-{Guid.NewGuid():N}");
+        var attemptPrefix = Path.Combine(attemptDirectory, "feedface-0-20260717120000000");
+        Directory.CreateDirectory(attemptDirectory);
+        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var calls = new List<string[]>();
+        try
+        {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, attemptPrefix);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            });
+
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(root, goalId).GetAwaiter().GetResult());
+
+            Assert.NotNull(result);
+            Assert.True(result!.Passed);
+            var testCall = calls.Single(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test");
+            var expectedTrx = Path.Combine(attemptDirectory, "feedface-0-20260717120000000.core-tests.trx");
+            Assert.Contains("--logger", testCall);
+            Assert.Contains($"trx;LogFileName={Path.GetFileName(expectedTrx)}", testCall);
+            Assert.Contains("--results-directory", testCall);
+            Assert.Contains(attemptDirectory, testCall);
+            Assert.Contains(expectedTrx, result.TestResultPaths!);
+            Assert.Contains(expectedTrx, result.Checks!.Single().TestResultPaths!);
+            Assert.Contains("TRX_TELEMETRY_UNAVAILABLE", output, StringComparison.Ordinal);
+            Assert.True(result.OutputTail is null);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+            DeleteDirectoryWithRetry(attemptDirectory);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_compiler_lock_and_returns_failed_when_retry_also_fails")]
     public async Task GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
     {
