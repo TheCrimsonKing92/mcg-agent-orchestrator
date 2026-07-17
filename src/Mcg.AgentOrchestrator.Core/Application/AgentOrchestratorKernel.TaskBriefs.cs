@@ -464,7 +464,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var retryEvents = goal.Timeline
-            .Where(evt => evt.Kind == ProgressKind.TaskRetried)
+            .Where(IsAccumulatedRetryRoundEvent)
             .OrderBy(evt => evt.OccurredAt)
             .ToList();
         if (retryEvents.Count == 0)
@@ -550,7 +550,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            var status = DescribeAccumulatedRetryFeedbackStatus(goal, retryEvents, feedbackEvents, evt);
+            var status = DescribeAccumulatedRetryFeedbackStatus(retryEvents, feedbackEvents, evt);
             var retryDescriptor = retryEvents.Count == 0
                 ? "Retry n/a"
                 : $"Retry {RetryOrdinalAt(retryEvents, evt.OccurredAt)} of {retryEvents.Count}";
@@ -844,16 +844,23 @@ public sealed partial class AgentOrchestratorKernel
 
     private static bool IsAccumulatedRetryFeedbackEvent(ProgressEvent evt)
     {
-        return evt.Kind is
-            ProgressKind.TaskRetried or
-            ProgressKind.TaskNote or
-            ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
-            ProgressKind.ReviewerEvidenceRequestReceived or
-            ProgressKind.ReviewerEvidenceRunRecorded;
+        return IsAccumulatedRetryRoundEvent(evt) ||
+               evt.Kind is
+                   ProgressKind.TaskNote or
+                   ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
+                   ProgressKind.ReviewerEvidenceRequestReceived or
+                   ProgressKind.ReviewerEvidenceRunRecorded;
     }
 
+    private static bool IsAccumulatedRetryRoundEvent(ProgressEvent evt) =>
+        evt.Kind == ProgressKind.TaskRetried && !IsDownstreamInvalidationRetryEvent(evt);
+
+    private static bool IsDownstreamInvalidationRetryEvent(ProgressEvent evt) =>
+        evt.Message.StartsWith("Invalidated ", StringComparison.Ordinal) &&
+        evt.Message.Contains(" task because upstream ", StringComparison.Ordinal) &&
+        evt.Message.EndsWith(" was retried.", StringComparison.Ordinal);
+
     private static string DescribeAccumulatedRetryFeedbackStatus(
-        Goal goal,
         IReadOnlyList<ProgressEvent> retryEvents,
         IReadOnlyList<ProgressEvent> feedbackEvents,
         ProgressEvent feedbackEvent)
@@ -861,29 +868,6 @@ public sealed partial class AgentOrchestratorKernel
         if (TryFindResolutionEvent(feedbackEvents, feedbackEvent, out var resolutionEvent))
         {
             return $"resolved-in-round-{RetryOrdinalAt(retryEvents, resolutionEvent.OccurredAt)}";
-        }
-
-        if (feedbackEvent.TaskId is { } taskId &&
-            goal.FindTask(taskId).VerificationHistory.Any(verification =>
-                verification.Succeeded &&
-                verification.CompletedAt > feedbackEvent.OccurredAt))
-        {
-            var resolvedAt = goal.FindTask(taskId).VerificationHistory
-                .Where(verification => verification.Succeeded && verification.CompletedAt > feedbackEvent.OccurredAt)
-                .Min(verification => verification.CompletedAt);
-            return $"resolved-in-round-{RetryOrdinalAt(retryEvents, resolvedAt)}";
-        }
-
-        if (feedbackEvent.TaskId is { } completedTaskId &&
-            goal.Timeline
-                .Where(evt =>
-                    evt.TaskId == completedTaskId &&
-                    evt.Kind == ProgressKind.TaskCompleted &&
-                    evt.OccurredAt > feedbackEvent.OccurredAt)
-                .OrderBy(evt => evt.OccurredAt)
-                .FirstOrDefault() is { } completionEvent)
-        {
-            return $"resolved-in-round-{RetryOrdinalAt(retryEvents, completionEvent.OccurredAt)}";
         }
 
         if (feedbackEvent.TaskId is { } sameTaskId &&

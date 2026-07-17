@@ -686,6 +686,76 @@ public sealed class TaskBriefTests
     Assert.Contains("Operator pivot: drop the original pin and verify the latest retry direction.", testerBrief, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_successful_verification_does_not_resolve_unreferenced_retry_feedback")]
+    public void BuildTaskBriefSuccessfulVerificationDoesNotResolveUnreferencedRetryFeedback()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement the pivoted behavior.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Verify the current retry direction.", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Keep pivot open until downstream verifies it", [developer, tester]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    kernel.RetryTask(goal.Id, developer.Id, "Operator pivot: verify the new branch behavior, not the original pin.");
+    clock.Advance();
+    kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+        "dotnet test --filter Pivot",
+        "C:\\repo",
+        0,
+        "Passed PivotTests",
+        string.Empty,
+        clock.UtcNow));
+
+    var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
+
+    Assert.Contains("[still-open] Retry 1 of 1", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("Operator pivot: verify the new branch behavior, not the original pin.", testerBrief, StringComparison.Ordinal);
+    Assert.True(!testerBrief.Contains("[resolved-in-round-1] Retry 1 of 1", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_downstream_invalidation_retries_from_accumulated_feedback")]
+    public void BuildTaskBriefOmitsDownstreamInvalidationRetriesFromAccumulatedFeedback()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt aggregation.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Test retry prompt aggregation.", AgentRole.Tester);
+    var reviewer = new TaskSpec(TaskId.New(), "Review retry prompt aggregation.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Keep invalidation noise out of feedback", [developer, tester, reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    for (var index = 1; index <= 5; index++)
+    {
+        kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+            $"dotnet test --filter InvalidationNoise{index}",
+            "C:\\repo",
+            0,
+            $"Passed tester invalidation setup {index}",
+            string.Empty,
+            clock.UtcNow));
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            $"review --round {index}",
+            "C:\\repo",
+            0,
+            $"Passed reviewer invalidation setup {index}",
+            string.Empty,
+            clock.UtcNow));
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, $"real review finding {index:00}");
+        clock.Advance();
+    }
+
+    var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+    var feedback = SectionFrom(developerBrief, "## Accumulated retry/review feedback");
+
+    Assert.Contains("Most recent retry: Retry 5 of 5", feedback, StringComparison.Ordinal);
+    Assert.Contains("real review finding 01", feedback, StringComparison.Ordinal);
+    Assert.Contains("real review finding 05", feedback, StringComparison.Ordinal);
+    Assert.True(!feedback.Contains("Invalidated Tester task", StringComparison.Ordinal));
+    Assert.True(!feedback.Contains("Invalidated Reviewer task", StringComparison.Ordinal));
+    Assert.True(!feedback.Contains("Omitted", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_acceptance_retry_includes_structured_failure_receipt")]
     public void BuildTaskBriefAcceptanceRetryIncludesStructuredFailureReceipt()
 {
