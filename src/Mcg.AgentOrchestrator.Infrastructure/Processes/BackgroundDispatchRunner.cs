@@ -631,7 +631,7 @@ public sealed class BackgroundDispatchRunner
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
         }
 
-        if (verification is not null && outcome.AutoRequeueDisposition is { } disposition)
+        if (outcome.AutoRequeueDisposition is { } disposition)
         {
             kernel.RecordTaskNote(goalId, taskId, $"{disposition.EventName}: {disposition.Message}");
             if (disposition.ShouldRequeue)

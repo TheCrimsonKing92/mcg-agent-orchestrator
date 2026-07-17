@@ -914,6 +914,48 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_recover_handles_auto_requeued_stale_dispatch")]
+    public void CliRecoverHandlesAutoRequeuedStaleDispatch()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Recover stale worker", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Recover auto-requeued stale dispatch", [task]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionPlanner("planner", "Planner")];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["recover", goal.Id.Value[..8], "reconcile safe stale dispatch"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        Xunit.Assert.Contains("recover: reset task 1 to dispatchable.", output);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Xunit.Assert.Null(task.LastProcess);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastVerification);
+        Xunit.Assert.Single(task.VerificationHistory, verification =>
+            verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal));
+        Xunit.Assert.Contains(goal.Timeline, (ProgressEvent evt) =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal));
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_reassign_agent_updates_task_to_exact_agent_id")]
     public void CliReassignAgentUpdatesTaskToExactAgentId()
     {
