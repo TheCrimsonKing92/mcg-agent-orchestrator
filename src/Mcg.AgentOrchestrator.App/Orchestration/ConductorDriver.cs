@@ -286,6 +286,11 @@ internal sealed class ConductorDriver
                 .Where(check => !check.Advisory && !check.Passed)
                 .Select(check => check.Name)
                 .ToArray() ?? [];
+            var testResultPaths = verification.TestResultPaths ?? verification.Checks?
+                .SelectMany(check => check.TestResultPaths ?? [])
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             if (verification.Passed)
                 GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
@@ -300,7 +305,8 @@ internal sealed class ConductorDriver
                 verification.Passed ? null : verification.OutputTail,
                 failedChecks,
                 branchHeadSha,
-                mainHeadSha);
+                mainHeadSha,
+                testResultPaths);
         };
 
         _runFocusedEvidence = (goal, request) =>

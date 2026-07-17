@@ -85,6 +85,37 @@ try {
     Assert-True (($all.Output -join "`n") -match 'Mcg\.Acceptance\.SkippedTest') 'Expected glob input to include skipped result.'
     Assert-True (($all.Output -join "`n") -match 'Skipped') 'Expected NotExecuted outcome to print as Skipped.'
 
+    $attemptRoot = Join-Path $work 'acceptance-gate-attempts'
+    $goalId = '11112222333344445555666677778888'
+    $goalDirectory = Join-Path $attemptRoot $goalId
+    New-Item -ItemType Directory -Force $goalDirectory | Out-Null
+    $gateTrx = Write-TrxFixture 'gate-attempt.dotnet-test.trx' @(
+        @{ Name = 'Mcg.Acceptance.GateSlow'; Outcome = 'Passed'; Duration = '00:00:09.0000000' }
+    )
+    $attemptId = '11112222-0-20260717120000000-abcdef'
+    $attemptPath = Join-Path $goalDirectory "$attemptId.attempt.json"
+    $resultPath = Join-Path $goalDirectory "$attemptId.result.json"
+    @{
+        attemptId = $attemptId
+        goalId = $goalId
+        goalPrefix = '11112222'
+        startedAt = '2026-07-17T12:00:00.0000000+00:00'
+        resultPath = $resultPath
+        testResultPaths = @($gateTrx)
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $attemptPath -Encoding UTF8
+    @{
+        kind = 'accepted'
+        acceptance = @{
+            passed = $true
+            unmetCriteria = @()
+            testResultPaths = @($gateTrx)
+        }
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resultPath -Encoding UTF8
+
+    $latestGate = Invoke-DurationScript @('-AttemptsRoot', $attemptRoot, '-Goal', '11112222', '-Top', '1')
+    Assert-True ($latestGate.ExitCode -eq 0) "Expected latest gate attempt invocation to pass. Output: $($latestGate.Output -join ' | ')"
+    Assert-True (($latestGate.Output -join "`n") -match 'Mcg\.Acceptance\.GateSlow') 'Expected latest gate attempt TRX to be resolved from attempt records.'
+
     $missing = Invoke-DurationScript @((Join-Path $work 'missing.trx'))
     Assert-True ($missing.ExitCode -ne 0) 'Expected missing input to fail.'
     Assert-True (($missing.Output -join "`n") -match 'Input not found or unreadable') 'Expected clear missing-input error.'

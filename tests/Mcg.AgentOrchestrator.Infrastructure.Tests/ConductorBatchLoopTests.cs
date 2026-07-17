@@ -878,6 +878,69 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_records_and_prunes_attempt_trx_with_attempt_artifacts")]
+    public void ParallelAcceptanceRecordsAndPrunesAttemptTrxWithAttemptArtifacts()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/AttemptTrx.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var now = new DateTimeOffset(2026, 7, 17, 12, 0, 0, TimeSpan.Zero);
+        var tick = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            utcNow: () => now.AddMinutes(tick++),
+            runInline: true);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/AttemptTrx.cs"], "branch", "main");
+        string? firstAttemptPath = null;
+        string? firstTrxPath = null;
+        ConductorParallelAcceptanceAttempt? latestAttempt = null;
+
+        try
+        {
+            for (var index = 0; index < 22; index++)
+            {
+                var completed = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (runCandidate, _) =>
+                    {
+                        var prefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+                        Assert.False(string.IsNullOrWhiteSpace(prefix));
+                        var trxPath = prefix + ".dotnet-test.trx";
+                        File.WriteAllText(trxPath, "trx");
+                        return ConductorParallelAcceptanceRunResult.Accepted(
+                            runCandidate,
+                            new AcceptanceVerificationSummary(true, [], TestResultPaths: [trxPath]));
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+                var persisted = ReadAttempt(completed.Attempt.MetadataPath);
+                Assert.NotNull(persisted.TestResultPaths);
+                Assert.Single(persisted.TestResultPaths!);
+                Assert.True(File.Exists(persisted.TestResultPaths![0]));
+                using var resultJson = JsonDocument.Parse(File.ReadAllText(completed.Attempt.ResultPath));
+                Assert.Equal(
+                    persisted.TestResultPaths![0],
+                    resultJson.RootElement.GetProperty("acceptance").GetProperty("testResultPaths")[0].GetString());
+
+                firstAttemptPath ??= completed.Attempt.MetadataPath;
+                firstTrxPath ??= persisted.TestResultPaths![0];
+                latestAttempt = completed.Attempt;
+                coordinator.MarkReconciled(completed.Attempt);
+            }
+
+            Assert.NotNull(firstAttemptPath);
+            Assert.NotNull(firstTrxPath);
+            Assert.False(File.Exists(firstAttemptPath!));
+            Assert.False(File.Exists(firstTrxPath!));
+            Assert.NotNull(latestAttempt);
+            Assert.True(File.Exists(latestAttempt!.MetadataPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_transient_launch_failure_retries_before_escalating_at_cap")]
     public void BatchLoopTransientLaunchFailureRetriesBeforeEscalatingAtCap()
     {
