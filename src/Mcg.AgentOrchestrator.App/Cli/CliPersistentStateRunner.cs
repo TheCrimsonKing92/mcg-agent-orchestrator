@@ -1192,6 +1192,7 @@ internal static class CliPersistentStateRunner
 
     private static bool IsCliValueFlag(string value) =>
         value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--policy", StringComparison.OrdinalIgnoreCase);
 

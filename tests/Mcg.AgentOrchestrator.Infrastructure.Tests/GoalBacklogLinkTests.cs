@@ -36,6 +36,93 @@ public sealed class GoalBacklogLinkTests
         Assert.False(File.Exists(Path.Combine(root, "BACKLOG.md")));
     }
 
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_simple_goal_backlog_item_flag_resolves_prefix_and_persists_link")]
+    public async Task SimpleGoalBacklogItemFlagResolvesPrefixAndPersistsLink()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Explicit direct link");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Implement explicit direct link", "--backlog-item", item.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.NotNull(currentGoal);
+        Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
+        Assert.Contains($"Source backlog: {item.Id}", output);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        var restored = await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).LoadAsync();
+        Assert.Equal(item.Id, restored.GetGoal(currentGoal.Id).SourceBacklogItemId);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_simple_goal_opening_prose_resolves_source_backlog_item")]
+    public async Task SimpleGoalOpeningProseResolvesSourceBacklogItem()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Prose direct link");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", $"(backlog {item.Id[..8]}) Implement prose direct link"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.NotNull(currentGoal);
+        Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_simple_goal_without_source_backlog_item_is_unchanged")]
+    public void SimpleGoalWithoutSourceBacklogItemIsUnchanged()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Implement unlinked direct goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.NotNull(currentGoal);
+        Assert.Null(currentGoal!.SourceBacklogItemId);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_intake_against_done_item_warns_but_creates_direct_goal")]
+    public async Task IntakeAgainstDoneItemWarnsButCreatesDirectGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Done direct link");
+        await store.CloseAsync(item.Id);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Implement done direct link", "--backlog-item", item.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.NotNull(currentGoal);
+        Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
+        Assert.Contains("already Done", output);
+        Assert.Contains("goal creation will continue", output);
+    }
+
     [Xunit.Fact(DisplayName = "GoalBacklogLink_create_goal_from_sqlite_only_backlog_carries_source_backlog_item_id")]
     public void CreateGoalFromSqliteOnlyBacklogCarriesSourceBacklogItemId()
     {
@@ -429,11 +516,18 @@ public sealed class GoalBacklogLinkTests
         var goal = kernel.CreateGoal("Land this", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
         kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
 
-        GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath);
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath, kernel: kernel);
 
         var fetched = await store.GetByExactIdAsync(item.Id);
         Assert.True(fetched is not null);
         Assert.True(fetched!.Status == BacklogItemStatus.Done);
+        var note = Assert.Single(fetched.Notes);
+        Assert.Contains(goal.Id.Value, note.Text);
+        Assert.Contains("integrateCommit=unknown", note.Text);
+
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath, kernel: kernel);
+        var rerun = await store.GetByExactIdAsync(item.Id);
+        Assert.Single(rerun!.Notes);
     }
 
     // ── Land: already-closed item is a safe no-op ────────────────────────────
@@ -470,5 +564,47 @@ public sealed class GoalBacklogLinkTests
 
         Assert.False(closed);
         Assert.Empty(messages);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_land_missing_source_backlog_item_records_goal_warning_without_throwing")]
+    public void LandMissingSourceBacklogItemRecordsGoalWarningWithoutThrowing()
+    {
+        var dbPath = Path.Combine(CreateTempDirectory(), "backlog.db");
+        _ = new BacklogStore(dbPath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Land this", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, "deadbeefdeadbeefdeadbeefdeadbeef");
+        var messages = new List<string>();
+
+        var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath, messages.Add, kernel);
+
+        Assert.False(closed);
+        Assert.Contains(messages, message => message.Contains("not found", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(kernel.GetTimeline(goal.Id), evt =>
+            evt.Message.Contains("linked backlog item deadbeefdeadbeefdeadbeefdeadbeef was not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_backlog_show_lists_linked_goals_and_landing_state")]
+    public async Task BacklogShowListsLinkedGoalsAndLandingState()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Visible linked goal");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Show linked goal", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", item.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Contains("Linked goals:", output);
+        Assert.Contains(goal.Id.Value[..8], output);
+        Assert.Contains("landing=", output);
     }
 }

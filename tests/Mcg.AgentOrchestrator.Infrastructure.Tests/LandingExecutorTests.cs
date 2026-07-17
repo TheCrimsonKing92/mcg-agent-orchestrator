@@ -157,6 +157,48 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Goal_mark_landed_closes_linked_source_backlog_item")]
+    public async Task GoalMarkLandedClosesLinkedSourceBacklogItem()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var store = new BacklogStore(workspace.BacklogStorePath);
+            var item = await store.AddAsync("Goal mark landed source");
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+            await repository.SaveAsync(kernel);
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            var closed = await store.GetByExactIdAsync(item.Id);
+            Assert.True(changed);
+            Assert.NotNull(closed);
+            Assert.Equal(BacklogItemStatus.Done, closed!.Status);
+            var note = Assert.Single(closed.Notes);
+            Assert.Contains(goal.Id.Value, note.Text);
+            Assert.Contains("integrateCommit=", note.Text);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Terminal_sweep_cleanup_failure_reports_blocker_without_failing_landed_goal")]
     public void TerminalSweepCleanupFailureReportsBlockerWithoutFailingLandedGoal()
     {

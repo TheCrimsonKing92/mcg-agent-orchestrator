@@ -64,6 +64,19 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             Console.WriteLine($"Updated: {item.UpdatedAt:O}");
             if (item.SourceGoalId is not null)
                 Console.WriteLine($"Goal:    {item.SourceGoalId}");
+            var linkedGoals = context.Kernel.Goals
+                .Where(goal => string.Equals(goal.SourceBacklogItemId, item.Id, StringComparison.Ordinal))
+                .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+                .ToList();
+            if (linkedGoals.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Linked goals:");
+                foreach (var goal in linkedGoals)
+                {
+                    Console.WriteLine($"- {goal.Id.Value[..8]} status={goal.Status} landing={ResolveBacklogShowGoalLandingState(context, goal)}");
+                }
+            }
             if (!string.IsNullOrWhiteSpace(item.Body))
             {
                 Console.WriteLine();
@@ -130,6 +143,20 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         default:
             return null;
     }
+}
+
+private static string ResolveBacklogShowGoalLandingState(CliExecutionContext context, Goal goal)
+{
+    var journal = GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
+    var workspaceExists = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null;
+    var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
+    var isRecorded = journal.LatestByOperation.Any(entry =>
+        entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase) &&
+        entry.Status == GoalOperationStatus.Completed);
+    var isCleanedUp = journal.LatestByOperation.Any(entry =>
+        entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) &&
+        entry.Status == GoalOperationStatus.Completed);
+    return GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp)).ToString();
 }
 
 internal static IReadOnlyList<BacklogItem> ApplyBacklogListFilters(

@@ -29,6 +29,12 @@ private static readonly Regex BacklogObjectiveReferenceRegex = new(
     @"\bbacklog\s+([0-9a-f]{8,64})\b",
     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+private static readonly Regex OpeningBacklogObjectiveReferenceRegex = new(
+    @"\A\s*\(?\s*backlog\s+([0-9a-f]{8,64})\s*\)?",
+    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+private sealed record SourceBacklogItemLink(BacklogItem Item, bool FromExplicitFlag);
+
 private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
     GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
 
@@ -71,8 +77,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
+                var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
+                PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective, context.Workspace, context.Providers, context.EventWriter);
+                ApplySourceBacklogItemLink(context, context.CurrentGoal, runSourceBacklogLink);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
                 AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file");
@@ -82,8 +91,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+            var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
+            PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective, context.Workspace, context.Providers, context.EventWriter);
+            ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
@@ -92,8 +104,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
+            var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
+            PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective, context.Workspace, context.Providers, context.EventWriter);
+            ApplySourceBacklogItemLink(context, context.CurrentGoal, simpleSourceBacklogLink);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
@@ -236,6 +251,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 new GoalTerminalDisposition(
                     GoalTerminalDispositionKind.Retired,
                     $"Goal {landedGp} was marked landed out-of-band via goal-mark-landed; retire from future terminal sweeps."));
+            if (landedGoal.SourceBacklogItemId is not null)
+            {
+                GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:backlog-close", "Closing linked source backlog item.");
+                var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(
+                    landedGoal,
+                    context.Workspace.BacklogStorePath,
+                    Console.WriteLine,
+                    context.Kernel,
+                    landedDir);
+                GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:backlog-close",
+                    closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
+            }
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
             context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
@@ -517,7 +544,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     AutoRecordDogfoodEntry(context);
                 }
 
-                GoalLandingPostActions.AutoCloseSourceBacklogItem(context.CurrentGoal, context.Workspace.BacklogStorePath, Console.WriteLine);
+                GoalLandingPostActions.AutoCloseSourceBacklogItem(
+                    context.CurrentGoal,
+                    context.Workspace.BacklogStorePath,
+                    Console.WriteLine,
+                    context.Kernel,
+                    context.Workspace.ExecutionDirectory);
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
@@ -1119,6 +1151,8 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     var objectivePlan = BuildGoalObjectivePlan(context, objective, simple);
     GoalObjectivePlanner.ThrowIfBlocked(objectivePlan);
     ConsoleViews.PrintGoalObjectivePlan(objectivePlan);
+    var sourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, objective);
+    PrintClosedSourceBacklogWarning(sourceBacklogLink);
 
     var existingGoalId = GoalOperationJournal.TryFindLifecycleGoal(context.Workspace.ExecutionDirectory, commandName, objective);
     context.CurrentGoal = existingGoalId is not null &&
@@ -1128,6 +1162,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
             ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers, context.EventWriter)
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers, context.EventWriter);
     var goal = context.CurrentGoal;
+    ApplySourceBacklogItemLink(context, goal, sourceBacklogLink);
     var goalPrefix = goal.Id.Value[..8];
     Console.WriteLine($"Lifecycle goal: {goal.Id.Value}");
     if (existingGoalId is not null && existingGoalId == goal.Id)
@@ -1194,7 +1229,12 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "acceptance", "Acceptance passed and merge completed.");
-    GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, context.Workspace.BacklogStorePath, Console.WriteLine);
+    GoalLandingPostActions.AutoCloseSourceBacklogItem(
+        goal,
+        context.Workspace.BacklogStorePath,
+        Console.WriteLine,
+        context.Kernel,
+        context.Workspace.ExecutionDirectory);
     Console.WriteLine("Stage workspace cleanup:");
     context.Kernel.CompleteGoal(goal.Id, "Lifecycle command completed goal after acceptance merge; cleanup deferred to conductor sweep.");
     RecordDeferredGoalCleanup(context, goal, "remove:lifecycle-deferred", commandName);
@@ -1621,6 +1661,88 @@ private static void AppendGoalAliasFlags(
         {
             target.Add(parts[++i]);
         }
+    }
+}
+
+private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
+    CliExecutionContext context,
+    IReadOnlyList<string> parts,
+    string objective)
+{
+    var explicitPrefix = GetFlagValue(parts, "--backlog-item");
+    if (explicitPrefix is null && HasCliConfirmation(parts, "--backlog-item"))
+    {
+        throw new ArgumentException("--backlog-item requires an id prefix.");
+    }
+
+    if (!string.IsNullOrWhiteSpace(explicitPrefix))
+    {
+        return new SourceBacklogItemLink(
+            ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, explicitPrefix, explicitFlag: true)!,
+            FromExplicitFlag: true);
+    }
+
+    var match = OpeningBacklogObjectiveReferenceRegex.Match(objective);
+    if (!match.Success)
+    {
+        return null;
+    }
+
+    var item = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, match.Groups[1].Value, explicitFlag: false);
+    return item is null ? null : new SourceBacklogItemLink(item, FromExplicitFlag: false);
+}
+
+private static BacklogItem? ResolveBacklogItemIdPrefix(string backlogStorePath, string idPrefix, bool explicitFlag)
+{
+    var trimmed = idPrefix.Trim();
+    if (string.IsNullOrWhiteSpace(trimmed))
+    {
+        if (explicitFlag)
+        {
+            throw new ArgumentException("--backlog-item requires an id prefix.");
+        }
+
+        return null;
+    }
+
+    try
+    {
+        var item = new BacklogStore(backlogStorePath).GetByIdPrefixAsync(trimmed).GetAwaiter().GetResult();
+        if (item is null && explicitFlag)
+        {
+            throw new InvalidOperationException($"No backlog item found with id prefix '{trimmed}'.");
+        }
+
+        return item;
+    }
+    catch (InvalidOperationException) when (!explicitFlag)
+    {
+        throw;
+    }
+}
+
+private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal goal, SourceBacklogItemLink? link)
+{
+    if (link is null)
+    {
+        return;
+    }
+
+    if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) &&
+        !string.Equals(goal.SourceBacklogItemId, link.Item.Id, StringComparison.Ordinal))
+    {
+        Console.WriteLine($"Warning: goal {goal.Id.Value[..8]} is already linked to backlog item {goal.SourceBacklogItemId}; requested link {link.Item.Id} ignored.");
+        return;
+    }
+
+    context.Kernel.SetGoalSourceBacklogItemId(goal.Id, link.Item.Id);
+}
+
+private static void PrintClosedSourceBacklogWarning(SourceBacklogItemLink? link)
+{
+    if (link?.Item.Status == BacklogItemStatus.Done)
+    {
+        Console.WriteLine($"Warning: linked backlog item {link.Item.Id} is already Done; goal creation will continue but may recreate landed work.");
     }
 }
 
@@ -2530,6 +2652,7 @@ private static bool IsCliValueFlag(string part)
     return GoalRoleAgentFlags.ContainsKey(part) ||
         part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase) ||

@@ -35,6 +35,10 @@ public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? st
     Console.WriteLine($"Goal {goal.Id}{label}");
     Console.WriteLine($"Objective: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
     Console.WriteLine($"Status: {statusText ?? goal.Status.ToString()}");
+    if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId))
+    {
+        Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");
+    }
     Console.WriteLine("Tasks:");
 
     for (var index = 0; index < goal.Tasks.Count; index++)

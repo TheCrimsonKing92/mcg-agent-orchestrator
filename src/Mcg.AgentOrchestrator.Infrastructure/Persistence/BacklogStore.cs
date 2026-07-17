@@ -20,6 +20,13 @@ public sealed record BacklogNote(
 
 public enum BacklogItemStatus { Open, Done }
 
+public enum BacklogCloseDisposition { Closed, AlreadyDone, NotFound }
+
+public sealed record BacklogCloseResult(BacklogCloseDisposition Disposition, BacklogItem? Item)
+{
+    public bool Closed => Disposition == BacklogCloseDisposition.Closed;
+}
+
 public sealed class BacklogStore
 {
     private readonly string _dbPath;
@@ -332,40 +339,91 @@ public sealed class BacklogStore
         string? reason = null,
         CancellationToken cancellationToken = default)
     {
+        var result = await TryCloseByIdWithResultAsync(id, reason, note: null, cancellationToken);
+        return result.Closed;
+    }
+
+    // Closes the item if Open and optionally records a note; no-op if already Done or absent; never throws.
+    public async Task<BacklogCloseResult> TryCloseByIdWithResultAsync(
+        string id,
+        string? reason = null,
+        string? note = null,
+        CancellationToken cancellationToken = default)
+    {
         try
         {
             return await WithBusyRetryAsync(async () =>
             {
                 await using var conn = OpenConnection();
                 await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+                await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
                 var updatedAt = DateTimeOffset.UtcNow.ToString("O");
-                await using var cmd = conn.CreateCommand();
-                if (reason is null)
+                try
                 {
-                    cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id AND status = 'Open'";
+                    var existing = await LoadItemByIdAsync(conn, id, cancellationToken, includeNotes: false);
+                    if (existing is null)
+                    {
+                        await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                        return new BacklogCloseResult(BacklogCloseDisposition.NotFound, null);
+                    }
+
+                    if (existing.Status == BacklogItemStatus.Done)
+                    {
+                        await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                        return new BacklogCloseResult(BacklogCloseDisposition.AlreadyDone, existing);
+                    }
+
+                    await using (var cmd = conn.CreateCommand())
+                    {
+                        if (reason is null)
+                        {
+                            cmd.CommandText = "UPDATE backlog SET status = 'Done', updated_at = $updated_at WHERE id = $id AND status = 'Open'";
+                        }
+                        else
+                        {
+                            cmd.CommandText = """
+                                UPDATE backlog
+                                SET status = 'Done',
+                                    updated_at = $updated_at,
+                                    body = CASE WHEN body = '' THEN $reason
+                                                ELSE body || char(10) || char(10) || 'Closed: ' || $reason
+                                           END
+                                WHERE id = $id AND status = 'Open'
+                                """;
+                            cmd.Parameters.AddWithValue("$reason", reason);
+                        }
+                        cmd.Parameters.AddWithValue("$updated_at", updatedAt);
+                        cmd.Parameters.AddWithValue("$id", id);
+                        await cmd.ExecuteNonQueryAsync(cancellationToken);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(note))
+                    {
+                        await using var insert = conn.CreateCommand();
+                        insert.CommandText = """
+                            INSERT INTO backlog_notes (backlog_item_id, created_at, text)
+                            VALUES ($backlog_item_id, $created_at, $text)
+                            """;
+                        insert.Parameters.AddWithValue("$backlog_item_id", id);
+                        insert.Parameters.AddWithValue("$created_at", updatedAt);
+                        insert.Parameters.AddWithValue("$text", note);
+                        await insert.ExecuteNonQueryAsync(cancellationToken);
+                    }
+
+                    var resultItem = await LoadItemByIdAsync(conn, id, cancellationToken);
+                    await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                    return new BacklogCloseResult(BacklogCloseDisposition.Closed, resultItem);
                 }
-                else
+                catch
                 {
-                    cmd.CommandText = """
-                        UPDATE backlog
-                        SET status = 'Done',
-                            updated_at = $updated_at,
-                            body = CASE WHEN body = '' THEN $reason
-                                        ELSE body || char(10) || char(10) || 'Closed: ' || $reason
-                                   END
-                        WHERE id = $id AND status = 'Open'
-                        """;
-                    cmd.Parameters.AddWithValue("$reason", reason);
+                    try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                    throw;
                 }
-                cmd.Parameters.AddWithValue("$updated_at", updatedAt);
-                cmd.Parameters.AddWithValue("$id", id);
-                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-                return rows > 0;
             }, cancellationToken);
         }
         catch
         {
-            return false;
+            return new BacklogCloseResult(BacklogCloseDisposition.NotFound, null);
         }
     }
 

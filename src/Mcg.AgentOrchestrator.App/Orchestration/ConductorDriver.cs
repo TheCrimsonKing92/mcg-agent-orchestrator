@@ -404,7 +404,12 @@ internal sealed class ConductorDriver
             }
 
             GoalOperationJournal.Begin(dir, goal, "conductor:backlog-close", "Closing linked source backlog item.");
-            var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, workspace.BacklogStorePath, Console.WriteLine);
+            var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(
+                goal,
+                workspace.BacklogStorePath,
+                Console.WriteLine,
+                kernel,
+                dir);
             GoalOperationJournal.Completed(dir, goal, "conductor:backlog-close",
                 closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
             RefreshJournal(goal.Id);
