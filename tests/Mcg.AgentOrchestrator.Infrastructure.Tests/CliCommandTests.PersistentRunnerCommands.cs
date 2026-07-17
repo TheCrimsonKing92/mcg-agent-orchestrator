@@ -112,16 +112,78 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Persistent_runner_unpark_goal_text_file_records_file_reason_and_exits_zero")]
+    public async Task PersistentRunnerUnparkGoalTextFileRecordsFileReasonAndExitsZero()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Unpark from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ParkGoal(goal.Id, "operator parked from test");
+        await repository.SaveAsync(kernel);
+        var reason = "Operator unparked from a text file.\n\nResume normal conductor handling.";
+        var reasonPath = Path.Combine(root, "unpark-reason.md");
+        File.WriteAllText(reasonPath, reason, System.Text.Encoding.UTF8);
+
+        var result = RunAppCommand(root, "unpark-goal", goal.Id.Value[..8], "--text-file", reasonPath, "--confirm-goal-unpark");
+
+        var restored = await repository.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("Goal unparked", result.Stdout);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Xunit.Assert.Equal(GoalStatus.Active, restoredGoal.Status);
+        Xunit.Assert.Contains(restoredGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message == $"Goal unparked: {reason}");
+    }
+
+
     [Xunit.Fact(DisplayName = "Persistent_runner_lifecycle_disposition_audit_routes_side_effect_verbs_outside_generic_transaction")]
     public void PersistentRunnerLifecycleDispositionAuditRoutesSideEffectVerbsOutsideGenericTransaction()
     {
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["park-goal", "abcdef12", "reason"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["unpark-goal", "abcdef12", "reason"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["abandon-goal", "abcdef12", "reason"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalMarkLandedCommand(["goal-mark-landed", "abcdef12", "--confirm-goal-mark-landed"]));
         Xunit.Assert.DoesNotContain(
             CliArgumentParser.RecognizedCommands,
             command => command.Equals("resume-goal", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    [Xunit.Fact(DisplayName = "Persistent_runner_unpark_goal_rejects_non_parked_goals_with_nonzero_exit")]
+    public async Task PersistentRunnerUnparkGoalRejectsNonParkedGoalsWithNonzeroExit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var active = kernel.CreateGoal("Active unpark rejection", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var completed = kernel.CreateGoal("Completed unpark rejection", [new TaskSpec(TaskId.New(), "Done work", AgentRole.Developer)]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(active.Id, agents);
+        kernel.ActivateGoal(completed.Id, agents);
+        kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+        await repository.SaveAsync(kernel);
+
+        var activeResult = RunAppCommand(root, "unpark-goal", active.Id.Value[..8], "resume", "--confirm-goal-unpark");
+        var completedResult = RunAppCommand(root, "unpark-goal", completed.Id.Value[..8], "resume", "--confirm-goal-unpark");
+
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(1, activeResult.ExitCode);
+        Xunit.Assert.Equal(1, completedResult.ExitCode);
+        Xunit.Assert.Contains("unpark-goal only applies to Parked goals", activeResult.Stderr);
+        Xunit.Assert.Contains("is Active", activeResult.Stderr);
+        Xunit.Assert.Contains("is Completed", completedResult.Stderr);
+        Xunit.Assert.Equal(GoalStatus.Active, restored.GetGoal(active.Id).Status);
+        Xunit.Assert.Equal(GoalStatus.Completed, restored.GetGoal(completed.Id).Status);
+        Xunit.Assert.DoesNotContain(restored.GetGoal(active.Id).Timeline, evt => evt.Message.StartsWith("Goal unparked:", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(restored.GetGoal(completed.Id).Timeline, evt => evt.Message.StartsWith("Goal unparked:", StringComparison.Ordinal));
     }
 
 

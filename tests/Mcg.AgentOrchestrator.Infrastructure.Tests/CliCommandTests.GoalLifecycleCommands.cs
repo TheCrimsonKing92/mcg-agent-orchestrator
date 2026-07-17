@@ -1907,6 +1907,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var supersedeGoal = kernel.CreateGoal("Supersede with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var abandonGoal = kernel.CreateGoal("Abandon with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var parkGoal = kernel.CreateGoal("Park with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var unparkGoal = kernel.CreateGoal("Unpark with literal flag", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -1915,28 +1916,89 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         kernel.ActivateGoal(supersedeGoal.Id, agents);
         kernel.ActivateGoal(abandonGoal.Id, agents);
         kernel.ActivateGoal(parkGoal.Id, agents);
+        kernel.ActivateGoal(unparkGoal.Id, agents);
+        kernel.ParkGoal(unparkGoal.Id, "set up parked goal");
         var cancelReason = "Operator note mentions --confirm-goal-stop literally.";
         var supersedeReason = "Operator note also mentions --confirm-goal-stop literally.";
         var abandonReason = "Operator note mentions --confirm-goal-abandon literally.";
         var parkReason = "Operator note mentions --confirm-goal-park literally.";
+        var unparkReason = "Operator note mentions --confirm-goal-unpark literally.";
         var cancelPath = Path.Combine(root, "cancel.md");
         var supersedePath = Path.Combine(root, "supersede.md");
         var abandonPath = Path.Combine(root, "abandon.md");
         var parkPath = Path.Combine(root, "park.md");
+        var unparkPath = Path.Combine(root, "unpark.md");
         File.WriteAllText(cancelPath, cancelReason, System.Text.Encoding.UTF8);
         File.WriteAllText(supersedePath, supersedeReason, System.Text.Encoding.UTF8);
         File.WriteAllText(abandonPath, abandonReason, System.Text.Encoding.UTF8);
         File.WriteAllText(parkPath, parkReason, System.Text.Encoding.UTF8);
+        File.WriteAllText(unparkPath, unparkReason, System.Text.Encoding.UTF8);
 
         CliCommandDispatcher.ExecuteCommand(["cancel-goal", cancelGoal.Id.Value[..8], "--text-file", cancelPath, "--confirm-goal-stop"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["supersede-goal", supersedeGoal.Id.Value[..8], "--text-file", supersedePath, "--confirm-goal-stop"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["abandon-goal", abandonGoal.Id.Value[..8], "--text-file", abandonPath, "--confirm-goal-abandon"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["park-goal", parkGoal.Id.Value[..8], "--text-file", parkPath, "--confirm-goal-park"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        CliCommandDispatcher.ExecuteCommand(["unpark-goal", unparkGoal.Id.Value[..8], "--text-file", unparkPath, "--confirm-goal-unpark"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Xunit.Assert.Contains(cancelGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == cancelReason);
         Xunit.Assert.Contains(supersedeGoal.Timeline, evt => evt.Kind == ProgressKind.GoalSuperseded && evt.Message == supersedeReason);
         Xunit.Assert.Contains(abandonGoal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled && evt.Message == abandonReason);
         Xunit.Assert.Contains(parkGoal.Timeline, evt => evt.Kind == ProgressKind.GoalPolicyDecision && evt.Message == $"Goal parked: {parkReason}");
+        Xunit.Assert.Equal(GoalStatus.Active, unparkGoal.Status);
+        Xunit.Assert.Contains(unparkGoal.Timeline, evt => evt.Kind == ProgressKind.GoalPolicyDecision && evt.Message == $"Goal unparked: {unparkReason}");
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_unpark_goal_requires_confirmation_and_records_reason")]
+    public void CliUnparkGoalRequiresConfirmationAndRecordsReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Resume parked work", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ParkGoal(goal.Id, "operator paused churn");
+        var goalPrefix = goal.Id.Value[..8];
+
+        var dryRunOutput = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                CliArgumentParser.SplitCommand($"unpark-goal {goalPrefix} Ready to resume."),
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Equal(GoalStatus.Parked, goal.Status);
+        Xunit.Assert.Contains("Goal unpark dry run", dryRunOutput);
+        Xunit.Assert.Contains("status change: Parked -> Active", dryRunOutput);
+
+        var applyOutput = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                CliArgumentParser.SplitCommand($"unpark-goal {goalPrefix} Ready to resume. --confirm-goal-unpark"),
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message == "Goal unparked: Ready to resume.");
+        Xunit.Assert.Contains("Goal unparked", applyOutput);
     }
 
 

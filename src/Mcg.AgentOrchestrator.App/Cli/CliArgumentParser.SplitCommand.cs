@@ -26,6 +26,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("unpark-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("rollback-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("recover", StringComparison.OrdinalIgnoreCase) ||
@@ -352,6 +353,12 @@ private static bool TryGetGoalDispositionConfirmationFlag(string command, out st
     if (command.Equals("park-goal", StringComparison.OrdinalIgnoreCase))
     {
         flag = "--confirm-goal-park";
+        return true;
+    }
+
+    if (command.Equals("unpark-goal", StringComparison.OrdinalIgnoreCase))
+    {
+        flag = "--confirm-goal-unpark";
         return true;
     }
 

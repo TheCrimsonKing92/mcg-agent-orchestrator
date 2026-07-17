@@ -274,6 +274,7 @@ internal static class CliPersistentStateRunner
         }
 
         return args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
+            args[0].Equals("unpark-goal", StringComparison.OrdinalIgnoreCase) ||
             args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase);
     }
 

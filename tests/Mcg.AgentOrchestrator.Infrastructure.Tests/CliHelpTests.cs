@@ -21,6 +21,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "answer", "--help" }, "answer", "--text-file")]
     [Xunit.InlineData(new[] { "add-task", "--help" }, "add-task", "--text-file")]
     [Xunit.InlineData(new[] { "abandon-goal", "--help" }, "abandon-goal", "--text-file")]
+    [Xunit.InlineData(new[] { "unpark-goal", "--help" }, "unpark-goal", "--confirm-goal-unpark")]
     [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--text-file")]
     [Xunit.InlineData(new[] { "agent", "--help" }, "agent <role>", "--subscription-reasoning")]
     [Xunit.InlineData(new[] { "agent-add", "--help" }, "agent-add <role>", "--subscription-reasoning")]

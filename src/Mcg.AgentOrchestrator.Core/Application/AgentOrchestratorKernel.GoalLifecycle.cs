@@ -406,6 +406,27 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
+    public Goal UnparkGoal(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var unparkReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(unparkReason))
+        {
+            throw new ArgumentException("Goal unpark reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status != GoalStatus.Parked)
+        {
+            throw new InvalidOperationException(
+                $"unpark-goal only applies to Parked goals; goal '{goalId}' is {goal.Status}. " +
+                "No state changed. Use status <goal> to inspect the current lifecycle state.");
+        }
+
+        goal.SetStatus(GoalStatus.Active);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, $"Goal unparked: {unparkReason}");
+        return goal;
+    }
+
     public Goal CompleteGoal(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
