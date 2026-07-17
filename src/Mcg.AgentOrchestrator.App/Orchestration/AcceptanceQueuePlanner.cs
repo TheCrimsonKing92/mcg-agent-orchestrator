@@ -41,13 +41,20 @@ internal static class AcceptanceQueuePlanner
         string executionDirectory,
         AutonomyPolicy policy)
     {
-        var items = kernel.Goals
+        var goals = kernel.Goals.ToArray();
+        if (goals.Length == 0)
+        {
+            return new AcceptanceQueuePlan(policy, []);
+        }
+
+        var gitFacts = GoalGitFactIndex.Build(executionDirectory);
+        var items = goals
             .Where(goal => goal.Status is GoalStatus.Verified or GoalStatus.Completed ||
                 GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
-                BranchExists(executionDirectory, GoalWorktrees.BranchName(goal.Id)))
+                gitFacts.HasGoalBranch(GoalWorktrees.BranchName(goal.Id)))
             .OrderBy(goal => FirstTimelineAt(goal) ?? DateTimeOffset.MaxValue)
             .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
-            .Select(goal => BuildItem(goal, executionDirectory, policy))
+            .Select(goal => BuildItem(goal, executionDirectory, policy, gitFacts))
             .ToArray();
 
         return new AcceptanceQueuePlan(policy, items);
@@ -56,12 +63,13 @@ internal static class AcceptanceQueuePlanner
     private static AcceptanceQueueItem BuildItem(
         Goal goal,
         string executionDirectory,
-        AutonomyPolicy policy)
+        AutonomyPolicy policy,
+        GoalGitFactIndex gitFacts)
     {
         var goalPrefix = goal.Id.Value[..8];
         var branchName = GoalWorktrees.BranchName(goal.Id);
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-        var hasBranch = BranchExists(executionDirectory, branchName);
+        var hasBranch = gitFacts.HasGoalBranch(branchName);
         var hasDiff = BranchHasDiff(executionDirectory, branchName);
         bool? dirty = worktreePath is null ? null : TryIsDirty(worktreePath);
         var acceptanceAllowed = policy.Allows(AutonomyAction.Acceptance);
@@ -156,11 +164,6 @@ internal static class AcceptanceQueuePlanner
     }
 
     private static bool TryIsDirty(string worktreePath) => GitCli.IsWorktreeDirty(worktreePath);
-
-    private static bool BranchExists(string executionDirectory, string branchName)
-    {
-        return GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}").ExitCode == 0;
-    }
 
     private static bool IsFastForwardable(string executionDirectory, string branchName)
     {
