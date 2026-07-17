@@ -231,15 +231,60 @@ public sealed class LandingExecutorTests
             AssertGitRef(remote, "refs/heads/main");
             AssertGitRef(remote, $"refs/heads/{goalBranch}");
             AssertGitRef(remote, "refs/tags/mirror-test-tag");
-            Assert.Contains(GoalOperationJournal.Read(repo, goal.Id).LatestByOperation, entry =>
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "conductor:mirror" &&
+                entry.Status == GoalOperationStatus.Completed &&
+                entry.Detail?.Contains("Mirror enqueued", StringComparison.Ordinal) == true);
+            Assert.Contains(journal.LatestByOperation, entry =>
                 entry.Operation == "conductor:mirror:mirror" &&
                 entry.Status == GoalOperationStatus.Completed &&
                 entry.Detail?.Contains("MirrorSucceeded", StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(journal.InterruptedOperations, entry =>
+                entry.Operation.StartsWith("conductor:mirror", StringComparison.Ordinal));
         }
         finally
         {
             TryDeleteDirectory(repo);
             TryDeleteDirectory(remote);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Remote_mirror_success_does_not_leave_interrupted_enqueue_operation")]
+    public void RemoteMirrorSuccessDoesNotLeaveInterruptedEnqueueOperation()
+    {
+        var repo = CreateGitRepository();
+        using var _ = WithMirrorTestHooks();
+        var oldGitRunner = RemoteGitMirror.GitRunner;
+        try
+        {
+            WriteMirrorConfig(repo, "mirror");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "journal-mirror.txt", "journal");
+
+            var landing = LandingExecutor.Execute(kernel, goal, workspace);
+            RemoteGitMirror.GitRunner = (workingDirectory, args) =>
+                args.Count > 0 && args[0] == "push"
+                    ? new GitCli.GitResult(0, string.Empty, string.Empty)
+                    : oldGitRunner(workingDirectory, args);
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+            var mirror = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+
+            Assert.True(landing.MainAdvanced);
+            Assert.Contains(mirror.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorSucceeded);
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == "conductor:mirror" &&
+                entry.Status == GoalOperationStatus.Completed);
+            Assert.DoesNotContain(journal.InterruptedOperations, entry =>
+                entry.Operation.StartsWith("conductor:mirror", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RemoteGitMirror.GitRunner = oldGitRunner;
+            TryDeleteDirectory(repo);
         }
     }
 

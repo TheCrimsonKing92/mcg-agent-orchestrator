@@ -99,7 +99,7 @@ internal static class RemoteGitMirror
 
         if (enqueued > 0)
         {
-            GoalOperationJournal.Begin(
+            GoalOperationJournal.Completed(
                 executionDirectory,
                 goal,
                 OperationPrefix,
