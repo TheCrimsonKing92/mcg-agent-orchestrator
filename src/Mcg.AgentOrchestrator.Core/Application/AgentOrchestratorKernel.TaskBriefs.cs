@@ -47,7 +47,10 @@ public sealed partial class AgentOrchestratorKernel
         string? targetHeadCommit = null,
         IReadOnlyList<string>? reviewerScopeChangedFiles = null,
         string? reviewerScopeMergeBase = null,
-        int? reviewerScopeTotalChangedFileCount = null)
+        int? reviewerScopeTotalChangedFileCount = null,
+        bool? reviewerMergeTreeClean = null,
+        IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
+        int? reviewerMergeTreeTotalConflictPathCount = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -157,7 +160,10 @@ public sealed partial class AgentOrchestratorKernel
             task,
             reviewerScopeChangedFiles,
             reviewerScopeMergeBase,
-            reviewerScopeTotalChangedFileCount);
+            reviewerScopeTotalChangedFileCount,
+            reviewerMergeTreeClean,
+            reviewerMergeTreeConflictPaths,
+            reviewerMergeTreeTotalConflictPathCount);
         if (reviewerChangedFileScope.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(reviewerChangedFileScope));
@@ -577,14 +583,17 @@ public sealed partial class AgentOrchestratorKernel
         TaskSpec task,
         IReadOnlyList<string>? changedFiles,
         string? mergeBase,
-        int? totalChangedFileCount)
+        int? totalChangedFileCount,
+        bool? mergeTreeClean,
+        IReadOnlyList<string>? mergeTreeConflictPaths,
+        int? totalMergeTreeConflictPathCount)
     {
-        if (task.RequiredRole != AgentRole.Reviewer || changedFiles is null)
+        if (task.RequiredRole != AgentRole.Reviewer || (changedFiles is null && !mergeTreeClean.HasValue))
         {
             return [];
         }
 
-        var boundedChangedFiles = changedFiles
+        var boundedChangedFiles = (changedFiles ?? [])
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Take(ReviewerChangedFileScopeMaxLines)
             .ToArray();
@@ -596,6 +605,32 @@ public sealed partial class AgentOrchestratorKernel
             $"Merge base: {(string.IsNullOrWhiteSpace(mergeBase) ? "unknown" : mergeBase.Trim())}",
             $"Changed files: {total}; showing {boundedChangedFiles.Length}."
         };
+
+        if (mergeTreeClean is true)
+        {
+            lines.Add("Merge-tree status: clean against current main (git merge-tree --write-tree --name-only main HEAD).");
+        }
+        else if (mergeTreeClean is false)
+        {
+            var boundedConflictPaths = (mergeTreeConflictPaths ?? [])
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Take(ReviewerChangedFileScopeMaxLines)
+                .ToArray();
+            var conflictTotal = Math.Max(totalMergeTreeConflictPathCount ?? boundedConflictPaths.Length, boundedConflictPaths.Length);
+            lines.Add("Merge-tree status: conflicted against current main (git merge-tree --write-tree --name-only main HEAD).");
+            lines.Add($"Conflicting paths: {conflictTotal}; showing {boundedConflictPaths.Length}.");
+            foreach (var path in boundedConflictPaths)
+            {
+                lines.Add($"- conflict: {path}");
+            }
+
+            if (boundedConflictPaths.Length < conflictTotal)
+            {
+                lines.Add($"- Omitted {conflictTotal - boundedConflictPaths.Length} additional conflict path(s) to preserve prompt budget.");
+            }
+        }
+
+        lines.Add("Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.");
 
         if (boundedChangedFiles.Length == 0)
         {

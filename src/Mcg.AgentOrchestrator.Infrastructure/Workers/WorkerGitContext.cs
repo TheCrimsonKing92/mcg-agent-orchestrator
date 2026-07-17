@@ -6,6 +6,7 @@ internal sealed class WorkerGitContext
     internal const int ReviewerChangedFilePromptMaxFiles = 120;
     internal const string ReviewerScopeUnavailableErrorCode = "ERR_REVIEWER_SCOPE_UNAVAILABLE";
     internal const string ReviewerMergeBaseUnavailableErrorCode = "ERR_REVIEWER_MERGE_BASE_UNAVAILABLE";
+    internal const string ReviewerMergeTreeUnavailableErrorCode = "ERR_REVIEWER_MERGE_TREE_UNAVAILABLE";
     internal const int DiffSummaryRetrievalMaxChars = DiffSummaryMaxChars;
 
     internal string[] ReadChangedFilesForTestImpact(string workingDirectory)
@@ -87,6 +88,74 @@ internal sealed class WorkerGitContext
             changedFiles.Length);
     }
 
+    internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(string workingDirectory)
+    {
+        if (!LooksLikeGitWorkspace(workingDirectory))
+        {
+            throw new ReviewerMergeTreeStatusException(
+                ReviewerMergeTreeUnavailableErrorCode,
+                "Reviewer merge-tree status unavailable because the working directory is not a git workspace.");
+        }
+
+        var mergeTreeResult = GitCli.Run(workingDirectory, 5_000, "merge-tree", "--write-tree", "--name-only", "main", "HEAD");
+        if (mergeTreeResult.ExitCode == 0)
+        {
+            return new ReviewerMergeTreeStatus(IsClean: true, [], 0);
+        }
+
+        var conflictPaths = ParseMergeTreeConflictPaths(mergeTreeResult.Output);
+        if (mergeTreeResult.ExitCode == 1 && conflictPaths.Length > 0)
+        {
+            return new ReviewerMergeTreeStatus(
+                IsClean: false,
+                conflictPaths.Take(ReviewerChangedFilePromptMaxFiles).ToArray(),
+                conflictPaths.Length);
+        }
+
+        throw new ReviewerMergeTreeStatusException(
+            ReviewerMergeTreeUnavailableErrorCode,
+            "Reviewer merge-tree status unavailable because git merge-tree --write-tree --name-only main HEAD failed.",
+            string.Join(" ", [mergeTreeResult.Output.Trim(), mergeTreeResult.Error.Trim()]).Trim());
+    }
+
+    private static string[] ParseMergeTreeConflictPaths(string output)
+    {
+        var lines = output.ReplaceLineEndings("\n").Split('\n');
+        var paths = new List<string>();
+        var sawTree = false;
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (!sawTree)
+            {
+                if (IsFullSha(line))
+                {
+                    sawTree = true;
+                }
+
+                continue;
+            }
+
+            if (line.Length == 0 || IsMergeTreeDiagnostic(line))
+            {
+                break;
+            }
+
+            paths.Add(line);
+        }
+
+        return paths
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsFullSha(string value) =>
+        value.Length == 40 && value.All(Uri.IsHexDigit);
+
+    private static bool IsMergeTreeDiagnostic(string value) =>
+        value.StartsWith("Auto-merging ", StringComparison.Ordinal) ||
+        value.StartsWith("CONFLICT ", StringComparison.Ordinal);
+
     private static string[] SplitGitOutput(string output) =>
         output
             .ReplaceLineEndings("\n")
@@ -165,9 +234,28 @@ internal sealed record ReviewerChangedFileScope(
     public bool Truncated => ChangedFiles.Count < TotalChangedFileCount;
 }
 
+internal sealed record ReviewerMergeTreeStatus(
+    bool IsClean,
+    IReadOnlyList<string> ConflictPaths,
+    int TotalConflictPathCount)
+{
+    public bool Truncated => ConflictPaths.Count < TotalConflictPathCount;
+}
+
 internal sealed class ReviewerChangedFileScopeException : InvalidOperationException
 {
     public ReviewerChangedFileScopeException(string errorCode, string message, string? detail = null)
+        : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
+    {
+        ErrorCode = errorCode;
+    }
+
+    public string ErrorCode { get; }
+}
+
+internal sealed class ReviewerMergeTreeStatusException : InvalidOperationException
+{
+    public ReviewerMergeTreeStatusException(string errorCode, string message, string? detail = null)
         : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
     {
         ErrorCode = errorCode;
