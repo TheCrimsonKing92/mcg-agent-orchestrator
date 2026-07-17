@@ -430,6 +430,7 @@ internal static class CliPersistentStateRunner
             sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
             ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
             GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+            RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
         }
         catch (Exception ex)
         {
@@ -705,6 +706,7 @@ internal static class CliPersistentStateRunner
         var runner = new BackgroundDispatchRunner();
         var reconciled = runner.SweepExitedProcesses(kernel);
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
 
         var results = CaptureRefreshResults(kernel, candidates);
