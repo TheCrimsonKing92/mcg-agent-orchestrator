@@ -24,7 +24,8 @@ public sealed class DispatchRecoveryPolicy
 {
     public static readonly TimeSpan DefaultRecentHeartbeatGrace = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan DefaultLiveIdleTimeout = TimeSpan.FromMinutes(30);
-    public const int DefaultStaleDispatchRetries = 2;
+    public const int DefaultStaleDispatchRetries = 1;
+    public const int DefaultStaleDispatchAutoRequeues = 2;
 
     private readonly IClock _clock;
     private readonly TimeSpan _recentHeartbeatGrace;
@@ -148,12 +149,21 @@ public sealed class DispatchRecoveryPolicy
 
     public static int GetStaleRetryBudgetRemaining(TaskSpec task)
     {
-        var consumed = CountConsecutiveStaleDispatchRetries(task);
+        var consumed = CountConsecutiveLegacyStaleDispatchRetries(task);
         return Math.Max(0, DefaultStaleDispatchRetries - consumed);
+    }
+
+    public static int GetStaleAutoRequeueBudgetRemaining(TaskSpec task)
+    {
+        var consumed = CountConsecutiveStaleDispatchAutoRequeues(task);
+        return Math.Max(0, DefaultStaleDispatchAutoRequeues - consumed);
     }
 
     public static bool IsStaleDispatchRetryVerification(TaskVerificationRecord verification) =>
         verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal) ||
+        IsLegacyStaleDispatchRetryVerification(verification);
+
+    private static bool IsLegacyStaleDispatchRetryVerification(TaskVerificationRecord verification) =>
         (verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) &&
          verification.StandardError.Contains("stale retry budget remaining=", StringComparison.Ordinal) &&
          !verification.StandardError.Contains("blocker='", StringComparison.Ordinal));
@@ -163,12 +173,28 @@ public sealed class DispatchRecoveryPolicy
         verification.StandardError.Contains("Dispatch recovery policy action='mark-stale'", StringComparison.Ordinal) ||
         verification.StandardError.Contains("Dispatch recovery policy action='budget-exhausted'", StringComparison.Ordinal);
 
-    private static int CountConsecutiveStaleDispatchRetries(TaskSpec task)
+    private static int CountConsecutiveLegacyStaleDispatchRetries(TaskSpec task)
     {
         var consumed = 0;
         for (var i = task.VerificationHistory.Count - 1; i >= 0; i--)
         {
-            if (!IsStaleDispatchRetryVerification(task.VerificationHistory[i]))
+            if (!IsLegacyStaleDispatchRetryVerification(task.VerificationHistory[i]))
+            {
+                break;
+            }
+
+            consumed++;
+        }
+
+        return consumed;
+    }
+
+    private static int CountConsecutiveStaleDispatchAutoRequeues(TaskSpec task)
+    {
+        var consumed = 0;
+        for (var i = task.VerificationHistory.Count - 1; i >= 0; i--)
+        {
+            if (!task.VerificationHistory[i].StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal))
             {
                 break;
             }

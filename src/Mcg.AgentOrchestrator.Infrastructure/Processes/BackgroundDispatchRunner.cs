@@ -20,7 +20,7 @@ public sealed record DispatchDiagnosticPayload(
     string StandardOutput,
     string StandardError);
 
-public sealed record DispatchAutoRequeueDisposition(string EventName, string Message);
+public sealed record DispatchAutoRequeueDisposition(string EventName, string Message, bool ShouldRequeue = true);
 
 public sealed record DispatchProcessStartResult(
     TaskProcessRecord? ProcessRecord,
@@ -634,7 +634,10 @@ public sealed class BackgroundDispatchRunner
         if (verification is not null && outcome.AutoRequeueDisposition is { } disposition)
         {
             kernel.RecordTaskNote(goalId, taskId, $"{disposition.EventName}: {disposition.Message}");
-            kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
+            if (disposition.ShouldRequeue)
+            {
+                kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
+            }
         }
     }
 
@@ -649,8 +652,7 @@ public sealed class BackgroundDispatchRunner
         out DispatchRefreshOutcome outcome)
     {
         outcome = default!;
-        if (recoveryDecision.Action != DispatchRecoveryAction.MarkStale ||
-            !string.IsNullOrWhiteSpace(recoveryDecision.Blocker))
+        if (!IsSafeStaleDispatchCandidate(recoveryDecision))
         {
             return false;
         }
@@ -665,6 +667,40 @@ public sealed class BackgroundDispatchRunner
                 out var evidenceDiagnostic))
         {
             return false;
+        }
+
+        if (DispatchRecoveryPolicy.GetStaleAutoRequeueBudgetRemaining(task) <= 0)
+        {
+            const string capBlocker = "stale-dispatch auto-requeue cap exhausted";
+            var capEvidenceDiagnostic = evidenceDiagnostic.Replace(
+                "auto-requeueing instead of escalating mechanical recovery",
+                "auto-requeue cap exhausted; escalating mechanical recovery",
+                StringComparison.Ordinal);
+            var capDecision = new DispatchRecoveryDecision(
+                DispatchRecoveryAction.BudgetExhausted,
+                DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.BudgetExhausted),
+                recoveryDecision.EvidencePath,
+                capBlocker,
+                capBlocker);
+            var capDiagnostic = AppendDiagnostic(BuildRecoveryDiagnostic(capDecision), capEvidenceDiagnostic);
+            outcome = BuildCompletedProcessOutcome(
+                kernel,
+                goalId,
+                taskId,
+                processRecord,
+                1,
+                capDiagnostic,
+                capDecision,
+                resourceAccounting) with
+                {
+                    AutoRequeueDisposition = disposition with
+                    {
+                        EventName = "StaleDispatchAutoRequeueCapExhausted",
+                        Message = capEvidenceDiagnostic,
+                        ShouldRequeue = false
+                    }
+                };
+            return true;
         }
 
         var retryDecision = WithAction(DispatchRecoveryAction.RetryStale, recoveryDecision, recoveryDecision.Reason);
@@ -682,6 +718,17 @@ public sealed class BackgroundDispatchRunner
                 AutoRequeueDisposition = disposition
             };
         return true;
+    }
+
+    private static bool IsSafeStaleDispatchCandidate(DispatchRecoveryDecision recoveryDecision)
+    {
+        if (recoveryDecision.Action == DispatchRecoveryAction.MarkStale)
+        {
+            return string.IsNullOrWhiteSpace(recoveryDecision.Blocker);
+        }
+
+        return recoveryDecision.Action == DispatchRecoveryAction.BudgetExhausted &&
+            string.Equals(recoveryDecision.Blocker, "stale-dispatch retry budget exhausted", StringComparison.Ordinal);
     }
 
     private bool TryBuildSafeStaleDispatchAutoRequeueDisposition(
@@ -734,8 +781,11 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var attempt = DispatchRecoveryPolicy.DefaultStaleDispatchRetries -
-            DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task) + 1;
+        var autoRequeueBudgetRemaining = DispatchRecoveryPolicy.GetStaleAutoRequeueBudgetRemaining(task);
+        var autoRequeuesSpent = DispatchRecoveryPolicy.DefaultStaleDispatchAutoRequeues - autoRequeueBudgetRemaining;
+        var attempt = autoRequeueBudgetRemaining > 0
+            ? autoRequeuesSpent + 1
+            : autoRequeuesSpent;
         var inventory =
             $"heartbeat_state={heartbeat.State}; heartbeat_available={heartbeat.IsAvailable.ToString().ToLowerInvariant()}; " +
             $"stdout_bytes={heartbeat.StandardOutputBytes}; stderr_bytes={heartbeat.StandardErrorBytes}; " +
@@ -747,7 +797,7 @@ public sealed class BackgroundDispatchRunner
             $"commits_after_dispatch={commitsAfterDispatch}; " +
             $"has_relevant_commit={hasRelevantPostDispatchCommit.ToString().ToLowerInvariant()}; " +
             $"owned_cpu_ms={heartbeat.OwnedCpuMs}; " +
-            $"auto_requeue={attempt}/{DispatchRecoveryPolicy.DefaultStaleDispatchRetries}";
+            $"auto_requeue={attempt}/{DispatchRecoveryPolicy.DefaultStaleDispatchAutoRequeues}";
         diagnostic = "Stale dispatch corpse produced no worker output, worker result, committed output, or worktree changes; " +
             "auto-requeueing instead of escalating mechanical recovery. " + inventory + ".";
         disposition = new DispatchAutoRequeueDisposition("StaleDispatchAutoRequeued", diagnostic);

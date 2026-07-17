@@ -1113,11 +1113,15 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.NotNull(task.LastVerification);
     Assert.Contains("Dispatch recovery policy action='budget-exhausted'", task.LastVerification!.StandardError, StringComparison.Ordinal);
-    Assert.Contains("stale-dispatch retry budget exhausted", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("stale-dispatch auto-requeue cap exhausted", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains("auto_requeue=2/2", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal(2, task.VerificationHistory.Count(DispatchRecoveryPolicy.IsStaleDispatchRetryVerification));
     Assert.Equal(2, goal.Timeline.Count(evt =>
         evt.TaskId == task.Id &&
         evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal)));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("StaleDispatchAutoRequeueCapExhausted", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_keeps_stale_file_role_heartbeat_when_worktree_changed")]
