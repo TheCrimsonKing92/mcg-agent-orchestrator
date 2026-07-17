@@ -414,22 +414,25 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
         finally
         {
-            if (stableSlotLease is not null)
+            try
             {
-                stableSlotLease.Dispose();
-                EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+                if (run is not null)
+                {
+                    CompleteWithRunResult(attempt, run, stderrDetail);
+                }
+                else if (terminalWithoutResult is { } terminal)
+                {
+                    CompleteWithoutResult(attempt, terminal.Outcome, terminal.Detail, terminal.Transient);
+                }
             }
-        }
-
-        if (run is not null)
-        {
-            CompleteWithRunResult(attempt, run, stderrDetail);
-            return;
-        }
-
-        if (terminalWithoutResult is { } terminal)
-        {
-            CompleteWithoutResult(attempt, terminal.Outcome, terminal.Detail, terminal.Transient);
+            finally
+            {
+                if (stableSlotLease is not null)
+                {
+                    stableSlotLease.Dispose();
+                    EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+                }
+            }
         }
     }
 

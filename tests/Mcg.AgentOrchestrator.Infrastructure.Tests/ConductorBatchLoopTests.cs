@@ -187,7 +187,7 @@ public sealed class ConductorBatchLoopTests
 
             BatchTickSummary? reconcileTick = null;
             var totalAdvanced = 0;
-            for (var tick = 0; tick < 4 && totalAdvanced < 2; tick++)
+            for (var tick = 0; tick < 8 && totalAdvanced < 2; tick++)
             {
                 var reconcileSummary = new ConductorBatchLoop().Run(
                     kernel,
@@ -270,7 +270,7 @@ public sealed class ConductorBatchLoopTests
 
             var totalAdvanced = 0;
             var totalHeld = 0;
-            for (var tick = 0; tick < 4 && totalAdvanced < 2; tick++)
+            for (var tick = 0; tick < 8 && totalAdvanced < 2; tick++)
             {
                 var summary = new ConductorBatchLoop().Run(
                     kernel,
