@@ -897,8 +897,17 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         Xunit.Assert.True(output.Contains("Applied actions: 1", StringComparison.Ordinal), output);
         Xunit.Assert.Contains("refresh-dispatch 1", output);
-        Xunit.Assert.False(task.LastProcess!.IsRunning);
-        Xunit.Assert.NotNull(task.LastVerification);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Xunit.Assert.Null(task.LastProcess);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastVerification);
+        Xunit.Assert.Single(task.VerificationHistory, verification =>
+            verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal));
+        Xunit.Assert.Contains(goal.Timeline, (ProgressEvent evt) =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal) &&
+            evt.Message.Contains("auto_requeue=1/2", StringComparison.Ordinal));
         Xunit.Assert.Contains(goal.Timeline, (ProgressEvent evt) =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("allowed supervisor refresh", StringComparison.Ordinal));
@@ -1141,8 +1150,17 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             Xunit.Assert.True(changed);
         });
 
-        Xunit.Assert.False(task.LastProcess!.IsRunning);
-        Xunit.Assert.NotNull(task.LastVerification);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Xunit.Assert.Null(task.LastProcess);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastVerification);
+        Xunit.Assert.Single(task.VerificationHistory, verification =>
+            verification.StandardError.Contains("Dispatch recovery policy action='retry-stale'", StringComparison.Ordinal));
+        Xunit.Assert.Contains(goal.Timeline, (ProgressEvent evt) =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal) &&
+            evt.Message.Contains("auto_requeue=1/2", StringComparison.Ordinal));
         Xunit.Assert.Contains("Applied actions: 1", output);
         Xunit.Assert.Contains("refresh-dispatch 1", output);
         Xunit.Assert.DoesNotContain("acceptance-queue --apply", output);
