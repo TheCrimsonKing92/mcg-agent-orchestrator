@@ -430,7 +430,8 @@ public sealed class TaskBriefTests
 
     Assert.Contains("event-start", brief, StringComparison.Ordinal);
     Assert.Contains("event-tail", brief, StringComparison.Ordinal);
-    var timelineLine = brief.Split(Environment.NewLine).Single(text =>
+    var timeline = SectionFrom(brief, "## Recent Timeline");
+    var timelineLine = timeline.Split(Environment.NewLine).Single(text =>
         text.Contains("TaskRetried", StringComparison.Ordinal) &&
         text.Contains("event-start", StringComparison.Ordinal));
     Assert.True(timelineLine.Contains("[truncated", StringComparison.Ordinal));
@@ -545,9 +546,10 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.True(!brief.Contains("simple-brief-note-02", StringComparison.Ordinal));
-    Assert.Contains("simple-brief-note-03", brief, StringComparison.Ordinal);
-    Assert.Contains("simple-brief-note-10", brief, StringComparison.Ordinal);
+    var timeline = SectionFrom(brief, "## Recent Timeline");
+    Assert.True(!timeline.Contains("simple-brief-note-02", StringComparison.Ordinal));
+    Assert.Contains("simple-brief-note-03", timeline, StringComparison.Ordinal);
+    Assert.Contains("simple-brief-note-10", timeline, StringComparison.Ordinal);
     Assert.Contains("## Recent Timeline", brief, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_keeps_larger_timeline_budget_for_complex_tasks")]
@@ -571,8 +573,8 @@ public sealed class TaskBriefTests
     Assert.Contains("complex-brief-note-01", brief, StringComparison.Ordinal);
     Assert.Contains("complex-brief-note-10", brief, StringComparison.Ordinal);
 }
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_tester")]
-    public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForTester()
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_accumulated_retry_feedback_for_tester")]
+    public void BuildTaskBriefIncludesAccumulatedRetryFeedbackForTester()
 {
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
@@ -595,19 +597,95 @@ public sealed class TaskBriefTests
     var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
     var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
-    Assert.Contains("## Recent retry/recovery feedback", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("## Accumulated retry/review feedback", testerBrief, StringComparison.Ordinal);
     Assert.Contains("Most recent retry: Retry 3 of 3", testerBrief, StringComparison.Ordinal);
     Assert.Contains(latestRetryAt.ToString("u"), testerBrief, StringComparison.Ordinal);
     Assert.Contains("Task 1 Developer", testerBrief, StringComparison.Ordinal);
     Assert.Contains("Prior outcome:", testerBrief, StringComparison.Ordinal);
     Assert.Contains("TaskFailed: prior developer outcome for tester redispatch", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("[still-open] Retry 3 of 3", testerBrief, StringComparison.Ordinal);
     Assert.Contains("latest developer retry feedback", testerBrief, StringComparison.Ordinal);
     Assert.Contains("operator recovery note for redispatch", testerBrief, StringComparison.Ordinal);
-    Assert.Equal(1, CountOccurrences(testerBrief, "## Recent retry/recovery feedback"));
-    Assert.True(!testerBrief.Contains("stale duplicate retry feedback", StringComparison.Ordinal));
+    Assert.Contains("[superseded] Retry 1 of 3", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("stale duplicate retry feedback", testerBrief, StringComparison.Ordinal);
+    Assert.Equal(1, CountOccurrences(testerBrief, "## Accumulated retry/review feedback"));
 
-    Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
+    Assert.Contains("## Accumulated retry/review feedback", developerBrief, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_round_three_developer_carries_all_prior_review_bounces_with_status")]
+    public void BuildTaskBriefRoundThreeDeveloperCarriesAllPriorReviewBouncesWithStatus()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt aggregation.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Carry cross-round review feedback", [developer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    kernel.RetryTask(goal.Id, developer.Id, "review finding round one: preserve the first pivot");
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "review finding round two: add sibling tester direction");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+    Assert.Contains("## Accumulated retry/review feedback", brief, StringComparison.Ordinal);
+    Assert.Contains("[still-open] Retry 2 of 2", brief, StringComparison.Ordinal);
+    Assert.Contains("review finding round two: add sibling tester direction", brief, StringComparison.Ordinal);
+    Assert.Contains("[superseded] Retry 1 of 2", brief, StringComparison.Ordinal);
+    Assert.Contains("review finding round one: preserve the first pivot", brief, StringComparison.Ordinal);
+    Assert.True(
+        brief.IndexOf("review finding round two", StringComparison.Ordinal) <
+        brief.IndexOf("review finding round one", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_accumulated_retry_feedback_marks_resolved_and_truncates_oldest")]
+    public void BuildTaskBriefAccumulatedRetryFeedbackMarksResolvedAndTruncatesOldest()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement bounded retry prompt aggregation.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Bound accumulated retry feedback", [developer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    kernel.RetryTask(goal.Id, developer.Id, "oldest retry feedback should be truncated");
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "finding alpha needs aggregation");
+    clock.Advance();
+    kernel.RecordTaskNote(goal.Id, developer.Id, "resolved finding alpha needs aggregation in the next round verdict");
+    for (var index = 3; index <= 8; index++)
+    {
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, $"bounded retry feedback {index}");
+    }
+
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+    Assert.Contains("- Omitted 1 oldest retry/review feedback entry to preserve prompt budget.", brief, StringComparison.Ordinal);
+    Assert.True(!brief.Contains("oldest retry feedback should be truncated", StringComparison.Ordinal));
+    Assert.Contains("[resolved-in-round-2] Retry 2 of 8", brief, StringComparison.Ordinal);
+    Assert.Contains("finding alpha needs aggregation", brief, StringComparison.Ordinal);
+    Assert.Contains("[still-open] Retry 8 of 8", brief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_tester_receives_operator_pivot_after_developer_retry")]
+    public void BuildTaskBriefTesterReceivesOperatorPivotAfterDeveloperRetry()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement the original pinned behavior.", AgentRole.Developer);
+    var tester = new TaskSpec(TaskId.New(), "Verify the current behavior, not stale pins.", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Pin the 2a891e56 stale-tester scenario", [developer, tester]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    kernel.RetryTask(goal.Id, developer.Id, "Operator pivot: drop the original pin and verify the latest retry direction.");
+
+    var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
+
+    Assert.Contains("## Accumulated retry/review feedback", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("[still-open] Retry 1 of 1", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("Operator pivot: drop the original pin and verify the latest retry direction.", testerBrief, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_acceptance_retry_includes_structured_failure_receipt")]
     public void BuildTaskBriefAcceptanceRetryIncludesStructuredFailureReceipt()
 {
@@ -666,7 +744,7 @@ public sealed class TaskBriefTests
 
     var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
 
-    Assert.Contains("## Recent retry/recovery feedback", testerBrief, StringComparison.Ordinal);
+    Assert.Contains("## Accumulated retry/review feedback", testerBrief, StringComparison.Ordinal);
     Assert.Contains("Structured failure receipt (bounded):", testerBrief, StringComparison.Ordinal);
     Assert.Contains("TaskVerificationRecorded: Verification failed (1): dotnet test --filter RetryReceipt", testerBrief, StringComparison.Ordinal);
     Assert.Contains("Verification command: dotnet test --filter RetryReceipt", testerBrief, StringComparison.Ordinal);
@@ -710,8 +788,8 @@ public sealed class TaskBriefTests
     Assert.True(!receipt.Contains(new string('s', 3000), StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_latest_developer_retry_feedback_for_reviewer")]
-    public void BuildTaskBriefIncludesLatestDeveloperRetryFeedbackForReviewer()
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_accumulated_retry_feedback_for_reviewer")]
+    public void BuildTaskBriefIncludesAccumulatedRetryFeedbackForReviewer()
 {
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
@@ -728,11 +806,15 @@ public sealed class TaskBriefTests
     var latestRetryAt = clock.UtcNow;
     clock.Advance();
     kernel.RecordTaskNote(goal.Id, developer.Id, "operator recovery note for reviewer redispatch");
+    clock.Advance();
+    kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "Reviewer requested proof that the retry prompt pin changed.");
+    clock.Advance();
+    kernel.RecordReviewerEvidenceRunRecorded(goal.Id, reviewer.Id, "Evidence run recorded: prompt contains latest developer retry feedback for review.");
 
     var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
     var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
-    Assert.Contains("## Recent retry/recovery feedback", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("## Accumulated retry/review feedback", reviewerBrief, StringComparison.Ordinal);
     Assert.Contains("Most recent retry: Retry 2 of 2", reviewerBrief, StringComparison.Ordinal);
     Assert.Contains(latestRetryAt.ToString("u"), reviewerBrief, StringComparison.Ordinal);
     Assert.Contains("Task 1 Developer", reviewerBrief, StringComparison.Ordinal);
@@ -740,9 +822,12 @@ public sealed class TaskBriefTests
     Assert.Contains("TaskFailed: prior developer outcome for reviewer redispatch", reviewerBrief, StringComparison.Ordinal);
     Assert.Contains("latest developer retry feedback for review", reviewerBrief, StringComparison.Ordinal);
     Assert.Contains("operator recovery note for reviewer redispatch", reviewerBrief, StringComparison.Ordinal);
-    Assert.Equal(1, CountOccurrences(reviewerBrief, "## Recent retry/recovery feedback"));
-    Assert.True(!reviewerBrief.Contains("first stale retry feedback", StringComparison.Ordinal));
-    Assert.True(!developerBrief.Contains("## Recent retry/recovery feedback", StringComparison.Ordinal));
+    Assert.Contains("ReviewerEvidenceRequestReceived: Reviewer requested proof", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("ReviewerEvidenceRunRecorded: Evidence run recorded", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("[superseded] Retry 1 of 2", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("first stale retry feedback", reviewerBrief, StringComparison.Ordinal);
+    Assert.Equal(1, CountOccurrences(reviewerBrief, "## Accumulated retry/review feedback"));
+    Assert.Contains("## Accumulated retry/review feedback", developerBrief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_includes_executed_test_evidence_with_provenance")]
@@ -1182,6 +1267,14 @@ static int CountOccurrences(string value, string needle)
     }
 
     return count;
+}
+
+static string SectionFrom(string value, string heading)
+{
+    var start = value.IndexOf(heading, StringComparison.Ordinal);
+    Assert.True(start >= 0);
+    var next = value.IndexOf($"{Environment.NewLine}## ", start + heading.Length, StringComparison.Ordinal);
+    return next < 0 ? value[start..] : value[start..next];
 }
 
 static IReadOnlyList<AgentDefinition> DefaultAgents()
