@@ -309,7 +309,13 @@ private static IReadOnlyList<string> SplitRetryCommand(string command, string re
         return parts;
     }
 
-    var message = parts[2];
+    var messageIndex = ResolveRetryMessageIndex(parts);
+    if (messageIndex is null)
+    {
+        return parts;
+    }
+
+    var message = parts[messageIndex.Value];
     var flagIndex = IndexOfStandaloneFlag(message, "--mechanical");
     if (flagIndex < 0)
     {
@@ -319,11 +325,26 @@ private static IReadOnlyList<string> SplitRetryCommand(string command, string re
     var beforeFlag = message[..flagIndex].Trim();
     var afterFlag = message[(flagIndex + "--mechanical".Length)..].Trim();
     var normalized = parts.ToList();
-    normalized[2] = string.IsNullOrWhiteSpace(afterFlag)
+    normalized[messageIndex.Value] = string.IsNullOrWhiteSpace(afterFlag)
         ? beforeFlag
         : string.Join(' ', [beforeFlag, afterFlag]).Trim();
     normalized.Add("--mechanical");
     return normalized.Where(part => !string.IsNullOrWhiteSpace(part)).ToArray();
+}
+
+private static int? ResolveRetryMessageIndex(IReadOnlyList<string> parts)
+{
+    if (parts.Count >= 5 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return 4;
+    }
+
+    if (parts.Count >= 4 && LooksLikePositionalGoalTask(parts[1], parts[2]))
+    {
+        return 3;
+    }
+
+    return parts.Count >= 3 ? 2 : null;
 }
 
 private static bool LooksLikePositionalGoalTask(string first, string second)

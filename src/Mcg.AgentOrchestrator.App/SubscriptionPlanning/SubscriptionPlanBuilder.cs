@@ -137,9 +137,7 @@ internal static class SubscriptionPlanBuilder
             .WorkerProfiles
             .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
-        var scorecardLookup = scorecard?.ToDictionary(
-            r => $"{r.ProviderName}/{r.ModelName}",
-            StringComparer.OrdinalIgnoreCase);
+        var scorecardLookup = BuildScorecardLookup(scorecard);
 
         var items = goal.Tasks
             .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup, now))
@@ -250,12 +248,18 @@ internal static class SubscriptionPlanBuilder
         var modelSelectionReason = GetTemplateValue(templateVariables, "modelSelectionReason");
         var taskComplexity = TryParseTaskComplexity(GetTemplateValue(templateVariables, "taskComplexity"));
 
-        var scorecardKey = $"{effectiveProviderName}/{subscriptionModelName ?? effectiveModelName}";
-        var scorecardRecord = scorecardLookup is not null && scorecardLookup.TryGetValue(scorecardKey, out var rec) ? rec : null;
-
         try
         {
             var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
+            var dispatchLane = GetTemplateValue(templateVariables, "dispatchLane");
+            var effectiveDispatchLane = string.IsNullOrWhiteSpace(dispatchLane)
+                ? profileName
+                : dispatchLane;
+            var scorecardRecord = ResolveScorecardRecord(
+                scorecardLookup,
+                effectiveProviderName,
+                subscriptionModelName ?? effectiveModelName,
+                effectiveDispatchLane);
             var profile = profiles.Profiles.FirstOrDefault(candidate => candidate.Name.Equals(profileName, StringComparison.OrdinalIgnoreCase));
             validations.TryGetValue(profileName, out var validation);
             var hasProfile = profile is not null;
@@ -588,6 +592,42 @@ internal static class SubscriptionPlanBuilder
             OutputTextPreview.CreateTimeline(recommendation).Text,
             reasons,
             alternatives.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static IReadOnlyDictionary<string, ModelOutcomeRecord>? BuildScorecardLookup(
+        IReadOnlyList<ModelOutcomeRecord>? scorecard)
+    {
+        return scorecard?
+            .GroupBy(
+                record => BuildScorecardKey(record.ProviderName, record.ModelName, record.DispatchLane),
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static ModelOutcomeRecord? ResolveScorecardRecord(
+        IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup,
+        string providerName,
+        string modelName,
+        string? dispatchLane)
+    {
+        if (scorecardLookup is null)
+        {
+            return null;
+        }
+
+        if (scorecardLookup.TryGetValue(BuildScorecardKey(providerName, modelName, dispatchLane), out var laneRecord))
+        {
+            return laneRecord;
+        }
+
+        return scorecardLookup.TryGetValue(BuildScorecardKey(providerName, modelName, null), out var noLaneRecord)
+            ? noLaneRecord
+            : null;
+    }
+
+    private static string BuildScorecardKey(string providerName, string modelName, string? dispatchLane)
+    {
+        return $"{providerName}/{modelName}/{dispatchLane ?? string.Empty}";
     }
 
     private static bool UsesComplexModel(AgentDefinition agent, string providerName, string modelName)

@@ -848,7 +848,8 @@ public static class WorkerProfileDispatcher
         {
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task, profiles: profiles, commandExists: commandExists);
             roleSelection = ApplyReasoningEffortPolicy(selection.Agent, goal, selection.Task, roleSelection);
-            var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection.Model, profiles);
+            var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection, profiles);
+            var resolvedModelName = ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection);
             var reasoningEffortSelection = new EffectiveReasoningEffortSelection(
                 ResolveEffectiveSubscriptionReasoningEffort(selection.Agent, roleSelection),
                 roleSelection.ReasoningEffortReason);
@@ -879,7 +880,7 @@ public static class WorkerProfileDispatcher
                 dispatchedAt,
                 BuildSubscriptionTemplateVariables(selection.Agent, roleSelection),
                 dispatchProviderName,
-                ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection),
+                resolvedModelName,
                 reasoningEffortSelection.Effort,
                 roleSelection.Complexity,
                 roleSelection.UsesComplexModel,
@@ -890,7 +891,9 @@ public static class WorkerProfileDispatcher
                 reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount,
                 reviewerMergeTreeClean: preflight.ReviewerMergeTreeClean,
                 reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
-                reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount));
+                reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount,
+                dispatchLane: roleSelection.DispatchLane ?? profile.Name,
+                modelSelectionReason: roleSelection.Reason));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

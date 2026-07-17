@@ -94,12 +94,12 @@ public sealed class BudgetAwareRoutingTests
         kernel.ActivateGoal(goal.Id, agents);
         var updatedGoal = kernel.GetGoal(goal.Id);
 
-        // Scorecard says Avoid for OpenAI/gpt-5.5 (the subscription model the codex lane uses)
+        // Scorecard says Avoid for the selected spark cheap lane.
         var scorecard = new[]
         {
             new ModelOutcomeRecord(
                 "OpenAI",
-                "gpt-5.5",
+                "gpt-5.3-codex-spark",
                 Completed: 1,
                 Failed: 2,
                 SelfRatedAdequate: 2,
@@ -107,7 +107,8 @@ public sealed class BudgetAwareRoutingTests
                 SelfRatedUnderpowered: 0,
                 Divergence: 2,
                 Recommendation: ModelOutcomeRecommendation.Avoid,
-                Reason: "2/3 recent dispatches failed. 2 self-rated adequate dispatch(es) failed.")
+                Reason: "2/3 recent dispatches failed. 2 self-rated adequate dispatch(es) failed.",
+                DispatchLane: "codex-spark")
         };
 
         var plan = SubscriptionPlanBuilder.Build(updatedGoal, agents, DefaultProfiles, scorecard: scorecard);
@@ -121,6 +122,54 @@ public sealed class BudgetAwareRoutingTests
             item.Route.Alternatives.Any(a =>
                 a.Contains("Scorecard says Avoid", StringComparison.OrdinalIgnoreCase) &&
                 a.Contains("route to a different provider", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Xunit.Fact(DisplayName = "BudgetAwareRouting_scorecard_lookup_accepts_same_model_in_multiple_lanes")]
+    public void BudgetAwareRoutingScorecardLookupAcceptsSameModelInMultipleLanes()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var agents = AgentCatalog.Default().Agents;
+        var task = new TaskSpec(TaskId.New(), "Implement high-risk multi-scope persistence migration", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Complex dispatch planning", [task]);
+        kernel.RecordGoalPolicyDecision(
+            goal.Id,
+            "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk.");
+        kernel.ActivateGoal(goal.Id, agents);
+        var updatedGoal = kernel.GetGoal(goal.Id);
+        var scorecard = new[]
+        {
+            new ModelOutcomeRecord(
+                "OpenAI",
+                "gpt-5.5",
+                Completed: 3,
+                Failed: 0,
+                SelfRatedAdequate: 3,
+                SelfRatedOverkill: 0,
+                SelfRatedUnderpowered: 0,
+                Divergence: 0,
+                Recommendation: ModelOutcomeRecommendation.Prefer,
+                Reason: "3/3 recent dispatches completed.",
+                DispatchLane: "codex-cli"),
+            new ModelOutcomeRecord(
+                "OpenAI",
+                "gpt-5.5",
+                Completed: 0,
+                Failed: 3,
+                SelfRatedAdequate: 3,
+                SelfRatedOverkill: 0,
+                SelfRatedUnderpowered: 0,
+                Divergence: 3,
+                Recommendation: ModelOutcomeRecommendation.Avoid,
+                Reason: "3/3 recent dispatches failed.",
+                DispatchLane: "codex-spark")
+        };
+
+        var plan = SubscriptionPlanBuilder.Build(updatedGoal, agents, DefaultProfiles, scorecard: scorecard);
+        var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
+
+        Assert.Equal("codex-cli", item.ProfileName);
+        Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
+        Assert.Contains(item.Route.Reasons, reason => reason.Contains("scorecard=Prefer", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "BudgetAwareRouting_budget_exhausted_suggests_ollama_fallback")]

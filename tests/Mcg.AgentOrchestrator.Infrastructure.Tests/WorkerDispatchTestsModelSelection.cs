@@ -714,6 +714,45 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         evt.Message.Contains("cheap-lane: Developer small-task", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_routes_small_default_developer_task_to_codex_spark")]
+    public void WorkerProfileDispatcherReadyBatchRoutesSmallDefaultDeveloperTaskToCodexSpark()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a typo",
+        [new TaskSpec(TaskId.New(), "Update one label.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-only; reasons: simple code objective; risk labels: small-task, low-risk.");
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Empty(batch.Blocked);
+    Assert.Single(batch.Dispatches);
+    Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
+    Assert.Equal("codex-spark", task.LastDispatch!.WorkerName);
+    Assert.Equal(ProviderKind.OpenAICodexSpark, task.LastDispatch.WorkerProviderKind);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Developer small-task", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_complex_high_risk_developer_on_default_lane")]
     public void WorkerProfileDispatcherKeepsComplexHighRiskDeveloperOnDefaultLane()
 {

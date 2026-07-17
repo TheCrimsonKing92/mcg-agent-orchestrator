@@ -78,7 +78,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
         "Retry a task with operator feedback.",
-        ["--goal", "--text-file", "--autonomy", "--autonomy-policy", "--help", "-h"]);
+        ["--goal", "--text-file", "--mechanical", "--autonomy", "--autonomy-policy", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,
