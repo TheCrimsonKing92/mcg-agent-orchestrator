@@ -62,12 +62,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --from-backlog: delegate to backlog-intake (objective used as heading filter)
             if (HasCliConfirmation(parts, "--from-backlog"))
             {
-                var backlogFilter = GetOptionalArgument(parts, "--from-backlog");
+                var backlogFilter = ResolveBacklogIntakeFilter(context, parts, "--from-backlog");
                 var backlogAliasParts = new List<string> { "backlog-intake" };
                 if (backlogFilter is not null)
                     backlogAliasParts.Add(backlogFilter);
-                foreach (var flag in parts.Skip(1).Where(p => p.StartsWith("--", StringComparison.Ordinal) && !p.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase)))
-                    backlogAliasParts.Add(flag);
+                AppendGoalAliasFlags(parts, backlogAliasParts, includeRoleAgentFlags: false, "--from-backlog", "--brief-file", "--text-file");
                 return TryExecuteGoalCommand("backlog-intake", backlogAliasParts, context);
             }
             // --run: create 5-role goal then delegate to run-goal
@@ -1746,6 +1745,53 @@ private static void PrintClosedSourceBacklogWarning(SourceBacklogItemLink? link)
     }
 }
 
+private static List<string> GetBacklogIntakeFilters(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    if (ResolveBacklogIntakeExplicitItemId(context, parts) is { } explicitItemId)
+    {
+        return [explicitItemId];
+    }
+
+    var filters = new List<string>();
+    for (var i = 1; i < parts.Count; i++)
+    {
+        var part = parts[i];
+        if (IsCliValueFlag(part))
+        {
+            i++;
+            continue;
+        }
+
+        if (!part.StartsWith("--", StringComparison.Ordinal))
+        {
+            filters.Add(part);
+        }
+    }
+
+    return filters;
+}
+
+private static string? ResolveBacklogIntakeFilter(CliExecutionContext context, IReadOnlyList<string> parts, params string[] ignoredFlags)
+{
+    return ResolveBacklogIntakeExplicitItemId(context, parts) ?? GetOptionalArgument(parts, ignoredFlags);
+}
+
+private static string? ResolveBacklogIntakeExplicitItemId(CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    var explicitPrefix = GetFlagValue(parts, "--backlog-item");
+    if (explicitPrefix is null)
+    {
+        if (HasCliConfirmation(parts, "--backlog-item"))
+        {
+            throw new ArgumentException("--backlog-item requires an id prefix.");
+        }
+
+        return null;
+    }
+
+    return ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, explicitPrefix, explicitFlag: true)!.Id;
+}
+
 private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     var createGoal = HasCliConfirmation(parts, "--create-goal");
@@ -1758,10 +1804,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     // Batch submission (a3f6b536): multiple positional filters each create one goal in a single command.
     // Single-filter behaviour below is unchanged; batch only engages with 2+ filters and a create flag.
-    var batchFilters = parts
-        .Skip(1)
-        .Where(part => !part.StartsWith("--", StringComparison.Ordinal))
-        .ToList();
+    var batchFilters = GetBacklogIntakeFilters(context, parts);
     if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
     {
         var batchPlans = new List<(string Filter, BacklogIntakePlan Plan)>();
@@ -1828,9 +1871,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         return created > 0;
     }
 
-    var headingFilter = parts
-        .Skip(1)
-        .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
+    var headingFilter = ResolveBacklogIntakeFilter(context, parts);
     var plan = BacklogIntakePlanner.Build(
         context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,

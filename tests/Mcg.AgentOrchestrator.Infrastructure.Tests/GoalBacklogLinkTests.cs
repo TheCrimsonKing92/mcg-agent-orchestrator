@@ -60,6 +60,56 @@ public sealed class GoalBacklogLinkTests
         Assert.Equal(item.Id, restored.GetGoal(currentGoal.Id).SourceBacklogItemId);
     }
 
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_backlog_intake_backlog_item_flag_resolves_prefix_and_creates_linked_goal")]
+    public async Task BacklogIntakeBacklogItemFlagResolvesPrefixAndCreatesLinkedGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var decoy = await store.AddAsync("Decoy intake link");
+        var item = await store.AddAsync("Explicit intake link", "Body with no shared filter text.");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["backlog-intake", decoy.Title, "--backlog-item", item.Id[..8], "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.True(changed);
+        Assert.NotNull(currentGoal);
+        Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
+        Assert.Contains("Explicit intake link", currentGoal.Objective, StringComparison.Ordinal);
+        Assert.DoesNotContain("Decoy intake link", currentGoal.Objective, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_goal_from_backlog_forwards_backlog_item_value_to_intake")]
+    public async Task GoalFromBacklogForwardsBacklogItemValueToIntake()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        await store.AddAsync("Wrong alias link");
+        var item = await store.AddAsync("Explicit alias link");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var changed = CliCommandDispatcher.ExecuteCommand(
+            ["goal", "Wrong alias link", "--from-backlog", "--backlog-item", item.Id[..8], "--create-simple-goal"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.True(changed);
+        Assert.NotNull(currentGoal);
+        Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
+        Assert.Contains("Explicit alias link", currentGoal.Objective, StringComparison.Ordinal);
+        Assert.DoesNotContain("Wrong alias link", currentGoal.Objective, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GoalBacklogLink_simple_goal_opening_prose_resolves_source_backlog_item")]
     public async Task SimpleGoalOpeningProseResolvesSourceBacklogItem()
     {
