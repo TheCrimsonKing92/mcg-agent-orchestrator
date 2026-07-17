@@ -907,9 +907,54 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
     Assert.Contains("git diff --name-only main...HEAD", prompt, StringComparison.Ordinal);
     Assert.Contains("git diff main...HEAD", prompt, StringComparison.Ordinal);
+    Assert.Contains("Merge-tree status: clean against current main", prompt, StringComparison.Ordinal);
+    Assert.Contains("branch-behind-main alone is NOT a blocker", prompt, StringComparison.Ordinal);
     Assert.Contains("src/Feature/GoalFeature.cs", prompt, StringComparison.Ordinal);
     Assert.DoesNotContain("main-only.txt", prompt, StringComparison.Ordinal);
     Assert.Contains("Do not use two-dot diffs", prompt, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "Reviewer_dispatch_prompt_injects_conflicted_merge_tree_paths")]
+    public void ReviewerDispatchPromptInjectsConflictedMergeTreePaths()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-15T19:02:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review merge-tree conflicts", [reviewer]);
+    var agent = new AgentDefinition(
+        new AgentId("reviewer"),
+        "Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    WriteSkill(worktree, "orchestrator-worker-verification");
+    File.WriteAllText(Path.Combine(worktree, "seed.txt"), "goal branch content");
+    RunGit(worktree, ["add", "seed.txt"], DateTimeOffset.Parse("2026-07-15T19:03:00Z"));
+    RunGit(worktree, ["commit", "-m", "Change seed on goal branch"], DateTimeOffset.Parse("2026-07-15T19:03:00Z"));
+    File.WriteAllText(Path.Combine(root, "seed.txt"), "main branch content");
+    RunGit(root, ["add", "seed.txt"], DateTimeOffset.Parse("2026-07-15T19:04:00Z"));
+    RunGit(root, ["commit", "-m", "Change seed on main"], DateTimeOffset.Parse("2026-07-15T19:04:00Z"));
+
+    var result = WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        reviewer,
+        [agent],
+        DispatchTestProfiles(),
+        promptRoot,
+        worktree,
+        dispatchedAt);
+
+    var prompt = File.ReadAllText(result.PromptPath);
+    Assert.Contains("Merge-tree status: conflicted against current main", prompt, StringComparison.Ordinal);
+    Assert.Contains("Conflicting paths: 1; showing 1.", prompt, StringComparison.Ordinal);
+    Assert.Contains("- conflict: seed.txt", prompt, StringComparison.Ordinal);
+    Assert.Contains("Staleness may block only with concrete integration-risk evidence", prompt, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "ProfileDispatchTask_reviewer_uses_merge_base_changed_file_scope")]
@@ -1021,6 +1066,41 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "PrepareTask_reviewer_fails_with_typed_merge_tree_unavailable")]
+    public void PrepareTaskReviewerFailsWithTypedMergeTreeUnavailable()
+{
+    var root = CreateSeededDispatchRepository();
+    RunGit(root, ["branch", "-m", "not-main"], DateTimeOffset.Parse("2026-07-15T19:05:00Z"));
+    var promptRoot = Path.Combine(root, "prompts");
+    var kernel = new AgentOrchestratorKernel();
+    var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review missing merge-tree main failure", [reviewer]);
+    var agent = new AgentDefinition(
+        new AgentId("reviewer"),
+        "Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
+
+    var ex = Assert.Throws<WorkerSubscriptionPreflightException>(() => WorkerProfileDispatcher.PrepareTask(
+        kernel,
+        goal,
+        reviewer,
+        profile,
+        promptRoot,
+        root,
+        DateTimeOffset.Parse("2026-07-15T19:06:00Z"),
+        reviewerScopeChangedFiles: ["seed.txt"],
+        reviewerScopeMergeBase: "0000000000000000000000000000000000000000",
+        reviewerScopeTotalChangedFileCount: 1));
+
+    Assert.Equal(WorkerProfileDispatcher.ReviewerMergeTreeUnavailableErrorCode, ex.ErrorCode);
+    Assert.Contains(ex.Findings, finding => finding.Contains("git merge-tree --write-tree --name-only main HEAD failed", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "Reviewer_dispatch_preflight_fails_when_merge_base_scope_unavailable")]

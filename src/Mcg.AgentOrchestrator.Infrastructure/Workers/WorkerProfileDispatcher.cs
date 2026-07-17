@@ -28,7 +28,10 @@ public sealed record WorkerSubscriptionPreflightResult(
     string? ErrorCode = null,
     IReadOnlyList<string>? ReviewerScopeChangedFiles = null,
     string? ReviewerScopeMergeBase = null,
-    int? ReviewerScopeTotalChangedFileCount = null);
+    int? ReviewerScopeTotalChangedFileCount = null,
+    bool? ReviewerMergeTreeClean = null,
+    IReadOnlyList<string>? ReviewerMergeTreeConflictPaths = null,
+    int? ReviewerMergeTreeTotalConflictPathCount = null);
 
 public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
 {
@@ -122,6 +125,7 @@ public static class WorkerProfileDispatcher
     public const string OllamaSubscriptionProfileName = "qwen-code-cli";
     public const string ReviewerScopeUnavailableErrorCode = WorkerGitContext.ReviewerScopeUnavailableErrorCode;
     public const string ReviewerMergeBaseUnavailableErrorCode = WorkerGitContext.ReviewerMergeBaseUnavailableErrorCode;
+    public const string ReviewerMergeTreeUnavailableErrorCode = WorkerGitContext.ReviewerMergeTreeUnavailableErrorCode;
     private const string HighRiskReviewerReasoningEffort = "xhigh";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
@@ -145,7 +149,10 @@ public static class WorkerProfileDispatcher
         bool allowPendingRecordedDispatchRefresh = false,
         IReadOnlyList<string>? reviewerScopeChangedFiles = null,
         string? reviewerScopeMergeBase = null,
-        int? reviewerScopeTotalChangedFileCount = null)
+        int? reviewerScopeTotalChangedFileCount = null,
+        bool? reviewerMergeTreeClean = null,
+        IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
+        int? reviewerMergeTreeTotalConflictPathCount = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -155,7 +162,10 @@ public static class WorkerProfileDispatcher
             ref preflightFindings,
             ref reviewerScopeChangedFiles,
             ref reviewerScopeMergeBase,
-            ref reviewerScopeTotalChangedFileCount);
+            ref reviewerScopeTotalChangedFileCount,
+            ref reviewerMergeTreeClean,
+            ref reviewerMergeTreeConflictPaths,
+            ref reviewerMergeTreeTotalConflictPathCount);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
@@ -170,7 +180,10 @@ public static class WorkerProfileDispatcher
             targetContext?.HeadCommit,
             reviewerScopeChangedFiles,
             reviewerScopeMergeBase,
-            reviewerScopeTotalChangedFileCount);
+            reviewerScopeTotalChangedFileCount,
+            reviewerMergeTreeClean,
+            reviewerMergeTreeConflictPaths,
+            reviewerMergeTreeTotalConflictPathCount);
         var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
         var preparation = WorkerCommandTemplate.Prepare(
             budgetedBrief,
@@ -204,7 +217,10 @@ public static class WorkerProfileDispatcher
         ref IReadOnlyList<string>? preflightFindings,
         ref IReadOnlyList<string>? reviewerScopeChangedFiles,
         ref string? reviewerScopeMergeBase,
-        ref int? reviewerScopeTotalChangedFileCount)
+        ref int? reviewerScopeTotalChangedFileCount,
+        ref bool? reviewerMergeTreeClean,
+        ref IReadOnlyList<string>? reviewerMergeTreeConflictPaths,
+        ref int? reviewerMergeTreeTotalConflictPathCount)
     {
         if (task.RequiredRole != AgentRole.Reviewer)
         {
@@ -213,7 +229,10 @@ public static class WorkerProfileDispatcher
 
         if (reviewerScopeChangedFiles is not null &&
             !string.IsNullOrWhiteSpace(reviewerScopeMergeBase) &&
-            reviewerScopeTotalChangedFileCount.HasValue)
+            reviewerScopeTotalChangedFileCount.HasValue &&
+            reviewerMergeTreeClean.HasValue &&
+            reviewerMergeTreeConflictPaths is not null &&
+            reviewerMergeTreeTotalConflictPathCount.HasValue)
         {
             return;
         }
@@ -221,21 +240,51 @@ public static class WorkerProfileDispatcher
         var findings = preflightFindings is null
             ? []
             : preflightFindings.ToList();
-        var scope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
-        if (scope is null)
+        var hasScope = reviewerScopeChangedFiles is not null &&
+            !string.IsNullOrWhiteSpace(reviewerScopeMergeBase) &&
+            reviewerScopeTotalChangedFileCount.HasValue;
+        if (!hasScope)
         {
-            var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerScopeUnavailableErrorCode;
+            var scope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
+            if (scope is null)
+            {
+                var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerScopeUnavailableErrorCode;
+                var codePrefix = string.IsNullOrWhiteSpace(errorCode) ? string.Empty : $"{errorCode}: ";
+                throw new WorkerSubscriptionPreflightException(
+                    "Reviewer changed-file scope preflight failed: " + codePrefix + string.Join("; ", findings),
+                    errorCode,
+                    findings);
+            }
+
+            reviewerScopeChangedFiles = scope.ChangedFiles;
+            reviewerScopeMergeBase = scope.MergeBase;
+            reviewerScopeTotalChangedFileCount = scope.TotalChangedFileCount;
+        }
+
+        var hasMergeTree = reviewerMergeTreeClean.HasValue &&
+            reviewerMergeTreeConflictPaths is not null &&
+            reviewerMergeTreeTotalConflictPathCount.HasValue;
+        if (hasMergeTree)
+        {
+            preflightFindings = findings;
+            return;
+        }
+
+        var mergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory);
+        if (mergeTree is null)
+        {
+            var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerMergeTreeUnavailableErrorCode;
             var codePrefix = string.IsNullOrWhiteSpace(errorCode) ? string.Empty : $"{errorCode}: ";
             throw new WorkerSubscriptionPreflightException(
-                "Reviewer changed-file scope preflight failed: " + codePrefix + string.Join("; ", findings),
+                "Reviewer merge-tree status preflight failed: " + codePrefix + string.Join("; ", findings),
                 errorCode,
                 findings);
         }
 
         preflightFindings = findings;
-        reviewerScopeChangedFiles = scope.ChangedFiles;
-        reviewerScopeMergeBase = scope.MergeBase;
-        reviewerScopeTotalChangedFileCount = scope.TotalChangedFileCount;
+        reviewerMergeTreeClean = mergeTree.IsClean;
+        reviewerMergeTreeConflictPaths = mergeTree.ConflictPaths;
+        reviewerMergeTreeTotalConflictPathCount = mergeTree.TotalConflictPathCount;
     }
 
     public static IReadOnlyList<WorkerProfileDispatchResult> PrepareReadyTasks(
@@ -324,7 +373,10 @@ public static class WorkerProfileDispatcher
             preflight.Findings,
             reviewerScopeChangedFiles: preflight.ReviewerScopeChangedFiles,
             reviewerScopeMergeBase: preflight.ReviewerScopeMergeBase,
-            reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount);
+            reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount,
+            reviewerMergeTreeClean: preflight.ReviewerMergeTreeClean,
+            reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
+            reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -342,6 +394,7 @@ public static class WorkerProfileDispatcher
     {
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
+        ReviewerMergeTreeStatus? reviewerMergeTree = null;
         string profileName;
         try
         {
@@ -400,6 +453,7 @@ public static class WorkerProfileDispatcher
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
             AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
             reviewerScope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
+            reviewerMergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory);
 
             if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
@@ -436,7 +490,10 @@ public static class WorkerProfileDispatcher
                 ResolvePreflightErrorCode(findings),
                 reviewerScope?.ChangedFiles,
                 reviewerScope?.MergeBase,
-                reviewerScope?.TotalChangedFileCount);
+                reviewerScope?.TotalChangedFileCount,
+                reviewerMergeTree?.IsClean,
+                reviewerMergeTree?.ConflictPaths,
+                reviewerMergeTree?.TotalConflictPathCount);
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
@@ -502,6 +559,11 @@ public static class WorkerProfileDispatcher
             return ReviewerScopeUnavailableErrorCode;
         }
 
+        if (findings.Any(finding => finding.Contains(ReviewerMergeTreeUnavailableErrorCode, StringComparison.Ordinal)))
+        {
+            return ReviewerMergeTreeUnavailableErrorCode;
+        }
+
         return null;
     }
 
@@ -540,6 +602,44 @@ public static class WorkerProfileDispatcher
     {
         var trimmed = value.Trim();
         return trimmed.Length <= 12 ? trimmed : trimmed[..12];
+    }
+
+    private static ReviewerMergeTreeStatus? AddReviewerMergeTreeStatusFindings(
+        List<string> findings,
+        TaskSpec task,
+        string workingDirectory)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            findings.Add("reviewer-merge-tree: merge-tree contract not required for non-Reviewer role");
+            return null;
+        }
+
+        try
+        {
+            var status = new WorkerGitContext().ReadReviewerMergeTreeStatus(workingDirectory);
+            if (status.IsClean)
+            {
+                findings.Add("reviewer-merge-tree: git merge-tree --write-tree --name-only main HEAD is clean against current main");
+            }
+            else
+            {
+                findings.Add(
+                    $"reviewer-merge-tree: git merge-tree --write-tree --name-only main HEAD found {status.TotalConflictPathCount} conflict path(s) against current main");
+                if (status.Truncated)
+                {
+                    findings.Add(
+                        $"reviewer-merge-tree: conflict path prompt list truncated to {status.ConflictPaths.Count} path(s) from {status.TotalConflictPathCount}");
+                }
+            }
+
+            return status;
+        }
+        catch (ReviewerMergeTreeStatusException ex)
+        {
+            findings.Add($"blocked: {ex.ErrorCode}: {ex.Message}");
+            return null;
+        }
     }
 
     private static void AddGitMetadataAccessFinding(
@@ -778,7 +878,10 @@ public static class WorkerProfileDispatcher
                 preflight.Findings,
                 reviewerScopeChangedFiles: preflight.ReviewerScopeChangedFiles,
                 reviewerScopeMergeBase: preflight.ReviewerScopeMergeBase,
-                reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount));
+                reviewerScopeTotalChangedFileCount: preflight.ReviewerScopeTotalChangedFileCount,
+                reviewerMergeTreeClean: preflight.ReviewerMergeTreeClean,
+                reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
+                reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

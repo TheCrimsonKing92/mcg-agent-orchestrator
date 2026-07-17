@@ -198,6 +198,30 @@ public sealed class TaskBriefTests
     Assert.DoesNotContain("list all acceptance-blocking findings", normalBrief, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_reviewer_staleness_policy")]
+    public void BuildTaskBriefIncludesReviewerStalenessPolicy()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var simpleReviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+    var complexReviewer = new TaskSpec(
+        TaskId.New(),
+        "Review a complex distributed integration change with migration risk and concurrency risk.",
+        AgentRole.Reviewer);
+    var simpleGoal = kernel.CreateGoal("Review normal goal", [simpleReviewer]);
+    var complexGoal = kernel.CreateGoal(
+        "Review complex multi-service architecture migration with concurrency and rollback risks.",
+        [complexReviewer]);
+
+    var simpleBrief = kernel.BuildTaskBrief(simpleGoal.Id, simpleReviewer.Id).Content;
+    var complexBrief = kernel.BuildTaskBrief(complexGoal.Id, complexReviewer.Id).Content;
+
+    Assert.Contains("branch-behind-main alone is NOT a blocker", simpleBrief, StringComparison.Ordinal);
+    Assert.Contains("deterministic acceptance gate rebases and verifies the integrated result", simpleBrief, StringComparison.Ordinal);
+    Assert.Contains("merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies", simpleBrief, StringComparison.Ordinal);
+    Assert.Contains("branch-behind-main alone is NOT a blocker", complexBrief, StringComparison.Ordinal);
+    Assert.Contains("deterministic acceptance gate rebases and verifies the integrated result", complexBrief, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "AgentTaskRunner_includes_complex_response_budget_guidance")]
     public async Task AgentTaskRunnerIncludesComplexResponseBudgetGuidance()
 {
