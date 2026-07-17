@@ -1077,6 +1077,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     var kernel = new AgentOrchestratorKernel();
     var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
     var goal = kernel.CreateGoal("Review missing merge-tree main failure", [reviewer]);
+    var agent = new AgentDefinition(
+        new AgentId("reviewer"),
+        "Reviewer",
+        AgentRole.Reviewer,
+        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
     var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
 
     var ex = Assert.Throws<WorkerSubscriptionPreflightException>(() => WorkerProfileDispatcher.PrepareTask(
