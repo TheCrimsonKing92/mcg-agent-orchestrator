@@ -1186,6 +1186,171 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_bounded_overtake_defers_newer_after_cap")]
+    public void BatchLoopParallelAcceptanceBoundedOvertakeDefersNewerAfterCap()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var older = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/OldestBlocked.cs");
+        var newer = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/NewerOvertake.cs");
+        var now = DateTimeOffset.UtcNow;
+        PassVerificationAt(kernel, older, older.Tasks.Single(), now);
+        PassVerificationAt(kernel, newer, newer.Tasks.Single(), now.AddMinutes(1));
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var launched = 0;
+        var livePids = new ConcurrentDictionary<int, byte>();
+        var nextPid = 8600;
+
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: pid => livePids.ContainsKey(pid),
+                launchOwnedProcess: _ =>
+                {
+                    var pid = Interlocked.Increment(ref nextPid);
+                    livePids[pid] = 0;
+                    launched++;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(pid);
+                });
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getLandingFileScopes: goal =>
+                {
+                    if (goal.Id == older.Id)
+                    {
+                        throw new IOException("oldest scope temporarily unavailable");
+                    }
+
+                    return ["src/Mcg.AgentOrchestrator.App/Orchestration/NewerOvertake.cs"];
+                },
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var summary = new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 2);
+
+                Assert.Equal(0, summary.Advanced);
+                Assert.True(summary.Held >= 2);
+            });
+
+            Assert.Equal(1, launched);
+            Assert.Contains("reason=parallel-acceptance-fairness", output, StringComparison.Ordinal);
+            Assert.Contains($"oldest={older.Id.Value[..8]}", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_replays_lease_receipts_to_conduct_events")]
+    public void BatchLoopParallelAcceptanceReplaysLeaseReceiptsToConductEvents()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var root = CreateTempDirectory("mcg-conduct-events-acceptance-lease");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var writer = new ConductEventLogWriter(logPath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/LeaseEvents.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/LeaseEvents.cs"],
+                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot,
+                    runInline: true));
+
+            new ConductorBatchLoop(conductEventLogWriter: writer).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            var records = File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .ToArray();
+
+            Assert.Contains(records, record =>
+                record.EventKind == "acceptance-lease" &&
+                record.GoalId == goal.Id.Value[..8] &&
+                record.Detail.Contains("ACCEPTANCE_LEASE_ACQUIRE", StringComparison.Ordinal));
+            Assert.Contains(records, record =>
+                record.EventKind == "acceptance-lease" &&
+                record.GoalId == goal.Id.Value[..8] &&
+                record.Detail.Contains("ACCEPTANCE_LEASE_RELEASE", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_cancelled_terminal_attempt_is_held_not_escalated")]
+    public void BatchLoopParallelAcceptanceCancelledTerminalAttemptIsHeldNotEscalated()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/CancelReplay.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var escalated = false;
+
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                launchOwnedProcess: launch =>
+                {
+                    launch.ExecuteInCurrentProcess(8701);
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(8701);
+                });
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => throw new OperationCanceledException("goal parked"),
+                writeEscalation: (_, _, _) => escalated = true,
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/CancelReplay.cs"],
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var summary = new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 2);
+
+                Assert.Equal(0, summary.Escalated);
+                Assert.True(summary.Held >= 1);
+            });
+
+            Assert.False(escalated);
+            Assert.Contains("result=cancelled", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("result=escalated", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_holds_stable_slot_lease_until_terminal")]
     public void ParallelAcceptanceAttemptHoldsStableSlotLeaseUntilTerminal()
     {

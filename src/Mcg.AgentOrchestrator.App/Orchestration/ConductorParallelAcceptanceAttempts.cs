@@ -53,7 +53,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     DateTimeOffset? ReconciledAt = null,
     string? Detail = null,
     int TransientFailureCount = 0,
-    IReadOnlyList<string>? TestResultPaths = null)
+    IReadOnlyList<string>? TestResultPaths = null,
+    IReadOnlyList<string>? LeaseReceipts = null,
+    int ReplayedLeaseReceiptCount = 0)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -196,6 +198,28 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 ReconciledAt = _utcNow(),
                 LastHeartbeatAt = _utcNow()
             });
+        }
+    }
+
+    internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            var receipts = current.LeaseReceipts ?? [];
+            var replayedCount = Math.Clamp(current.ReplayedLeaseReceiptCount, 0, receipts.Count);
+            if (replayedCount >= receipts.Count)
+            {
+                return [];
+            }
+
+            var pending = receipts.Skip(replayedCount).ToArray();
+            WriteAttemptFile(current with
+            {
+                ReplayedLeaseReceiptCount = receipts.Count,
+                LastHeartbeatAt = _utcNow()
+            });
+            return pending;
         }
     }
 
@@ -476,15 +500,41 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
-    private static void EmitAttemptLeaseReceipt(
+    private void EmitAttemptLeaseReceipt(
         string action,
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         int? holderPid)
     {
         var pid = holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-        Console.WriteLine(
-            $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} slot=slot-{candidate.SlotIndex} holderPid={pid}");
+        var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} slot=slot-{candidate.SlotIndex} holderPid={pid}";
+        Console.WriteLine(line);
+        PersistLeaseReceipt(attempt, line);
+    }
+
+    private void PersistLeaseReceipt(ConductorParallelAcceptanceAttempt attempt, string line)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null || !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var receipts = (current.LeaseReceipts ?? []).ToList();
+            if (receipts.Contains(line, StringComparer.Ordinal))
+            {
+                return;
+            }
+
+            receipts.Add(line);
+            WriteAttemptFile(current with
+            {
+                LeaseReceipts = receipts,
+                LastHeartbeatAt = _utcNow()
+            });
+        }
     }
 
     private void CompleteWithoutResult(

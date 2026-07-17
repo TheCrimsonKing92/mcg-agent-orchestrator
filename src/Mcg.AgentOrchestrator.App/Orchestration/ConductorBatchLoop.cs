@@ -597,6 +597,10 @@ internal sealed class ConductorBatchLoop
         kind = head switch
         {
             "ACCEPTANCE" => "acceptance",
+            "ACCEPTANCE_LEASE_ACQUIRE" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_HANDOFF" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_RELEASE" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_YIELD" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
             "GOAL" => ClassifyGoalEvent(line),
             "LOCK" => "lock-blocker",
@@ -1028,6 +1032,7 @@ internal sealed class ConductorBatchLoop
                 candidate,
                 policy,
                 driver.RunParallelLandingAcceptance);
+            ReplayParallelAcceptanceLeaseReceipts(driver, decision.Attempt, changedGoalLines);
 
             switch (decision.Kind)
             {
@@ -1162,6 +1167,17 @@ internal sealed class ConductorBatchLoop
     private static void RecordParallelAcceptanceProgress(string line, List<string> changedGoalLines) =>
         changedGoalLines.Add(line);
 
+    private static void ReplayParallelAcceptanceLeaseReceipts(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceAttempt attempt,
+        List<string> changedGoalLines)
+    {
+        foreach (var receipt in driver.ParallelAcceptanceAttemptCoordinator.TakePendingLeaseReceipts(attempt))
+        {
+            RecordParallelAcceptanceProgress(receipt, changedGoalLines);
+        }
+    }
+
     private static bool? TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
     {
         try
@@ -1206,6 +1222,14 @@ internal sealed class ConductorBatchLoop
                     new ConductorAdvanceOutcome.Held(
                         GoalLifecycleState.Verified,
                         $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(slotsBusy.SlotsBusy)}"));
+            }
+
+            if (run.Exception is OperationCanceledException cancelled)
+            {
+                return ParallelAcceptanceHeld(
+                    run.Candidate,
+                    policy,
+                    $"Background acceptance attempt cancelled; retry on next conduct tick: {Sanitize(cancelled.Message)}");
             }
 
             if (run.Exception is BuildLockBlockedException buildLock)
@@ -1278,6 +1302,14 @@ internal sealed class ConductorBatchLoop
                 $"Build artifact lock blocked background acceptance attempt; retry on next conduct tick. attempt={attempt.AttemptId}");
         }
 
+        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Cancelled)
+        {
+            return ParallelAcceptanceHeld(
+                candidate,
+                policy,
+                $"Background acceptance attempt cancelled; retry on next conduct tick. attempt={attempt.AttemptId}: {Sanitize(attempt.Detail ?? "cancelled")}");
+        }
+
         if (ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(attempt) &&
             attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
         {
@@ -1310,6 +1342,7 @@ internal sealed class ConductorBatchLoop
             return run.Exception switch
             {
                 DotnetBuildSlotsBusyException => "slots-busy",
+                OperationCanceledException => "cancelled",
                 BuildLockBlockedException => "build-lock-blocked",
                 _ => "fault"
             };
