@@ -143,7 +143,7 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
         throw new ArgumentException("Retry JSON must include a non-empty 'message' value.");
     }
 
-    return new RetrySubmissionDto(submission.Message.Trim());
+    return new RetrySubmissionDto(submission.Message.Trim(), submission.Mechanical);
 }
 
 public static LimitReviewSubmissionDto? ParseLimitReviewSubmission(string body)

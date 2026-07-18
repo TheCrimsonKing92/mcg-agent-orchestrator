@@ -169,6 +169,39 @@ public static class DotnetBuildEnvironmentManager
         return CreateStableSlotEnvironment(slotIndex);
     }
 
+    public static bool IsStableSlotExecutionLeaseAvailable(int slotIndex)
+    {
+        var environment = CreateStableSlotEnvironment(slotIndex);
+        var executionLockPath = environment.ExecutionLockPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
+        var createdByProbe = !File.Exists(executionLockPath);
+        try
+        {
+            using (var stream = new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
+            {
+                stream.Lock(0, 1);
+                stream.Unlock(0, 1);
+            }
+
+            if (createdByProbe && IsEmptyFile(executionLockPath))
+            {
+                File.Delete(executionLockPath);
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public static int? GetStableSlotExecutionLeaseOwner(int slotIndex)
+    {
+        ValidateStableSlotIndex(slotIndex);
+        return TryReadStableSlotExecutionOwner(slotIndex);
+    }
+
     public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
         TimeSpan? timeout = null,
         Action<DotnetBuildStableSlotWait>? onWait = null,

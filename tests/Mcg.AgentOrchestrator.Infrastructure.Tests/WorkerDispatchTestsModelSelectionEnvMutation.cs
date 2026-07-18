@@ -97,9 +97,11 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     Assert.Equal(5, results.Count);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
-    Assert.Equal("codex-cli", developer.LastDispatch!.WorkerName);
+    Assert.Equal("codex-spark", developer.LastDispatch!.WorkerName);
     Assert.Contains("codex exec", developer.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Equal("codex-spark", developer.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Developer small-task", developer.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='low'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains($"--cd '{workingDirectory}'", developer.LastDispatch.Command, StringComparison.Ordinal);

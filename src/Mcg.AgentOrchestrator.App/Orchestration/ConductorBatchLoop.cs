@@ -14,6 +14,7 @@ internal sealed class ConductorBatchLoop
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 6;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
+    internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
 
     private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -25,6 +26,9 @@ internal sealed class ConductorBatchLoop
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
+    private static readonly object ParallelAcceptanceFairnessGate = new();
+    private static string? s_parallelAcceptanceOldestWaiter;
+    private static int s_parallelAcceptanceConsecutiveOvertakes;
 
     public ConductorBatchLoop(
         Action<AgentOrchestratorKernel>? sweep = null,
@@ -593,6 +597,10 @@ internal sealed class ConductorBatchLoop
         kind = head switch
         {
             "ACCEPTANCE" => "acceptance",
+            "ACCEPTANCE_LEASE_ACQUIRE" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_HANDOFF" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_RELEASE" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_YIELD" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
             "GOAL" => ClassifyGoalEvent(line),
             "LOCK" => "lock-blocker",
@@ -960,17 +968,77 @@ internal sealed class ConductorBatchLoop
         var activeCandidates = new List<ConductorParallelAcceptanceCandidate>();
         var results = new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         var deferredByAdmission = 0;
-        foreach (var goal in eligible)
+        var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
+            .Where(goal =>
+                IsParallelAcceptanceLifecycleEligible(goal, driver) &&
+                HasCompletedPassedVerificationForAllTasks(goal) &&
+                GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
+                TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
+            .ToArray());
+        var oldestWaiter = orderedEligible.FirstOrDefault();
+        var oldestServedThisTick = false;
+        foreach (var goal in orderedEligible)
         {
-            if (GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is not null ||
-                TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) != false)
+            if (oldestWaiter is not null &&
+                goal.Id != oldestWaiter.Id &&
+                !oldestServedThisTick &&
+                ShouldDeferForParallelAcceptanceFairness(oldestWaiter.Id.Value))
             {
+                var deferredCandidate = TryBuildParallelAcceptanceCandidate(
+                    driver,
+                    goal,
+                    policy,
+                    activeCandidates.Count,
+                    out var deferredBuildException);
+                if (deferredCandidate is not null)
+                {
+                    results[goal.Id.Value] = new ParallelLandingOutcome(
+                        ParallelAcceptanceHeld(
+                            deferredCandidate,
+                            policy,
+                            $"parallel acceptance fairness waiting for oldest verified goal {oldestWaiter.Id.Value[..8]}; retry on next conduct tick"),
+                        null);
+                    RecordParallelAcceptanceProgress(
+                        $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]}",
+                        changedGoalLines);
+                }
+                else if (deferredBuildException is not null)
+                {
+                    results[goal.Id.Value] = new ParallelLandingOutcome(
+                        ParallelAcceptanceHeld(
+                            goal,
+                            policy,
+                            $"parallel acceptance candidate unavailable; retry on next conduct tick: {Sanitize(deferredBuildException.Message)}"),
+                        null);
+                    RecordParallelAcceptanceProgress(
+                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={Sanitize(deferredBuildException.Message)}",
+                        changedGoalLines);
+                }
+
                 continue;
             }
 
-            var candidate = TryBuildParallelAcceptanceCandidate(driver, goal, policy, activeCandidates.Count);
+            var candidate = TryBuildParallelAcceptanceCandidate(
+                driver,
+                goal,
+                policy,
+                activeCandidates.Count,
+                out var buildException);
             if (candidate is null)
             {
+                if (buildException is not null)
+                {
+                    results[goal.Id.Value] = new ParallelLandingOutcome(
+                        ParallelAcceptanceHeld(
+                            goal,
+                            policy,
+                            $"parallel acceptance candidate unavailable; retry on next conduct tick: {Sanitize(buildException.Message)}"),
+                        null);
+                    RecordParallelAcceptanceProgress(
+                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={Sanitize(buildException.Message)}",
+                        changedGoalLines);
+                }
+
                 continue;
             }
 
@@ -1001,11 +1069,49 @@ internal sealed class ConductorBatchLoop
                 candidate,
                 policy,
                 driver.RunParallelLandingAcceptance);
+            ReplayParallelAcceptanceLeaseReceipts(driver, decision.Attempt, changedGoalLines);
 
             switch (decision.Kind)
             {
                 case ConductorParallelAcceptanceAttemptDecisionKind.Started:
+                    if (decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+                    {
+                        var terminalDecision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
+                            candidate,
+                            policy,
+                            driver.RunParallelLandingAcceptance);
+                        ReplayParallelAcceptanceLeaseReceipts(driver, terminalDecision.Attempt, changedGoalLines);
+                        if (terminalDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed)
+                        {
+                            var terminalRun = terminalDecision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
+                                candidate,
+                                new InvalidOperationException("Completed acceptance attempt had no run result."));
+                            var terminalResult = CompleteParallelAcceptanceRun(driver, policy, terminalRun);
+                            driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalDecision.Attempt);
+                            oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
+                            RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
+                            RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
+                            results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(terminalResult, candidate.SlotIndex);
+                            RecordParallelAcceptanceProgress(
+                                $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceRunDisposition(terminalRun)} attempt={terminalDecision.Attempt.AttemptId} tick={tick}",
+                                changedGoalLines);
+                            break;
+                        }
+
+                        results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
+                            ParallelAcceptanceTerminal(driver, candidate, policy, terminalDecision.Attempt),
+                            candidate.SlotIndex);
+                        driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalDecision.Attempt);
+                        RecordParallelAcceptanceProgress(
+                            $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceAttemptOutcomeToken(terminalDecision.Attempt.Outcome)} attempt={terminalDecision.Attempt.AttemptId} tick={tick}",
+                            changedGoalLines);
+                        break;
+                    }
+
                     activeCandidates.Add(candidate);
+                    oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
+                    RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
+                    RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceHeld(
                             candidate,
@@ -1018,6 +1124,9 @@ internal sealed class ConductorBatchLoop
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.Running:
                     activeCandidates.Add(candidate);
+                    oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
+                    RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
+                    RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceHeld(
                             candidate,
@@ -1034,6 +1143,9 @@ internal sealed class ConductorBatchLoop
                         new InvalidOperationException("Completed acceptance attempt had no run result."));
                     var result = CompleteParallelAcceptanceRun(driver, policy, run);
                     driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+                    oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
+                    RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
+                    RecordParallelAcceptanceFairnessCapIfReached(goal, oldestWaiter, tick, changedGoalLines);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(result, candidate.SlotIndex);
                     RecordParallelAcceptanceProgress(
                         $"ACCEPTANCE goal={candidate.GoalPrefix} slot=slot-{candidate.SlotIndex} result={AcceptanceRunDisposition(run)} attempt={decision.Attempt.AttemptId} tick={tick}",
@@ -1061,8 +1173,137 @@ internal sealed class ConductorBatchLoop
         return results;
     }
 
+    private static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
+        eligible
+            .OrderBy(ParallelAcceptanceVerifiedAt)
+            .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
+            .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool IsParallelAcceptanceLifecycleEligible(
+        Goal goal,
+        ConductorDriver driver)
+    {
+        if (string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
+        {
+            return true;
+        }
+
+        try
+        {
+            return !GoalOperationJournal.HasRetiredTerminalDisposition(
+                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id));
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)
+    {
+        var lastVerification = goal.Tasks
+            .Select(task => task.LastVerification?.CompletedAt)
+            .Where(completedAt => completedAt.HasValue)
+            .Select(completedAt => completedAt!.Value)
+            .DefaultIfEmpty(goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
+            .Max();
+        return goal.Timeline
+            .Where(evt =>
+                evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("Verified", StringComparison.OrdinalIgnoreCase))
+            .Select(evt => evt.OccurredAt)
+            .DefaultIfEmpty(lastVerification)
+            .Min();
+    }
+
+    private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
+        goal.Tasks.Count > 0 &&
+        goal.Tasks.All(task =>
+            task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is { Succeeded: true });
+
+    private static bool ShouldDeferForParallelAcceptanceFairness(string oldestGoalId)
+    {
+        lock (ParallelAcceptanceFairnessGate)
+        {
+            if (!string.Equals(s_parallelAcceptanceOldestWaiter, oldestGoalId, StringComparison.Ordinal))
+            {
+                s_parallelAcceptanceOldestWaiter = oldestGoalId;
+                s_parallelAcceptanceConsecutiveOvertakes = 0;
+                return false;
+            }
+
+            return s_parallelAcceptanceConsecutiveOvertakes >= ParallelAcceptanceBoundedOvertakeLimit;
+        }
+    }
+
+    private static void RecordParallelAcceptanceFairnessGrant(string goalId, string? oldestGoalId)
+    {
+        if (string.IsNullOrWhiteSpace(oldestGoalId))
+        {
+            return;
+        }
+
+        lock (ParallelAcceptanceFairnessGate)
+        {
+            if (string.Equals(goalId, oldestGoalId, StringComparison.Ordinal))
+            {
+                s_parallelAcceptanceOldestWaiter = oldestGoalId;
+                s_parallelAcceptanceConsecutiveOvertakes = 0;
+                return;
+            }
+
+            if (!string.Equals(s_parallelAcceptanceOldestWaiter, oldestGoalId, StringComparison.Ordinal))
+            {
+                s_parallelAcceptanceOldestWaiter = oldestGoalId;
+                s_parallelAcceptanceConsecutiveOvertakes = 0;
+            }
+
+            s_parallelAcceptanceConsecutiveOvertakes++;
+        }
+    }
+
+    private static void RecordParallelAcceptanceFairnessCapIfReached(
+        Goal goal,
+        Goal? oldestWaiter,
+        int tick,
+        List<string> changedGoalLines)
+    {
+        if (oldestWaiter is null ||
+            goal.Id == oldestWaiter.Id ||
+            !IsParallelAcceptanceFairnessAtLimit(oldestWaiter.Id.Value))
+        {
+            return;
+        }
+
+        RecordParallelAcceptanceProgress(
+            $"ADMISSION tick={tick} result=cap-reached reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]} limit={ParallelAcceptanceBoundedOvertakeLimit}",
+            changedGoalLines);
+    }
+
+    private static bool IsParallelAcceptanceFairnessAtLimit(string oldestGoalId)
+    {
+        lock (ParallelAcceptanceFairnessGate)
+        {
+            return string.Equals(s_parallelAcceptanceOldestWaiter, oldestGoalId, StringComparison.Ordinal) &&
+                s_parallelAcceptanceConsecutiveOvertakes >= ParallelAcceptanceBoundedOvertakeLimit;
+        }
+    }
+
     private static void RecordParallelAcceptanceProgress(string line, List<string> changedGoalLines) =>
         changedGoalLines.Add(line);
+
+    private static void ReplayParallelAcceptanceLeaseReceipts(
+        ConductorDriver driver,
+        ConductorParallelAcceptanceAttempt attempt,
+        List<string> changedGoalLines)
+    {
+        foreach (var receipt in driver.ParallelAcceptanceAttemptCoordinator.TakePendingLeaseReceipts(attempt))
+        {
+            RecordParallelAcceptanceProgress(receipt, changedGoalLines);
+        }
+    }
 
     private static bool? TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
     {
@@ -1080,14 +1321,17 @@ internal sealed class ConductorBatchLoop
         ConductorDriver driver,
         Goal goal,
         ConductorAutonomyPolicy policy,
-        int slotIndex)
+        int slotIndex,
+        out Exception? exception)
     {
+        exception = null;
         try
         {
             return driver.TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex);
         }
-        catch
+        catch (Exception ex)
         {
+            exception = ex;
             return null;
         }
     }
@@ -1108,6 +1352,14 @@ internal sealed class ConductorBatchLoop
                     new ConductorAdvanceOutcome.Held(
                         GoalLifecycleState.Verified,
                         $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(slotsBusy.SlotsBusy)}"));
+            }
+
+            if (run.Exception is OperationCanceledException cancelled)
+            {
+                return ParallelAcceptanceHeld(
+                    run.Candidate,
+                    policy,
+                    $"Background acceptance attempt cancelled; retry on next conduct tick: {Sanitize(cancelled.Message)}");
             }
 
             if (run.Exception is BuildLockBlockedException buildLock)
@@ -1152,9 +1404,15 @@ internal sealed class ConductorBatchLoop
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         string reason) =>
+        ParallelAcceptanceHeld(candidate.Goal, policy, reason);
+
+    private static ConductorAdvanceResult ParallelAcceptanceHeld(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string reason) =>
         new(
-            candidate.Goal.Id.Value,
-            candidate.GoalPrefix,
+            goal.Id.Value,
+            goal.Id.Value[..8],
             policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason));
 
@@ -1178,6 +1436,14 @@ internal sealed class ConductorBatchLoop
                 candidate,
                 policy,
                 $"Build artifact lock blocked background acceptance attempt; retry on next conduct tick. attempt={attempt.AttemptId}");
+        }
+
+        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Cancelled)
+        {
+            return ParallelAcceptanceHeld(
+                candidate,
+                policy,
+                $"Background acceptance attempt cancelled; retry on next conduct tick. attempt={attempt.AttemptId}: {Sanitize(attempt.Detail ?? "cancelled")}");
         }
 
         if (ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(attempt) &&
@@ -1212,6 +1478,7 @@ internal sealed class ConductorBatchLoop
             return run.Exception switch
             {
                 DotnetBuildSlotsBusyException => "slots-busy",
+                OperationCanceledException => "cancelled",
                 BuildLockBlockedException => "build-lock-blocked",
                 _ => "fault"
             };

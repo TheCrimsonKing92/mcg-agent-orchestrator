@@ -8,6 +8,8 @@ public sealed partial class AgentOrchestratorKernel
     private const int FailureReceiptStreamTailChars = 700;
     private const int ReviewerExecutedTestEvidenceMaxLines = 12;
     private const int ReviewerChangedFileScopeMaxLines = 120;
+    private const int AccumulatedRetryFeedbackMaxEntries = 8;
+    private const int AccumulatedRetryFeedbackMaxChars = 3500;
     private static readonly JsonSerializerOptions GoalOperationJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -69,7 +71,7 @@ public sealed partial class AgentOrchestratorKernel
             "# Agent Task Brief",
             string.Empty
         };
-        headerLines.AddRange(BuildLatestDeveloperRetryBlock(goal, task, targetBranchName, targetHeadCommit));
+        headerLines.AddRange(BuildAccumulatedRetryFeedbackBriefBlock(goal, task, workingDirectory, targetBranchName, targetHeadCommit));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
@@ -194,12 +196,6 @@ public sealed partial class AgentOrchestratorKernel
             feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {PromptContextFormatter.TrimPromptBlock(item)}"));
             feedbackLines.Add(string.Empty);
             segments.Add(TaskBriefSegment.Fixed(feedbackLines));
-        }
-
-        var recentRetryFeedback = BuildRecentRetryFeedbackBriefBlock(goal, task, workingDirectory);
-        if (recentRetryFeedback.Count > 0)
-        {
-            segments.Add(TaskBriefSegment.Fixed(recentRetryFeedback));
         }
 
         if (pendingInput.Count > 0)
@@ -455,35 +451,63 @@ public sealed partial class AgentOrchestratorKernel
         return lines;
     }
 
-    private static List<string> BuildLatestDeveloperRetryBlock(
+    private static List<string> BuildAccumulatedRetryFeedbackBriefBlock(
         Goal goal,
         TaskSpec task,
+        string? workingDirectory,
         string? targetBranchName,
         string? targetHeadCommit)
     {
-        if (task.RequiredRole != AgentRole.Developer)
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer))
         {
             return [];
         }
 
-        var latestRetry = goal.Timeline
-            .Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried)
-            .OrderByDescending(evt => evt.OccurredAt)
-            .FirstOrDefault();
-        if (latestRetry is null || string.IsNullOrWhiteSpace(latestRetry.Message))
+        var retryEvents = goal.Timeline
+            .Where(IsAccumulatedRetryRoundEvent)
+            .OrderBy(evt => evt.OccurredAt)
+            .ToList();
+        if (retryEvents.Count == 0)
         {
             return [];
         }
+
+        var feedbackEvents = goal.Timeline
+            .Where(IsAccumulatedRetryFeedbackEvent)
+            .OrderByDescending(evt => evt.OccurredAt)
+            .ThenByDescending(evt => (int)evt.Kind)
+            .ToList();
+        if (feedbackEvents.Count == 0)
+        {
+            return [];
+        }
+
+        var latestRetry = retryEvents.LastOrDefault();
+        var priorOutcomeEvent = latestRetry is null
+            ? null
+            : goal.Timeline
+                .Where(evt =>
+                    evt.TaskId == latestRetry.TaskId &&
+                    evt.OccurredAt <= latestRetry.OccurredAt &&
+                    IsRetryPriorOutcomeEvent(evt))
+                .OrderByDescending(evt => evt.OccurredAt)
+                .FirstOrDefault();
 
         var lines = new List<string>
         {
-            "<!-- LATEST_DEVELOPER_RETRY_BLOCKER_START -->",
-            "## LATEST DEVELOPER RETRY BLOCKER - FIX FIRST",
-            "This is the latest retry feedback for this Developer task. Address it before using prior task history, branch evidence, or context digests.",
-            $"Source: {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}; {latestRetry.Kind}.",
+            "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
+            "## Accumulated retry/review feedback",
+            $"Newest first; capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. Status legend: still-open, resolved-in-round-N, superseded.",
+            "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests.",
         };
 
-        if (!string.IsNullOrWhiteSpace(targetBranchName) || !string.IsNullOrWhiteSpace(targetHeadCommit))
+        if (latestRetry is not null)
+        {
+            lines.Add($"Most recent retry: Retry {retryEvents.Count} of {retryEvents.Count}; {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}.");
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
+            (!string.IsNullOrWhiteSpace(targetBranchName) || !string.IsNullOrWhiteSpace(targetHeadCommit)))
         {
             lines.Add("Current branch/head for this retry:");
             if (!string.IsNullOrWhiteSpace(targetBranchName))
@@ -497,10 +521,58 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
-        lines.Add(string.Empty);
-        lines.Add("Retry feedback (verbatim):");
-        lines.Add(latestRetry.Message);
-        lines.Add("<!-- LATEST_DEVELOPER_RETRY_BLOCKER_END -->");
+        if (priorOutcomeEvent is not null)
+        {
+            lines.Add($"Prior outcome: {priorOutcomeEvent.OccurredAt:u}; {DescribeTimelineTask(goal, priorOutcomeEvent)}; {priorOutcomeEvent.Kind}: {PromptContextFormatter.TrimPromptBlock(priorOutcomeEvent.Message)}");
+        }
+
+        if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
+            latestRetry?.TaskId is { } retriedTaskId)
+        {
+            var retriedTask = goal.FindTask(retriedTaskId);
+            lines.AddRange(BuildStructuredFailureReceiptLines(
+                "operator retry/verification",
+                priorOutcomeEvent is null ? [] : [$"{priorOutcomeEvent.Kind}: {priorOutcomeEvent.Message}"],
+                retriedTask,
+                latestRetry.OccurredAt,
+                ReadLatestFailedAcceptanceOperation(workingDirectory, goal.Id, latestRetry.OccurredAt)));
+        }
+
+        var sectionChars = string.Join(Environment.NewLine, lines).Length;
+        var emittedCount = 0;
+        var omittedCount = 0;
+        for (var index = 0; index < feedbackEvents.Count; index++)
+        {
+            var evt = feedbackEvents[index];
+            var message = evt.Message.Trim();
+            if (message.Length == 0)
+            {
+                continue;
+            }
+
+            var status = DescribeAccumulatedRetryFeedbackStatus(retryEvents, feedbackEvents, evt);
+            var retryDescriptor = retryEvents.Count == 0
+                ? "Retry n/a"
+                : $"Retry {RetryOrdinalAt(retryEvents, evt.OccurredAt)} of {retryEvents.Count}";
+            var line = $"- [{status}] {retryDescriptor}; {evt.OccurredAt:u}; {DescribeTimelineTask(goal, evt)}; {evt.Kind}: {PromptContextFormatter.TrimPromptBlock(message)}";
+            if (emittedCount >= AccumulatedRetryFeedbackMaxEntries ||
+                sectionChars + line.Length + Environment.NewLine.Length > AccumulatedRetryFeedbackMaxChars)
+            {
+                omittedCount = feedbackEvents.Count - index;
+                break;
+            }
+
+            lines.Add(line);
+            sectionChars += line.Length + Environment.NewLine.Length;
+            emittedCount++;
+        }
+
+        if (omittedCount > 0)
+        {
+            lines.Add($"- Omitted {omittedCount} oldest retry/review feedback entr{(omittedCount == 1 ? "y" : "ies")} to preserve prompt budget.");
+        }
+
+        lines.Add("<!-- ACCUMULATED_RETRY_FEEDBACK_END -->");
         lines.Add(string.Empty);
         return lines;
     }
@@ -770,95 +842,123 @@ public sealed partial class AgentOrchestratorKernel
     private static bool IsNoneValue(string value) =>
         string.Equals(value.Trim(), "none", StringComparison.OrdinalIgnoreCase);
 
-    private static IReadOnlyList<string> BuildRecentRetryFeedbackBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)
+    private static bool IsAccumulatedRetryFeedbackEvent(ProgressEvent evt)
     {
-        if (task.RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer))
+        return IsAccumulatedRetryRoundEvent(evt) ||
+               evt.Kind is (
+                   ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
+                   ProgressKind.ReviewerEvidenceRequestReceived or
+                   ProgressKind.ReviewerEvidenceRunRecorded) ||
+               (evt.Kind == ProgressKind.TaskNote && IsAccumulatedRetryFeedbackTaskNote(evt.Message));
+    }
+
+    private static bool IsAccumulatedRetryFeedbackTaskNote(string message)
+    {
+        var trimmed = message.Trim();
+        if (trimmed.Length == 0)
         {
-            return [];
+            return false;
         }
 
-        var retryEvents = goal.Timeline
-            .Where(evt => evt.Kind == ProgressKind.TaskRetried)
-            .OrderBy(evt => evt.OccurredAt)
-            .ToList();
-        if (retryEvents.Count == 0)
+        return !trimmed.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("RESOURCE ", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("TaskOutputCommitted:", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Ignored stale dispatch execution evidence from ", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Ignored duplicate dispatch execution evidence for already settled dispatch:", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Reconciled failed dispatch verification to Completed from structured WORKER_RESULT evidence", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Auto-cleared stale LastProcess.IsRunning before dispatch;", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("StaleDispatchAutoRequeued:", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("StaleDispatchAutoRequeueCapExhausted:", StringComparison.Ordinal);
+    }
+
+    private static bool IsAccumulatedRetryRoundEvent(ProgressEvent evt) =>
+        evt.Kind == ProgressKind.TaskRetried && !IsDownstreamInvalidationRetryEvent(evt);
+
+    private static bool IsDownstreamInvalidationRetryEvent(ProgressEvent evt) =>
+        evt.Message.StartsWith("Invalidated ", StringComparison.Ordinal) &&
+        evt.Message.Contains(" task because upstream ", StringComparison.Ordinal) &&
+        evt.Message.EndsWith(" was retried.", StringComparison.Ordinal);
+
+    private static string DescribeAccumulatedRetryFeedbackStatus(
+        IReadOnlyList<ProgressEvent> retryEvents,
+        IReadOnlyList<ProgressEvent> feedbackEvents,
+        ProgressEvent feedbackEvent)
+    {
+        if (TryFindResolutionEvent(feedbackEvents, feedbackEvent, out var resolutionEvent))
         {
-            return [];
+            return $"resolved-in-round-{RetryOrdinalAt(retryEvents, resolutionEvent.OccurredAt)}";
         }
 
-        var latestRetry = retryEvents[^1];
-        var latestRetryOrdinal = retryEvents.Count;
-        var priorOutcomeEvent = goal.Timeline
-            .Where(evt =>
-                evt.TaskId == latestRetry.TaskId &&
-                evt.OccurredAt <= latestRetry.OccurredAt &&
-                IsRetryPriorOutcomeEvent(evt))
-            .OrderByDescending(evt => evt.OccurredAt)
-            .FirstOrDefault();
-        var feedbackEvents = goal.Timeline
-            .Where(evt =>
-                evt.OccurredAt >= latestRetry.OccurredAt &&
-                evt.Kind is ProgressKind.TaskRetried or ProgressKind.TaskNote or ProgressKind.TaskSubscriptionLimitReviewAcknowledged)
-            .OrderByDescending(evt => evt.OccurredAt)
-            .ThenByDescending(evt => (int)evt.Kind)
-            .ToList();
-
-        var lines = new List<string>
+        if (feedbackEvent.TaskId is { } sameTaskId &&
+            retryEvents.Any(evt => evt.TaskId == sameTaskId && evt.OccurredAt > feedbackEvent.OccurredAt))
         {
-            "## Recent retry/recovery feedback",
-            $"Most recent retry: Retry {latestRetryOrdinal} of {retryEvents.Count}; {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}.",
-        };
-        if (priorOutcomeEvent is not null)
-        {
-            lines.Add($"Prior outcome: {priorOutcomeEvent.OccurredAt:u}; {DescribeTimelineTask(goal, priorOutcomeEvent)}; {priorOutcomeEvent.Kind}: {PromptContextFormatter.TrimPromptBlock(priorOutcomeEvent.Message)}");
+            return "superseded";
         }
 
-        if (latestRetry.TaskId is { } retriedTaskId)
-        {
-            var retriedTask = goal.FindTask(retriedTaskId);
-            lines.AddRange(BuildStructuredFailureReceiptLines(
-                "operator retry/verification",
-                priorOutcomeEvent is null ? [] : [$"{priorOutcomeEvent.Kind}: {priorOutcomeEvent.Message}"],
-                retriedTask,
-                latestRetry.OccurredAt,
-                ReadLatestFailedAcceptanceOperation(workingDirectory, goal.Id, latestRetry.OccurredAt)));
-        }
+        return "still-open";
+    }
 
-        lines.Add("Use this as the current correction context; older duplicate retry/recovery notes are omitted.");
-
-        var emittedMessages = new HashSet<string>(StringComparer.Ordinal);
-        var emittedCount = 0;
-        var omittedCount = 0;
-        var sectionChars = string.Join(Environment.NewLine, lines).Length;
-        foreach (var evt in feedbackEvents)
+    private static bool TryFindResolutionEvent(
+        IReadOnlyList<ProgressEvent> feedbackEvents,
+        ProgressEvent feedbackEvent,
+        out ProgressEvent resolutionEvent)
+    {
+        foreach (var candidate in feedbackEvents)
         {
-            var message = evt.Message.Trim();
-            if (message.Length == 0 || !emittedMessages.Add(message))
+            if (candidate.OccurredAt <= feedbackEvent.OccurredAt ||
+                candidate.TaskId != feedbackEvent.TaskId ||
+                !ContainsResolutionSignal(candidate.Message) ||
+                !MessageReferencesFeedback(feedbackEvent.Message, candidate.Message))
             {
-                omittedCount++;
                 continue;
             }
 
-            var retryOrdinal = RetryOrdinalAt(retryEvents, evt.OccurredAt);
-            var line = $"- Retry {retryOrdinal} of {retryEvents.Count}; {evt.OccurredAt:u}; {DescribeTimelineTask(goal, evt)}; {evt.Kind}: {PromptContextFormatter.TrimPromptBlock(message)}";
-            if (emittedCount >= 3 || sectionChars + line.Length + Environment.NewLine.Length > 2500)
-            {
-                omittedCount++;
-                continue;
-            }
-
-            lines.Add(line);
-            sectionChars += line.Length + Environment.NewLine.Length;
-            emittedCount++;
+            resolutionEvent = candidate;
+            return true;
         }
 
-        if (omittedCount > 0)
+        resolutionEvent = default!;
+        return false;
+    }
+
+    private static bool ContainsResolutionSignal(string message)
+    {
+        return message.Contains("resolved", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("fixed", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("addressed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MessageReferencesFeedback(string feedbackMessage, string candidateMessage)
+    {
+        var feedback = NormalizeFeedbackReference(feedbackMessage);
+        var candidate = NormalizeFeedbackReference(candidateMessage);
+        if (feedback.Length == 0 || candidate.Length == 0)
         {
-            lines.Add($"- Omitted {omittedCount} older, duplicate, or over-budget retry/recovery note(s).");
+            return false;
         }
 
-        lines.Add(string.Empty);
-        return lines;
+        if (candidate.Contains(feedback, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var meaningfulTokens = feedback
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(token => token.Length >= 6)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return meaningfulTokens.Count > 0 &&
+               meaningfulTokens.Count(token => candidate.Contains(token, StringComparison.OrdinalIgnoreCase)) >= Math.Min(2, meaningfulTokens.Count);
+    }
+
+    private static string NormalizeFeedbackReference(string value)
+    {
+        var chars = value
+            .Trim()
+            .ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : ' ')
+            .ToArray();
+        return string.Join(' ', new string(chars).Split(' ', StringSplitOptions.RemoveEmptyEntries));
     }
 
     private static IReadOnlyList<string> BuildStructuredFailureReceiptLines(

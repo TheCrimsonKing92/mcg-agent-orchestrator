@@ -610,6 +610,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
     var goal = kernel.CreateGoal("Implement high-risk multi-scope persistence migration", [new TaskSpec(TaskId.New(), "Implement the scoped slice.", AgentRole.Developer)]);
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk, multi-scope.");
     kernel.ActivateGoal(goal.Id, [agent]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -665,6 +668,238 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Equal(ProviderKind.OpenAICodexSpark, task.LastDispatch.WorkerProviderKind);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_routes_small_default_developer_task_to_codex_spark")]
+    public void WorkerProfileDispatcherRoutesSmallDefaultDeveloperTaskToCodexSpark()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a typo",
+        [new TaskSpec(TaskId.New(), "Update one label.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-only; reasons: simple code objective; risk labels: small-task, low-risk.");
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Equal("codex-spark", task.LastDispatch!.WorkerName);
+    Assert.Equal(ProviderKind.OpenAICodexSpark, task.LastDispatch.WorkerProviderKind);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Developer small-task", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("model_reasoning_effort='low'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskDispatchRecorded &&
+        evt.Message.Contains("lane=codex-spark", StringComparison.Ordinal) &&
+        evt.Message.Contains("cheap-lane: Developer small-task", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_routes_small_default_developer_task_to_codex_spark")]
+    public void WorkerProfileDispatcherReadyBatchRoutesSmallDefaultDeveloperTaskToCodexSpark()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a typo",
+        [new TaskSpec(TaskId.New(), "Update one label.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-only; reasons: simple code objective; risk labels: small-task, low-risk.");
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Empty(batch.Blocked);
+    Assert.Single(batch.Dispatches);
+    Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
+    Assert.Equal("codex-spark", task.LastDispatch!.WorkerName);
+    Assert.Equal(ProviderKind.OpenAICodexSpark, task.LastDispatch.WorkerProviderKind);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Developer small-task", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_complex_high_risk_developer_on_default_lane")]
+    public void WorkerProfileDispatcherKeepsComplexHighRiskDeveloperOnDefaultLane()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Implement high-risk multi-scope persistence migration",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk, multi-scope.");
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
+    Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
+    Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_routes_mechanical_retry_to_codex_spark_even_when_complex")]
+    public void WorkerProfileDispatcherRoutesMechanicalRetryToCodexSparkEvenWhenComplex()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Implement high-risk multi-scope persistence migration",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    kernel.RetryTask(goal.Id, task.Id, "Mechanical retry: rerun named commands and quote receipts; commit nothing.", retryRoundKind: RetryRoundKind.Mechanical);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("codex-spark", task.LastDispatch.WorkerName);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Developer mechanical-retry", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_routes_mechanical_tester_retry_to_codex_spark_even_when_complex")]
+    public void WorkerProfileDispatcherRoutesMechanicalTesterRetryToCodexSparkEvenWhenComplex()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Implement high-risk multi-scope persistence migration",
+        [new TaskSpec(
+            TaskId.New(),
+            "Build comprehensive production integration tests for API CLI dashboard provider subscription worker persistence state, schema migration, rollback, deadlock, and authorization behavior.",
+            AgentRole.Tester)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk, multi-scope.");
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    kernel.RetryTask(goal.Id, task.Id, "Mechanical retry: rerun named commands and quote receipts; commit nothing.", retryRoundKind: RetryRoundKind.Mechanical);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("codex-spark", task.LastDispatch.WorkerName);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Tester mechanical-retry", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_to_default_lane_when_codex_spark_is_unconfigured")]
+    public void WorkerProfileDispatcherFallsBackToDefaultLaneWhenCodexSparkIsUnconfigured()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a typo",
+        [new TaskSpec(TaskId.New(), "Update one label.", AgentRole.Developer)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog(
+    [
+        new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox workspace-write --cd {workingDirectory}")
+    ]);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        profiles,
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
+    Assert.Contains("fallback-default-lane: spark unavailable", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_test_only_surface_tasks_on_routine_subscription_model")]
@@ -1490,9 +1725,12 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var dispatchedAt = DateTimeOffset.Parse("2026-07-08T12:00:00Z");
     var kernel = new AgentOrchestratorKernel();
-    var task = new TaskSpec(TaskId.New(), "Implement a focused source change.", AgentRole.Developer);
-    var goal = kernel.CreateGoal("Keep developer model unchanged", [task]);
+    var task = new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Keep complex developer model unchanged", [task]);
     var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk.");
     kernel.ActivateGoal(goal.Id, agents);
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
@@ -1994,7 +2232,12 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var kernel = new AgentOrchestratorKernel();
     Directory.CreateDirectory(workingDirectory);
     File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
-    var goal = kernel.CreateGoal("Dispatch default OpenAI subscription profile", [new TaskSpec(TaskId.New(), "Implement default OpenAI subscription profile.", AgentRole.Developer)]);
+    var goal = kernel.CreateGoal(
+        "Dispatch default OpenAI subscription profile",
+        [new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Developer)]);
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: complex objective; risk labels: complex, high-risk.");
     var agent = new AgentDefinition(
         new AgentId("openai-developer"),
         "OpenAI developer",
@@ -2033,7 +2276,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "Write-Output {promptPath}"));
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "Write-Output {promptPath}")]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -2096,7 +2339,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"));
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}")]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,

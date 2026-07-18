@@ -2130,7 +2130,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal("focused CLI infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
     Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliHelpTests", StringComparison.Ordinal));
     Assert.False(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~FundamentalAliasTests", StringComparison.Ordinal));
-    Assert.False(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
+    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
     Assert.True(html.Contains("Test impact: Selected focused CLI infrastructure tests from changed file scope.", StringComparison.Ordinal));
     Assert.Contains($"data-next-action=\"ExecuteRecordedDispatch\" data-action-button=\"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true\"", html, StringComparison.Ordinal);
     Assert.False(html.Contains("confirmLargePaidSubscriptionStart=true", StringComparison.Ordinal));
@@ -2186,6 +2186,8 @@ public sealed class DashboardRenderingTests
         Workspace: dashboardWorkspace));
 
     Assert.Equal("focused dashboard infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
+    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~DashboardHostTests", StringComparison.Ordinal));
+    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("Category!=HostIntegration", StringComparison.Ordinal));
     Assert.True(html.Contains("Test impact: Selected focused dashboard infrastructure tests from changed file scope.", StringComparison.Ordinal));
     Assert.False(html.Contains("Test impact: No changed files detected; no build verification required.", StringComparison.Ordinal));
 }

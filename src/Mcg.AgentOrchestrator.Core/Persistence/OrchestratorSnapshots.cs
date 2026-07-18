@@ -56,7 +56,8 @@ public sealed record TaskSnapshot(
     int CriterionRetryCount = 0,
     IReadOnlyList<string>? CriterionRetryFeedback = null,
     int EmptyOutputRetryCount = 0,
-    DateTimeOffset? LatestRetryAt = null);
+    DateTimeOffset? LatestRetryAt = null,
+    RetryRoundKind? PendingRetryRoundKind = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -100,7 +101,9 @@ public sealed record TaskDispatchSnapshot(
     bool SandboxLowIntegrity = false,
     string? PromptPath = null,
     ProviderKind WorkerProviderKind = ProviderKind.Unknown,
-    string? ReasoningEffortReason = null);
+    string? ReasoningEffortReason = null,
+    string? DispatchLane = null,
+    string? ModelSelectionReason = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

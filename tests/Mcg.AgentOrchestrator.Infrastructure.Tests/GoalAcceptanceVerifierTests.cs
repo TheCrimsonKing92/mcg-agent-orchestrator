@@ -79,8 +79,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_no_holder_acceptance_output_lock_in_tick")]
-    public async Task GoalAcceptanceVerifierRetriesNoHolderAcceptanceOutputLockInTick()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_waits_for_no_holder_acceptance_output_lock_then_retries")]
+    public async Task GoalAcceptanceVerifierWaitsForNoHolderAcceptanceOutputLockThenRetries()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -91,14 +91,22 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
               "forbiddenChangedPathGlobs": []
             }
             """);
+        var lockedPath = Path.Combine(root, "artifacts", "Mcg.AgentOrchestrator.Core.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        File.WriteAllText(lockedPath, "held");
+        using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         var calls = new List<string[]>();
         var buildAttempts = 0;
-        var previousDelay = GoalAcceptanceVerifier.TransientNoHolderBuildLockRetryDelay;
+        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
             "handle64-timeout");
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockRetryDelay = TimeSpan.Zero;
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
@@ -111,12 +119,13 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 }
 
                 buildAttempts++;
-                if (buildAttempts <= 2)
+                if (buildAttempts == 1)
                 {
-                    var lockedPath = Path.Combine(
-                        ExtractArtifactsPath(args),
-                        "bin",
-                        "Mcg.AgentOrchestrator.Core.dll");
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(500);
+                        held.Dispose();
+                    });
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         1,
                         $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
@@ -125,30 +134,101 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             });
 
-            var result = await verifier.RunAsync(root);
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(root).GetAwaiter().GetResult());
 
-            Assert.True(result.Passed);
+            Assert.NotNull(result);
+            Assert.True(result!.Passed);
             Assert.True(result.Retried);
-            Assert.Equal(3, buildAttempts);
-            Assert.Equal(5, calls.Count);
+            Assert.Equal(2, buildAttempts);
+            Assert.Equal(4, calls.Count);
             Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
             Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
             var check = Assert.Single(result.Checks!);
             Assert.True(check.LockRemediationApplied);
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
+            Assert.Contains("released=true", output, StringComparison.Ordinal);
+            Assert.Matches(@"waited-ms=([1-9][0-9]*)", output);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=completed", output, StringComparison.Ordinal);
+            Assert.Contains("build-lock=false", output, StringComparison.Ordinal);
         }
         finally
         {
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockRetryDelay = previousDelay;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
             LockAttribution.AttributeForTests = null;
         }
+    }
 
-        static string ExtractArtifactsPath(string[] args)
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_no_holder_lock_wait_excludes_probe_time_and_blocks_after_window")]
+    public async Task GoalAcceptanceVerifierNoHolderLockWaitExcludesProbeTimeAndBlocksAfterWindow()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "app build", "type": "command", "command": "dotnet", "arguments": ["build", "Fake.csproj"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var lockedPath = Path.Combine(root, "artifacts", "Mcg.AgentOrchestrator.Core.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+        File.WriteAllText(lockedPath, "held");
+        using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        LockAttribution.AttributeForTests = (path, _) =>
         {
-            var artifactsPathIndex = Array.IndexOf(args, "--artifacts-path");
-            Assert.True(artifactsPathIndex >= 0);
-            Assert.True(artifactsPathIndex + 1 < args.Length);
-            return args[artifactsPathIndex + 1];
+            Thread.Sleep(120);
+            return new BuildLockAttribution(
+                path,
+                [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+                "handle64-timeout");
+        };
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(80);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    1,
+                    $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
+            });
+
+            BuildLockBlockedException? blocked = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync(root)).GetAwaiter().GetResult());
+
+            Assert.NotNull(blocked);
+            Assert.Equal(lockedPath, blocked!.Attribution.Path);
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
+            Assert.Contains("released=false", output, StringComparison.Ordinal);
+            Assert.Matches(@"probe-ms=(1[0-9]{2}|[2-9][0-9]{2,})", output);
+            Assert.Matches(@"waited-ms=([8-9][0-9]|[1-9][0-9]{2,})", output);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=wait-exhausted", output, StringComparison.Ordinal);
+            Assert.Contains("build-lock=true", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            LockAttribution.AttributeForTests = null;
         }
     }
 
@@ -688,8 +768,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_does_not_start_next_build_until_test_child_exits")]
-    public async Task GoalAcceptanceVerifierSlotGateDoesNotStartNextBuildUntilTestChildExits()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_builds_once_and_runs_later_tests_no_build")]
+    public async Task GoalAcceptanceVerifierSlotGateBuildsOnceAndRunsLaterTestsNoBuild()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -734,9 +814,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var result = await run;
 
             Assert.True(result.Passed);
-            var secondBuildIndex = calls.FindIndex(call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "build" && call[2] == "tests/Second.Tests.csproj");
+            var buildCalls = calls
+                .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
+                .ToArray();
             var firstTestIndex = calls.FindIndex(call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "test" && call[2] == "tests/First.Tests.csproj");
-            Assert.True(secondBuildIndex > firstTestIndex);
+            var secondTestIndex = calls.FindIndex(call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "test" && call[2] == "tests/Second.Tests.csproj");
+            Assert.Single(buildCalls);
+            Assert.Equal("tests/First.Tests.csproj", buildCalls[0][2]);
+            Assert.True(firstTestIndex > 0);
+            Assert.True(secondTestIndex > firstTestIndex);
+            Assert.DoesNotContain(calls, call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "build" && call[2] == "tests/Second.Tests.csproj");
             Assert.All(calls.Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test"), call => Assert.Contains("--no-build", call));
         }
         finally
@@ -1089,6 +1176,167 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_builds_solution_once_for_partitioned_targets")]
+    public async Task GoalAcceptanceVerifierSlotGateBuildsSolutionOnceForPartitionedTargets()
+    {
+        var calls = new List<string[]>();
+        var root = CreateCheckedInManifestShapeWorkspace();
+        File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("12345678123456781234567812345678"),
+                changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"],
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            var buildCalls = calls
+                .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
+                .ToArray();
+            var testCalls = calls
+                .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test")
+                .ToArray();
+            Assert.Single(buildCalls);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", buildCalls[0], StringComparer.OrdinalIgnoreCase);
+            Assert.All(testCalls, call => Assert.Contains("--no-build", call));
+            Assert.DoesNotContain(testCalls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
+            Assert.DoesNotContain(calls.SkipWhile(call => call != buildCalls[0]).Skip(1),
+                call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build");
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_prefers_completed_red_test_verdict_after_transient_build_lock")]
+    public void GoalAcceptanceVerifierSlotGatePrefersCompletedRedTestVerdictAfterTransientBuildLock()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Infra.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
+        var calls = new List<string[]>();
+        var buildAttempts = 0;
+        var testAttempts = 0;
+        FileStream? held = null;
+        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+            "handle64-timeout");
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    buildAttempts++;
+                    if (buildAttempts == 1)
+                    {
+                        var artifactsPath = GetArtifactsPath(args);
+                        var lockedPath = Path.Combine(artifactsPath, "bin", "Core.Tests.dll");
+                        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+                        File.WriteAllText(lockedPath, "held");
+                        held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(500);
+                            held!.Dispose();
+                        });
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
+                {
+                    testAttempts++;
+                    return Task.FromResult(testAttempts == 1
+                        ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 519, Skipped: 0, Total: 519.")
+                        : new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            "Failed! - Failed: 1, Passed: 1980, Skipped: 0, Total: 1981.\n" +
+                            "Red.Namespace.FailingTest failed\n" +
+                            "error CS2012: Cannot open 'C:\\mcg-dotnet-isolated\\slots\\slot-0\\artifacts\\bin\\Core.Tests.dll' for writing because it is being used by another process."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(
+                    root,
+                    new GoalId("11112222333344445555666677778888"),
+                    stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
+
+            Assert.NotNull(result);
+            Assert.False(result!.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(2, buildAttempts);
+            Assert.Equal(2, testAttempts);
+            Assert.Equal(1, result.ExitCode);
+            Assert.NotNull(result.OutputTail);
+            Assert.Contains("Red.Namespace.FailingTest", result.OutputTail!, StringComparison.Ordinal);
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
+            Assert.Contains("released=true", output, StringComparison.Ordinal);
+            Assert.Matches(@"waited-ms=([1-9][0-9]*)", output);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=completed", output, StringComparison.Ordinal);
+            Assert.Contains("build-lock=false", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("verdict=blocked", output, StringComparison.Ordinal);
+            Assert.All(calls.Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test"),
+                call => Assert.Contains("--no-build", call));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            LockAttribution.AttributeForTests = null;
+            held?.Dispose();
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_CS2012_file_lock_and_returns_passed")]
     public async Task GoalAcceptanceVerifierSelfHealsOnceOnCs2012FileLockAndReturnsPassed()
     {
@@ -1185,29 +1433,50 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_compiler_lock_and_returns_failed_when_retry_also_fails")]
-    public async Task GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
+    public void GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
     {
         var calls = new List<string[]>();
         var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
             new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
             new(0, ""),
+            new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process.")
         ]);
 
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        try
         {
-            calls.Add(args);
-            return Task.FromResult(responses.Dequeue());
-        });
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 2;
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
 
-        var blocked = await Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"));
+            BuildLockBlockedException? blocked = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"))
+                    .GetAwaiter()
+                    .GetResult());
 
-        Assert.Equal(lockedPath, blocked.Attribution.Path);
-        Assert.Equal(4, calls.Count);
-        AssertIsolatedTestCommand(calls[1]);
-        AssertIsolatedTestCommand(calls[3]);
+            Assert.NotNull(blocked);
+            Assert.Equal(lockedPath, blocked!.Attribution.Path);
+            Assert.Equal(5, calls.Count);
+            AssertIsolatedTestCommand(calls[1]);
+            AssertIsolatedTestCommand(calls[3]);
+            AssertIsolatedTestCommand(calls[4]);
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
+            Assert.Contains("max-cycles=2", output, StringComparison.Ordinal);
+            Assert.Contains("cycle=2", output, StringComparison.Ordinal);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=blocked", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_when_owned_process_kill_retry_still_reports_lock")]
@@ -1433,8 +1702,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.DoesNotContain(calls[2], argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Contains("--filter", calls[2]);
         Assert.Contains(calls[2], argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains(calls[2], argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
         Assert.False(calls[2].Any(argument => argument.Contains("FundamentalAliasTests", StringComparison.Ordinal)));
-        Assert.False(calls[2].Any(argument => argument.Contains("CliCommandTests", StringComparison.Ordinal)));
         Assert.DoesNotContain(calls[2], argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
         Assert.Contains(result.Checks!, check => check.Name == "focused CLI infrastructure tests");
         Assert.Contains(result.Checks!, check =>
@@ -1489,19 +1758,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains("covered by: focused changed infrastructure tests", infrastructureReceipt.ResultSummary, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partitions_infrastructure_suite_for_multiple_app_subsystems")]
-    public async Task GoalAcceptanceVerifierPartitionsInfrastructureSuiteForMultipleAppSubsystems()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_union_filter_for_multiple_mapped_app_subsystems")]
+    public async Task GoalAcceptanceVerifierRunsUnionFilterForMultipleMappedAppSubsystems()
     {
         var root = CreateStandardManifestWorkspace();
         var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(0, ""),
+            new(0, "Focused App tests passed.")
+        ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
-            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                0,
-                args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                    ? "Infrastructure partition passed."
-                    : ""));
+            return Task.FromResult(responses.Dequeue());
         });
 
         var result = await verifier.RunAsync(
@@ -1519,22 +1789,31 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call[1] == "test" &&
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
-        Assert.Equal(18, infrastructureCalls.Length);
+        var call = Assert.Single(infrastructureCalls);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
-        foreach (var call in infrastructureCalls)
-            Assert.Contains("--filter", call);
-        Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
-        Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardRenderingTests"));
-        Assert.Contains(infrastructureCalls, call =>
-            call.Any(argument => argument.Contains("FullyQualifiedName!~DashboardHostTests", StringComparison.Ordinal) &&
-                argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Cli");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Dashboard rendering");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.Contains(result.Checks!, check =>
-            check.Name == "infrastructure tests" &&
-            check.Passed &&
-            check.ResultSummary == "covered by 18 partitioned checks");
+        Assert.Contains("--filter", call);
+        var filterIndex = Array.IndexOf(call, "--filter");
+        Assert.True(filterIndex >= 0);
+        Assert.Equal(
+            "(FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests)|(FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests)",
+            call[filterIndex + 1]);
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
+        Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardValidationHarnessTests", StringComparison.Ordinal));
+        Assert.Contains(result.Checks!, check => check.Name == "focused CLI+dashboard infrastructure tests");
+        var infrastructureReceipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.True(infrastructureReceipt.Passed);
+        Assert.Contains(
+            "covered by: focused CLI+dashboard infrastructure tests",
+            infrastructureReceipt.ResultSummary ?? "",
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "changed file in dependency closure",
+            infrastructureReceipt.ResultSummary ?? "",
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_safety_valves_force_full_policy_shards")]

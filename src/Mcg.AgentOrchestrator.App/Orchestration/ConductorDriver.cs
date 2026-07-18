@@ -21,10 +21,10 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Action _buildServerShutdown;
-    private readonly Func<Goal, int?, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
-    private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
+    private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRequestReceived;
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRunRecorded;
@@ -239,7 +239,7 @@ internal sealed class ConductorDriver
             catch { }
         };
 
-        _runAcceptanceVerification = (goal, stableSlotIndex) =>
+        _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken) =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
@@ -253,7 +253,15 @@ internal sealed class ConductorDriver
             {
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
                     AppendGateProgressEvent(dir, goal.Id, progress));
-                verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
+                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
+                    () => IsAcceptanceAttemptCancelled(workspace, goal.Id));
+                verification = acceptanceVerifier.RunAsync(
+                    worktreePath,
+                    goal.Id,
+                    changedFiles,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    cancellationToken).GetAwaiter().GetResult();
             }
             catch (DotnetBuildSlotsBusyException ex)
             {
@@ -336,7 +344,8 @@ internal sealed class ConductorDriver
             return result;
         };
 
-        _retryTask = (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message);
+        _retryTask = (goalId, taskId, message, retryRoundKind) =>
+            kernel.RetryTask(goalId, taskId, message, retryRoundKind: retryRoundKind);
         _recordTaskNote = (goalId, taskId, message) =>
         {
             kernel.RecordTaskNote(goalId, taskId, message);
@@ -532,11 +541,13 @@ internal sealed class ConductorDriver
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
-        Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null)
+        Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -546,7 +557,10 @@ internal sealed class ConductorDriver
             ? _dispatchAndStart
             : (goal, _) => startRecordedDispatches(goal);
         _buildServerShutdown = buildServerShutdown ?? (() => { });
-        _runAcceptanceVerification = runAcceptanceVerificationWithSlot ?? ((goal, _) => runAcceptanceVerification(goal));
+        _runAcceptanceVerification = runAcceptanceVerificationWithLease
+            ?? (runAcceptanceVerificationWithSlot is not null
+                ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
+                : ((goal, _, _, _) => runAcceptanceVerification(goal)));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence ?? ((_, request) => new FocusedEvidenceRunResult(
             request,
@@ -554,7 +568,10 @@ internal sealed class ConductorDriver
             Passed: false,
             Summary: "focused evidence runner was not configured",
             Checks: []));
-        _retryTask = retryTask ?? ((_, _, _) => throw new InvalidOperationException("Retry delegate was not configured."));
+        _retryTask = retryTaskWithRoundKind
+            ?? (retryTask is not null
+                ? ((goalId, taskId, message, _) => retryTask(goalId, taskId, message))
+                : ((_, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordReviewerEvidenceRequestReceived = recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordReviewerEvidenceRunRecorded = recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
@@ -589,6 +606,8 @@ internal sealed class ConductorDriver
 
     internal ConductorParallelAcceptanceAttemptCoordinator ParallelAcceptanceAttemptCoordinator =>
         _parallelAcceptanceAttemptCoordinator;
+
+    internal string? ExecutionDirectory => _executionDirectory;
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
@@ -660,7 +679,7 @@ internal sealed class ConductorDriver
                 {
                     var note = $"Auto-retry stale dispatch recovery for task {staleRecoveryTask.Id.Value[..8]}; " +
                         ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!);
-                    _retryTask(goal.Id, staleRecoveryTask.Id, note);
+                _retryTask(goal.Id, staleRecoveryTask.Id, note, null);
                     return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
                 }
 
@@ -708,7 +727,7 @@ internal sealed class ConductorDriver
                     : $"Auto-retry empty-output dispatch flake {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
                         $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; " +
                         $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
-                _retryTask(goal.Id, flakedTask.Id, note);
+                _retryTask(goal.Id, flakedTask.Id, note, null);
                 // Immediately dispatch in the same tick after recovery, bypassing the next-tick
                 // WorkspaceReady path. If ownership blocks dispatch under Conservative policy,
                 // ExecuteDispatchAndStart returns Held (not Escalate) so the goal stays eligible.
@@ -727,7 +746,7 @@ internal sealed class ConductorDriver
                     _recordTaskNote(goal.Id, autoRetry.TargetTask!.Id, autoRetry.WarningMessage);
                 }
 
-                _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message);
+                _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message, autoRetry.RoundKind);
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
         }
@@ -829,7 +848,11 @@ internal sealed class ConductorDriver
                 $"reviewer evidence-on-demand: Reviewer task {reviewerTask.Id.Value[..8]} requested focused test evidence; " +
                 $"conductor ran it without reopening upstream Developer/Tester work. {evidenceMessage}. " +
                 $"Re-review the same round using these receipts.";
-            decision = ReviewNeedsWorkAutoRetryDecision.Retry(reviewerTask, evidenceRetryMessage, null);
+            decision = ReviewNeedsWorkAutoRetryDecision.Retry(
+                reviewerTask,
+                evidenceRetryMessage,
+                null,
+                RetryRoundKind.Mechanical);
             return true;
         }
 
@@ -879,7 +902,11 @@ internal sealed class ConductorDriver
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
             : null;
-        decision = ReviewNeedsWorkAutoRetryDecision.Retry(targetTask, message, warning);
+        decision = ReviewNeedsWorkAutoRetryDecision.Retry(
+            targetTask,
+            message,
+            warning,
+            null);
         return true;
     }
 
@@ -976,15 +1003,20 @@ internal sealed class ConductorDriver
         bool ShouldEscalate,
         TaskSpec? TargetTask,
         string Message,
-        string? WarningMessage)
+        string? WarningMessage,
+        RetryRoundKind? RoundKind)
     {
-        public static ReviewNeedsWorkAutoRetryDecision None { get; } = new(false, null, string.Empty, null);
+        public static ReviewNeedsWorkAutoRetryDecision None { get; } = new(false, null, string.Empty, null, null);
 
-        public static ReviewNeedsWorkAutoRetryDecision Retry(TaskSpec targetTask, string message, string? warningMessage) =>
-            new(false, targetTask, message, warningMessage);
+        public static ReviewNeedsWorkAutoRetryDecision Retry(
+            TaskSpec targetTask,
+            string message,
+            string? warningMessage,
+            RetryRoundKind? roundKind = null) =>
+            new(false, targetTask, message, warningMessage, roundKind);
 
         public static ReviewNeedsWorkAutoRetryDecision Escalate(string message) =>
-            new(true, null, message, null);
+            new(true, null, message, null, null);
     }
 
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
@@ -1017,7 +1049,9 @@ internal sealed class ConductorDriver
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy)
+        ConductorAutonomyPolicy policy,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken)
     {
         var effectiveCandidate = candidate;
         try
@@ -1036,7 +1070,11 @@ internal sealed class ConductorDriver
             effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
             return ConductorParallelAcceptanceRunResult.Accepted(
                 effectiveCandidate,
-                _runAcceptanceVerification(effectiveCandidate.Goal, effectiveCandidate.SlotIndex));
+                _runAcceptanceVerification(
+                    effectiveCandidate.Goal,
+                    effectiveCandidate.SlotIndex,
+                    stableSlotLease,
+                    cancellationToken));
         }
         catch (Exception ex)
         {
@@ -1052,6 +1090,25 @@ internal sealed class ConductorDriver
             candidate.ScopePaths,
             TryResolveAcceptanceBranchHead(candidate.Goal),
             _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
+
+    private static bool IsAcceptanceAttemptCancelled(OrchestratorWorkspace workspace, GoalId goalId)
+    {
+        try
+        {
+            var latest = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .LoadAsync()
+                .GetAwaiter()
+                .GetResult()
+                .Goals
+                .FirstOrDefault(goal => goal.Id == goalId);
+            return latest is null ||
+                latest.Status is GoalStatus.Parked or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     internal ConductorAdvanceResult CompleteParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
@@ -1547,7 +1604,7 @@ internal sealed class ConductorDriver
         AcceptanceVerificationSummary acceptance;
         try
         {
-            acceptance = _runAcceptanceVerification(goal, null);
+            acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
         }
         catch (DotnetBuildSlotsBusyException ex)
         {
@@ -1677,7 +1734,7 @@ internal sealed class ConductorDriver
                     retryFeedback);
                 var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): " +
                     string.Join(Environment.NewLine, retryFeedback);
-                _retryTask(goal.Id, task.Id, retryMessage);
+                _retryTask(goal.Id, task.Id, retryMessage, null);
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }

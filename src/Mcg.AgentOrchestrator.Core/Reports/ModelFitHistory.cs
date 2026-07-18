@@ -12,7 +12,8 @@ public sealed record ModelFitHistoryRow(
     string SelfRating,
     DateTimeOffset Timestamp,
     string? OutcomeRule = null,
-    TaskOutcomeClass OutcomeClass = TaskOutcomeClass.UnknownEra)
+    TaskOutcomeClass OutcomeClass = TaskOutcomeClass.UnknownEra,
+    string? DispatchLane = null)
 {
     public bool IsCompleted => Outcome == WorkTaskStatus.Completed;
     public bool IsFailed => Outcome == WorkTaskStatus.Failed;
@@ -61,7 +62,8 @@ public static class ModelFitHistory
             selfRating,
             task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt,
             outcome.Rule,
-            outcome.Class);
+            outcome.Class,
+            dispatch.DispatchLane);
     }
 
     public static IReadOnlyList<ModelFitHistoryRow> FromGoals(IEnumerable<Goal> goals)
