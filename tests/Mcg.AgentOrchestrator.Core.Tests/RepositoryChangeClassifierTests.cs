@@ -156,6 +156,11 @@ public sealed class RepositoryChangeClassifierTests
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused CLI+dashboard infrastructure tests", check.Name);
         Assert.Contains("--filter", check.Command);
+        var filterIndex = Array.FindIndex(check.Command.ToArray(), argument => argument == "--filter");
+        Assert.True(filterIndex >= 0);
+        Assert.Equal(
+            "(FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests)|(FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests)",
+            check.Command[filterIndex + 1]);
         Assert.Contains(check.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));

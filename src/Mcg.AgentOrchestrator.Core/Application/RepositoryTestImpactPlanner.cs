@@ -212,7 +212,30 @@ public static class RepositoryTestImpactPlanner
     }
 
     private static string JoinFilters(string left, string? right) =>
-        string.IsNullOrWhiteSpace(right) ? left : $"{left}|{right}";
+        string.IsNullOrWhiteSpace(right) ? left : JoinFilterUnion([left, right]);
+
+    private static string JoinFilterUnion(IEnumerable<string> filters) =>
+        string.Join(
+            "|",
+            filters
+                .Where(filter => !string.IsNullOrWhiteSpace(filter))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(ParenthesizeCompositeFilter));
+
+    private static string ParenthesizeCompositeFilter(string filter)
+    {
+        var trimmed = filter.Trim();
+        if (trimmed.StartsWith("(", StringComparison.Ordinal) &&
+            trimmed.EndsWith(")", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        return trimmed.Contains('|') ||
+            trimmed.Contains('&')
+            ? $"({trimmed})"
+            : trimmed;
+    }
 
     private static (string Name, string Filter, string Reason)? TryBuildFocusedInfrastructureFilter(
         RepositoryChangeSummary summary,
@@ -257,7 +280,7 @@ public static class RepositoryTestImpactPlanner
             filters.Count == 1
                 ? $"focused {names[0]} infrastructure tests"
                 : $"focused {string.Join("+", names)} infrastructure tests",
-            string.Join("|", filters.Distinct(StringComparer.OrdinalIgnoreCase)),
+            JoinFilterUnion(filters),
             filters.Count == 1
                 ? $"{names[0]}-only App change; run the mapped Infrastructure test partition."
                 : $"{string.Join(" and ", names)} App changes; run the union of mapped Infrastructure test partitions.");

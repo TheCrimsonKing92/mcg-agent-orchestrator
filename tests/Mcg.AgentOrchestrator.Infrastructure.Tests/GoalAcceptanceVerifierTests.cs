@@ -1642,6 +1642,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var call = Assert.Single(infrastructureCalls);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         Assert.Contains("--filter", call);
+        var filterIndex = Array.IndexOf(call, "--filter");
+        Assert.True(filterIndex >= 0);
+        Assert.Equal(
+            "(FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests)|(FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests)",
+            call[filterIndex + 1]);
         Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal));
         Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~CliHelpTests", StringComparison.Ordinal));
         Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardRenderingTests", StringComparison.Ordinal));
@@ -1649,10 +1654,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(call, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
         Assert.Contains(call, argument => argument.Contains("FullyQualifiedName~DashboardValidationHarnessTests", StringComparison.Ordinal));
         Assert.Contains(result.Checks!, check => check.Name == "focused CLI+dashboard infrastructure tests");
-        Assert.Contains(result.Checks!, check =>
-            check.Name == "infrastructure tests" &&
-            check.Passed &&
-            check.ResultSummary == "covered by: focused CLI+dashboard infrastructure tests");
+        var infrastructureReceipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.True(infrastructureReceipt.Passed);
+        Assert.Contains(
+            "covered by: focused CLI+dashboard infrastructure tests",
+            infrastructureReceipt.ResultSummary ?? "",
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "changed file in dependency closure",
+            infrastructureReceipt.ResultSummary ?? "",
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_safety_valves_force_full_policy_shards")]
