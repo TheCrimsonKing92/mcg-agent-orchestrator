@@ -139,8 +139,9 @@ internal static class SubscriptionPlanBuilder
 
         var scorecardLookup = BuildScorecardLookup(scorecard);
 
+        var allowCheapLaneInPlan = scorecard is not null;
         var items = goal.Tasks
-            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup, now))
+            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup, now, allowCheapLaneInPlan))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -178,7 +179,8 @@ internal static class SubscriptionPlanBuilder
         IReadOnlyDictionary<string, WorkerProfileValidation> validations,
         Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
         IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        bool allowCheapLane = false)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -238,7 +240,7 @@ internal static class SubscriptionPlanBuilder
                     ["Run delegate or add the missing agent profile."]));
         }
 
-        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
+        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles, allowCheapLane: allowCheapLane);
         var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
         var effectiveModelName = GetTemplateValue(templateVariables, "apiModelName") ?? agent.Model.ModelName;
         var usesComplexModel = UsesComplexModel(agent, effectiveProviderName, effectiveModelName);
@@ -250,7 +252,7 @@ internal static class SubscriptionPlanBuilder
 
         try
         {
-            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
+            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles, allowCheapLane: allowCheapLane);
             var dispatchLane = GetTemplateValue(templateVariables, "dispatchLane");
             var effectiveDispatchLane = string.IsNullOrWhiteSpace(dispatchLane)
                 ? profileName

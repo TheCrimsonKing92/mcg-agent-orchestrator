@@ -1035,9 +1035,14 @@ public static class WorkerProfileDispatcher
         return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task));
     }
 
-    public static string ResolveSubscriptionProfileName(AgentDefinition agent, Goal goal, TaskSpec task, WorkerProfileCatalog profiles)
+    public static string ResolveSubscriptionProfileName(
+        AgentDefinition agent,
+        Goal goal,
+        TaskSpec task,
+        WorkerProfileCatalog profiles,
+        bool allowCheapLane = true)
     {
-        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles));
+        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles, allowCheapLane: allowCheapLane));
     }
 
     private static string ResolveSubscriptionProfileName(AgentDefinition agent, SubscriptionModelSelection selection)
@@ -1098,9 +1103,10 @@ public static class WorkerProfileDispatcher
         AgentDefinition agent,
         Goal goal,
         TaskSpec task,
-        WorkerProfileCatalog profiles)
+        WorkerProfileCatalog profiles,
+        bool allowCheapLane = true)
     {
-        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles);
+        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles, allowCheapLane: allowCheapLane);
         return BuildSubscriptionTemplateVariables(agent, ApplyReasoningEffortPolicy(agent, goal, task, selection));
     }
 
@@ -1284,12 +1290,13 @@ public static class WorkerProfileDispatcher
         WorkerProfileCatalog? profiles = null,
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        bool allowCheapLane = true)
     {
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, goal, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+            : ResolveRoleModelSelection(agent, goal, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions, commandExists, allowCheapLane);
     }
 
     private static SubscriptionModelSelection ResolveRoleModelSelection(
@@ -1300,11 +1307,13 @@ public static class WorkerProfileDispatcher
         WorkerProfileCatalog? profiles,
         Func<ClaudeCliAuthState>? claudeAuthProbe,
         WorkerSandboxOptions? sandboxOptions,
-        Func<string, bool>? commandExists)
+        Func<string, bool>? commandExists,
+        bool allowCheapLane)
     {
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
-            if (TrySelectCheapLane(agent, goal, task, fullSelection, profiles, out var cheapSelection))
+            if (allowCheapLane &&
+                TrySelectCheapLane(agent, goal, task, fullSelection, profiles, out var cheapSelection))
             {
                 return cheapSelection;
             }
@@ -1363,6 +1372,13 @@ public static class WorkerProfileDispatcher
         }
 
         if (!mechanicalRetry && task.RequiredRole != AgentRole.Developer)
+        {
+            return false;
+        }
+
+        if (!mechanicalRetry &&
+            fullSelection.UsesComplexModel &&
+            fullSelection.Complexity is not TaskComplexity.Complex)
         {
             return false;
         }
