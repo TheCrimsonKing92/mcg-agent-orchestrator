@@ -1349,8 +1349,8 @@ public sealed class ConductorDriverTests
         Assert.Contains("auto-review-retry round 1", retryMessage);
         Assert.Contains(blocker, retryMessage);
         Assert.Contains("C:\\tmp\\reviewer.out.log", retryMessage);
-        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
-        Assert.Equal(RetryRoundKind.Mechanical, developer.PendingRetryRoundKind);
+        Assert.Null(retryRoundKind);
+        Assert.Null(developer.PendingRetryRoundKind);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskRetried &&

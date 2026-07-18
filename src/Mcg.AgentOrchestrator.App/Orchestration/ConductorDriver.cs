@@ -906,7 +906,7 @@ internal sealed class ConductorDriver
             targetTask,
             message,
             warning,
-            RetryRoundKind.Mechanical);
+            null);
         return true;
     }
 
