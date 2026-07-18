@@ -37,10 +37,10 @@ public static class RepositoryTestImpactPlanner
     ];
 
     private const string CliInfrastructureFilter =
-        "FullyQualifiedName~CliHelpTests";
+        "FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests";
 
     private const string DashboardInfrastructureFilter =
-        "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardValidationHarnessTests";
+        "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests";
 
     private static readonly string[] FullDotnetTests =
     [
@@ -212,15 +212,35 @@ public static class RepositoryTestImpactPlanner
     }
 
     private static string JoinFilters(string left, string? right) =>
-        string.IsNullOrWhiteSpace(right) ? left : $"{left}|{right}";
+        string.IsNullOrWhiteSpace(right) ? left : JoinFilterUnion([left, right]);
+
+    private static string JoinFilterUnion(IEnumerable<string> filters) =>
+        string.Join(
+            "|",
+            filters
+                .Where(filter => !string.IsNullOrWhiteSpace(filter))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(ParenthesizeCompositeFilter));
+
+    private static string ParenthesizeCompositeFilter(string filter)
+    {
+        var trimmed = filter.Trim();
+        if (trimmed.StartsWith("(", StringComparison.Ordinal) &&
+            trimmed.EndsWith(")", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        return trimmed.Contains('|') ||
+            trimmed.Contains('&')
+            ? $"({trimmed})"
+            : trimmed;
+    }
 
     private static (string Name, string Filter, string Reason)? TryBuildFocusedInfrastructureFilter(
         RepositoryChangeSummary summary,
         string[] appSubsystems)
     {
-        if (appSubsystems.Length != 1)
-            return null;
-
         if (summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
@@ -230,25 +250,40 @@ public static class RepositoryTestImpactPlanner
         if (summary.Files.Count(file => file.Categories.Contains(RepositoryChangeCategory.Source)) > 5)
             return null;
 
-        var subsystem = appSubsystems[0];
-        if (subsystem.Equals("cli", StringComparison.OrdinalIgnoreCase))
+        var filters = new List<string>();
+        var names = new List<string>();
+        foreach (var subsystem in appSubsystems.Order(StringComparer.OrdinalIgnoreCase))
         {
-            return (
-                "focused CLI infrastructure tests",
-                CliInfrastructureFilter,
-                "CLI-only App change; run the CLI-related Infrastructure test classes.");
+            if (subsystem.Equals("cli", StringComparison.OrdinalIgnoreCase))
+            {
+                filters.Add(CliInfrastructureFilter);
+                names.Add("CLI");
+                continue;
+            }
+
+            if (subsystem.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
+                subsystem.Equals("api", StringComparison.OrdinalIgnoreCase))
+            {
+                filters.Add(DashboardInfrastructureFilter);
+                if (!names.Contains("dashboard", StringComparer.OrdinalIgnoreCase))
+                    names.Add("dashboard");
+                continue;
+            }
+
+            return null;
         }
 
-        if (subsystem.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
-            subsystem.Equals("api", StringComparison.OrdinalIgnoreCase))
-        {
-            return (
-                "focused dashboard infrastructure tests",
-                DashboardInfrastructureFilter,
-                "Dashboard/API-only App change; run dashboard rendering and validation Infrastructure tests.");
-        }
+        if (filters.Count == 0)
+            return null;
 
-        return null;
+        return (
+            filters.Count == 1
+                ? $"focused {names[0]} infrastructure tests"
+                : $"focused {string.Join("+", names)} infrastructure tests",
+            JoinFilterUnion(filters),
+            filters.Count == 1
+                ? $"{names[0]}-only App change; run the mapped Infrastructure test partition."
+                : $"{string.Join(" and ", names)} App changes; run the union of mapped Infrastructure test partitions.");
     }
 
     private static string? AppSubsystem(string path)
