@@ -235,6 +235,9 @@ public sealed class ConductorBatchLoopTests
         var kernel = new AgentOrchestratorKernel();
         var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs");
         var goalB = CreateVerifiedSimpleGoal(kernel, "Also update src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs");
+        using var releaseAcceptance = new SemaphoreSlim(0);
+        using var acceptanceStarted = new SemaphoreSlim(0);
+        using var acceptanceFinished = new SemaphoreSlim(0);
         var running = 0;
         var overlapped = false;
         var slots = new ConcurrentQueue<int?>();
@@ -256,9 +259,17 @@ public sealed class ConductorBatchLoopTests
                         overlapped = true;
                     }
 
-                    Thread.Sleep(25);
-                    Interlocked.Decrement(ref running);
-                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                    acceptanceStarted.Release();
+                    try
+                    {
+                        Assert.True(releaseAcceptance.Wait(TimeSpan.FromSeconds(5)));
+                        return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref running);
+                        acceptanceFinished.Release();
+                    }
                 },
                 land: goal =>
                 {
@@ -268,29 +279,46 @@ public sealed class ConductorBatchLoopTests
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"],
                 parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
-            var totalAdvanced = 0;
-            var totalHeld = 0;
-            for (var tick = 0; tick < 8 && totalAdvanced < 2; tick++)
-            {
-                var summary = new ConductorBatchLoop().Run(
-                    kernel,
-                    driver,
-                    ConductorAutonomyPolicy.Conservative,
-                    NoStopPath(),
-                    maxIterations: 1);
-                totalAdvanced += summary.Advanced;
-                totalHeld += summary.Held;
-                Thread.Sleep(50);
-            }
+            var firstSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            Assert.True(acceptanceStarted.Wait(TimeSpan.FromSeconds(5)));
+            releaseAcceptance.Release();
+            Assert.True(acceptanceFinished.Wait(TimeSpan.FromSeconds(5)));
+
+            var secondSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            Assert.True(acceptanceStarted.Wait(TimeSpan.FromSeconds(5)));
+            releaseAcceptance.Release();
+            Assert.True(acceptanceFinished.Wait(TimeSpan.FromSeconds(5)));
+
+            var thirdSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            var totalAdvanced = firstSummary.Advanced + secondSummary.Advanced + thirdSummary.Advanced;
+            var totalHeld = firstSummary.Held + secondSummary.Held + thirdSummary.Held;
+            var observedSlots = slots.ToArray();
 
             Assert.Equal(2, totalAdvanced);
             Assert.True(totalHeld >= 2);
             Assert.False(overlapped);
-            Assert.Equal(2, slots.Count);
-            Assert.All(slots, slot => Assert.True(slot.HasValue));
+            Assert.Equal(2, observedSlots.Length);
+            Assert.All(observedSlots, slot => Assert.True(slot.HasValue));
         }
         finally
         {
+            releaseAcceptance.Release(2);
             waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
