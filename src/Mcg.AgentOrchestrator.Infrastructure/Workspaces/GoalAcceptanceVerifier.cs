@@ -1808,7 +1808,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
-                currentEnvironment,
+                retryEnvironment,
                 retryAttribution,
                 reacquireLease,
                 cancellationToken).ConfigureAwait(false);
@@ -2118,7 +2118,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsBuildLockFailure(CommandResult result, DotnetBuildEnvironment environment, out BuildLockAttribution attribution)
     {
         attribution = null!;
-        if (result.TimedOut || result.ExitCode == 0)
+        if (result.TimedOut || result.ExitCode == 0 || DotnetTestRunReportsCompleted(result.Output))
         {
             return false;
         }
@@ -2276,6 +2276,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsTransientNoHolderBuildArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
         HasNoActionableHolder(attribution) &&
         (PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) || IsBuildArtifactPath(attribution.Path));
+
+    private static bool DotnetTestRunReportsCompleted(string output) =>
+        Regex.IsMatch(
+            output,
+            @"(?:Passed|Failed)!\s*-\s*Failed:\s*\d+,\s*Passed:\s*\d+",
+            RegexOptions.IgnoreCase);
 
     private static bool IsBuildArtifactPath(string path)
     {

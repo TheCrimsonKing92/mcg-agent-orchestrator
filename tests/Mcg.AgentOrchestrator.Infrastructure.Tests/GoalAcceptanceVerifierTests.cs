@@ -1290,7 +1290,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                         ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 519, Skipped: 0, Total: 519.")
                         : new GoalAcceptanceVerifier.CommandResult(
                             1,
-                            "Failed! - Failed: 1, Passed: 1980, Skipped: 0, Total: 1981.\nRed.Namespace.FailingTest failed"));
+                            "Failed! - Failed: 1, Passed: 1980, Skipped: 0, Total: 1981.\n" +
+                            "Red.Namespace.FailingTest failed\n" +
+                            "error CS2012: Cannot open 'C:\\mcg-dotnet-isolated\\slots\\slot-0\\artifacts\\bin\\Core.Tests.dll' for writing because it is being used by another process."));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
