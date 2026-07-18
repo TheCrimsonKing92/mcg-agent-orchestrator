@@ -138,6 +138,7 @@ public sealed class ConductorDriverTests
         Action<Goal, AcceptanceVerificationSummary>? runAdvisorySemanticAcceptance = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Func<GoalId, TaskId, string, TaskSpec>? retryTask = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
         Action<GoalId, TaskId, string>? recordTaskNote = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
@@ -189,7 +190,8 @@ public sealed class ConductorDriverTests
             hasGateReadyGoal: hasGateReadyGoal,
             runFocusedEvidence: runFocusedEvidence,
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
-            recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded);
+            recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
+            retryTaskWithRoundKind: retryTaskWithRoundKind);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -1325,10 +1327,16 @@ public sealed class ConductorDriverTests
         var dispatched = false;
         var escalated = false;
         string? retryMessage = null;
+        RetryRoundKind? retryRoundKind = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
-            retryTask: (gid, tid, msg) => { retryMessage = msg; return kernel.RetryTask(gid, tid, msg); },
+            retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
+            {
+                retryMessage = msg;
+                retryRoundKind = roundKind;
+                return kernel.RetryTask(gid, tid, msg, retryRoundKind: roundKind);
+            },
             writeEscalation: (_, _, _) => { escalated = true; });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -1341,6 +1349,8 @@ public sealed class ConductorDriverTests
         Assert.Contains("auto-review-retry round 1", retryMessage);
         Assert.Contains(blocker, retryMessage);
         Assert.Contains("C:\\tmp\\reviewer.out.log", retryMessage);
+        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
+        Assert.Equal(RetryRoundKind.Mechanical, developer.PendingRetryRoundKind);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
@@ -1365,6 +1375,7 @@ public sealed class ConductorDriverTests
         var focusedRuns = 0;
         var retriedTaskIds = new List<TaskId>();
         string? retryMessage = null;
+        RetryRoundKind? retryRoundKind = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
@@ -1387,11 +1398,12 @@ public sealed class ConductorDriverTests
                             ArtifactsPath: "C:\\tmp\\trx")
                     ]);
             },
-            retryTask: (gid, tid, msg) =>
+            retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
             {
                 retriedTaskIds.Add(tid);
                 retryMessage = msg;
-                return kernel.RetryTask(gid, tid, msg);
+                retryRoundKind = roundKind;
+                return kernel.RetryTask(gid, tid, msg, retryRoundKind: roundKind);
             },
             recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
             recordReviewerEvidenceRunRecorded: (gid, tid, msg) => kernel.RecordReviewerEvidenceRunRecorded(gid, tid, msg));
@@ -1405,6 +1417,8 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         Assert.Contains("reviewer evidence-on-demand", retryMessage);
         Assert.Contains("C:\\tmp\\trx", retryMessage);
+        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
+        Assert.Equal(RetryRoundKind.Mechanical, reviewer.PendingRetryRoundKind);
         Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived);
         Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
