@@ -279,32 +279,29 @@ public sealed class ConductorBatchLoopTests
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Same.cs"],
                 parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
-            var firstSummary = new ConductorBatchLoop().Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1);
-            Assert.True(acceptanceStarted.Wait(TimeSpan.FromSeconds(5)));
-            releaseAcceptance.Release();
-            Assert.True(acceptanceFinished.Wait(TimeSpan.FromSeconds(5)));
+            BatchLoopSummary RunSingleTick() =>
+                new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
 
-            var secondSummary = new ConductorBatchLoop().Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1);
-            Assert.True(acceptanceStarted.Wait(TimeSpan.FromSeconds(5)));
-            releaseAcceptance.Release();
-            Assert.True(acceptanceFinished.Wait(TimeSpan.FromSeconds(5)));
+            void ReleaseStartedAcceptance()
+            {
+                Assert.True(acceptanceStarted.Wait(TimeSpan.FromSeconds(5)));
+                releaseAcceptance.Release();
+                Assert.True(acceptanceFinished.Wait(TimeSpan.FromSeconds(5)));
+                waitForAttempts();
+            }
 
-            var thirdSummary = new ConductorBatchLoop().Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1);
+            var firstSummary = RunSingleTick();
+            ReleaseStartedAcceptance();
+
+            var secondSummary = RunSingleTick();
+            ReleaseStartedAcceptance();
+
+            var thirdSummary = RunSingleTick();
 
             var totalAdvanced = firstSummary.Advanced + secondSummary.Advanced + thirdSummary.Advanced;
             var totalHeld = firstSummary.Held + secondSummary.Held + thirdSummary.Held;
@@ -440,6 +437,7 @@ public sealed class ConductorBatchLoopTests
 
         try
         {
+            using var allStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount + 1);
             var driver = MakeDriver(
                 getFacts: goal => landed.Contains(goal.Id.Value)
                     ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
@@ -447,6 +445,7 @@ public sealed class ConductorBatchLoopTests
                 runAcceptanceWithSlot: (_, slot) =>
                 {
                     slots.Enqueue(slot);
+                    allStarted.Signal();
                     lock (gate)
                     {
                         running++;
@@ -491,31 +490,32 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, firstSummary.Held);
             Assert.True(firstWaveStarted.Wait(TimeSpan.FromSeconds(5)));
             release.Set();
-            Thread.Sleep(100);
+            waitForAttempts();
 
-            var totalAdvanced = 0;
-            var deferredGoalStartedOnFirstFreeTick = false;
-            for (var tick = 0; tick < 8 && totalAdvanced < DotnetBuildEnvironmentManager.StableSlotCount + 1; tick++)
-            {
-                BatchTickSummary? tickSummary = null;
-                var summary = new ConductorBatchLoop().Run(
-                    kernel,
-                    driver,
-                    ConductorAutonomyPolicy.Conservative,
-                    NoStopPath(),
-                    maxIterations: 1,
-                    onTick: t => tickSummary = t);
-                totalAdvanced += summary.Advanced;
-                if (tick == 0)
-                {
-                    var deferredPrefix = goals[^1].Id.Value[..8];
-                    deferredGoalStartedOnFirstFreeTick = tickSummary?.ProgressLines?.Any(line =>
-                        line.Contains($"ACCEPTANCE goal={deferredPrefix}", StringComparison.Ordinal) &&
-                        line.Contains("result=started", StringComparison.Ordinal)) == true;
-                }
+            BatchTickSummary? firstFreeTick = null;
+            var firstFreeSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: t => firstFreeTick = t);
+            var totalAdvanced = firstFreeSummary.Advanced;
+            var deferredPrefix = goals[^1].Id.Value[..8];
+            var deferredGoalStartedOnFirstFreeTick = firstFreeTick?.ProgressLines?.Any(line =>
+                line.Contains($"ACCEPTANCE goal={deferredPrefix}", StringComparison.Ordinal) &&
+                line.Contains("result=started", StringComparison.Ordinal)) == true;
 
-                Thread.Sleep(50);
-            }
+            Assert.True(allStarted.Wait(TimeSpan.FromSeconds(5)));
+            waitForAttempts();
+
+            var finalSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            totalAdvanced += finalSummary.Advanced;
 
             Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, totalAdvanced);
             Assert.True(deferredGoalStartedOnFirstFreeTick);
