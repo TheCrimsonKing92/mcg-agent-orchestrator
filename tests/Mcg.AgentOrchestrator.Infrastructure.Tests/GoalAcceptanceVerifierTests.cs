@@ -1431,29 +1431,50 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_compiler_lock_and_returns_failed_when_retry_also_fails")]
-    public async Task GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
+    public void GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
     {
         var calls = new List<string[]>();
         var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
             new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
             new(0, ""),
+            new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process.")
         ]);
 
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        try
         {
-            calls.Add(args);
-            return Task.FromResult(responses.Dequeue());
-        });
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 2;
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
 
-        var blocked = await Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"));
+            BuildLockBlockedException? blocked = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"))
+                    .GetAwaiter()
+                    .GetResult());
 
-        Assert.Equal(lockedPath, blocked.Attribution.Path);
-        Assert.Equal(4, calls.Count);
-        AssertIsolatedTestCommand(calls[1]);
-        AssertIsolatedTestCommand(calls[3]);
+            Assert.NotNull(blocked);
+            Assert.Equal(lockedPath, blocked!.Attribution.Path);
+            Assert.Equal(5, calls.Count);
+            AssertIsolatedTestCommand(calls[1]);
+            AssertIsolatedTestCommand(calls[3]);
+            AssertIsolatedTestCommand(calls[4]);
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
+            Assert.Contains("max-cycles=2", output, StringComparison.Ordinal);
+            Assert.Contains("cycle=2", output, StringComparison.Ordinal);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=blocked", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_when_owned_process_kill_retry_still_reports_lock")]
