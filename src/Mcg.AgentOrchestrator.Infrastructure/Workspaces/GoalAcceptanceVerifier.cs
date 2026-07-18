@@ -132,6 +132,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
+    private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
     internal static TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
     internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
     internal static TimeSpan TransientNoHolderBuildLockRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
@@ -155,6 +156,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var previous = CurrentGateProgressSink.Value;
         CurrentGateProgressSink.Value = sink;
         return new RestoreAction(() => CurrentGateProgressSink.Value = previous);
+    }
+
+    public static IDisposable PushGateCancellationProbe(Func<bool> shouldCancel)
+    {
+        var previous = CurrentGateCancellationProbe.Value;
+        CurrentGateCancellationProbe.Value = shouldCancel;
+        return new RestoreAction(() => CurrentGateCancellationProbe.Value = previous);
     }
 
     public async Task<AcceptanceVerificationResult> RunAsync(
@@ -208,7 +216,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -223,7 +231,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                     scopedNames.Contains(c.Name)))
                 {
-                    var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                    var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                     retried |= checkResult.Retried;
                     checks.Add(checkResult.Result);
                     if (!checkResult.Result.Passed)
@@ -241,7 +249,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -253,7 +261,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             if (nonDotnetPassed)
             {
-                var slnRun = await RunCheckAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var slnRun = await RunCheckWithCancellationProbeAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= slnRun.Retried;
                 checks.Add(slnRun.Result);
 
@@ -279,7 +287,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
                         !deferredNames.Contains(c.Name)))
                     {
-                        var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                        var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                         retried |= checkResult.Retried;
                         checks.Add(checkResult.Result);
                         if (!checkResult.Result.Passed)
@@ -294,7 +302,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             foreach (var check in effectiveChecks)
             {
-                var checkResult = await RunCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -322,7 +330,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Advisory checks: always run, failures are recorded but do not affect overall Passed.
         foreach (var advisoryCheck in advisoryChecks)
         {
-            var checkResult = await RunCheckAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+            var checkResult = await RunCheckWithCancellationProbeAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result with { Advisory = true });
         }
 
@@ -374,7 +382,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var checks = new List<AcceptanceCheckResult>();
         foreach (var check in focusedChecks)
         {
-            var checkResult = await RunCheckAsync(
+            var checkResult = await RunCheckWithCancellationProbeAsync(
                 check,
                 worktreePath,
                 goalId,
@@ -403,6 +411,35 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Passed: failed is null,
             Summary: summary,
             Checks: checks);
+    }
+
+    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithCancellationProbeAsync(
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfGateCancellationRequested(cancellationToken);
+        var result = await RunCheckAsync(
+            check,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            cancellationToken).ConfigureAwait(false);
+        ThrowIfGateCancellationRequested(cancellationToken);
+        return result;
+    }
+
+    private static void ThrowIfGateCancellationRequested(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CurrentGateCancellationProbe.Value?.Invoke() == true)
+        {
+            throw new OperationCanceledException("acceptance gate attempt cancelled by goal disposition");
+        }
     }
 
     private static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>

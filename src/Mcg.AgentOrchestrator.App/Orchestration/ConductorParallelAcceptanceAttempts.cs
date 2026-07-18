@@ -53,7 +53,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     DateTimeOffset? ReconciledAt = null,
     string? Detail = null,
     int TransientFailureCount = 0,
-    IReadOnlyList<string>? TestResultPaths = null)
+    IReadOnlyList<string>? TestResultPaths = null,
+    IReadOnlyList<string>? LeaseReceipts = null,
+    int ReplayedLeaseReceiptCount = 0)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -84,6 +86,12 @@ internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
     Action<int> ExecuteInCurrentProcess);
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
+
+internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptanceRunAcceptance(
+    ConductorParallelAcceptanceCandidate candidate,
+    ConductorAutonomyPolicy policy,
+    DotnetBuildEnvironmentLease? stableSlotLease,
+    CancellationToken cancellationToken);
 
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
@@ -119,7 +127,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
+        Evaluate(candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
+
+    internal ConductorParallelAcceptanceAttemptDecision Evaluate(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsReconciled(current))
@@ -187,10 +201,32 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
+    internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            var receipts = current.LeaseReceipts ?? [];
+            var replayedCount = Math.Clamp(current.ReplayedLeaseReceiptCount, 0, receipts.Count);
+            if (replayedCount >= receipts.Count)
+            {
+                return [];
+            }
+
+            var pending = receipts.Skip(replayedCount).ToArray();
+            WriteAttemptFile(current with
+            {
+                ReplayedLeaseReceiptCount = receipts.Count,
+                LastHeartbeatAt = _utcNow()
+            });
+            return pending;
+        }
+    }
+
     private ConductorParallelAcceptanceAttemptDecision Launch(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var attempt = CreateAttempt(candidate, policy);
         try
@@ -250,7 +286,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
+        RunAttemptForTests(attempt, candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
+
+    internal void RunAttemptForTests(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         RunAttempt(attempt, candidate, policy, runAcceptance);
     }
@@ -344,12 +387,62 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
+        DotnetBuildEnvironmentLease? stableSlotLease = null;
+        ConductorParallelAcceptanceRunResult? run = null;
+        (ConductorParallelAcceptanceAttemptOutcome Outcome, string Detail, bool Transient)? terminalWithoutResult = null;
+        string? stderrDetail = null;
         try
         {
             WriteHeartbeat(attempt, "running");
-            var run = RunWithAttemptTelemetryContext(attempt, candidate, policy, runAcceptance);
+            stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
+            run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+        }
+        catch (OperationCanceledException ex)
+        {
+            terminalWithoutResult = (ConductorParallelAcceptanceAttemptOutcome.Cancelled, ex.Message, false);
+        }
+        catch (Exception ex) when (IsTransientAttemptIo(ex))
+        {
+            terminalWithoutResult = (ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts, ex.Message, true);
+        }
+        catch (Exception ex)
+        {
+            run = ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
+            stderrDetail = ex.ToString();
+        }
+        finally
+        {
+            try
+            {
+                if (run is not null)
+                {
+                    CompleteWithRunResult(attempt, run, stderrDetail);
+                }
+                else if (terminalWithoutResult is { } terminal)
+                {
+                    CompleteWithoutResult(attempt, terminal.Outcome, terminal.Detail, terminal.Transient);
+                }
+            }
+            finally
+            {
+                if (stableSlotLease is not null)
+                {
+                    stableSlotLease.Dispose();
+                    EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+                }
+            }
+        }
+    }
+
+    private void CompleteWithRunResult(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceRunResult run,
+        string? stderrDetail)
+    {
+        try
+        {
             WriteResult(attempt.ResultPath, ToArtifact(run));
             var outcome = OutcomeFor(run);
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
@@ -363,12 +456,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = run.Acceptance?.TestResultPaths
             });
+            if (!string.IsNullOrWhiteSpace(stderrDetail))
+            {
+                TryAppend(attempt.StderrPath, $"{stderrDetail}{Environment.NewLine}");
+            }
+
             File.AppendAllText(attempt.StdoutPath, $"acceptance attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
-        }
-        catch (OperationCanceledException ex)
-        {
-            CompleteWithoutResult(attempt, ConductorParallelAcceptanceAttemptOutcome.Cancelled, ex.Message);
         }
         catch (Exception ex) when (IsTransientAttemptIo(ex))
         {
@@ -380,41 +474,96 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
         catch (Exception ex)
         {
-            var run = ConductorParallelAcceptanceRunResult.Fault(candidate, ex);
-            WriteResult(attempt.ResultPath, ToArtifact(run));
-            var outcome = OutcomeFor(run);
-            TryWriteExit(attempt.ExitCodePath, 1);
-            TryPersistTerminal(attempt, current => current with
-            {
-                BranchHeadSha = run.Candidate.BranchHeadSha,
-                MainHeadSha = run.Candidate.MainHeadSha,
-                Outcome = outcome,
-                CompletedAt = _utcNow(),
-                LastHeartbeatAt = _utcNow(),
-                Detail = ex.Message,
-                TestResultPaths = run.Acceptance?.TestResultPaths
-            });
+            CompleteWithoutResult(
+                attempt,
+                ConductorParallelAcceptanceAttemptOutcome.Failed,
+                ex.Message);
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
-            WriteHeartbeat(attempt, "exiting");
         }
+    }
+
+    private DotnetBuildEnvironmentLease AcquireAttemptStableSlotLease(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate)
+    {
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(candidate.SlotIndex);
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+        if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
+        {
+            EmitAttemptLeaseReceipt("acquire", attempt, candidate, Environment.ProcessId);
+            EmitAttemptLeaseReceipt("handoff", attempt, candidate, Environment.ProcessId);
+            return acquired.Lease;
+        }
+
+        if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy busy)
+        {
+            var holderPid = busy.BusySlots.FirstOrDefault(slot => slot.SlotIndex == candidate.SlotIndex).OwnerProcessId;
+            EmitAttemptLeaseReceipt("yield", attempt, candidate, holderPid);
+            throw new DotnetBuildSlotsBusyException(busy);
+        }
+
+        if (acquisition is DotnetBuildLeaseAcquisition.BuildLockBlocked blocked)
+        {
+            throw new BuildLockBlockedException(blocked.Attribution);
+        }
+
+        throw new InvalidOperationException("Unknown dotnet build lease acquisition result.");
     }
 
     private static ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance)
+        DotnetBuildEnvironmentLease stableSlotLease,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
         Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
         try
         {
-            return runAcceptance(candidate, policy);
+            return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
         }
         finally
         {
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
+        }
+    }
+
+    private void EmitAttemptLeaseReceipt(
+        string action,
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        int? holderPid)
+    {
+        var pid = holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} slot=slot-{candidate.SlotIndex} holderPid={pid}";
+        Console.WriteLine(line);
+        PersistLeaseReceipt(attempt, line);
+    }
+
+    private void PersistLeaseReceipt(ConductorParallelAcceptanceAttempt attempt, string line)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null || !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var receipts = (current.LeaseReceipts ?? []).ToList();
+            if (receipts.Contains(line, StringComparer.Ordinal))
+            {
+                return;
+            }
+
+            receipts.Add(line);
+            WriteAttemptFile(current with
+            {
+                LeaseReceipts = receipts,
+                LastHeartbeatAt = _utcNow()
+            });
         }
     }
 
@@ -444,6 +593,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate)
     {
         ConductorParallelAcceptanceAttemptDecision durablePassed;
+        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
+            IsAttemptExecutionLeaseStillHeld(attempt))
+        {
+            return null;
+        }
 
         if (File.Exists(attempt.ResultPath))
         {
@@ -517,6 +671,17 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
 
         return null;
+    }
+
+    private static bool IsAttemptExecutionLeaseStillHeld(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(attempt.SlotIndex))
+        {
+            return false;
+        }
+
+        var ownerProcessId = DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(attempt.SlotIndex);
+        return ownerProcessId.HasValue && ownerProcessId.Value == attempt.OwnerProcessId;
     }
 
     private void MarkStale(ConductorParallelAcceptanceAttempt attempt)

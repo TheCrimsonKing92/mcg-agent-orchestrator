@@ -21,7 +21,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Action _buildServerShutdown;
-    private readonly Func<Goal, int?, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<GoalId, TaskId, string, TaskSpec> _retryTask;
@@ -239,7 +239,7 @@ internal sealed class ConductorDriver
             catch { }
         };
 
-        _runAcceptanceVerification = (goal, stableSlotIndex) =>
+        _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken) =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
@@ -253,7 +253,15 @@ internal sealed class ConductorDriver
             {
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
                     AppendGateProgressEvent(dir, goal.Id, progress));
-                verification = acceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex).GetAwaiter().GetResult();
+                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
+                    () => IsAcceptanceAttemptCancelled(workspace, goal.Id));
+                verification = acceptanceVerifier.RunAsync(
+                    worktreePath,
+                    goal.Id,
+                    changedFiles,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    cancellationToken).GetAwaiter().GetResult();
             }
             catch (DotnetBuildSlotsBusyException ex)
             {
@@ -532,6 +540,7 @@ internal sealed class ConductorDriver
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceVerificationWithSlot = null,
+        Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary>? runAcceptanceVerificationWithLease = null,
         Func<bool>? hasGateReadyGoal = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
@@ -546,7 +555,10 @@ internal sealed class ConductorDriver
             ? _dispatchAndStart
             : (goal, _) => startRecordedDispatches(goal);
         _buildServerShutdown = buildServerShutdown ?? (() => { });
-        _runAcceptanceVerification = runAcceptanceVerificationWithSlot ?? ((goal, _) => runAcceptanceVerification(goal));
+        _runAcceptanceVerification = runAcceptanceVerificationWithLease
+            ?? (runAcceptanceVerificationWithSlot is not null
+                ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
+                : ((goal, _, _, _) => runAcceptanceVerification(goal)));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence ?? ((_, request) => new FocusedEvidenceRunResult(
             request,
@@ -1017,7 +1029,9 @@ internal sealed class ConductorDriver
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy)
+        ConductorAutonomyPolicy policy,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken)
     {
         var effectiveCandidate = candidate;
         try
@@ -1036,7 +1050,11 @@ internal sealed class ConductorDriver
             effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
             return ConductorParallelAcceptanceRunResult.Accepted(
                 effectiveCandidate,
-                _runAcceptanceVerification(effectiveCandidate.Goal, effectiveCandidate.SlotIndex));
+                _runAcceptanceVerification(
+                    effectiveCandidate.Goal,
+                    effectiveCandidate.SlotIndex,
+                    stableSlotLease,
+                    cancellationToken));
         }
         catch (Exception ex)
         {
@@ -1052,6 +1070,25 @@ internal sealed class ConductorDriver
             candidate.ScopePaths,
             TryResolveAcceptanceBranchHead(candidate.Goal),
             _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
+
+    private static bool IsAcceptanceAttemptCancelled(OrchestratorWorkspace workspace, GoalId goalId)
+    {
+        try
+        {
+            var latest = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .LoadAsync()
+                .GetAwaiter()
+                .GetResult()
+                .Goals
+                .FirstOrDefault(goal => goal.Id == goalId);
+            return latest is null ||
+                latest.Status is GoalStatus.Parked or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     internal ConductorAdvanceResult CompleteParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
@@ -1547,7 +1584,7 @@ internal sealed class ConductorDriver
         AcceptanceVerificationSummary acceptance;
         try
         {
-            acceptance = _runAcceptanceVerification(goal, null);
+            acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
         }
         catch (DotnetBuildSlotsBusyException ex)
         {
