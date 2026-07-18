@@ -16,7 +16,8 @@ public sealed record BuildLockAttribution(
     IReadOnlyList<BuildLockHolder> Holders,
     string Source,
     string? Phase = null,
-    string? Operation = null);
+    string? Operation = null,
+    TimeSpan? ProbeElapsed = null);
 
 public sealed class BuildLockBlockedException : IOException
 {
