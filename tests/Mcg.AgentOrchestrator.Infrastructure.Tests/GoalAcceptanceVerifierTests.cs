@@ -123,7 +123,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 {
                     _ = Task.Run(async () =>
                     {
-                        await Task.Delay(100);
+                        await Task.Delay(500);
                         held.Dispose();
                     });
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -1272,7 +1272,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                         held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
                         _ = Task.Run(async () =>
                         {
-                            await Task.Delay(100);
+                            await Task.Delay(500);
                             held!.Dispose();
                         });
                         return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
