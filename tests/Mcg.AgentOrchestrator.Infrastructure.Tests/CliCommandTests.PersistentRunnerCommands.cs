@@ -1014,6 +1014,118 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(terminalGoalIds[0], terminalSnapshot.Id);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_sweeps_terminal_candidates_loaded_on_demand")]
+    public void PersistentRunnerConductLoopSweepsTerminalCandidatesLoadedOnDemand()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement terminal cleanup", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Terminal cleanup candidate", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/terminal-cleanup.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["conduct", "--loop", "--max-iterations", "0"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            var restored = repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult()!;
+            Xunit.Assert.Equal(0, repository.LoadCount);
+            Xunit.Assert.True(repository.LoadGoalsCount >= 2);
+            Xunit.Assert.Contains(goal.Id.Value, repository.LoadedGoalIds);
+            Xunit.Assert.Equal(GoalStatus.Verified, restored.Status);
+            Xunit.Assert.Contains("completed-branch-normalized", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_timeline_loads_terminal_goal_on_demand")]
+    public void PersistentRunnerTimelineLoadsTerminalGoalOnDemand()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var completed = kernel.CreateGoal("Completed timeline goal", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active goal");
+        kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["timeline", completed.Id.Value[..8]],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Contains(completed.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Equal(completed.Id, currentGoal!.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_provenance_loads_completed_goals_on_demand")]
+    public void PersistentRunnerProvenanceLoadsCompletedGoalsOnDemand()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var completed = kernel.CreateGoal("Backed completed goal", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active provenance bystander");
+        kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = active;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["provenance"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Contains(completed.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.Contains("BACKED", output, StringComparison.Ordinal);
+    }
+
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_tick_merge_skip_formats_receipt")]
     public void PersistentRunnerTickMergeSkipFormatsReceipt()

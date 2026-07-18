@@ -106,6 +106,16 @@ internal static class CliPersistentStateRunner
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsSingleGoalSnapshotCommand(args))
+        {
+            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
+        if (IsProvenanceCommand(args))
+        {
+            return ExecuteProvenanceWithoutFullHydration(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (IsGoalLifecycleDispositionCommand(args))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -266,6 +276,22 @@ internal static class CliPersistentStateRunner
         return args.Count > 0 && args[0].Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool IsSingleGoalSnapshotCommand(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+            return false;
+
+        return args[0].ToLowerInvariant() switch
+        {
+            "timeline" or "task-timeline" => true,
+            "goal-timing" => args.Count > 1 && !args[1].Equals("--all", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
+    internal static bool IsProvenanceCommand(IReadOnlyList<string> args) =>
+        args.Count == 1 && args[0].Equals("provenance", StringComparison.OrdinalIgnoreCase);
+
     internal static bool IsGoalLifecycleDispositionCommand(IReadOnlyList<string> args)
     {
         if (args.Count == 0)
@@ -296,13 +322,17 @@ internal static class CliPersistentStateRunner
 
         try
         {
-            var kernel = stateRepository.LoadAsync(cancellation.Token).GetAwaiter().GetResult();
-            currentGoal = ResolveCurrentGoal(kernel, currentGoalId);
+            var goalId = ResolveSingleGoalCommandGoalId(
+                stateRepository,
+                currentGoalId,
+                GetOptionalArgument(args, "--confirm-goal-mark-landed", "--force"));
+            var kernel = LoadSingleGoalKernel(stateRepository, goalId, cancellation.Token);
+            currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
             void Persist(AgentOrchestratorKernel checkpoint)
             {
                 slowStep = "state-save-commit";
-                stateRepository.SaveAsync(checkpoint, cancellation.Token).GetAwaiter().GetResult();
+                PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId, cancellation.Token);
                 slowStep = "command-handler";
             }
 
@@ -316,7 +346,7 @@ internal static class CliPersistentStateRunner
                     ref workerProfiles,
                     ref currentGoal,
                     channel,
-                    () => stateRepository.LoadAsync(cancellation.Token).GetAwaiter().GetResult(),
+                    () => LoadSingleGoalKernel(stateRepository, goalId, cancellation.Token),
                     Persist,
                     goalMarkLandedElapsedMilliseconds: () => elapsed.ElapsedMilliseconds);
 
@@ -427,10 +457,19 @@ internal static class CliPersistentStateRunner
         TerminalGoalSweepResult? sweep = null;
         try
         {
-            sweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
+            var watchGoalId = ResolveConductWatchGoalId(args, kernel, currentGoal, stateRepository);
+            var sweepKernel = LoadConductLoopSweepKernel(stateRepository, kernel, workspace.ExecutionDirectory, watchGoalId);
+            sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
             ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
-            GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
-            RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory, ResolveConductWatchGoalId(args, kernel, currentGoal));
+            if (sweep.Changed)
+            {
+                PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
+                kernel = LoadConductLoopKernel(stateRepository);
+                tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+            }
+
+            GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
+            RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
         }
         catch (Exception ex)
         {
@@ -473,11 +512,6 @@ internal static class CliPersistentStateRunner
                     Console.WriteLine(FormatTickMergeReceipt(result));
                 }
             }
-        }
-
-        if (sweep?.Changed == true)
-        {
-            Persist(kernel);
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -554,6 +588,79 @@ internal static class CliPersistentStateRunner
         return kernel;
     }
 
+    private static AgentOrchestratorKernel LoadConductLoopSweepKernel(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        AgentOrchestratorKernel workingSetKernel,
+        string executionDirectory,
+        GoalId? onlyGoalId)
+    {
+        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, onlyGoalId)
+            .Where(id => !workingSetKernel.Goals.Any(goal => goal.Id == id))
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return workingSetKernel;
+        }
+
+        var terminalKernel = stateRepository.LoadGoalsAsync(candidates).GetAwaiter().GetResult();
+        return MergeKernels(workingSetKernel, terminalKernel.ExportSnapshot().Goals);
+    }
+
+    private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string executionDirectory,
+        GoalId? onlyGoalId)
+    {
+        if (onlyGoalId is not null)
+        {
+            return [onlyGoalId];
+        }
+
+        var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
+        var gitFacts = GoalGitFactIndex.Build(executionDirectory);
+        return summaries
+            .Where(summary => IsConductLoopTerminalStatus(summary.Status))
+            .Select(summary => new GoalId(summary.Id))
+            .Where(id =>
+                gitFacts.HasGoalBranch(GoalWorktrees.BranchName(id)) ||
+                GoalWorktrees.TryResolve(executionDirectory, id) is not null ||
+                GoalWorktrees.TryGetCleanupBackoff(executionDirectory, id) is not null)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static void PersistSweepChanges(
+        AgentOrchestratorKernel sweepKernel,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        IReadOnlyCollection<GoalId> changedGoalIds)
+    {
+        if (changedGoalIds.Count == 0)
+        {
+            return;
+        }
+
+        var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var snapshots = sweepKernel.ExportSnapshot().Goals
+            .Where(goal => changed.Contains(goal.Id))
+            .ToArray();
+        if (snapshots.Length > 0)
+        {
+            stateRepository.SaveGoalSnapshotsAsync(snapshots, CancellationToken.None).GetAwaiter().GetResult();
+        }
+    }
+
+    private static AgentOrchestratorKernel MergeKernels(
+        AgentOrchestratorKernel baseKernel,
+        IReadOnlyList<GoalSnapshot> additionalGoals)
+    {
+        var snapshot = baseKernel.ExportSnapshot();
+        var existing = snapshot.Goals.Select(goal => goal.Id).ToHashSet(StringComparer.Ordinal);
+        var mergedGoals = snapshot.Goals
+            .Concat(additionalGoals.Where(goal => existing.Add(goal.Id)))
+            .ToArray();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = mergedGoals });
+    }
+
     private static bool IsConductLoopTerminalStatus(string status) =>
         status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
@@ -590,6 +697,75 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool ExecuteSingleGoalCommandWithoutTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var goalId = ResolveSingleGoalCommandGoalId(
+            stateRepository,
+            currentGoal?.Id.Value,
+            ResolveSingleGoalSnapshotCommandGoalPrefix(args));
+        var kernel = LoadSingleGoalKernel(stateRepository, goalId);
+        currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
+
+        void Persist(AgentOrchestratorKernel checkpoint) =>
+            PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => LoadSingleGoalKernel(stateRepository, goalId),
+            Persist);
+
+        if (shouldSave)
+        {
+            Persist(kernel);
+        }
+
+        return shouldSave;
+    }
+
+    private static bool ExecuteProvenanceWithoutFullHydration(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var completedGoalIds = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(goal => goal.Status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase))
+            .Select(goal => new GoalId(goal.Id))
+            .ToArray();
+        var kernel = LoadGoalSnapshotsById(stateRepository, completedGoalIds);
+        currentGoal = null;
+
+        return CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => LoadGoalSnapshotsById(stateRepository, completedGoalIds));
     }
 
     private static bool ExecuteBacklogIntakeOutsideTransaction(
@@ -1174,6 +1350,40 @@ internal static class CliPersistentStateRunner
     private static string? ResolveAcceptanceGoalPrefix(IReadOnlyList<string> parts) =>
         GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
 
+    private static string? ResolveSingleGoalSnapshotCommandGoalPrefix(IReadOnlyList<string> parts)
+    {
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        if (parts[0].Equals("goal-timing", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts.Count > 1 ? parts[1] : null;
+        }
+
+        if (parts[0].Equals("timeline", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts.Count > 1 ? parts[1] : null;
+        }
+
+        if (parts[0].Equals("task-timeline", StringComparison.OrdinalIgnoreCase))
+        {
+            var goalFlag = GetFlagValue(parts, "--goal");
+            if (!string.IsNullOrWhiteSpace(goalFlag))
+            {
+                return goalFlag;
+            }
+
+            if (parts.Count > 2 && !int.TryParse(parts[1], out _))
+            {
+                return parts[1];
+            }
+        }
+
+        return null;
+    }
+
     private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
     {
         for (var i = 1; i < parts.Count; i++)
@@ -1268,11 +1478,30 @@ internal static class CliPersistentStateRunner
 
     private static AgentOrchestratorKernel LoadSingleGoalKernel(
         ITransactionalOrchestratorStateRepository stateRepository,
-        GoalId goalId)
+        GoalId goalId,
+        CancellationToken cancellationToken = default)
     {
-        var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+        var snapshot = stateRepository.LoadGoalAsync(goalId, cancellationToken).GetAwaiter().GetResult()
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
         return KernelFromGoalSnapshot(snapshot);
+    }
+
+    private static AgentOrchestratorKernel LoadGoalSnapshotsById(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        IReadOnlyList<GoalId> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshots = new List<GoalSnapshot>(goalIds.Count);
+        foreach (var goalId in goalIds)
+        {
+            var snapshot = stateRepository.LoadGoalAsync(goalId, cancellationToken).GetAwaiter().GetResult();
+            if (snapshot is not null)
+            {
+                snapshots.Add(snapshot);
+            }
+        }
+
+        return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(snapshots, []));
     }
 
     private static AgentOrchestratorKernel KernelFromGoalSnapshot(GoalSnapshot snapshot) =>
@@ -1285,16 +1514,18 @@ internal static class CliPersistentStateRunner
     private static void PersistSingleGoalSnapshot(
         ITransactionalOrchestratorStateRepository stateRepository,
         AgentOrchestratorKernel kernel,
-        GoalId goalId)
+        GoalId goalId,
+        CancellationToken cancellationToken = default)
     {
         var snapshot = ExportGoalSnapshot(kernel, goalId);
-        stateRepository.SaveGoalSnapshotsAsync([snapshot], CancellationToken.None).GetAwaiter().GetResult();
+        stateRepository.SaveGoalSnapshotsAsync([snapshot], cancellationToken).GetAwaiter().GetResult();
     }
 
     private static GoalId? ResolveConductWatchGoalId(
         IReadOnlyList<string> args,
         AgentOrchestratorKernel kernel,
-        Goal? currentGoal)
+        Goal? currentGoal,
+        ITransactionalOrchestratorStateRepository? stateRepository = null)
     {
         if (args.Count < 2 ||
             !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
@@ -1305,7 +1536,27 @@ internal static class CliPersistentStateRunner
             return null;
         }
 
-        return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, args[1]).Id;
+        var prefix = args[1];
+        var match = kernel.Goals.Where(goal => goal.Id.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (match.Length == 1)
+        {
+            return match[0].Id;
+        }
+
+        if (stateRepository is not null)
+        {
+            var metadataMatches = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+                .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            return metadataMatches.Length switch
+            {
+                1 => new GoalId(metadataMatches[0].Id),
+                0 => throw new KeyNotFoundException($"Goal '{prefix}' was not found."),
+                _ => throw new InvalidOperationException($"Goal prefix '{prefix}' is ambiguous.")
+            };
+        }
+
+        return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, prefix).Id;
     }
 
     private static bool ConductLoopWillExitBeforeFirstTick(IReadOnlyList<string> args, string executionDirectory)
