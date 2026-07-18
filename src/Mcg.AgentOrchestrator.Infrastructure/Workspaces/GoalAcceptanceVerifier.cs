@@ -1753,7 +1753,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceCheckTimeouts.DefaultTimeout,
             cancellationToken).ConfigureAwait(false);
 
-        if (IsTransientNoHolderSlotArtifactLock(attribution, currentEnvironment))
+        if (IsTransientNoHolderBuildArtifactLock(attribution, currentEnvironment))
         {
             return await RetryTransientNoHolderBuildLockAsync(
                 arguments,
@@ -1798,7 +1798,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         retryAttribution ??= attribution;
-        if (IsTransientNoHolderSlotArtifactLock(retryAttribution, retryEnvironment))
+        if (IsTransientNoHolderBuildArtifactLock(retryAttribution, retryEnvironment))
         {
             return await RetryTransientNoHolderBuildLockAsync(
                 arguments,
@@ -2190,9 +2190,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static bool IsTransientNoHolderSlotArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
-        PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
-        HasNoActionableHolder(attribution);
+    private static bool IsTransientNoHolderBuildArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
+        HasNoActionableHolder(attribution) &&
+        (PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) || IsBuildArtifactPath(attribution.Path));
+
+    private static bool IsBuildArtifactPath(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".pdb", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".trx", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cache", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".lock", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasNoActionableHolder(BuildLockAttribution attribution) =>
         attribution.Holders.Count == 0 ||
