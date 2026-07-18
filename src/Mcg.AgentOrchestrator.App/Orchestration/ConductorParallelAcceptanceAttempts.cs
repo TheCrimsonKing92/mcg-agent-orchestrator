@@ -593,6 +593,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate)
     {
         ConductorParallelAcceptanceAttemptDecision durablePassed;
+        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
+            IsAttemptExecutionLeaseStillHeld(attempt))
+        {
+            return null;
+        }
 
         if (File.Exists(attempt.ResultPath))
         {
@@ -666,6 +671,17 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
 
         return null;
+    }
+
+    private static bool IsAttemptExecutionLeaseStillHeld(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(attempt.SlotIndex))
+        {
+            return false;
+        }
+
+        var ownerProcessId = DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(attempt.SlotIndex);
+        return ownerProcessId.HasValue && ownerProcessId.Value == attempt.OwnerProcessId;
     }
 
     private void MarkStale(ConductorParallelAcceptanceAttempt attempt)
