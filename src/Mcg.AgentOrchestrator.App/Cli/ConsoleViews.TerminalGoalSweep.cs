@@ -9,7 +9,7 @@ internal static partial class ConsoleViews
         bool includeRepairs = true,
         bool includeBlockers = true)
     {
-        if (includeBlockers && result.ExcludedGoalCount > 0)
+        if (result.ExcludedGoalCount > 0)
         {
             Console.WriteLine($"SWEEP_SUMMARY kind=stale-terminal-excluded count={result.ExcludedGoalCount}");
         }

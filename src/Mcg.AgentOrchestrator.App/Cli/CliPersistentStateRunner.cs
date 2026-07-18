@@ -460,6 +460,15 @@ internal static class CliPersistentStateRunner
             var watchGoalId = ResolveConductWatchGoalId(args, kernel, currentGoal, stateRepository);
             var sweepKernel = LoadConductLoopSweepKernel(stateRepository, kernel, workspace.ExecutionDirectory, watchGoalId);
             sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
+            var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
+                stateRepository,
+                workspace.ExecutionDirectory,
+                watchGoalId);
+            if (metadataOnlyExcludedGoalCount > 0)
+            {
+                sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
+            }
+
             ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
             if (sweep.Changed)
             {
@@ -617,6 +626,19 @@ internal static class CliPersistentStateRunner
         }
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
+        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId);
+    }
+
+    private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
+        IReadOnlyList<GoalSummary> summaries,
+        string executionDirectory,
+        GoalId? onlyGoalId)
+    {
+        if (onlyGoalId is not null)
+        {
+            return [onlyGoalId];
+        }
+
         var gitFacts = GoalGitFactIndex.Build(executionDirectory);
         return summaries
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
@@ -627,6 +649,28 @@ internal static class CliPersistentStateRunner
                 GoalWorktrees.TryGetCleanupBackoff(executionDirectory, id) is not null)
             .Distinct()
             .ToArray();
+    }
+
+    private static int CountMetadataOnlyTerminalSweepExclusions(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string executionDirectory,
+        GoalId? onlyGoalId)
+    {
+        if (onlyGoalId is not null)
+        {
+            return 0;
+        }
+
+        var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
+        var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId)
+            .Select(id => id.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        return summaries
+            .Where(summary => IsConductLoopTerminalStatus(summary.Status))
+            .Select(summary => summary.Id)
+            .Where(id => !hydratedSweepCandidateIds.Contains(id))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
     }
 
     private static void PersistSweepChanges(
