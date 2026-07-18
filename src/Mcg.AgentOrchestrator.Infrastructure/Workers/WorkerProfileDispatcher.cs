@@ -1304,7 +1304,7 @@ public static class WorkerProfileDispatcher
     {
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
-            if (TrySelectCheapDeveloperLane(agent, goal, task, fullSelection, profiles, out var cheapSelection))
+            if (TrySelectCheapLane(agent, goal, task, fullSelection, profiles, out var cheapSelection))
             {
                 return cheapSelection;
             }
@@ -1346,7 +1346,7 @@ public static class WorkerProfileDispatcher
             Reason: $"light-role: {task.RequiredRole} uses {AnthropicSubscriptionProfileName}/{LightRoleAnthropicModelName}");
     }
 
-    private static bool TrySelectCheapDeveloperLane(
+    private static bool TrySelectCheapLane(
         AgentDefinition agent,
         Goal goal,
         TaskSpec task,
@@ -1355,14 +1355,18 @@ public static class WorkerProfileDispatcher
         out SubscriptionModelSelection selection)
     {
         selection = fullSelection;
-        if (task.RequiredRole != AgentRole.Developer ||
-            !agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+        var mechanicalRetry = task.PendingRetryRoundKind == RetryRoundKind.Mechanical;
+        if (!agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
             HasCustomWorkerProfileOverride(agent))
         {
             return false;
         }
 
-        var mechanicalRetry = task.PendingRetryRoundKind == RetryRoundKind.Mechanical;
+        if (!mechanicalRetry && task.RequiredRole != AgentRole.Developer)
+        {
+            return false;
+        }
+
         var smallTask = (fullSelection.Complexity is not TaskComplexity.Complex || HasExplicitSmallTaskIntakeLabel(goal)) &&
             !HasHighRiskOrComplexIntakeRiskLabel(goal);
         if (!mechanicalRetry && !smallTask)
@@ -1399,7 +1403,7 @@ public static class WorkerProfileDispatcher
                 agent.Model.MaxOutputTokens),
             UsesComplexModel: false,
             UsesSubscriptionLaunchProfile: false,
-            Reason: $"cheap-lane: Developer {triggerReason} uses {OpenAiSparkSubscriptionProfileName}/{OpenAiSparkSubscriptionModelName}",
+            Reason: $"cheap-lane: {task.RequiredRole} {triggerReason} uses {OpenAiSparkSubscriptionProfileName}/{OpenAiSparkSubscriptionModelName}",
             LaunchProfileName: OpenAiSparkSubscriptionProfileName,
             DispatchLane: OpenAiSparkSubscriptionProfileName);
         return true;

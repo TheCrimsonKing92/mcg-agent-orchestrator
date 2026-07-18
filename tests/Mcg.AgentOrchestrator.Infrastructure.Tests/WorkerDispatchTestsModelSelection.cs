@@ -823,6 +823,47 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Contains("cheap-lane: Developer mechanical-retry", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_routes_mechanical_tester_retry_to_codex_spark_even_when_complex")]
+    public void WorkerProfileDispatcherRoutesMechanicalTesterRetryToCodexSparkEvenWhenComplex()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Implement high-risk multi-scope persistence migration",
+        [new TaskSpec(
+            TaskId.New(),
+            "Build comprehensive production integration tests for API CLI dashboard provider subscription worker persistence state, schema migration, rollback, deadlock, and authorization behavior.",
+            AgentRole.Tester)]);
+    var agents = AgentCatalog.Default().Agents;
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; reasons: high-risk objective needs pre-acceptance review; risk labels: complex, high-risk, multi-scope.");
+    kernel.ActivateGoal(goal.Id, agents);
+    var task = goal.Tasks.Single();
+    kernel.RetryTask(goal.Id, task.Id, "Mechanical retry: rerun named commands and quote receipts; commit nothing.", retryRoundKind: RetryRoundKind.Mechanical);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+
+    Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
+    Assert.Equal("codex-spark", task.LastDispatch.WorkerName);
+    Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+    Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+    Assert.Contains("cheap-lane: Tester mechanical-retry", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+    Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_to_default_lane_when_codex_spark_is_unconfigured")]
     public void WorkerProfileDispatcherFallsBackToDefaultLaneWhenCodexSparkIsUnconfigured()
 {
