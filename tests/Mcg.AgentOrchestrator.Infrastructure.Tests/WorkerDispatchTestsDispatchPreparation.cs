@@ -1267,8 +1267,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.DoesNotContain("old operator feedback", failureBlock, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_latest_developer_retry_blocker_before_prior_branch_and_digest_context")]
-    public void BuildTaskBriefPutsLatestDeveloperRetryBlockerBeforePriorBranchAndDigestContext()
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_accumulated_retry_feedback_before_prior_branch_and_digest_context")]
+    public void BuildTaskBriefPutsAccumulatedRetryFeedbackBeforePriorBranchAndDigestContext()
 {
     var root = CreateTempDirectory();
     var workingDirectory = Path.Combine(root, "repo");
@@ -1316,8 +1316,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         targetBranchName: "goal/41c6e2a2",
         targetHeadCommit: "abcdef123456").Content;
 
-    var retryStart = prompt.IndexOf("<!-- LATEST_DEVELOPER_RETRY_BLOCKER_START -->", StringComparison.Ordinal);
-    var retryEnd = prompt.IndexOf("<!-- LATEST_DEVELOPER_RETRY_BLOCKER_END -->", StringComparison.Ordinal);
+    var retryStart = prompt.IndexOf("<!-- ACCUMULATED_RETRY_FEEDBACK_START -->", StringComparison.Ordinal);
+    var retryEnd = prompt.IndexOf("<!-- ACCUMULATED_RETRY_FEEDBACK_END -->", StringComparison.Ordinal);
     Assert.True(retryStart >= 0, prompt);
     Assert.True(retryEnd > retryStart, prompt);
     Assert.True(retryStart < prompt.IndexOf("Goal:", StringComparison.Ordinal), prompt);
@@ -1333,7 +1333,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("PrepareSubscriptionTask", retryBlock, StringComparison.Ordinal);
     Assert.Contains("- Branch: goal/41c6e2a2", retryBlock, StringComparison.Ordinal);
     Assert.Contains("- HEAD commit: abcdef123456", retryBlock, StringComparison.Ordinal);
-    Assert.DoesNotContain("Old retry reason for prior history.", retryBlock, StringComparison.Ordinal);
+    Assert.Contains("Old retry reason for prior history.", retryBlock, StringComparison.Ordinal);
+    Assert.Contains("[superseded] Retry 1 of 2", retryBlock, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_omits_developer_retry_blocker_on_first_attempt")]
