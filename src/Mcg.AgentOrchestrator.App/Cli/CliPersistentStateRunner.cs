@@ -116,6 +116,11 @@ internal static class CliPersistentStateRunner
             return ExecuteProvenanceWithoutFullHydration(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsSingleGoalReportCommand(args))
+        {
+            return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (IsGoalLifecycleDispositionCommand(args))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -291,6 +296,35 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsProvenanceCommand(IReadOnlyList<string> args) =>
         args.Count == 1 && args[0].Equals("provenance", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsSingleGoalReportCommand(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+            return false;
+
+        return args[0].ToLowerInvariant() switch
+        {
+            "status" or
+            "monitor" or
+            "readiness" or
+            "goal-recovery" or
+            "dogfood-eval" or
+            "failure-triage" or
+            "retention-plan" or
+            "evidence" or
+            "goal-changes" or
+            "stages" or
+            "gates" or
+            "verify-needed" or
+            "input-needed" or
+            "goal-diagnostics" or
+            "next" or
+            "subscription-plan" or
+            "supervisor" or
+            "build-lease-cleanup" => true,
+            _ => false
+        };
+    }
 
     internal static bool IsGoalLifecycleDispositionCommand(IReadOnlyList<string> args)
     {
@@ -756,7 +790,7 @@ internal static class CliPersistentStateRunner
         var goalId = ResolveSingleGoalCommandGoalId(
             stateRepository,
             currentGoal?.Id.Value,
-            ResolveSingleGoalSnapshotCommandGoalPrefix(args));
+            ResolveSingleGoalCommandGoalPrefix(args));
         var kernel = LoadSingleGoalKernel(stateRepository, goalId);
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
@@ -1394,7 +1428,7 @@ internal static class CliPersistentStateRunner
     private static string? ResolveAcceptanceGoalPrefix(IReadOnlyList<string> parts) =>
         GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
 
-    private static string? ResolveSingleGoalSnapshotCommandGoalPrefix(IReadOnlyList<string> parts)
+    private static string? ResolveSingleGoalCommandGoalPrefix(IReadOnlyList<string> parts)
     {
         if (parts.Count == 0)
         {
@@ -1425,6 +1459,19 @@ internal static class CliPersistentStateRunner
             }
         }
 
+        if (IsSingleGoalReportCommand(parts))
+        {
+            return parts[0].ToLowerInvariant() switch
+            {
+                "next" => GetOptionalArgument(parts, "--full"),
+                "goal-changes" => GetOptionalArgument(parts, "--role", "--task", "--committed", "--working", "--all", "--flat", "--json"),
+                "failure-triage" => GetOptionalArgument(parts, "--autonomy", "--policy"),
+                "supervisor" => GetOptionalArgument(parts, "--apply-safe", "--autonomy", "--policy"),
+                "build-lease-cleanup" => GetOptionalArgument(parts, "--confirm-build-lease-cleanup"),
+                _ => parts.Count > 1 ? parts[1] : null
+            };
+        }
+
         return null;
     }
 
@@ -1435,6 +1482,11 @@ internal static class CliPersistentStateRunner
             var part = parts[i];
             if (flags.Contains(part, StringComparer.OrdinalIgnoreCase))
             {
+                if (IsCliValueFlag(part))
+                {
+                    i++;
+                }
+
                 continue;
             }
 
@@ -1458,6 +1510,8 @@ internal static class CliPersistentStateRunner
     private static bool IsCliValueFlag(string value) =>
         value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--role", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--task", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--policy", StringComparison.OrdinalIgnoreCase);
 
