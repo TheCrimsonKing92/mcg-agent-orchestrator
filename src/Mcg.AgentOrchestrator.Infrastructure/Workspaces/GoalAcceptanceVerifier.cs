@@ -137,6 +137,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
     internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
     internal static TimeSpan TransientNoHolderBuildLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+    internal static int TransientNoHolderBuildLockMaxRetryCycles { get; set; } = 2;
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
 
@@ -1807,7 +1808,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
-                currentEnvironment,
+                retryEnvironment,
                 retryAttribution,
                 reacquireLease,
                 cancellationToken).ConfigureAwait(false);
@@ -1873,43 +1874,99 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
             ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
             : currentEnvironment);
-        var wait = await WaitForBuildArtifactWriteAccessAsync(
-            attribution.Path,
-            TransientNoHolderBuildLockWaitWindow,
-            TransientNoHolderBuildLockPollInterval,
-            cancellationToken).ConfigureAwait(false);
-        EmitTransientNoHolderBuildLockWaitReceipt(attribution, wait);
-        if (!wait.Released)
+        var cycleAttribution = attribution;
+        var maxRetryCycles = Math.Max(1, TransientNoHolderBuildLockMaxRetryCycles);
+        for (var cycle = 1; cycle <= maxRetryCycles; cycle++)
         {
-            throw new BuildLockBlockedException(attribution);
-        }
-
-        reacquireLease(retryEnvironment);
-        CommandResult retry;
-        try
-        {
-            retry = await RunManagedDotnetCommandAsync(
-                check,
-                arguments,
-                retryEnvironment,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+            var wait = await WaitForBuildArtifactWriteAccessAsync(
+                cycleAttribution.Path,
+                TransientNoHolderBuildLockWaitWindow,
+                TransientNoHolderBuildLockPollInterval,
                 cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsBuildArtifactIoException(ex))
-        {
-            var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, worktreePath, "acceptance-transient-retry", check.Name));
-        }
+            EmitTransientNoHolderBuildLockWaitReceipt(cycleAttribution, wait, cycle, maxRetryCycles);
+            if (!wait.Released)
+            {
+                EmitTransientNoHolderBuildLockRetryReceipt(
+                    check,
+                    cycleAttribution,
+                    cycle,
+                    maxRetryCycles,
+                    "wait-exhausted",
+                    exitCode: null,
+                    timedOut: false,
+                    buildLock: true);
+                throw new BuildLockBlockedException(cycleAttribution);
+            }
 
-        if (IsBuildLockFailure(retry, retryEnvironment, out var retryAttribution))
-        {
+            reacquireLease(retryEnvironment);
+            CommandResult retry;
+            try
+            {
+                retry = await RunManagedDotnetCommandAsync(
+                    check,
+                    arguments,
+                    retryEnvironment,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsBuildArtifactIoException(ex))
+            {
+                var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
+                var exceptionAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-transient-retry", check.Name);
+                EmitTransientNoHolderBuildLockRetryReceipt(
+                    check,
+                    exceptionAttribution,
+                    cycle,
+                    maxRetryCycles,
+                    "io-exception",
+                    exitCode: null,
+                    timedOut: false,
+                    buildLock: true);
+                if (cycle < maxRetryCycles && IsTransientNoHolderBuildArtifactLock(exceptionAttribution, retryEnvironment))
+                {
+                    cycleAttribution = exceptionAttribution;
+                    continue;
+                }
+
+                throw new BuildLockBlockedException(exceptionAttribution);
+            }
+
+            if (!IsBuildLockFailure(retry, retryEnvironment, out var retryAttribution))
+            {
+                EmitTransientNoHolderBuildLockRetryReceipt(
+                    check,
+                    cycleAttribution,
+                    cycle,
+                    maxRetryCycles,
+                    "completed",
+                    retry.ExitCode,
+                    retry.TimedOut,
+                    buildLock: false);
+                return (retry, true);
+            }
+
+            EmitTransientNoHolderBuildLockRetryReceipt(
+                check,
+                retryAttribution,
+                cycle,
+                maxRetryCycles,
+                "blocked",
+                retry.ExitCode,
+                retry.TimedOut,
+                buildLock: true);
+            if (cycle < maxRetryCycles && IsTransientNoHolderBuildArtifactLock(retryAttribution, retryEnvironment))
+            {
+                cycleAttribution = retryAttribution;
+                continue;
+            }
+
             throw new BuildLockBlockedException(retryAttribution);
         }
 
-        return (retry, true);
+        throw new BuildLockBlockedException(cycleAttribution);
     }
 
     private static async Task<TransientBuildLockWaitResult> WaitForBuildArtifactWriteAccessAsync(
@@ -1985,14 +2042,40 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static void EmitTransientNoHolderBuildLockWaitReceipt(
         BuildLockAttribution attribution,
-        TransientBuildLockWaitResult wait)
+        TransientBuildLockWaitResult wait,
+        int cycle,
+        int maxCycles)
     {
         var probeMilliseconds = (long)(attribution.ProbeElapsed ?? TimeSpan.Zero).TotalMilliseconds;
         Console.WriteLine(
             $"LOCK_TRANSIENT_WAIT path={QuoteProgressToken(attribution.Path)} " +
+            $"cycle={cycle.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"max-cycles={maxCycles.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"waited-ms={wait.WaitedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"probe-ms={probeMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"released={wait.Released.ToString().ToLowerInvariant()}");
+        Console.Out.Flush();
+    }
+
+    private static void EmitTransientNoHolderBuildLockRetryReceipt(
+        AcceptanceManifestCheck check,
+        BuildLockAttribution attribution,
+        int cycle,
+        int maxCycles,
+        string verdict,
+        int? exitCode,
+        bool timedOut,
+        bool buildLock)
+    {
+        Console.WriteLine(
+            $"LOCK_TRANSIENT_RETRY path={QuoteProgressToken(attribution.Path)} " +
+            $"check={QuoteProgressToken(check.Name)} " +
+            $"cycle={cycle.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"max-cycles={maxCycles.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"verdict={verdict} " +
+            $"exit-code={(exitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none")} " +
+            $"timed-out={timedOut.ToString().ToLowerInvariant()} " +
+            $"build-lock={buildLock.ToString().ToLowerInvariant()}");
         Console.Out.Flush();
     }
 
@@ -2035,7 +2118,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsBuildLockFailure(CommandResult result, DotnetBuildEnvironment environment, out BuildLockAttribution attribution)
     {
         attribution = null!;
-        if (result.TimedOut || result.ExitCode == 0)
+        if (result.TimedOut || result.ExitCode == 0 || DotnetTestRunReportsCompleted(result.Output))
         {
             return false;
         }
@@ -2193,6 +2276,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsTransientNoHolderBuildArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
         HasNoActionableHolder(attribution) &&
         (PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) || IsBuildArtifactPath(attribution.Path));
+
+    private static bool DotnetTestRunReportsCompleted(string output) =>
+        Regex.IsMatch(
+            output,
+            @"(?:Passed|Failed)!\s*-\s*Failed:\s*\d+,\s*Passed:\s*\d+",
+            RegexOptions.IgnoreCase);
 
     private static bool IsBuildArtifactPath(string path)
     {
