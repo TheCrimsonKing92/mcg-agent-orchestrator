@@ -970,6 +970,7 @@ internal sealed class ConductorBatchLoop
         var deferredByAdmission = 0;
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
+                IsParallelAcceptanceLifecycleEligible(goal, driver) &&
                 HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
@@ -1178,6 +1179,26 @@ internal sealed class ConductorBatchLoop
             .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
             .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
             .ToArray();
+
+    private static bool IsParallelAcceptanceLifecycleEligible(
+        Goal goal,
+        ConductorDriver driver)
+    {
+        if (string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
+        {
+            return true;
+        }
+
+        try
+        {
+            return !GoalOperationJournal.HasRetiredTerminalDisposition(
+                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id));
+        }
+        catch
+        {
+            return true;
+        }
+    }
 
     private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)
     {

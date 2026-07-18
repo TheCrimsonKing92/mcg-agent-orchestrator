@@ -235,6 +235,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 timestamp     TEXT NOT NULL,
                 outcome_rule  TEXT NULL,
                 outcome_class TEXT NOT NULL DEFAULT 'unknown-era',
+                dispatch_lane TEXT NULL,
                 PRIMARY KEY (goal_id, task_id, timestamp)
             )
             """);
@@ -268,6 +269,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         AddColumnIfMissing(conn, "model_fit_history", "outcome_rule", "ALTER TABLE model_fit_history ADD COLUMN outcome_rule TEXT NULL");
         AddColumnIfMissing(conn, "model_fit_history", "outcome_class", "ALTER TABLE model_fit_history ADD COLUMN outcome_class TEXT NOT NULL DEFAULT 'unknown-era'");
+        AddColumnIfMissing(conn, "model_fit_history", "dispatch_lane", "ALTER TABLE model_fit_history ADD COLUMN dispatch_lane TEXT NULL");
 
         if (!IndexExists(conn, "ix_model_fit_history_outcome_class"))
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
@@ -637,7 +639,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class
+            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class, dispatch_lane
             FROM model_fit_history
             ORDER BY timestamp DESC
             """;
@@ -665,7 +667,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class
+            SELECT goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class, dispatch_lane
             FROM model_fit_history
             WHERE role = $role
             ORDER BY timestamp DESC
@@ -910,7 +912,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             SubscriptionLimitReviewedFailureCount = PickStoreOwned(baseline.SubscriptionLimitReviewedFailureCount, stored.SubscriptionLimitReviewedFailureCount, current.SubscriptionLimitReviewedFailureCount),
             CriterionRetryCount = PickStoreOwned(baseline.CriterionRetryCount, stored.CriterionRetryCount, current.CriterionRetryCount),
             CriterionRetryFeedback = PickStoreOwnedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
-            EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount)
+            EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount),
+            LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
+            PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind)
         };
 
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
@@ -1176,9 +1180,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT INTO model_fit_history (
-                goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class)
+                goal_id, task_id, role, provider_name, model_name, complexity, task_shape, outcome, self_rating, timestamp, outcome_rule, outcome_class, dispatch_lane)
             VALUES (
-                $goal_id, $task_id, $role, $provider_name, $model_name, $complexity, $task_shape, $outcome, $self_rating, $timestamp, $outcome_rule, $outcome_class)
+                $goal_id, $task_id, $role, $provider_name, $model_name, $complexity, $task_shape, $outcome, $self_rating, $timestamp, $outcome_rule, $outcome_class, $dispatch_lane)
             ON CONFLICT(goal_id, task_id, timestamp) DO UPDATE SET
                 role          = excluded.role,
                 provider_name = excluded.provider_name,
@@ -1188,7 +1192,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 outcome       = excluded.outcome,
                 self_rating   = excluded.self_rating,
                 outcome_rule  = excluded.outcome_rule,
-                outcome_class = excluded.outcome_class
+                outcome_class = excluded.outcome_class,
+                dispatch_lane = excluded.dispatch_lane
             """;
         cmd.Parameters.AddWithValue("$goal_id", row.GoalId);
         cmd.Parameters.AddWithValue("$task_id", row.TaskId);
@@ -1202,6 +1207,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$timestamp", row.Timestamp.ToString("O"));
         cmd.Parameters.AddWithValue("$outcome_rule", row.OutcomeRule ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("$outcome_class", TaskOutcomeClassifier.FormatClass(row.OutcomeClass));
+        cmd.Parameters.AddWithValue("$dispatch_lane", row.DispatchLane ?? (object)DBNull.Value);
         return (await cmd.ExecuteNonQueryAsync(cancellationToken), 0);
     }
 
@@ -1235,7 +1241,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             ModelFitHistory.NormalizeSelfRating(reader.GetString(8)),
             DateTimeOffset.Parse(reader.GetString(9), null, System.Globalization.DateTimeStyles.RoundtripKind),
             reader.IsDBNull(10) ? null : reader.GetString(10),
-            TaskOutcomeClassifier.ParseClass(reader.IsDBNull(11) ? null : reader.GetString(11)));
+            TaskOutcomeClassifier.ParseClass(reader.IsDBNull(11) ? null : reader.GetString(11)),
+            reader.IsDBNull(12) ? null : reader.GetString(12));
     }
 
     private async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)

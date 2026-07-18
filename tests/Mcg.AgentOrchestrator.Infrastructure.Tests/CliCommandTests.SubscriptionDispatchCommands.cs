@@ -1383,7 +1383,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
         var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree", line);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=dirty-worktree", line);
         Xunit.Assert.Null(task.LastDispatch);
         Xunit.Assert.Null(task.LastProcess);
     }
@@ -1413,9 +1413,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var diagnostic = Xunit.Assert.Single(result.ReadyBlocked!);
         Xunit.Assert.Equal(goal.Id.Value[..8], diagnostic.Goal);
         Xunit.Assert.Equal(1, diagnostic.Task);
-        Xunit.Assert.Equal("codex-cli", diagnostic.Provider);
+        Xunit.Assert.Equal("codex-spark", diagnostic.Provider);
         Xunit.Assert.Equal("dirty-worktree", diagnostic.Reason);
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree", diagnostic.Line);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=dirty-worktree", diagnostic.Line);
     }
 
 
@@ -1446,7 +1446,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         });
 
         var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=autonomy-policy", line);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=autonomy-policy", line);
     }
 
 
@@ -1594,6 +1594,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration when the task is routine", dispatchOutput);
         Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
         Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+        Xunit.Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
         Xunit.Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
         Xunit.Assert.Null(risk);
         Xunit.Assert.Null(task.LastProcess);
@@ -1827,6 +1828,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"));
         kernel.ActivateGoal(goal.Id, [agent]);
+        kernel.RecordGoalPolicyDecision(
+            goal.Id,
+            "Intake pipeline decision (auto): developer-reviewer; reasons: preserve model-fit evidence lane; risk labels: high-risk.");
         kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
         kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
             "manual-verification passed",
@@ -2468,7 +2472,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref currentGoal);
         // Letters prefix: the original passing case.
         var lettersRetryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal."),
+            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal. --mechanical"),
             kernel,
             workspace,
             ref agents,
@@ -2490,6 +2494,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Equal(numericGoal.Id, currentGoal!.Id);
         Xunit.Assert.Contains(numericGoal.Timeline, evt => evt.TaskId == numericTask.Id && evt.Kind == ProgressKind.TaskRetried);
         Xunit.Assert.Contains(lettersGoal.Timeline, evt => evt.TaskId == lettersTask.Id && evt.Kind == ProgressKind.TaskRetried);
+        Xunit.Assert.Equal(RetryRoundKind.Mechanical, lettersTask.PendingRetryRoundKind);
+        Xunit.Assert.DoesNotContain(lettersTask.CriterionRetryFeedback, feedback =>
+            feedback.Contains("--mechanical", StringComparison.OrdinalIgnoreCase));
         Xunit.Assert.NotNull(numericTask.LastVerification);
         Xunit.Assert.Empty(current.Tasks.Single().VerificationHistory);
     }
@@ -2548,7 +2555,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.True(dispatched);
         Xunit.Assert.Equal(newAgent.Id, task.AssignedAgentId);
         Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
-        Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+        Xunit.Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
+        Xunit.Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
         Xunit.Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskRedelegated &&

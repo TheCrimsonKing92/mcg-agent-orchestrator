@@ -316,7 +316,13 @@ public sealed partial class AgentOrchestratorKernel
             return string.Empty;
         }
 
-        return $" using {dispatch.ProviderName}/{dispatch.ModelName}";
+        var lane = string.IsNullOrWhiteSpace(dispatch.DispatchLane)
+            ? string.Empty
+            : $" lane={dispatch.DispatchLane}";
+        var reason = string.IsNullOrWhiteSpace(dispatch.ModelSelectionReason)
+            ? string.Empty
+            : $" ({dispatch.ModelSelectionReason})";
+        return $" using {dispatch.ProviderName}/{dispatch.ModelName}{lane}{reason}";
     }
 
     public void RecordTaskProcessStarted(GoalId goalId, TaskId taskId, TaskProcessRecord process)

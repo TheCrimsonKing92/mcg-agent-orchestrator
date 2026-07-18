@@ -21,7 +21,8 @@ public sealed record ModelOutcomeRecord(
     int RealFailures = 0,
     int EnvironmentalFailures = 0,
     int ManufacturedFixedFailures = 0,
-    int UnknownEraFailures = 0)
+    int UnknownEraFailures = 0,
+    string? DispatchLane = null)
 {
     public int NonRealFailures => EnvironmentalFailures + ManufacturedFixedFailures + UnknownEraFailures;
 }
@@ -51,16 +52,18 @@ public static class ModelOutcomeScorecard
         return qualified
             .GroupBy(row => (
                 row.ProviderName,
-                row.ModelName))
+                row.ModelName,
+                row.DispatchLane))
             .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.Key.DispatchLane, StringComparer.OrdinalIgnoreCase)
             .Select(group =>
             {
                 var recent = group
                     .OrderByDescending(row => row.Timestamp)
                     .Take(windowSize)
                     .ToList();
-                return BuildRecord(group.Key.ProviderName, group.Key.ModelName, recent);
+                return BuildRecord(group.Key.ProviderName, group.Key.ModelName, group.Key.DispatchLane, recent);
             })
             .ToList();
     }
@@ -89,12 +92,14 @@ public static class ModelOutcomeScorecard
             ModelFitHistory.NormalizeSelfRating(fit?.Fit),
             task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt,
             null,
-            outcomeClass);
+            outcomeClass,
+            dispatch.DispatchLane ?? dispatch.WorkerName);
     }
 
     private static ModelOutcomeRecord BuildRecord(
         string providerName,
         string modelName,
+        string? dispatchLane,
         List<ModelFitHistoryRow> recentRows)
     {
         var n = recentRows.Count;
@@ -140,7 +145,8 @@ public static class ModelOutcomeScorecard
             realFailures,
             environmentalFailures,
             manufacturedFailures,
-            unknownEraFailures);
+            unknownEraFailures,
+            dispatchLane);
     }
 
     private static (ModelOutcomeRecommendation Recommendation, string Reason) BuildRecommendation(

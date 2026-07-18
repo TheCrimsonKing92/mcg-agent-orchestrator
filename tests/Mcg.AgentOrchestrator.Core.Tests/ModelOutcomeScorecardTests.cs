@@ -103,6 +103,28 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Contains("1 environmental", record.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Xunit.Fact(DisplayName = "ModelOutcomeScorecard_groups_same_model_by_dispatch_lane")]
+    public void ModelOutcomeScorecardGroupsSameModelByDispatchLane()
+    {
+        var rows = new[]
+        {
+            Row(0, WorkTaskStatus.Completed, "committed-worker-result-evidence") with { DispatchLane = "codex-cli" },
+            Row(1, WorkTaskStatus.Failed, "succeeded-worker-result-failing-tests") with { DispatchLane = "codex-spark" }
+        };
+
+        var scorecard = ModelOutcomeScorecard.Build(rows, windowSize: 2);
+
+        Assert.Equal(2, scorecard.Count);
+        Assert.Contains(scorecard, record => record.ProviderName == "OpenAI" &&
+            record.ModelName == "gpt-5.5" &&
+            record.DispatchLane == "codex-cli" &&
+            record.Completed == 1);
+        Assert.Contains(scorecard, record => record.ProviderName == "OpenAI" &&
+            record.ModelName == "gpt-5.5" &&
+            record.DispatchLane == "codex-spark" &&
+            record.Failed == 1);
+    }
+
     [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_provider_neutral_progress_stall_is_environmental")]
     public void TaskOutcomeClassifierProviderNeutralProgressStallIsEnvironmental()
     {

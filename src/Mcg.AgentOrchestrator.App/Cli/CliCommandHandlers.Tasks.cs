@@ -104,13 +104,17 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "retry":
             var retryPolicy = ResolveCliAutonomyPolicy(parts);
-            var retryUsage = "retry <task-number> <message>|retry <goal-prefix> <task-number> <message>|retry --goal <goal-prefix> <task-number> <message>|retry <task-number> --text-file <path>";
-            var retryTarget = ResolveCommandTaskTarget(parts, context, retryUsage);
-            RequireRemainingArgument(parts, retryTarget.NextIndex, retryUsage);
+            var retryUsage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+            var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
+                ? RetryRoundKind.Mechanical
+                : (RetryRoundKind?)null;
+            var retryParts = RemoveStandaloneFlag(parts, "--mechanical");
+            var retryTarget = ResolveCommandTaskTarget(retryParts, context, retryUsage);
+            RequireRemainingArgument(retryParts, retryTarget.NextIndex, retryUsage);
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, retryPolicy, AutonomyAction.Retry, "retry");
-            var retryMessage = ResolveTextArgument(parts, retryTarget.NextIndex, retryUsage, "--text-file");
-            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage);
+            var retryMessage = ResolveTextArgument(retryParts, retryTarget.NextIndex, retryUsage, "--text-file");
+            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage, retryRoundKind: retryRoundKind);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,

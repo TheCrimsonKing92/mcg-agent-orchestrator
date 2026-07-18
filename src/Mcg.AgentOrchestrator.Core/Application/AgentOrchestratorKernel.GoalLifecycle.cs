@@ -158,7 +158,12 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
-    public TaskSpec RetryTask(GoalId goalId, TaskId taskId, string message, bool invalidateDownstream = true)
+    public TaskSpec RetryTask(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        bool invalidateDownstream = true,
+        RetryRoundKind? retryRoundKind = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -185,7 +190,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var retryAt = _clock.UtcNow;
-        ResetTaskForRetry(task, retryAt);
+        ResetTaskForRetry(task, retryAt, retryRoundKind);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
         {
@@ -546,14 +551,14 @@ public sealed partial class AgentOrchestratorKernel
         RefreshGoalStatus(goal);
     }
 
-    private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt)
+    private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt, RetryRoundKind? retryRoundKind = null)
     {
         task.ClearLatestVerification();
         task.ClearLastExecution();
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
-        task.RecordRetry(retryAt);
+        task.RecordRetry(retryAt, retryRoundKind);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }
 

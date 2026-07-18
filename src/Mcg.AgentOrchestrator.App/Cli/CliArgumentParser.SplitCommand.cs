@@ -18,8 +18,12 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 2);
     }
 
-    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("note", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitRetryCommand(command, remainder);
+    }
+
+    if (command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
         return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 1);
     }
@@ -287,6 +291,60 @@ private static IReadOnlyList<string> SplitTaskTargetCommandWithTextFileFlag(stri
     return string.IsNullOrWhiteSpace(beforeFlag)
         ? [command, .. flags]
         : [.. SplitTaskTargetCommand(command, beforeFlag, trailingArgumentCount), .. flags];
+}
+
+private static IReadOnlyList<string> SplitRetryCommand(string command, string remainder)
+{
+    var parts = SplitTaskTargetCommandWithTextFileFlag(command, remainder, 1);
+    var mechanicalIndex = parts
+        .Select((part, index) => (part, index))
+        .FirstOrDefault(item => item.part.Equals("--mechanical", StringComparison.OrdinalIgnoreCase));
+    if (mechanicalIndex.part is not null)
+    {
+        return parts;
+    }
+
+    if (parts.Count < 3)
+    {
+        return parts;
+    }
+
+    var messageIndex = ResolveRetryMessageIndex(parts);
+    if (messageIndex is null)
+    {
+        return parts;
+    }
+
+    var message = parts[messageIndex.Value];
+    var flagIndex = IndexOfStandaloneFlag(message, "--mechanical");
+    if (flagIndex < 0)
+    {
+        return parts;
+    }
+
+    var beforeFlag = message[..flagIndex].Trim();
+    var afterFlag = message[(flagIndex + "--mechanical".Length)..].Trim();
+    var normalized = parts.ToList();
+    normalized[messageIndex.Value] = string.IsNullOrWhiteSpace(afterFlag)
+        ? beforeFlag
+        : string.Join(' ', [beforeFlag, afterFlag]).Trim();
+    normalized.Add("--mechanical");
+    return normalized.Where(part => !string.IsNullOrWhiteSpace(part)).ToArray();
+}
+
+private static int? ResolveRetryMessageIndex(IReadOnlyList<string> parts)
+{
+    if (parts.Count >= 5 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        return 4;
+    }
+
+    if (parts.Count >= 4 && LooksLikePositionalGoalTask(parts[1], parts[2]))
+    {
+        return 3;
+    }
+
+    return parts.Count >= 3 ? 2 : null;
 }
 
 private static bool LooksLikePositionalGoalTask(string first, string second)
