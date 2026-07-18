@@ -135,8 +135,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
     internal static TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
     internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
-    internal static TimeSpan TransientNoHolderBuildLockRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
-    private const int TransientNoHolderBuildLockRetryLimit = 3;
+    internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
+    internal static TimeSpan TransientNoHolderBuildLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
 
@@ -189,6 +189,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles, policyRequiredChecks, policyShardPlan);
         var effectiveChecks = ExpandBroadInfrastructureChecks(policyEffectiveChecks);
+        var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
+            ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks)
+            : null;
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
 
@@ -216,7 +219,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -231,7 +234,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                     scopedNames.Contains(c.Name)))
                 {
-                    var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                    var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                     retried |= checkResult.Retried;
                     checks.Add(checkResult.Result);
                     if (!checkResult.Result.Passed)
@@ -249,7 +252,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             foreach (var check in effectiveChecks.Where(c =>
                 !c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)))
             {
-                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -261,7 +264,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             if (nonDotnetPassed)
             {
-                var slnRun = await RunCheckWithCancellationProbeAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var slnRun = await RunCheckWithCancellationProbeAsync(solutionCheck!, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= slnRun.Retried;
                 checks.Add(slnRun.Result);
 
@@ -287,7 +290,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
                         !deferredNames.Contains(c.Name)))
                     {
-                        var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                        var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                         retried |= checkResult.Retried;
                         checks.Add(checkResult.Result);
                         if (!checkResult.Result.Passed)
@@ -302,7 +305,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             foreach (var check in effectiveChecks)
             {
-                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+                var checkResult = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
                 if (!checkResult.Result.Passed)
@@ -330,7 +333,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Advisory checks: always run, failures are recorded but do not affect overall Passed.
         foreach (var advisoryCheck in advisoryChecks)
         {
-            var checkResult = await RunCheckWithCancellationProbeAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+            var checkResult = await RunCheckWithCancellationProbeAsync(advisoryCheck, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result with { Advisory = true });
         }
 
@@ -379,6 +382,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceCheckTimeouts.DefaultTimeout,
             cancellationToken).ConfigureAwait(false);
 
+        var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
+            ? CreateDotnetTestBuildPhase(worktreePath, focusedChecks)
+            : null;
         var checks = new List<AcceptanceCheckResult>();
         foreach (var check in focusedChecks)
         {
@@ -388,6 +394,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
+                dotnetTestBuildPhase,
                 cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result);
             if (!checkResult.Result.Passed)
@@ -419,6 +426,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken)
     {
         ThrowIfGateCancellationRequested(cancellationToken);
@@ -428,6 +436,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId,
             stableSlotIndex,
             stableSlotLease,
+            dotnetTestBuildPhase,
             cancellationToken).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
         return result;
@@ -1281,6 +1290,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken)
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
@@ -1298,11 +1308,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (RunFileExistsCheck(check, worktreePath), false);
 
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
-            return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+            return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
 
         return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
-            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false)
-            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false);
+            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false)
+            : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<AcceptanceCheckResult> RunGrepCheckAsync(
@@ -1370,6 +1380,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken)
     {
         var arguments = BuildCommandArguments(check);
@@ -1385,6 +1396,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     goalId,
                     stableSlotIndex,
                     stableSlotLease,
+                    dotnetTestBuildPhase,
                     $"acceptance-{Slug(check.Name)}",
                     cancellationToken).ConfigureAwait(false);
             }
@@ -1432,6 +1444,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken)
     {
         var noBuild = GateUsesStableSlot(stableSlotIndex, stableSlotLease);
@@ -1457,6 +1470,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId,
             stableSlotIndex,
             stableSlotLease,
+            dotnetTestBuildPhase,
             $"acceptance-{Slug(check.Name)}",
             cancellationToken).ConfigureAwait(false);
     }
@@ -1469,25 +1483,38 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
         string attemptName,
         CancellationToken cancellationToken)
     {
-        var buildRun = await RunManagedDotnetCheckAsync(
-            check,
-            buildArguments,
-            worktreePath,
-            goalId,
-            stableSlotIndex,
-            stableSlotLease,
-            $"{attemptName}-build",
-            cancellationToken).ConfigureAwait(false);
-        if (!buildRun.Result.Passed)
+        var buildRun = dotnetTestBuildPhase is null
+            ? new DotnetTestBuildPhaseResult(
+                await RunManagedDotnetCheckAsync(
+                    check,
+                    buildArguments,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    $"{attemptName}-build",
+                    cancellationToken).ConfigureAwait(false),
+                ContributesToCheck: true)
+            : await EnsureDotnetTestBuildPhaseAsync(
+                dotnetTestBuildPhase,
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                attemptName,
+                cancellationToken).ConfigureAwait(false);
+        if (!buildRun.Run.Result.Passed)
         {
-            return (buildRun.Result with
+            return (buildRun.Run.Result with
             {
                 Name = check.Name,
-                ResultSummary = PrefixResultSummary("build phase failed", buildRun.Result.ResultSummary)
-            }, buildRun.Retried);
+                ResultSummary = PrefixResultSummary("build phase failed", buildRun.Run.Result.ResultSummary)
+            }, buildRun.Run.Retried);
         }
 
         var testRun = await RunManagedDotnetCheckAsync(
@@ -1500,16 +1527,44 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             attemptName,
             cancellationToken).ConfigureAwait(false);
 
-        var lockRemediationApplied = buildRun.Result.LockRemediationApplied || testRun.Result.LockRemediationApplied;
-        var durationMilliseconds = (buildRun.Result.DurationMilliseconds ?? 0) + (testRun.Result.DurationMilliseconds ?? 0);
+        var lockRemediationApplied = buildRun.Run.Result.LockRemediationApplied || testRun.Result.LockRemediationApplied;
+        var durationMilliseconds = (buildRun.ContributesToCheck ? buildRun.Run.Result.DurationMilliseconds ?? 0 : 0) +
+            (testRun.Result.DurationMilliseconds ?? 0);
         return (testRun.Result with
         {
             DurationMilliseconds = durationMilliseconds,
             LockRemediationApplied = lockRemediationApplied,
-            ResultSummary = lockRemediationApplied && buildRun.Result.LockRemediationApplied
+            ResultSummary = lockRemediationApplied && buildRun.Run.Result.LockRemediationApplied
                 ? PrefixResultSummary("build phase remediated", testRun.Result.ResultSummary)
                 : testRun.Result.ResultSummary
-        }, buildRun.Retried || testRun.Retried);
+        }, buildRun.Run.Retried || testRun.Retried);
+    }
+
+    private async Task<DotnetTestBuildPhaseResult> EnsureDotnetTestBuildPhaseAsync(
+        DotnetTestBuildPhase phase,
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        string attemptName,
+        CancellationToken cancellationToken)
+    {
+        if (phase.Run is { } completed)
+        {
+            return new DotnetTestBuildPhaseResult(completed, ContributesToCheck: false);
+        }
+
+        phase.Run = await RunManagedDotnetCheckAsync(
+            check,
+            phase.BuildArguments,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            $"{attemptName}-build",
+            cancellationToken).ConfigureAwait(false);
+        return new DotnetTestBuildPhaseResult(phase.Run.Value, ContributesToCheck: true);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetCheckAsync(
@@ -1603,7 +1658,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
         {
             var lockedPath = TryExtractPathFromException(ex) ?? environment.ArtifactsPath;
-            var attribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-check", check.Name);
+            var attribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-check", check.Name);
             var (result, _) = await RemediateBuildLockAndRetryAsync(
                 arguments,
                 worktreePath,
@@ -1698,6 +1753,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceCheckTimeouts.DefaultTimeout,
             cancellationToken).ConfigureAwait(false);
 
+        if (IsTransientNoHolderBuildArtifactLock(attribution, currentEnvironment))
+        {
+            return await RetryTransientNoHolderBuildLockAsync(
+                arguments,
+                worktreePath,
+                check,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                currentEnvironment,
+                attribution,
+                reacquireLease,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
             ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
             : currentEnvironment);
@@ -1719,7 +1789,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-            retryAttribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-retry", check.Name);
+            retryAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-retry", check.Name);
         }
 
         if (retry is not null && !IsBuildLockFailure(retry, retryEnvironment, out retryAttribution))
@@ -1728,7 +1798,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         retryAttribution ??= attribution;
-        if (IsTransientNoHolderSlotArtifactLock(retryAttribution, retryEnvironment))
+        if (IsTransientNoHolderBuildArtifactLock(retryAttribution, retryEnvironment))
         {
             return await RetryTransientNoHolderBuildLockAsync(
                 arguments,
@@ -1777,7 +1847,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
         {
             var lockedPath = TryExtractPathFromException(ex) ?? killRetryEnvironment.ArtifactsPath;
-            throw new BuildLockBlockedException(LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-kill-retry", check.Name));
+            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, worktreePath, "acceptance-kill-retry", check.Name));
         }
 
         if (IsBuildLockFailure(killRetry, killRetryEnvironment, out var killRetryAttribution))
@@ -1800,56 +1870,130 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Action<DotnetBuildEnvironment> reacquireLease,
         CancellationToken cancellationToken)
     {
-        var latestAttribution = attribution;
-        for (var attempt = 1; attempt <= TransientNoHolderBuildLockRetryLimit; attempt++)
+        var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : currentEnvironment);
+        var wait = await WaitForBuildArtifactWriteAccessAsync(
+            attribution.Path,
+            TransientNoHolderBuildLockWaitWindow,
+            TransientNoHolderBuildLockPollInterval,
+            cancellationToken).ConfigureAwait(false);
+        EmitTransientNoHolderBuildLockWaitReceipt(attribution, wait);
+        if (!wait.Released)
         {
-            if (TransientNoHolderBuildLockRetryDelay > TimeSpan.Zero)
+            throw new BuildLockBlockedException(attribution);
+        }
+
+        reacquireLease(retryEnvironment);
+        CommandResult retry;
+        try
+        {
+            retry = await RunManagedDotnetCommandAsync(
+                check,
+                arguments,
+                retryEnvironment,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsBuildArtifactIoException(ex))
+        {
+            var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
+            throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, worktreePath, "acceptance-transient-retry", check.Name));
+        }
+
+        if (IsBuildLockFailure(retry, retryEnvironment, out var retryAttribution))
+        {
+            throw new BuildLockBlockedException(retryAttribution);
+        }
+
+        return (retry, true);
+    }
+
+    private static async Task<TransientBuildLockWaitResult> WaitForBuildArtifactWriteAccessAsync(
+        string path,
+        TimeSpan waitWindow,
+        TimeSpan pollInterval,
+        CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        if (CanOpenBuildArtifactForWrite(path))
+        {
+            elapsed.Stop();
+            return new TransientBuildLockWaitResult((long)elapsed.Elapsed.TotalMilliseconds, true);
+        }
+
+        var effectivePollInterval = pollInterval <= TimeSpan.Zero
+            ? TimeSpan.FromMilliseconds(1)
+            : pollInterval;
+        while (elapsed.Elapsed < waitWindow)
+        {
+            var remaining = waitWindow - elapsed.Elapsed;
+            if (remaining > TimeSpan.Zero)
             {
-                await Task.Delay(TransientNoHolderBuildLockRetryDelay, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(remaining < effectivePollInterval ? remaining : effectivePollInterval, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
-            var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-                ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-                : currentEnvironment);
-            reacquireLease(retryEnvironment);
-
-            CommandResult retry;
-            try
+            if (CanOpenBuildArtifactForWrite(path))
             {
-                retry = await RunManagedDotnetCommandAsync(
-                    check,
-                    arguments,
-                    retryEnvironment,
-                    worktreePath,
-                    goalId,
-                    stableSlotIndex,
-                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsBuildArtifactIoException(ex))
-            {
-                var lockedPath = TryExtractPathFromException(ex) ?? retryEnvironment.ArtifactsPath;
-                latestAttribution = LockAttribution.Attribute(lockedPath, worktreePath, "acceptance-transient-retry", check.Name);
-                if (!IsTransientNoHolderSlotArtifactLock(latestAttribution, retryEnvironment))
-                {
-                    throw new BuildLockBlockedException(latestAttribution);
-                }
-
-                continue;
-            }
-
-            if (!IsBuildLockFailure(retry, retryEnvironment, out latestAttribution))
-            {
-                return (retry, true);
-            }
-
-            if (!IsTransientNoHolderSlotArtifactLock(latestAttribution, retryEnvironment))
-            {
-                throw new BuildLockBlockedException(latestAttribution);
+                elapsed.Stop();
+                return new TransientBuildLockWaitResult((long)elapsed.Elapsed.TotalMilliseconds, true);
             }
         }
 
-        throw new BuildLockBlockedException(latestAttribution);
+        elapsed.Stop();
+        return new TransientBuildLockWaitResult((long)elapsed.Elapsed.TotalMilliseconds, false);
+    }
+
+    private static bool CanOpenBuildArtifactForWrite(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                var probePath = Path.Combine(path, $".mcg-write-probe-{Guid.NewGuid():N}.tmp");
+                using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                }
+
+                TryDeleteFile(probePath);
+                return true;
+            }
+
+            if (File.Exists(path))
+            {
+                using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+                {
+                }
+
+                return true;
+            }
+
+            var directory = Path.GetDirectoryName(path);
+            return string.IsNullOrWhiteSpace(directory) ||
+                !Directory.Exists(directory) ||
+                CanOpenBuildArtifactForWrite(directory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void EmitTransientNoHolderBuildLockWaitReceipt(
+        BuildLockAttribution attribution,
+        TransientBuildLockWaitResult wait)
+    {
+        var probeMilliseconds = (long)(attribution.ProbeElapsed ?? TimeSpan.Zero).TotalMilliseconds;
+        Console.WriteLine(
+            $"LOCK_TRANSIENT_WAIT path={QuoteProgressToken(attribution.Path)} " +
+            $"waited-ms={wait.WaitedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"probe-ms={probeMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"released={wait.Released.ToString().ToLowerInvariant()}");
+        Console.Out.Flush();
     }
 
     private async Task<CommandResult> RunManagedDotnetCommandAsync(
@@ -1876,6 +2020,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsBuildArtifactIoException(Exception ex) =>
         ex is IOException or UnauthorizedAccessException;
 
+    private static BuildLockAttribution AttributeBuildLock(
+        string path,
+        string? ownershipHint,
+        string? phase,
+        string? operation)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var attribution = LockAttribution.Attribute(path, ownershipHint, phase, operation);
+        elapsed.Stop();
+        return attribution with { ProbeElapsed = elapsed.Elapsed };
+    }
+
     private static bool IsBuildLockFailure(CommandResult result, DotnetBuildEnvironment environment, out BuildLockAttribution attribution)
     {
         attribution = null!;
@@ -1890,7 +2046,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        attribution = LockAttribution.Attribute(
+        attribution = AttributeBuildLock(
             lockedPath ?? environment.ArtifactsPath,
             environment.ArtifactsPath,
             "acceptance-output",
@@ -2034,9 +2190,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static bool IsTransientNoHolderSlotArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
-        PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
-        HasNoActionableHolder(attribution);
+    private static bool IsTransientNoHolderBuildArtifactLock(BuildLockAttribution attribution, DotnetBuildEnvironment environment) =>
+        HasNoActionableHolder(attribution) &&
+        (PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) || IsBuildArtifactPath(attribution.Path));
+
+    private static bool IsBuildArtifactPath(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".pdb", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".trx", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cache", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".lock", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasNoActionableHolder(BuildLockAttribution attribution) =>
         attribution.Holders.Count == 0 ||
@@ -2475,6 +2643,55 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return [.. args];
+    }
+
+    private static DotnetTestBuildPhase CreateDotnetTestBuildPhase(
+        string worktreePath,
+        IReadOnlyList<AcceptanceManifestCheck> checks)
+    {
+        var dotnetTestChecks = checks
+            .Where(check => check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var solutionCheck = dotnetTestChecks.FirstOrDefault(check =>
+            !string.IsNullOrWhiteSpace(check.Project) &&
+            check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
+        if (solutionCheck is not null)
+        {
+            return new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(solutionCheck));
+        }
+
+        if (TryFindRootSolution(worktreePath) is { } solutionPath)
+        {
+            var template = dotnetTestChecks.FirstOrDefault();
+            var templateArguments = template?.Arguments ?? [];
+            return new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(
+                ["dotnet", "test", solutionPath, .. templateArguments]));
+        }
+
+        var firstCheck = dotnetTestChecks.FirstOrDefault();
+        return new DotnetTestBuildPhase(firstCheck is null
+            ? ["dotnet", "build"]
+            : BuildDotnetTestBuildArguments(firstCheck));
+    }
+
+    private static string? TryFindRootSolution(string worktreePath)
+    {
+        var preferred = Path.Combine(worktreePath, "Mcg.AgentOrchestrator.sln");
+        if (File.Exists(preferred))
+        {
+            return Path.GetFileName(preferred);
+        }
+
+        try
+        {
+            return Directory.EnumerateFiles(worktreePath, "*.sln", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     private static string[] BuildDotnetTestBuildArguments(AcceptanceManifestCheck check)
@@ -3210,6 +3427,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private sealed record InfrastructureTestLane(string Name, string Filter);
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
+
+    private sealed class DotnetTestBuildPhase(string[] buildArguments)
+    {
+        public string[] BuildArguments { get; } = buildArguments;
+        public (AcceptanceCheckResult Result, bool Retried)? Run { get; set; }
+    }
+
+    private readonly record struct DotnetTestBuildPhaseResult(
+        (AcceptanceCheckResult Result, bool Retried) Run,
+        bool ContributesToCheck);
+
+    private readonly record struct TransientBuildLockWaitResult(long WaitedMilliseconds, bool Released);
 
     private sealed record GateHeartbeatContext(
         string? GoalId,
