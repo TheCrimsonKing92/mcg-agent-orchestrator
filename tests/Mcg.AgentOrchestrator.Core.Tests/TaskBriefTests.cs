@@ -638,6 +638,50 @@ public sealed class TaskBriefTests
         brief.IndexOf("review finding round one", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_accumulated_retry_feedback_ignores_automatic_task_notes_before_cap")]
+    public void BuildTaskBriefAccumulatedRetryFeedbackIgnoresAutomaticTaskNotesBeforeCap()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement retry prompt aggregation.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Keep automatic notes out of accumulated retry feedback", [developer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    kernel.RetryTask(goal.Id, developer.Id, "review finding round one: preserve the earlier pivot");
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "review finding round two: keep the latest direction");
+
+    var automaticNotes = new[]
+    {
+        "CLASSIFIER rule=succeeded-dispatch-completion-evidence; verdict=VerifiedSuccess",
+        "RESOURCE goal=12345678 task=abcdefgh cpu_ms=10 peak_mem_bytes=20 io_bytes=30 accounting_source=snapshot",
+        "TaskOutputCommitted: sha=abcdef1; provenance=worker-result.",
+        "Ignored stale dispatch execution evidence from 2026-07-18 20:00:00Z; latest retry was 2026-07-18 20:01:00Z.",
+        "Ignored duplicate dispatch execution evidence for already settled dispatch: codex exec prompt.md",
+        "Reconciled failed dispatch verification to Completed from structured WORKER_RESULT evidence and commit provenance.",
+        "Auto-cleared stale LastProcess.IsRunning before dispatch; pid 42 had exit artifact exit.txt with exit 0.",
+        "StaleDispatchAutoRequeued: stale dispatch auto-requeue receipt",
+        "StaleDispatchAutoRequeueCapExhausted: stale dispatch auto-requeue cap receipt",
+        "CLASSIFIER rule=committed-worker-result-evidence; verdict=VerifiedSuccess"
+    };
+    foreach (var note in automaticNotes)
+    {
+        clock.Advance();
+        kernel.RecordTaskNote(goal.Id, developer.Id, note);
+    }
+
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+    var feedback = SectionFrom(brief, "## Accumulated retry/review feedback");
+
+    Assert.Contains("review finding round two: keep the latest direction", feedback, StringComparison.Ordinal);
+    Assert.Contains("review finding round one: preserve the earlier pivot", feedback, StringComparison.Ordinal);
+    Assert.DoesNotContain("CLASSIFIER rule=", feedback, StringComparison.Ordinal);
+    Assert.DoesNotContain("RESOURCE goal=", feedback, StringComparison.Ordinal);
+    Assert.DoesNotContain("TaskOutputCommitted:", feedback, StringComparison.Ordinal);
+    Assert.DoesNotContain("StaleDispatchAutoRequeued:", feedback, StringComparison.Ordinal);
+    Assert.DoesNotContain("Omitted", feedback, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_accumulated_retry_feedback_marks_resolved_and_truncates_oldest")]
     public void BuildTaskBriefAccumulatedRetryFeedbackMarksResolvedAndTruncatesOldest()
 {

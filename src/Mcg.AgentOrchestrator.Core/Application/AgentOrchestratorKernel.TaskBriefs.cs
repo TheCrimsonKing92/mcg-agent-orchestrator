@@ -845,11 +845,30 @@ public sealed partial class AgentOrchestratorKernel
     private static bool IsAccumulatedRetryFeedbackEvent(ProgressEvent evt)
     {
         return IsAccumulatedRetryRoundEvent(evt) ||
-               evt.Kind is
-                   ProgressKind.TaskNote or
+               evt.Kind is (
                    ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
                    ProgressKind.ReviewerEvidenceRequestReceived or
-                   ProgressKind.ReviewerEvidenceRunRecorded;
+                   ProgressKind.ReviewerEvidenceRunRecorded) ||
+               (evt.Kind == ProgressKind.TaskNote && IsAccumulatedRetryFeedbackTaskNote(evt.Message));
+    }
+
+    private static bool IsAccumulatedRetryFeedbackTaskNote(string message)
+    {
+        var trimmed = message.Trim();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        return !trimmed.StartsWith("CLASSIFIER ", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("RESOURCE ", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("TaskOutputCommitted:", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Ignored stale dispatch execution evidence from ", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Ignored duplicate dispatch execution evidence for already settled dispatch:", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Reconciled failed dispatch verification to Completed from structured WORKER_RESULT evidence", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("Auto-cleared stale LastProcess.IsRunning before dispatch;", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("StaleDispatchAutoRequeued:", StringComparison.Ordinal) &&
+               !trimmed.StartsWith("StaleDispatchAutoRequeueCapExhausted:", StringComparison.Ordinal);
     }
 
     private static bool IsAccumulatedRetryRoundEvent(ProgressEvent evt) =>
