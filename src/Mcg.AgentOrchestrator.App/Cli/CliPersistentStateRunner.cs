@@ -522,16 +522,18 @@ internal static class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository)
     {
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
-        var eligibleIds = summaries
+        var terminalSummaries = summaries
+            .Where(summary => IsConductLoopTerminalStatus(summary.Status))
+            .ToArray();
+        var hydratedIds = summaries
+            .Where(summary => !IsConductLoopTerminalStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
-        var kernel = stateRepository.LoadGoalsAsync(eligibleIds).GetAwaiter().GetResult();
-        kernel.MarkKnownCompletedDependencyGoals(kernel.Goals
-            .Where(goal => goal.Status == GoalStatus.Completed)
-            .Select(goal => goal.Id)
-            .ToArray());
+        var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
+        kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
+            .Select(summary => new GoalId(summary.Id)));
 
-        var loadedIds = eligibleIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var loadedIds = hydratedIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
         var missingDependencyIds = kernel.Goals
             .SelectMany(goal => goal.DependsOn)
             .Select(id => id.Value)
@@ -554,6 +556,9 @@ internal static class CliPersistentStateRunner
 
     private static bool IsConductLoopTerminalStatus(string status) =>
         status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
 
     private static bool ExecuteCommandWithoutTransaction(

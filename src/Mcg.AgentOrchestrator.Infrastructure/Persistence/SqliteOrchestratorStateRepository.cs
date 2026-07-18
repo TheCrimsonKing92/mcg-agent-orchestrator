@@ -413,8 +413,18 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             // statement; the bulk boundary is one connection, one BEGIN IMMEDIATE, one COMMIT.
             foreach (var goal in goals)
             {
-                telemetry.AddWrite(await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken));
-                telemetry.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, goal, cancellationToken));
+                var goalWrite = await UpsertGoalRowAsync(
+                    conn,
+                    goal,
+                    updatedAt,
+                    versionSql: "goals.version + 1",
+                    cancellationToken,
+                    skipUnchanged: true);
+                telemetry.AddWrite(goalWrite);
+                if (goalWrite.RowsWritten > 0)
+                {
+                    telemetry.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, goal, cancellationToken));
+                }
             }
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
@@ -592,10 +602,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.CommandText = """
             SELECT id, status, objective, updated_at
             FROM goals
-            WHERE status <> $cleanedUp
             ORDER BY updated_at DESC
             """;
-        cmd.Parameters.AddWithValue("$cleanedUp", "CleanedUp");
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
@@ -983,7 +991,18 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         foreach (var goal in snapshot.Goals)
         {
-            telemetry?.AddWrite(await UpsertGoalRowAsync(conn, goal, updatedAt, versionSql: "goals.version + 1", cancellationToken));
+            var goalWrite = await UpsertGoalRowAsync(
+                conn,
+                goal,
+                updatedAt,
+                versionSql: "goals.version + 1",
+                cancellationToken,
+                skipUnchanged: true);
+            telemetry?.AddWrite(goalWrite);
+            if (goalWrite.RowsWritten > 0)
+            {
+                telemetry?.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, goal, cancellationToken));
+            }
         }
 
         foreach (var request in snapshot.HumanInputRequests)
@@ -1001,11 +1020,6 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             cmd.Parameters.AddWithValue("$goal_id", request.GoalId);
             cmd.Parameters.AddWithValue("$json", json);
             telemetry?.AddWrite(await cmd.ExecuteNonQueryAsync(cancellationToken), Encoding.UTF8.GetByteCount(json));
-        }
-
-        foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
-        {
-            telemetry?.AddWrite(await UpsertModelFitHistoryRowAsync(conn, row, cancellationToken));
         }
     }
 
@@ -1144,7 +1158,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         string updatedAt,
         string versionSql,
         CancellationToken cancellationToken,
-        int? version = null)
+        int? version = null,
+        bool skipUnchanged = false)
     {
         var json = JsonSerializer.Serialize(goal, SerializerOptions);
         await using var cmd = conn.CreateCommand();
@@ -1160,6 +1175,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 updated_at    = CASE WHEN excluded.snapshot_json != goals.snapshot_json
                                      THEN excluded.updated_at
                                      ELSE goals.updated_at END
+            WHERE $skip_unchanged = 0 OR excluded.snapshot_json != goals.snapshot_json
             """;
         cmd.Parameters.AddWithValue("$id", goal.Id);
         cmd.Parameters.AddWithValue("$status", goal.Status.ToString());
@@ -1168,8 +1184,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
         cmd.Parameters.AddWithValue("$json", json);
         cmd.Parameters.AddWithValue("$version", version is null ? DBNull.Value : version.Value);
+        cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
-        return (rows, Encoding.UTF8.GetByteCount(json));
+        return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }
 
     private static async Task<(int RowsWritten, long SerializedBytes)> UpsertModelFitHistoryRowAsync(

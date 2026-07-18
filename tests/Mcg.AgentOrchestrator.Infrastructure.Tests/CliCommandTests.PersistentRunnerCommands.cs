@@ -964,46 +964,54 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_loads_terminal_goals_for_stale_sweep")]
-    public void PersistentRunnerConductLoopLoadsTerminalGoalsForStaleSweep()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_excludes_terminal_goals_from_hydration")]
+    public void PersistentRunnerConductLoopExcludesTerminalGoalsFromHydration()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
-        var completedGoalIds = new List<string>();
+        var terminalGoalIds = new List<string>();
         for (var i = 0; i < 3; i++)
         {
             var completed = kernel.CreateGoal($"Completed audit goal {i}", [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
             kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskVerification(completed.Id, completed.Tasks.Single().Id,
                 new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
-            completedGoalIds.Add(completed.Id.Value);
+            kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+            terminalGoalIds.Add(completed.Id.Value);
         }
 
         var cleanedUp = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cleaned-up audit goal");
+        var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cancelled audit goal");
+        var superseded = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Superseded audit goal");
         var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active conductor goal");
         var failed = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Failed conductor goal");
         kernel.ReportTaskProgress(failed.Id, failed.Tasks.Single().Id, WorkTaskStatus.Failed, "Still needs conductor/operator attention");
+        kernel = WithGoalStatus(kernel, cancelled.Id, GoalStatus.Cancelled);
+        kernel = WithGoalStatus(kernel, superseded.Id, GoalStatus.Superseded);
         var repository = new InMemoryTransactionalStateRepository(kernel);
         repository.CleanedUpGoalIds.Add(cleanedUp.Id.Value);
+        terminalGoalIds.AddRange([cleanedUp.Id.Value, cancelled.Id.Value, superseded.Id.Value]);
 
         var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository);
 
         Xunit.Assert.Equal(0, repository.LoadCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
-        Xunit.Assert.All(completedGoalIds, id => Xunit.Assert.Contains(id, repository.LoadedGoalIds));
-        Xunit.Assert.DoesNotContain(cleanedUp.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.DoesNotContain(id, repository.LoadedGoalIds));
         Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(failed.Id.Value, repository.LoadedGoalIds);
-        Xunit.Assert.All(completedGoalIds, id => Xunit.Assert.Contains(loaded.Goals, goal => goal.Id.Value == id));
-        Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id == cleanedUp.Id);
+        Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id.Value == id));
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == failed.Id);
-        var expectedLoadedIds = completedGoalIds.Concat([active.Id.Value, failed.Id.Value])
+        Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
+        var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
         Xunit.Assert.Equal(
             expectedLoadedIds,
             repository.LoadGoalBatches.Single().OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        var terminalSnapshot = repository.LoadGoalAsync(new GoalId(terminalGoalIds[0])).GetAwaiter().GetResult();
+        Xunit.Assert.NotNull(terminalSnapshot);
+        Xunit.Assert.Equal(terminalGoalIds[0], terminalSnapshot.Id);
     }
 
 
@@ -1042,10 +1050,11 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository);
         var plan = CrossGoalSubscriptionStartPlanner.Build(loaded, agents, WorkerProfileCatalog.Default());
 
-        Xunit.Assert.Contains(completed.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.DoesNotContain(completed.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
-        Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == completed.Id);
+        Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id == completed.Id);
+        Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(completed.Id));
         Xunit.Assert.Single(plan.Candidates);
         Xunit.Assert.Contains(active.Id.Value, plan.FirstBatchCandidates.Select(candidate => candidate.GoalId));
         Xunit.Assert.DoesNotContain(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
