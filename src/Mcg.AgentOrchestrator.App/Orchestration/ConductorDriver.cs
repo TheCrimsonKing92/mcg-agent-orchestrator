@@ -607,6 +607,8 @@ internal sealed class ConductorDriver
     internal ConductorParallelAcceptanceAttemptCoordinator ParallelAcceptanceAttemptCoordinator =>
         _parallelAcceptanceAttemptCoordinator;
 
+    internal string? ExecutionDirectory => _executionDirectory;
+
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
         if (result.Processes.RecoveryActions?.FirstOrDefault() is { } recoveryAction)

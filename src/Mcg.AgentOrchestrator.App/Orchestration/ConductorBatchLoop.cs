@@ -228,7 +228,6 @@ internal sealed class ConductorBatchLoop
                 policy,
                 completedGoals,
                 escalatedGoals,
-                goalProjectionCache,
                 totalTicks,
                 changedGoalLines);
 
@@ -957,7 +956,6 @@ internal sealed class ConductorBatchLoop
         ConductorAutonomyPolicy policy,
         HashSet<string> completedGoals,
         HashSet<string> escalatedGoals,
-        GoalProjectionCache goalProjectionCache,
         int tick,
         List<string> changedGoalLines)
     {
@@ -972,7 +970,7 @@ internal sealed class ConductorBatchLoop
         var deferredByAdmission = 0;
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
-                IsParallelAcceptanceLifecycleEligible(goal, driver, goalProjectionCache) &&
+                IsParallelAcceptanceLifecycleEligible(goal, driver) &&
                 HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
@@ -1184,12 +1182,17 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsParallelAcceptanceLifecycleEligible(
         Goal goal,
-        ConductorDriver driver,
-        GoalProjectionCache goalProjectionCache)
+        ConductorDriver driver)
     {
+        if (string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
+        {
+            return true;
+        }
+
         try
         {
-            return goalProjectionCache.ResolveState(goal, driver) != GoalLifecycleState.CleanedUp;
+            return !GoalOperationJournal.HasRetiredTerminalDisposition(
+                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id));
         }
         catch
         {
