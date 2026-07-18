@@ -99,12 +99,14 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var buildAttempts = 0;
         var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
         var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
             "handle64-timeout");
         GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
         GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
@@ -148,11 +150,16 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
             Assert.Contains("released=true", output, StringComparison.Ordinal);
+            Assert.Matches(@"waited-ms=([1-9][0-9]*)", output);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=completed", output, StringComparison.Ordinal);
+            Assert.Contains("build-lock=false", output, StringComparison.Ordinal);
         }
         finally
         {
             GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
             GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -175,6 +182,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
         var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
         LockAttribution.AttributeForTests = (path, _) =>
         {
             Thread.Sleep(120);
@@ -185,6 +193,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         };
         GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(80);
         GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
@@ -210,11 +219,15 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Contains("released=false", output, StringComparison.Ordinal);
             Assert.Matches(@"probe-ms=(1[0-9]{2}|[2-9][0-9]{2,})", output);
             Assert.Matches(@"waited-ms=([8-9][0-9]|[1-9][0-9]{2,})", output);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=wait-exhausted", output, StringComparison.Ordinal);
+            Assert.Contains("build-lock=true", output, StringComparison.Ordinal);
         }
         finally
         {
             GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
             GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -1203,6 +1216,120 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_prefers_completed_red_test_verdict_after_transient_build_lock")]
+    public void GoalAcceptanceVerifierSlotGatePrefersCompletedRedTestVerdictAfterTransientBuildLock()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Infra.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
+        var calls = new List<string[]>();
+        var buildAttempts = 0;
+        var testAttempts = 0;
+        FileStream? held = null;
+        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+            "handle64-timeout");
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    buildAttempts++;
+                    if (buildAttempts == 1)
+                    {
+                        var artifactsPath = GetArtifactsPath(args);
+                        var lockedPath = Path.Combine(artifactsPath, "bin", "Core.Tests.dll");
+                        Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
+                        File.WriteAllText(lockedPath, "held");
+                        held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(100);
+                            held!.Dispose();
+                        });
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
+                {
+                    testAttempts++;
+                    return Task.FromResult(testAttempts == 1
+                        ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 519, Skipped: 0, Total: 519.")
+                        : new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            "Failed! - Failed: 1, Passed: 1980, Skipped: 0, Total: 1981.\nRed.Namespace.FailingTest failed"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(
+                    root,
+                    new GoalId("11112222333344445555666677778888"),
+                    stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
+
+            Assert.NotNull(result);
+            Assert.False(result!.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(2, buildAttempts);
+            Assert.Equal(2, testAttempts);
+            Assert.Equal(1, result.ExitCode);
+            Assert.NotNull(result.OutputTail);
+            Assert.Contains("Red.Namespace.FailingTest", result.OutputTail!, StringComparison.Ordinal);
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
+            Assert.Contains("released=true", output, StringComparison.Ordinal);
+            Assert.Matches(@"waited-ms=([1-9][0-9]*)", output);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
+            Assert.Contains("verdict=completed", output, StringComparison.Ordinal);
+            Assert.Contains("build-lock=false", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("verdict=blocked", output, StringComparison.Ordinal);
+            Assert.All(calls.Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test"),
+                call => Assert.Contains("--no-build", call));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
+            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            LockAttribution.AttributeForTests = null;
+            held?.Dispose();
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
