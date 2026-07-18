@@ -228,6 +228,7 @@ internal sealed class ConductorBatchLoop
                 policy,
                 completedGoals,
                 escalatedGoals,
+                goalProjectionCache,
                 totalTicks,
                 changedGoalLines);
 
@@ -956,6 +957,7 @@ internal sealed class ConductorBatchLoop
         ConductorAutonomyPolicy policy,
         HashSet<string> completedGoals,
         HashSet<string> escalatedGoals,
+        GoalProjectionCache goalProjectionCache,
         int tick,
         List<string> changedGoalLines)
     {
@@ -970,6 +972,7 @@ internal sealed class ConductorBatchLoop
         var deferredByAdmission = 0;
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
+                IsParallelAcceptanceLifecycleEligible(goal, driver, goalProjectionCache) &&
                 HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
@@ -1178,6 +1181,21 @@ internal sealed class ConductorBatchLoop
             .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
             .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
             .ToArray();
+
+    private static bool IsParallelAcceptanceLifecycleEligible(
+        Goal goal,
+        ConductorDriver driver,
+        GoalProjectionCache goalProjectionCache)
+    {
+        try
+        {
+            return goalProjectionCache.ResolveState(goal, driver) != GoalLifecycleState.CleanedUp;
+        }
+        catch
+        {
+            return true;
+        }
+    }
 
     private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)
     {

@@ -445,7 +445,14 @@ private static void EmitReadyBlockedDiagnosticsForAssigned(
         .OrderBy(item => item.TaskNumber);
     foreach (var item in planItems)
     {
-        var provider = string.IsNullOrWhiteSpace(item.ProfileName) ? "unknown" : item.ProfileName;
+        var task = goal.Tasks.FirstOrDefault(task => task.Id.Value == item.TaskId);
+        var agent = task?.AssignedAgentId is null
+            ? null
+            : agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
+        var provider = task is null || agent is null
+            ? item.ProfileName
+            : WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
+        provider = string.IsNullOrWhiteSpace(provider) ? "unknown" : provider;
         Console.Error.WriteLine(
             $"READY_BLOCKED goal={goal.Id.Value[..8]} task={item.TaskNumber} provider={provider} reason={reason}");
     }
