@@ -67,6 +67,49 @@ public static class WorkerResultBlockers
         return hasNeedsWorkVerdict && !string.IsNullOrWhiteSpace(blocker);
     }
 
+    public static bool TryFindUnsuppressedNeedsWorkVerdict(
+        TaskVerificationRecord? verification,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
+        out string blocker,
+        out IReadOnlyList<string> suppressedFindings)
+    {
+        suppressedFindings = [];
+        if (!TryFindNeedsWorkVerdict(verification, out blocker))
+        {
+            return false;
+        }
+
+        if (criteriaCorrections.Count == 0)
+        {
+            return true;
+        }
+
+        var kept = new List<string>();
+        var suppressed = new List<string>();
+        foreach (var finding in SplitBlockerFindings(blocker))
+        {
+            if (EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
+                finding,
+                criteriaCorrections,
+                out _))
+            {
+                suppressed.Add(finding);
+                continue;
+            }
+
+            kept.Add(finding);
+        }
+
+        if (suppressed.Count == 0)
+        {
+            return true;
+        }
+
+        blocker = string.Join("; ", kept);
+        suppressedFindings = suppressed;
+        return !string.IsNullOrWhiteSpace(blocker);
+    }
+
     public static bool TryFindEvidenceRequest(TaskVerificationRecord? verification, out string request)
     {
         request = string.Empty;
@@ -263,6 +306,18 @@ public static class WorkerResultBlockers
 
         blocker = value;
         return true;
+    }
+
+    private static IReadOnlyList<string> SplitBlockerFindings(string blocker)
+    {
+        var findings = blocker
+            .Replace("\r\n", "\n")
+            .Split(['\n', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => item.TrimStart('-', '*', ' '))
+            .Where(item => item.Length > 0)
+            .ToList();
+
+        return findings.Count == 0 ? [blocker.Trim()] : findings;
     }
 
     private static bool TryFindBlockerMarkedFinding(string line, out string blocker)

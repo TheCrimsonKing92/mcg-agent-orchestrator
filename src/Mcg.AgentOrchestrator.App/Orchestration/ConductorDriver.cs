@@ -807,14 +807,23 @@ internal sealed class ConductorDriver
         var reviewerTask = goal.Tasks.FirstOrDefault(t =>
             t.Status == WorkTaskStatus.Failed &&
             t.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindNeedsWorkVerdict(t.LastVerification, out _));
+            WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
+                t.LastVerification,
+                goal.EffectiveAcceptanceCriteriaCorrections,
+                out _,
+                out _));
         if (reviewerTask is null ||
-            !WorkerResultBlockers.TryFindNeedsWorkVerdict(reviewerTask.LastVerification, out var blocker))
+            !WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
+                reviewerTask.LastVerification,
+                goal.EffectiveAcceptanceCriteriaCorrections,
+                out var blocker,
+                out var suppressedFindings))
         {
             return false;
         }
 
         var reviewArtifact = FormatReviewerOutputArtifact(reviewerTask);
+        RecordSuppressedAutoReviewRetryFindings(goal, reviewerTask, suppressedFindings);
         if (WorkerResultBlockers.TryFindEvidenceRequest(reviewerTask.LastVerification, out var evidenceRequest))
         {
             var hadPriorEvidenceRequest = HasPriorReviewerEvidenceRequestInCurrentRound(goal, reviewerTask);
@@ -915,6 +924,20 @@ internal sealed class ConductorDriver
             warning,
             null);
         return true;
+    }
+
+    private void RecordSuppressedAutoReviewRetryFindings(
+        Goal goal,
+        TaskSpec reviewerTask,
+        IReadOnlyList<string> suppressedFindings)
+    {
+        foreach (var finding in suppressedFindings)
+        {
+            _recordTaskNote(
+                goal.Id,
+                reviewerTask.Id,
+                $"Suppressed auto-review-retry finding matching operator criteria correction: {TrimForConductorMessage(finding)}");
+        }
     }
 
     private static AgentRole InferReviewRetryTargetRole(string blocker)

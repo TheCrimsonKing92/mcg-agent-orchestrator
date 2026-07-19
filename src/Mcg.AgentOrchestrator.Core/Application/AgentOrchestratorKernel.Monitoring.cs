@@ -18,7 +18,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks)
         {
-            var gate = BuildTaskVerificationGate(task);
+            var gate = BuildTaskVerificationGate(goal, task);
             if (task.Status == WorkTaskStatus.Failed)
             {
                 attention.Add(new TaskAttentionItem(
@@ -111,7 +111,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks)
         {
-            var gate = BuildTaskVerificationGate(task);
+            var gate = BuildTaskVerificationGate(goal, task);
             if (task.Status == WorkTaskStatus.Failed)
             {
                 var message = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery)

@@ -126,6 +126,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Task note message cannot be empty.", nameof(message));
         }
 
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskNote, noteMessage);
         Append(goal, taskId, ProgressKind.TaskNote, noteMessage);
         return task;
     }
@@ -191,6 +192,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var retryAt = _clock.UtcNow;
         ResetTaskForRetry(task, retryAt, retryRoundKind);
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         if (invalidateDownstream)
         {
@@ -215,7 +217,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
         {
             return false;
         }
@@ -248,7 +250,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (!goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (!goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
         {
             return false;
         }
@@ -546,6 +548,7 @@ public sealed partial class AgentOrchestratorKernel
             _ => ProgressKind.TaskUpdated
         };
 
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, kind, message);
         Append(goal, taskId, kind, message);
 
         RefreshGoalStatus(goal);

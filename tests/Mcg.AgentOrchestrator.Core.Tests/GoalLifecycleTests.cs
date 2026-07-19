@@ -189,6 +189,30 @@ public sealed class GoalLifecycleTests
     Assert.Contains("TaskNote", brief, StringComparison.Ordinal);
     Assert.Contains("Use the existing CLI command style.", brief, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact(DisplayName = "RecordTaskNote_with_criteria_correction_stores_effective_acceptance_overlay_with_provenance")]
+    public void RecordTaskNoteWithCriteriaCorrectionStoresEffectiveAcceptanceOverlayWithProvenance()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Correct bad acceptance wording");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskNote(
+        goal.Id,
+        task.Id,
+        "CRITERIA CORRECTION: supersedes=\"run the full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient for this slice\"");
+
+    var correction = Assert.Single(goal.EffectiveAcceptanceCriteriaCorrections);
+    Assert.Equal("run the full Infrastructure suite before review", correction.SupersededCriterion);
+    Assert.Equal("focused build-check evidence is sufficient for this slice", correction.Correction);
+    Assert.Equal("operator", correction.Actor);
+    Assert.Equal(clock.UtcNow, correction.RecordedAt);
+    Assert.Equal(task.Id, correction.SourceTaskId);
+    Assert.Equal(ProgressKind.TaskNote, correction.SourceKind);
+}
+
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
     public void SnapshotRoundtripPreservesAddedTask()
 {

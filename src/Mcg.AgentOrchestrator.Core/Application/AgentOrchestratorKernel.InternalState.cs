@@ -20,7 +20,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (goal.Tasks.All(task => BuildTaskVerificationGate(task).GateStatus == VerificationGateStatus.Passed))
+        if (goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
         {
             goal.SetStatus(GoalStatus.Verified);
             return;
@@ -32,7 +32,7 @@ public sealed partial class AgentOrchestratorKernel
     private static bool IsTerminalGoalStatus(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
-    private static TaskVerificationGate BuildTaskVerificationGate(TaskSpec task)
+    private static TaskVerificationGate BuildTaskVerificationGate(Goal goal, TaskSpec task)
     {
         if (task.LastVerification is { Succeeded: false })
         {
@@ -67,7 +67,8 @@ public sealed partial class AgentOrchestratorKernel
 
         if (task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, task.LastVerification) &&
-            WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var reviewerBlocker))
+            WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var reviewerBlocker) &&
+            TryGetUnsuppressedReviewerBlocker(goal, reviewerBlocker, out var effectiveReviewerBlocker))
         {
             return new TaskVerificationGate(
                 task.Id,
@@ -75,7 +76,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.Description,
                 task.Status,
                 VerificationGateStatus.FailedVerification,
-                $"Reviewer WORKER_RESULT reported blocker: {reviewerBlocker}",
+                $"Reviewer WORKER_RESULT reported blocker: {effectiveReviewerBlocker}",
                 VerificationGateReason.ReviewerWorkerResultBlocker);
         }
 

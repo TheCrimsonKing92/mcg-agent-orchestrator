@@ -1003,6 +1003,43 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("operator-authored retry feedback", feedback);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_operator_criteria_corrections")]
+    public async Task TickMergePreservesOperatorCriteriaCorrections()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect operator criteria correction");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickSnapshot = baseline with { Status = GoalStatus.Active };
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var transactionKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                transactionKernel.RecordTaskNote(
+                    goal.Id,
+                    task.Id,
+                    "CRITERIA CORRECTION: supersedes=\"full suite required\"; correction=\"focused build-check accepted\"");
+                return Task.FromResult((true, transactionKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        var result = Assert.Single(results);
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var correction = Assert.Single(restoredGoal.EffectiveAcceptanceCriteriaCorrections);
+        Assert.Equal("full suite required", correction.SupersededCriterion);
+        Assert.Equal("focused build-check accepted", correction.Correction);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_skip_returns_receipt")]
     public async Task TickMergeSkipReturnsReceipt()
     {

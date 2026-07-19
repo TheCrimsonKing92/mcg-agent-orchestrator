@@ -69,6 +69,7 @@ internal static class SdlcRolePromptRequirements
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
+                "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
                 "- State residual risk, test gaps, and whether acceptance is justified.",
                 "- Do not approve based only on a summary from another role.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
@@ -172,6 +173,7 @@ internal static class SdlcRolePromptRequirements
                 "- Use git diff main...HEAD for independent scope checks; reject two-dot or working-tree-only scope verdict evidence.",
                 "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
+                "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
                 "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."

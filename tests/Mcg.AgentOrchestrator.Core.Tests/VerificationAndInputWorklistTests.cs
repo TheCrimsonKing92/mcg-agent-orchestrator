@@ -189,6 +189,98 @@ public sealed class VerificationAndInputWorklistTests
         item.Message.Contains("Finding A blocks acceptance", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Reviewer_WORKER_RESULT_blocker_matching_superseded_criterion_is_suppressed")]
+    public void ReviewerWorkerResultBlockerMatchingSupersededCriterionIsSuppressed()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Suppress corrected review blocker",
+        [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
+    kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Reviewer)]);
+    var reviewer = goal.Tasks.Single();
+    kernel.RecordTaskNote(
+        goal.Id,
+        reviewer.Id,
+        "CRITERIA CORRECTION: supersedes=\"full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient\"");
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: none",
+        "tests: pass - focused check",
+        "commit: none",
+        "blockers: missing full Infrastructure suite before review",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "skills: none",
+        "confidence: high",
+        "END_WORKER_RESULT");
+    kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
+
+    kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+        "reviewer stdout",
+        "C:\\repo",
+        0,
+        stdout,
+        string.Empty,
+        clock.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
+    var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
+    Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+    Assert.Equal(VerificationGateStatus.Passed, gate.GateStatus);
+    Assert.True(acceptance.IsAccepted);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == reviewer.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Suppressed Reviewer blocker matching operator criteria correction", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Reviewer_WORKER_RESULT_unrelated_blocker_routes_after_superseded_finding_is_removed")]
+    public void ReviewerWorkerResultUnrelatedBlockerRoutesAfterSupersededFindingIsRemoved()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal(
+        "Keep unrelated review blocker",
+        [new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer)]);
+    kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Reviewer)]);
+    var reviewer = goal.Tasks.Single();
+    kernel.RetryTask(
+        goal.Id,
+        reviewer.Id,
+        "CRITERIA CORRECTION: supersedes=\"full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient\"");
+    var stdout = string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: none",
+        "tests: pass - focused check",
+        "commit: none",
+        "blockers: missing full Infrastructure suite before review; public status output omits the correction overlay",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "skills: none",
+        "confidence: high",
+        "END_WORKER_RESULT");
+    kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Completed, "Reviewer done.");
+
+    kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+        "reviewer stdout",
+        "C:\\repo",
+        0,
+        stdout,
+        string.Empty,
+        clock.UtcNow));
+
+    var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
+    var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+    Assert.Equal(VerificationGateReason.ReviewerWorkerResultBlocker, gate.Reason);
+    Assert.DoesNotContain("missing full Infrastructure suite before review", gate.Message, StringComparison.Ordinal);
+    Assert.Contains("public status output omits the correction overlay", gate.Message, StringComparison.Ordinal);
+    Assert.False(acceptance.IsAccepted);
+}
+
     [Xunit.Fact(DisplayName = "Reviewer_markdown_decorated_WORKER_RESULT_blockers_fail_gate")]
     public void ReviewerMarkdownDecoratedWorkerResultBlockersFailGate()
 {

@@ -72,6 +72,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty
         };
         headerLines.AddRange(BuildAccumulatedRetryFeedbackBriefBlock(goal, task, workingDirectory, targetBranchName, targetHeadCommit));
+        headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
@@ -573,6 +574,35 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         lines.Add("<!-- ACCUMULATED_RETRY_FEEDBACK_END -->");
+        lines.Add(string.Empty);
+        return lines;
+    }
+
+    private static List<string> BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(Goal goal, TaskSpec task)
+    {
+        if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Reviewer) ||
+            goal.EffectiveAcceptanceCriteriaCorrections.Count == 0)
+        {
+            return [];
+        }
+
+        var lines = new List<string>
+        {
+            "<!-- EFFECTIVE_ACCEPTANCE_CRITERIA_CORRECTIONS_START -->",
+            "## EFFECTIVE ACCEPTANCE CRITERIA - OPERATOR CORRECTIONS",
+            "Operator corrections in this overlay supersede conflicting brief text. Do not enforce or re-raise findings that apply only to superseded criteria.",
+            "Correction marker convention: CRITERIA CORRECTION: supersedes=\"<brief text/ref>\"; correction=\"<effective criterion>\".",
+        };
+
+        foreach (var correction in goal.EffectiveAcceptanceCriteriaCorrections.OrderByDescending(item => item.RecordedAt))
+        {
+            var taskReference = correction.SourceTaskId is null ? "goal timeline" : $"task {correction.SourceTaskId.Value[..8]}";
+            lines.Add($"- Supersedes: {PromptContextFormatter.TrimPromptBlock(correction.SupersededCriterion)}");
+            lines.Add($"  Effective criterion: {PromptContextFormatter.TrimPromptBlock(correction.Correction)}");
+            lines.Add($"  Provenance: {correction.Actor}; {correction.RecordedAt:u}; {correction.SourceKind}; {taskReference}.");
+        }
+
+        lines.Add("<!-- EFFECTIVE_ACCEPTANCE_CRITERIA_CORRECTIONS_END -->");
         lines.Add(string.Empty);
         return lines;
     }

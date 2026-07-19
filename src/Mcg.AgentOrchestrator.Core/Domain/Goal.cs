@@ -4,6 +4,7 @@ public sealed class Goal
 {
     private readonly List<TaskSpec> _tasks;
     private readonly List<ProgressEvent> _timeline = [];
+    private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
@@ -30,6 +31,8 @@ public sealed class Goal
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
 
     public IReadOnlyList<ProgressEvent> Timeline => _timeline;
+
+    public IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> EffectiveAcceptanceCriteriaCorrections => _effectiveAcceptanceCriteriaCorrections;
 
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
@@ -63,6 +66,33 @@ public sealed class Goal
 
     internal void AddDependency(GoalId dependencyId) => _dependsOn.Add(dependencyId);
 
+    internal bool AddEffectiveAcceptanceCriteriaCorrection(EffectiveAcceptanceCriteriaCorrection correction)
+    {
+        var normalizedSuperseded = RequireText(correction.SupersededCriterion, nameof(correction.SupersededCriterion));
+        var normalizedCorrection = RequireText(correction.Correction, nameof(correction.Correction));
+        var normalizedActor = RequireText(correction.Actor, nameof(correction.Actor));
+        var normalized = correction with
+        {
+            SupersededCriterion = normalizedSuperseded,
+            Correction = normalizedCorrection,
+            Actor = normalizedActor
+        };
+
+        if (_effectiveAcceptanceCriteriaCorrections.Any(existing =>
+            string.Equals(existing.SupersededCriterion, normalized.SupersededCriterion, StringComparison.Ordinal) &&
+            string.Equals(existing.Correction, normalized.Correction, StringComparison.Ordinal) &&
+            string.Equals(existing.Actor, normalized.Actor, StringComparison.Ordinal) &&
+            existing.RecordedAt == normalized.RecordedAt &&
+            existing.SourceTaskId == normalized.SourceTaskId &&
+            existing.SourceKind == normalized.SourceKind))
+        {
+            return false;
+        }
+
+        _effectiveAcceptanceCriteriaCorrections.Add(normalized);
+        return true;
+    }
+
     internal GoalSnapshot ToSnapshot()
     {
         return new GoalSnapshot(
@@ -90,7 +120,16 @@ public sealed class Goal
                     LatestAcceptanceFailure.OccurredAt,
                     LatestAcceptanceFailure.FailedChecks.ToList(),
                     LatestAcceptanceFailure.BranchHeadSha,
-                    LatestAcceptanceFailure.MainHeadSha));
+                    LatestAcceptanceFailure.MainHeadSha),
+            _effectiveAcceptanceCriteriaCorrections.Count == 0
+                ? null
+                : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
+                    correction.SupersededCriterion,
+                    correction.Correction,
+                    correction.Actor,
+                    correction.RecordedAt,
+                    correction.SourceTaskId?.Value,
+                    correction.SourceKind)).ToList());
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -133,6 +172,17 @@ public sealed class Goal
                 failure.OccurredAt,
                 failure.BranchHeadSha,
                 failure.MainHeadSha);
+        }
+
+        foreach (var correction in snapshot.EffectiveAcceptanceCriteriaCorrections ?? [])
+        {
+            goal.AddEffectiveAcceptanceCriteriaCorrection(new EffectiveAcceptanceCriteriaCorrection(
+                correction.SupersededCriterion,
+                correction.Correction,
+                correction.Actor,
+                correction.RecordedAt,
+                correction.SourceTaskId is null ? null : new TaskId(correction.SourceTaskId),
+                correction.SourceKind));
         }
 
         return goal;
