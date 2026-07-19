@@ -409,6 +409,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var readinessSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
+            TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
                 context.CurrentGoal,
@@ -422,6 +423,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var recoverySweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
+            TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
             return recoverySweep.Changed;
@@ -639,6 +641,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             var nextSweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             ConsoleViews.PrintTerminalGoalSweep(nextSweep);
+            TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             var nextPolicy = ResolveCliAutonomyPolicy(parts);
             var nextHealth = GoalHealthEvaluator.Build(
@@ -851,6 +854,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
+                    TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,
@@ -1387,6 +1391,7 @@ internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context,
 {
     var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
+    TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);
     if (context.CurrentGoal?.Id == goal.Id)
     {
@@ -1447,6 +1452,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
 
     var diagnosticsSweep = TerminalGoalSweep.Diagnose(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
     ConsoleViews.PrintTerminalGoalSweep(diagnosticsSweep, includeRepairs: false);
+    TerminalGoalSweepAttention.Surface(context.Kernel, diagnosticsSweep, context.Workspace.OrchestratorDirectory, goal.Id);
 
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
     var dispatchSurface = new DispatchStateSurface(inspectWorktree: false);
@@ -3722,6 +3728,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
     var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
+    TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);
     context.CurrentGoal = goal;
     var actions = 0;

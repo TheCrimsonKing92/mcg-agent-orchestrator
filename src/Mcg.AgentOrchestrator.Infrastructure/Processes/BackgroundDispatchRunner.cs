@@ -336,7 +336,7 @@ public sealed class BackgroundDispatchRunner
                 var process = task.LastProcess;
                 if (process is null ||
                     process.WasCancelled ||
-                    task.LastVerification is not null ||
+                    HasProcessOnlyCompletionAlreadyApplied(task, process) ||
                     HasRecordedCompletionForProcess(task, process))
                 {
                     continue;
@@ -367,6 +367,12 @@ public sealed class BackgroundDispatchRunner
             verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
             verification.CompletedAt == process.CompletedAt);
     }
+
+    private static bool HasProcessOnlyCompletionAlreadyApplied(TaskSpec task, TaskProcessRecord process) =>
+        task.Status == WorkTaskStatus.Completed &&
+        task.LastVerification is not null &&
+        process.CompletedAt is not null &&
+        process.ExitCode is not null;
 
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
@@ -402,7 +408,11 @@ public sealed class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
-        var hasLiveProcess = AnyTrackedProcessStillRunning(processRecord);
+        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
+        var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
+            ? refreshHeartbeat
+            : null;
+        var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
         var hasDirtyWorktreeEvidence =
             !hasLiveProcess &&
             !File.Exists(processRecord.ExitCodePath) &&
@@ -421,6 +431,11 @@ public sealed class BackgroundDispatchRunner
 
         if (hasLiveProcess)
         {
+            if (!hasLiveTrackedProcess && !exitFileExists)
+            {
+                return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+            }
+
             if (IsAuthoritativeHold(recoveryDecision))
             {
                 return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
@@ -512,21 +527,20 @@ public sealed class BackgroundDispatchRunner
         DispatchRecoveryDecision recoveryDecision,
         out DispatchRefreshOutcome outcome)
     {
-        IReadOnlyList<int>? ownedProcessIds = null;
-        if (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
+        var hasHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat);
+        var observedHeartbeat = hasHeartbeat ? heartbeat : null;
+        if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
-            ownedProcessIds = heartbeat.OwnedProcessIds;
+            if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
+            {
+                outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+                return false;
+            }
         }
-
-        if (ownedProcessIds?.Any(_isStillRunning) == true)
+        else
         {
-            outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
-            return false;
-        }
-
-        if (!TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
-        {
-            if (!File.Exists(processRecord.ExitCodePath) || AnyTrackedProcessStillRunning(processRecord))
+            if (!File.Exists(processRecord.ExitCodePath) ||
+                AnyObservedProcessStillRunning(processRecord, observedHeartbeat))
             {
                 outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
                 return false;
@@ -549,19 +563,10 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
-        if (AnyTrackedProcessStillRunning(processRecord))
+        if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
         {
-            var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
-            outcome = BuildCompletedProcessOutcome(
-                kernel,
-                goalId,
-                taskId,
-                processRecord,
-                exitCode,
-                BuildRecoveryDiagnostic(recoveryDecision),
-                recoveryDecision,
-                resourceAccounting);
-            return true;
+            outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+            return false;
         }
 
         outcome = BuildCompletedProcessOutcome(
@@ -617,10 +622,10 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
-        if (previousProcess?.CompletedAt is not null &&
+        if (task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is not null &&
             outcome.ProcessRecord.CompletedAt is not null &&
-            previousProcess.ProcessId == outcome.ProcessRecord.ProcessId &&
-            task.LastVerification is not null)
+            previousProcess?.ProcessId == outcome.ProcessRecord.ProcessId)
         {
             verification = null;
         }
@@ -2285,6 +2290,82 @@ public sealed class BackgroundDispatchRunner
     private bool AnyTrackedProcessStillRunning(TaskProcessRecord processRecord)
     {
         return processRecord.TrackedProcessIds.Any(_isStillRunning);
+    }
+
+    private bool AnyObservedProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
+    {
+        return GetObservedProcessIds(processRecord, heartbeat).Any(_isStillRunning);
+    }
+
+    private bool AnyOwnedWorkerProcessStillRunning(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
+    {
+        return GetOwnedWorkerProcessIds(processRecord, heartbeat).Any(_isStillRunning);
+    }
+
+    private static IReadOnlyList<int> GetObservedProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
+    {
+        var processIds = new HashSet<int>(processRecord.TrackedProcessIds.Where(pid => pid > 0));
+        if (heartbeat is not null)
+        {
+            if (heartbeat.ChildProcessId is > 0)
+            {
+                processIds.Add(heartbeat.ChildProcessId.Value);
+            }
+
+            if (heartbeat.OwnedProcessIds is { Count: > 0 })
+            {
+                foreach (var processId in heartbeat.OwnedProcessIds)
+                {
+                    if (processId > 0)
+                    {
+                        processIds.Add(processId);
+                    }
+                }
+            }
+        }
+
+        return processIds.ToArray();
+    }
+
+    private static IReadOnlyList<int> GetOwnedWorkerProcessIds(TaskProcessRecord processRecord, DispatchHeartbeat? heartbeat)
+    {
+        var processIds = new HashSet<int>();
+        if (processRecord.OwnedProcessIds is { Count: > 0 })
+        {
+            foreach (var processId in processRecord.OwnedProcessIds)
+            {
+                if (processId > 0)
+                {
+                    processIds.Add(processId);
+                }
+            }
+        }
+
+        if (heartbeat is not null)
+        {
+            if (heartbeat.ProcessId > 0)
+            {
+                processIds.Add(heartbeat.ProcessId);
+            }
+
+            if (heartbeat.ChildProcessId is > 0)
+            {
+                processIds.Add(heartbeat.ChildProcessId.Value);
+            }
+
+            if (heartbeat.OwnedProcessIds is { Count: > 0 })
+            {
+                foreach (var processId in heartbeat.OwnedProcessIds)
+                {
+                    if (processId > 0)
+                    {
+                        processIds.Add(processId);
+                    }
+                }
+            }
+        }
+
+        return processIds.ToArray();
     }
 
     private void TryKillTrackedProcesses(TaskProcessRecord processRecord, bool waitForExit)

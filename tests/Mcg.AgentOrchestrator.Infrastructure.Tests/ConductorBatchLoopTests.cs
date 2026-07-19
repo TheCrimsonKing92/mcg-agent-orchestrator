@@ -4772,6 +4772,62 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Advanced);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_reconciles_verified_dead_dispatch_before_gate_admission")]
+    public void BatchLoopReconcilesVerifiedDeadDispatchBeforeGateAdmission()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-dead-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var exit = Path.Combine(root, "developer.exit.txt");
+        var stdout = Path.Combine(root, "developer.out.log");
+        var stderr = Path.Combine(root, "developer.err.log");
+        File.WriteAllText(stdout, "prior worker result");
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "1");
+
+        var (kernel, goal) = SimpleGoal("completed tasks held by stale dead watch");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now));
+        var processRecord = new TaskProcessRecord(111, "codex exec prompt", root, stdout, stderr, exit, now, null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "already completed", string.Empty, now));
+        File.WriteAllText(
+            BackgroundDispatchRunner.GetHeartbeatPath(processRecord),
+            """
+{"pid":32640,"childPid":32641,"ownedPids":[],"state":"exiting","lastObservedAt":"2026-07-19T12:00:00Z","lastProgressAt":"2026-07-19T11:59:00Z","stdoutBytes":42,"stderrBytes":0}
+""");
+
+        var acceptedGoals = new List<GoalId>();
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (candidate, _) =>
+            {
+                acceptedGoals.Add(candidate.Id);
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            });
+
+        try
+        {
+            var summary = new ConductorBatchLoop(loopKernel => runner.SweepExitedProcesses(loopKernel)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal([goal.Id], acceptedGoals);
+            Assert.Equal(1, summary.Advanced);
+            Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
+            Assert.Equal(1, kernel.GetTask(goal.Id, task.Id).LastProcess!.ExitCode);
+            Assert.Single(kernel.GetTask(goal.Id, task.Id).VerificationHistory);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WatchMode_exit_wake_reconciles_before_stop_file_exit")]
     public void WatchModeExitWakeReconcilesBeforeStopFileExit()
     {
