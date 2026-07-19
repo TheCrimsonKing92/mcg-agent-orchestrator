@@ -61,7 +61,7 @@ public static class OperatorEscalationProjection
 
         if (item.Kind == OperatorInboxKind.AcceptanceGate && !requiresInput)
         {
-            var acknowledgeCommand = $"inbox-ack {item.Id}";
+            var acknowledgeCommand = $"operator-inbox-ack {item.Id}";
             actions.Add(new OperatorEscalationAction("Acknowledge", acknowledgeCommand, RequiresConfirm: false));
         }
 

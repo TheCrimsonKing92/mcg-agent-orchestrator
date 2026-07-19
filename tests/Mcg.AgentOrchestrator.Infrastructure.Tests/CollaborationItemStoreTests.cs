@@ -170,6 +170,60 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal(2, (await store.ListDecisionAuditAsync()).Count);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_list_actions_excludes_consumed_and_expired_actions")]
+    public async Task ListActionsExcludesConsumedAndExpiredActions()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-open-actions",
+            [
+                new CollaborationActionBinding("Run", "next abc123"),
+                new CollaborationActionBinding("Expired", "next expired", ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(-1))
+            ]);
+
+        var before = await store.ListActionsAsync("corr-open-actions");
+        await store.TryClaimActionAsync(
+            "corr-open-actions", 0, "discord:user1", "interaction-consume", null, DateTimeOffset.UtcNow);
+        var after = await store.ListActionsAsync("corr-open-actions");
+
+        Xunit.Assert.Equal(["next abc123"], before.Select(action => action.Command).ToArray());
+        Xunit.Assert.Empty(after);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_open_item_refresh_preserves_consumed_actions")]
+    public async Task OpenItemRefreshPreservesConsumedActions()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-refresh-consumed",
+            [new CollaborationActionBinding("Run", "next abc123")]);
+        var first = await store.TryClaimActionAsync(
+            "corr-refresh-consumed", 0, "discord:user1", "interaction-1", null, DateTimeOffset.UtcNow);
+
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s refreshed",
+            "b refreshed",
+            "corr-refresh-consumed",
+            [new CollaborationActionBinding("Run again", "next resurrected")]);
+        var second = await store.TryClaimActionAsync(
+            "corr-refresh-consumed", 0, "discord:user1", "interaction-2", null, DateTimeOffset.UtcNow);
+
+        Xunit.Assert.True(first.Applied);
+        Xunit.Assert.False(second.Applied);
+        Xunit.Assert.Equal("Action already consumed.", second.ErrorMessage);
+        Xunit.Assert.Equal("next abc123", second.Action!.Command);
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_bound_action_expiry_rejects_and_audits")]
     public async Task BoundActionExpiryRejectsAndAudits()
     {
@@ -236,6 +290,20 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("discord:user1", audit.ActorId);
         Xunit.Assert.Equal("interaction-hash", audit.InteractionId);
         Xunit.Assert.Equal("sha256-card", audit.RenderedContentHash);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_default_decision_and_verify_actions_are_cli_commands")]
+    public async Task DefaultDecisionAndVerifyActionsAreCliCommands()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(CollaborationItemType.Decision, "g1", "decision", "body", "corr-default-decision");
+        await store.RaiseAsync(CollaborationItemType.Verify, "g1", "verify", "body", "corr-default-verify");
+
+        var decision = (await store.ListActionsAsync("corr-default-decision")).Single();
+        var verify = (await store.ListActionsAsync("corr-default-verify")).Single();
+
+        Xunit.Assert.Equal("operator-inbox-ack corr-default-decision", decision.Command);
+        Xunit.Assert.Equal("operator-inbox-ack corr-default-verify", verify.Command);
     }
 
     [Xunit.Fact(DisplayName = "CollaborationItemStore_allowlist_accepts_existing_operator_inbox_verbs")]

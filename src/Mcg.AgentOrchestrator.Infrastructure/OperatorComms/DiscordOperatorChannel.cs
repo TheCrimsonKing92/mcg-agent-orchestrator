@@ -29,11 +29,12 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
             escalation.Title,
             BuildContent(escalation),
             escalation.InboxItemId,
-            BuildBindings(escalation.Actions, expectedGoalStateVersion),
+            BuildBindings(escalation.InboxItemId, escalation.Actions, expectedGoalStateVersion),
             cancellationToken);
     }
 
     private static IReadOnlyList<CollaborationActionBinding> BuildBindings(
+        string inboxItemId,
         IReadOnlyList<OperatorEscalationAction> actions,
         long? expectedGoalStateVersion)
     {
@@ -48,7 +49,7 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
                 action.ExpiresAt))
             .ToList();
         return bindings.Count == 0
-            ? [new CollaborationActionBinding("Resolve", "resolved", ExpectedGoalStateVersion: expectedGoalStateVersion)]
+            ? [new CollaborationActionBinding("Resolve", $"operator-inbox-ack {inboxItemId}", ExpectedGoalStateVersion: expectedGoalStateVersion)]
             : bindings;
     }
 

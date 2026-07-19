@@ -156,6 +156,7 @@ public sealed class OperatorChannelTests
         var actions = OperatorEscalationProjection.DeriveActions(item);
 
         Assert.True(actions[0].RequiresConfirm);
+        Assert.Contains(actions, action => action.Command == $"operator-inbox-ack {item.Id}");
     }
 
     [Xunit.Fact(DisplayName = "Projection_next_command_does_not_require_confirm")]
@@ -408,6 +409,21 @@ public sealed class OperatorChannelTests
         var action = (await store.ListActionsAsync(escalation.InboxItemId)).Single();
         Assert.Equal("Retry", action.Label);
         Assert.Equal("next testgoal", action.Command);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_no_action_fallback_binds_cli_ack_command")]
+    public async Task DiscordOperatorChannelNoActionFallbackBindsCliAckCommand()
+    {
+        var stateDir = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
+        var escalation = BuildEscalation("inbox-no-action", actions: []);
+
+        await channel.SendEscalationAsync(escalation);
+
+        var action = (await store.ListActionsAsync(escalation.InboxItemId)).Single();
+        Assert.Equal("Resolve", action.Label);
+        Assert.Equal("operator-inbox-ack inbox-no-action", action.Command);
     }
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_second_escalation_raises_second_queue_item")]

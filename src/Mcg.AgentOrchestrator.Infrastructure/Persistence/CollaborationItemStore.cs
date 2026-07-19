@@ -130,7 +130,6 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         "answer",
         "conduct",
         "doctor",
-        "inbox-ack",
         "input-needed",
         "land",
         "next",
@@ -143,8 +142,6 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         "subscription-plan",
         "verify",
         "verify-needed",
-        "resolved",
-        "verified",
         "workspace"
     };
 
@@ -276,7 +273,7 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         if (string.IsNullOrWhiteSpace(correlationKey))
             return await RaiseCoreAsync(type, goalId, subject, body, correlationKey, null, cancellationToken);
 
-        var defaultActions = BuildDefaultActions(type);
+        var defaultActions = BuildDefaultActions(type, correlationKey);
         return await RaiseCoreAsync(type, goalId, subject, body, correlationKey, defaultActions, cancellationToken);
     }
 
@@ -554,9 +551,12 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                    expected_goal_state_version, expires_at, consumed_at, rendered_content_hash
             FROM collaboration_item_actions
             WHERE correlation_key = $key
+              AND consumed_at IS NULL
+              AND expires_at > $now
             ORDER BY action_index ASC
             """;
         cmd.Parameters.AddWithValue("$key", correlationKey);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
             results.Add(ReadAction(reader));
@@ -800,11 +800,13 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
             reader.IsDBNull(10) ? null : reader.GetString(10),
             DateTimeOffset.Parse(reader.GetString(11)));
 
-    private static IReadOnlyList<CollaborationActionBinding>? BuildDefaultActions(CollaborationItemType type) =>
+    private static IReadOnlyList<CollaborationActionBinding>? BuildDefaultActions(
+        CollaborationItemType type,
+        string correlationKey) =>
         type switch
         {
-            CollaborationItemType.Decision => [new CollaborationActionBinding("Resolve", "resolved")],
-            CollaborationItemType.Verify => [new CollaborationActionBinding("Verify", "verified")],
+            CollaborationItemType.Decision => [new CollaborationActionBinding("Resolve", $"operator-inbox-ack {correlationKey}")],
+            CollaborationItemType.Verify => [new CollaborationActionBinding("Verify", $"operator-inbox-ack {correlationKey}")],
             _ => null
         };
 
@@ -830,12 +832,21 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
             var action = NormalizeAction(actions[i]);
             await using var insert = conn.CreateCommand();
             insert.CommandText = """
-                INSERT OR REPLACE INTO collaboration_item_actions (
+                INSERT INTO collaboration_item_actions (
                     correlation_key, action_index, label, command, requires_confirmation, requires_input,
                     expected_goal_state_version, expires_at, consumed_at, rendered_content_hash)
                 VALUES (
                     $correlation_key, $action_index, $label, $command, $requires_confirmation, $requires_input,
                     $expected_goal_state_version, $expires_at, NULL, NULL)
+                ON CONFLICT(correlation_key, action_index) DO UPDATE SET
+                    label = excluded.label,
+                    command = excluded.command,
+                    requires_confirmation = excluded.requires_confirmation,
+                    requires_input = excluded.requires_input,
+                    expected_goal_state_version = excluded.expected_goal_state_version,
+                    expires_at = excluded.expires_at,
+                    rendered_content_hash = NULL
+                WHERE collaboration_item_actions.consumed_at IS NULL
                 """;
             insert.Parameters.AddWithValue("$correlation_key", correlationKey);
             insert.Parameters.AddWithValue("$action_index", i);
