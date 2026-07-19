@@ -408,7 +408,11 @@ public sealed class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
 
-        var hasLiveProcess = AnyTrackedProcessStillRunning(processRecord);
+        var hasLiveTrackedProcess = AnyTrackedProcessStillRunning(processRecord);
+        var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
+            ? refreshHeartbeat
+            : null;
+        var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
         var hasDirtyWorktreeEvidence =
             !hasLiveProcess &&
             !File.Exists(processRecord.ExitCodePath) &&
@@ -427,6 +431,11 @@ public sealed class BackgroundDispatchRunner
 
         if (hasLiveProcess)
         {
+            if (!hasLiveTrackedProcess && !exitFileExists)
+            {
+                return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+            }
+
             if (IsAuthoritativeHold(recoveryDecision))
             {
                 return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);

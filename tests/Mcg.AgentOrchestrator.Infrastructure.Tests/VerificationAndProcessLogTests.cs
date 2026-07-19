@@ -577,6 +577,39 @@ public sealed class VerificationAndProcessLogTests
     Assert.Null(workTask.LastVerification);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_no_exit_dispatch_when_heartbeat_child_pid_is_live")]
+    public void BackgroundDispatchRunnerReconcileHoldsNoExitDispatchWhenHeartbeatChildPidIsLive()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "live child heartbeat worker task", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Hold live child heartbeat dispatch", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var workTask = goal.Tasks.Single();
+
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "Worker still alive.");
+
+    kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(111, "codex exec prompt", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, workTask.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 32640, childPid: 32641, ownedPids: [], state: "running");
+
+    var killed = new List<int>();
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: pid => pid == 32641,
+        tryKillOwnedProcess: pid => { killed.Add(pid); return true; });
+    runner.RefreshLatestProcess(kernel, goal.Id, workTask.Id);
+
+    Assert.Empty(killed);
+    Assert.True(workTask.LastProcess!.IsRunning);
+    Assert.Null(workTask.LastProcess.ExitCode);
+    Assert.Null(workTask.LastVerification);
+    Assert.Empty(workTask.VerificationHistory);
+}
+
 private static TaskProcessRecord CreateProcessRecord(string root, string exitPath)
 {
     return new TaskProcessRecord(
