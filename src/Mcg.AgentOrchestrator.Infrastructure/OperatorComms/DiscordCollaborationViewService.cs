@@ -62,6 +62,26 @@ public sealed class DiscordCollaborationViewService
         out string? errorMessage) =>
         DiscordInteractionHandler.TryBuildActionInputModalRequest(customId, userId, _allowedUserIds, out errorMessage);
 
+    public async Task RecordRejectedActionReferenceAsync(
+        string customId,
+        string userId,
+        string interactionId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (!DiscordInteractionHandler.TryReadActionReference(customId, out var rejectedKey, out var rejectedIndex))
+            return;
+
+        await _store.RecordRejectedDecisionAsync(
+            rejectedKey,
+            rejectedIndex,
+            $"discord:{userId}",
+            interactionId,
+            reason,
+            _clock(),
+            cancellationToken);
+    }
+
     public async Task<DiscordInteractionResult> ApplyAnswerModalAsync(
         string modalCustomId,
         string answer,
@@ -95,17 +115,12 @@ public sealed class DiscordCollaborationViewService
             modalCustomId, modalText, userId, interactionId, _allowedUserIds);
         if (submit.ErrorMessage is not null)
         {
-            if (DiscordInteractionHandler.TryReadActionReference(modalCustomId, out var rejectedKey, out var rejectedIndex))
-            {
-                await _store.RecordRejectedDecisionAsync(
-                    rejectedKey,
-                    rejectedIndex,
-                    $"discord:{userId}",
-                    interactionId,
-                    submit.ErrorMessage,
-                    _clock(),
-                    cancellationToken);
-            }
+            await RecordRejectedActionReferenceAsync(
+                modalCustomId,
+                userId,
+                interactionId,
+                submit.ErrorMessage,
+                cancellationToken);
 
             return new DiscordInteractionResult(null, false, null, submit.ErrorMessage);
         }
@@ -195,17 +210,12 @@ public sealed class DiscordCollaborationViewService
         var result = DiscordInteractionHandler.Process(customId, userId, interactionId, _allowedUserIds);
         if (result.ErrorMessage is not null)
         {
-            if (DiscordInteractionHandler.TryReadActionReference(customId, out var rejectedKey, out var rejectedIndex))
-            {
-                await _store.RecordRejectedDecisionAsync(
-                    rejectedKey,
-                    rejectedIndex,
-                    $"discord:{userId}",
-                    interactionId,
-                    result.ErrorMessage,
-                    _clock(),
-                    cancellationToken);
-            }
+            await RecordRejectedActionReferenceAsync(
+                customId,
+                userId,
+                interactionId,
+                result.ErrorMessage,
+                cancellationToken);
 
             return result;
         }

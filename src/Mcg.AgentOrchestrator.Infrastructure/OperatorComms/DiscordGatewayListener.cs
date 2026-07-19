@@ -58,6 +58,11 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
             var actionInput = _view.TryBuildActionInputModalRequest(customId, userId, out var actionInputError);
             if (actionInputError is not null)
             {
+                await _view.RecordRejectedActionReferenceAsync(
+                    customId,
+                    userId,
+                    interactionId,
+                    actionInputError);
                 await component.RespondAsync(actionInputError, ephemeral: true);
                 return;
             }

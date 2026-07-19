@@ -403,6 +403,9 @@ public sealed class DiscordGatewayTests
         Assert.Equal("Rejected", audit.Outcome);
         Assert.Equal("discord:intruder", audit.ActorId);
         Assert.Equal("interaction-auth-1", audit.InteractionId);
+        Assert.Equal(
+            DiscordCollaborationViewService.ComputeContentHash(api.SentMessages.Single().Content),
+            audit.RenderedContentHash);
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_applied_decision_audit_records_actor_interaction_and_render_hash")]
@@ -548,6 +551,40 @@ public sealed class DiscordGatewayTests
         var pathEnd = command.IndexOf('"', pathStart);
         var textFile = command[pathStart..pathEnd];
         Assert.Equal("malicious --autonomy unsafe", File.ReadAllText(textFile));
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_action_input_button_rejection_is_logged")]
+    public async Task DiscordCollaborationViewActionInputButtonRejectionIsLogged()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-abc123",
+            "Need answer",
+            "Body",
+            "corr-input-auth",
+            [new CollaborationActionBinding("Answer", "answer request123 <answer>", RequiresInput: true)]);
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+        var sent = api.SentMessages.Single();
+        var button = sent.Buttons.Single();
+
+        var modal = view.TryBuildActionInputModalRequest(button.CustomId, "intruder", out var modalError);
+        await view.RecordRejectedActionReferenceAsync(
+            button.CustomId,
+            "intruder",
+            "interaction-input-auth-1",
+            modalError!);
+
+        Assert.Null(modal);
+        Assert.Contains("allowlist", modalError);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Assert.Equal("Rejected", audit.Outcome);
+        Assert.Equal("discord:intruder", audit.ActorId);
+        Assert.Equal("interaction-input-auth-1", audit.InteractionId);
+        Assert.Equal(DiscordCollaborationViewService.ComputeContentHash(sent.Content), audit.RenderedContentHash);
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_modal_answer_writes_back_spec_and_unblocks_clarification")]

@@ -327,8 +327,12 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                         refresh.Parameters.AddWithValue("$body", body);
                         refresh.Parameters.AddWithValue("$id", existing.Id);
                         await refresh.ExecuteNonQueryAsync(cancellationToken);
-                        if (actions is not null)
+                        if (actions is not null &&
+                            !await HasActionRowsAsync(conn, correlationKey!, cancellationToken))
+                        {
                             await ReplaceActionsAsync(conn, correlationKey!, actions, cancellationToken);
+                        }
+
                         await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                         return existing with { Subject = subject, Body = body };
                     }
@@ -726,9 +730,13 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                     return existing;
                 }
 
+                var referencedAction = actionIndex is null
+                    ? null
+                    : await TryReadActionAsync(conn, correlationKey, actionIndex.Value, cancellationToken);
                 var audit = await InsertAuditAsync(
                     conn, correlationKey, actionIndex, actorId, interactionId, "Rejected", null,
-                    reason, null, null, null, decidedAt, cancellationToken);
+                    reason, referencedAction?.ExpectedGoalStateVersion, null,
+                    referencedAction?.RenderedContentHash, decidedAt, cancellationToken);
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return audit;
             }
@@ -858,6 +866,23 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
             insert.Parameters.AddWithValue("$expires_at", (action.ExpiresAt ?? DateTimeOffset.UtcNow.Add(DefaultActionTtl)).ToString("O"));
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
+    }
+
+    private static async Task<bool> HasActionRowsAsync(
+        SqliteConnection conn,
+        string correlationKey,
+        CancellationToken cancellationToken)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT 1
+            FROM collaboration_item_actions
+            WHERE correlation_key = $key
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$key", correlationKey);
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result is not null;
     }
 
     private static CollaborationActionBinding NormalizeAction(CollaborationActionBinding action)

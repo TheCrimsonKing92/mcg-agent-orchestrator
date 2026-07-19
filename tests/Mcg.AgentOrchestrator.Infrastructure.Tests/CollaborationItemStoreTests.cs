@@ -224,6 +224,35 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("next abc123", second.Action!.Command);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_open_item_refresh_preserves_unconsumed_actions")]
+    public async Task OpenItemRefreshPreservesUnconsumedActions()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-refresh-open",
+            [new CollaborationActionBinding("Run", "next abc123")]);
+
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s refreshed",
+            "b refreshed",
+            "corr-refresh-open",
+            [new CollaborationActionBinding("Run changed", "next rebound")]);
+
+        var actions = await store.ListActionsAsync("corr-refresh-open");
+        var result = await store.TryClaimActionAsync(
+            "corr-refresh-open", 0, "discord:user1", "interaction-open-refresh", null, DateTimeOffset.UtcNow);
+
+        Xunit.Assert.Equal(["next abc123"], actions.Select(action => action.Command).ToArray());
+        Xunit.Assert.True(result.Applied);
+        Xunit.Assert.Equal("next abc123", result.Action!.Command);
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_bound_action_expiry_rejects_and_audits")]
     public async Task BoundActionExpiryRejectsAndAudits()
     {
@@ -290,6 +319,33 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("discord:user1", audit.ActorId);
         Xunit.Assert.Equal("interaction-hash", audit.InteractionId);
         Xunit.Assert.Equal("sha256-card", audit.RenderedContentHash);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_rejected_decision_audit_records_rendered_content_hash")]
+    public async Task RejectedDecisionAuditRecordsRenderedContentHash()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-reject-hash",
+            [new CollaborationActionBinding("Run", "next abc123")]);
+        await store.UpdateRenderedContentHashAsync(["corr-reject-hash"], "sha256-card");
+
+        await store.RecordRejectedDecisionAsync(
+            "corr-reject-hash",
+            0,
+            "discord:intruder",
+            "interaction-reject-hash",
+            "User 'intruder' is not in the operator allowlist.",
+            DateTimeOffset.UtcNow);
+
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Xunit.Assert.Equal("Rejected", audit.Outcome);
+        Xunit.Assert.Equal("sha256-card", audit.RenderedContentHash);
+        Xunit.Assert.Equal("User 'intruder' is not in the operator allowlist.", audit.RejectionReason);
     }
 
     [Xunit.Fact(DisplayName = "CollaborationItemStore_default_decision_and_verify_actions_are_cli_commands")]
