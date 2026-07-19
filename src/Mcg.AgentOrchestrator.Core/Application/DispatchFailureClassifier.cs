@@ -617,6 +617,25 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
+        if (verification.ExitCode != 0 &&
+            HasSubstantiveStandardError(verification.StandardError))
+        {
+            return BuildOutcome(
+                "real-failure",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildRealFailureEvidenceSummary(verification)));
+        }
+
         return BuildOutcome(
             "unknown-failure",
             task,
@@ -642,7 +661,7 @@ public static class DispatchFailureClassifier
         DispatchOutcome outcome) =>
         outcome with
         {
-            ClassifierReceipt = AppendProviderEvidenceReceipt(
+            ClassifierReceipt = AppendEvidenceReceipt(
                 BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
                 outcome)
         };
@@ -650,29 +669,22 @@ public static class DispatchFailureClassifier
     private static DispatchOutcome WithClassifierReceipt(string rule, DispatchOutcome outcome, int exitCode) =>
         outcome with
         {
-            ClassifierReceipt = AppendProviderEvidenceReceipt(
+            ClassifierReceipt = AppendEvidenceReceipt(
                 $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
                 "stdout_bytes=unknown; stderr_bytes=unknown; heartbeat_stdout_bytes=unknown; " +
                 $"worker_result=absent; commit=none; verdict={outcome.Kind}",
                 outcome)
         };
 
-    private static string AppendProviderEvidenceReceipt(string receipt, DispatchOutcome outcome)
+    private static string AppendEvidenceReceipt(string receipt, DispatchOutcome outcome)
     {
-        if (!IsProviderFailureVerdict(outcome.Kind) ||
-            string.IsNullOrWhiteSpace(outcome.EvidenceSummary))
+        if (string.IsNullOrWhiteSpace(outcome.EvidenceSummary))
         {
             return receipt;
         }
 
         return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary)}";
     }
-
-    private static bool IsProviderFailureVerdict(DispatchOutcomeKind kind) =>
-        kind is DispatchOutcomeKind.RecoverableSubscriptionLimit or
-            DispatchOutcomeKind.ProviderAuthentication or
-            DispatchOutcomeKind.ProviderConnectivity or
-            DispatchOutcomeKind.ProviderModelRejection;
 
     private static string BuildClassifierReceipt(
         string rule,
@@ -931,6 +943,19 @@ public static class DispatchFailureClassifier
         TryGetRecoverableSubscriptionLimitLine(verification, out var line)
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
+
+    private static string BuildRealFailureEvidenceSummary(TaskVerificationRecord verification)
+    {
+        var substantiveLines = verification.StandardError
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => !IsRunnerBookkeepingLine(line))
+            .TakeLast(3)
+            .ToArray();
+
+        return substantiveLines.Length == 0
+            ? BuildEvidenceSummary(verification)
+            : $"real-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
+    }
 
     private static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {

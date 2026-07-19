@@ -196,6 +196,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("rule=verified-no-new-commit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("verified-no-new-commit", outcome.EvidenceSummary, StringComparison.Ordinal);
         Xunit.Assert.Contains(existingCommit, outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains("evidence=verified-no-new-commit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains(existingCommit, outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
@@ -540,8 +542,11 @@ public sealed class DispatchOutcomeClassifyTests
         var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
         Xunit.Assert.Equal(TaskOutcomeClass.RealFailure, classification.Class);
-        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("real-failure stderr-tail", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains("powershell.exe: ParserError", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=empty-output-flake", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
@@ -663,7 +668,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "Classify preserves genuine CLI provider diagnostics with evidence")]
