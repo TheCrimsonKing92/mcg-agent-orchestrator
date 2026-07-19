@@ -192,6 +192,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         if (SchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
+            PracticeRegistryStore.EnsureSchemaAndSeed(conn);
             BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
@@ -245,6 +246,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
+        PracticeRegistryStore.EnsureSchemaAndSeed(conn);
     }
 
     // Idempotent migration: adds metadata columns to existing schemas that pre-date them.
@@ -743,8 +745,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             }
         }
 
-        return AgentOrchestratorKernel.FromSnapshot(
+        var kernel = AgentOrchestratorKernel.FromSnapshot(
             new OrchestratorSnapshot(goalSnapshots, humanInputSnapshots));
+        kernel.SetEngineeringPractices(PracticeRegistryStore.ListActive(conn));
+        return kernel;
     }
 
     private static bool TryReadGoalSnapshot(

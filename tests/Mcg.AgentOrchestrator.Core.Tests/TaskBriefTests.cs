@@ -1384,6 +1384,97 @@ public sealed class TaskBriefTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "EngineeringPracticeRegistry_matches_by_goal_and_changed_file_scope")]
+    public void EngineeringPracticeRegistryMatchesByGoalAndChangedFileScope()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Refactor neutral orchestration text",
+        [new TaskSpec(TaskId.New(), "Implement the neutral change.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var matches = kernel.MatchEngineeringPractices(
+        goal,
+        task,
+        ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier.cs"]);
+
+    Assert.Contains(matches, match => match.Practice.Id == "classifier-positive-evidence");
+    Assert.DoesNotContain(matches, match => match.Practice.Id == "process-dispatch-hygiene");
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_injects_classifier_practice_and_excludes_process_practice")]
+    public void BuildTaskBriefInjectsClassifierPracticeAndExcludesProcessPractice()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Fix repository change classifier fault classification",
+        [new TaskSpec(TaskId.New(), "Implement classifier decision-table behavior.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+    var practices = SectionFrom(brief, "## PRACTICES");
+
+    Assert.Contains("classifier-positive-evidence", practices, StringComparison.Ordinal);
+    Assert.Contains("Positive-evidence classification", practices, StringComparison.Ordinal);
+    Assert.Contains("b0807c0e", practices, StringComparison.Ordinal);
+    Assert.Contains("prompt-size delta +", practices, StringComparison.Ordinal);
+    Assert.DoesNotContain("process-dispatch-hygiene", practices, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_injects_process_practice_and_excludes_classifier_practice")]
+    public void BuildTaskBriefInjectsProcessPracticeAndExcludesClassifierPractice()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal(
+        "Harden dispatch child process liveness",
+        [new TaskSpec(TaskId.New(), "Implement process/dispatch supervision around worker exit artifacts.", AgentRole.Developer)]);
+    var task = goal.Tasks.Single();
+
+    var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+    var practices = SectionFrom(brief, "## PRACTICES");
+
+    Assert.Contains("process-dispatch-hygiene", practices, StringComparison.Ordinal);
+    Assert.Contains("async output drains", practices, StringComparison.Ordinal);
+    Assert.Contains("c86de253", practices, StringComparison.Ordinal);
+    Assert.DoesNotContain("classifier-positive-evidence", practices, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_receives_practice_checklist")]
+    public void BuildTaskBriefReviewerReceivesPracticeChecklist()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var reviewer = new TaskSpec(TaskId.New(), "Review classifier behavior and fault-path tests.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review repository classifier classification change", [reviewer]);
+
+    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+    var checklist = SectionFrom(brief, "## PRACTICES REVIEW CHECKLIST");
+
+    Assert.Contains("classifier-positive-evidence", checklist, StringComparison.Ordinal);
+    Assert.Contains("Violation is a finding named \"Positive-evidence classification\"", checklist, StringComparison.Ordinal);
+    Assert.Contains("prompt-size delta +", checklist, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "AgentTaskRunner_reviewer_api_prompt_receives_practice_checklist")]
+    public async Task AgentTaskRunnerReviewerApiPromptReceivesPracticeChecklist()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var reviewer = new TaskSpec(TaskId.New(), "Review process/dispatch liveness and exit artifacts.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review dispatch child process implementation", [reviewer]);
+    var agents = DefaultAgents();
+    kernel.ActivateGoal(goal.Id, agents);
+    var provider = new FakeModelProvider("OpenAI", "review complete");
+    var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+    await runner.RunAsync(goal.Id, reviewer.Id);
+
+    Assert.True(provider.LastRequest is not null);
+    var prompt = provider.LastRequest!.Messages.Single().Content;
+    Assert.Contains("## PRACTICES REVIEW CHECKLIST", prompt, StringComparison.Ordinal);
+    Assert.Contains("process-dispatch-hygiene", prompt, StringComparison.Ordinal);
+    Assert.Contains("Violation is a finding named \"Process/dispatch hygiene\"", prompt, StringComparison.Ordinal);
+}
+
 static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, string prefix, int count)
 {
     for (var index = 1; index <= count; index++)
