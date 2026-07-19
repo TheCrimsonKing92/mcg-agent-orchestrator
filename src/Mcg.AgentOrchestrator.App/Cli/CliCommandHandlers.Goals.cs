@@ -545,8 +545,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "workspace":
-            HandleWorkspaceCommand(context, parts);
-            return false;
+            return HandleWorkspaceCommand(context, parts);
 
         case "evidence":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
@@ -2890,12 +2889,12 @@ private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<
     return plan.PrunedCount > 0;
 }
 
-private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnlyList<string> parts)
+private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     if (IsHelpRequested(parts))
     {
         CliCommandHelp.TryPrintStartupHelp(parts);
-        return;
+        return false;
     }
 
     var action = parts.Count > 1 ? parts[1] : null;
@@ -2918,22 +2917,22 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             Console.WriteLine(existing is null
                 ? $"Goal has no workspace. Create one with: workspace create (branch {branch})"
                 : $"Workspace: {existing} (branch {branch})");
-            return;
+            return false;
 
         case "create":
             Console.WriteLine($"Workspace: {context.Worktrees.Ensure(executionDirectory, goal.Id)} (branch {branch})");
-            return;
+            return false;
 
         case "merge":
             var merge = context.Worktrees.TryFastForwardMerge(executionDirectory, goal.Id);
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));
-            return;
+            return false;
 
         case "rebase":
             Console.WriteLine(FormatWorkspaceRebase(context.Worktrees.TryRebaseOntoMain(executionDirectory, goal.Id)));
-            return;
+            return false;
 
         case "remove":
             var policy = ResolveCliAutonomyPolicy(parts);
@@ -2957,6 +2956,7 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                 if (TryReconcileLandedCleanedAcceptance(context, goal, "workspace remove", out _, cleanupEvidenceRecorded: true))
                 {
                     context.EventWriter.AppendCleanedUp(goal.Id);
+                    return true;
                 }
             }
             else if (TryCompleteLandedBranchOnlyWorkspaceRemove(context, goal, removeResult, out var completedRemoveDetail))
@@ -2965,13 +2965,14 @@ private static void HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                 if (TryReconcileLandedCleanedAcceptance(context, goal, "workspace remove", out _, cleanupEvidenceRecorded: true))
                 {
                     context.EventWriter.AppendCleanedUp(goal.Id);
+                    return true;
                 }
             }
             else
             {
                 GoalOperationJournal.Failed(executionDirectory, goal, "workspace:remove", removeResult.Message);
             }
-            return;
+            return false;
 
         default:
             throw new ArgumentException("Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");

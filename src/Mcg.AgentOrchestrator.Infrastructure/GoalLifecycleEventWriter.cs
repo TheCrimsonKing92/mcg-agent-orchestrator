@@ -113,27 +113,33 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["providerSessionRetentionDays"] = _sessionRetentionOptions.RetentionPeriod.TotalDays;
             obj["providerSessionRetireAfter"] = cleanedUpAt.Add(_sessionRetentionOptions.RetentionPeriod);
         });
-        ScheduleDispatchProviderSessionRetirement(goalId, cleanedUpAt);
+        RetireDispatchProviderSessions(_kernel, goalId, cleanedUpAt, _sessionRetentionOptions);
     }
 
-    private void ScheduleDispatchProviderSessionRetirement(GoalId goalId, DateTimeOffset cleanedUpAt)
+    public static int RetireDispatchProviderSessions(
+        AgentOrchestratorKernel? kernel,
+        GoalId goalId,
+        DateTimeOffset cleanedUpAt,
+        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null)
     {
-        if (_kernel is null)
+        if (kernel is null)
         {
-            return;
+            return 0;
         }
 
-        var retireAt = cleanedUpAt.Add(_sessionRetentionOptions.RetentionPeriod);
+        var options = sessionRetentionOptions ?? DispatchProviderSessionRetentionOptions.FromEnvironment();
+        var retireAt = cleanedUpAt.Add(options.RetentionPeriod);
         Goal goal;
         try
         {
-            goal = _kernel.GetGoal(goalId);
+            goal = kernel.GetGoal(goalId);
         }
         catch (KeyNotFoundException)
         {
-            return;
+            return 0;
         }
 
+        var retired = 0;
         foreach (var task in goal.Tasks)
         {
             var dispatch = task.LastDispatch;
@@ -144,8 +150,11 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
                 continue;
             }
 
-            _kernel.RetireDispatchProviderSession(goalId, task.Id, retireAt);
+            kernel.RetireDispatchProviderSession(goalId, task.Id, retireAt);
+            retired++;
         }
+
+        return retired;
     }
 
     private void Append(GoalId goalId, string eventType, Action<JsonObject> addFields)

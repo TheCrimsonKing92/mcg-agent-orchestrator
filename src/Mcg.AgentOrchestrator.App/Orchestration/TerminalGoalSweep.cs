@@ -709,6 +709,7 @@ internal static class TerminalGoalSweep
             goal,
             new GoalTerminalDisposition(kind, detail));
         kernel.CompleteGoal(goal.Id, detail);
+        GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
     }
 
     public static TerminalGoalSweepResult Diagnose(
