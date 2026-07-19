@@ -83,7 +83,7 @@ public sealed class ProgressiveReviewGlanceTests
     }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_dispatch_uses_read_only_profile_selection_and_bounded_inputs")]
-    public void DispatchUsesReadOnlyProfileSelectionAndBoundedInputs()
+    public async Task DispatchUsesReadOnlyProfileSelectionAndBoundedInputs()
     {
         var sparkSelection = SubscriptionCliProgressiveReviewGlanceRunner.SelectProfile(WorkerProfileCatalog.Default());
         Xunit.Assert.Equal("codex-spark", sparkSelection.ProfileName);
@@ -125,6 +125,26 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("Correct criterion B", inputs.CriteriaCorrectionOverlay.Single(), StringComparison.Ordinal);
         Xunit.Assert.True(inputs.DiffExcerpt.Length < 90);
         Xunit.Assert.True(inputs.TranscriptTail.Length < 90);
+
+        var lightDelivery = await CaptureGlancePromptDeliveryAsync(WorkerProfileCatalog.Default(), inputs);
+        var fallbackDelivery = await CaptureGlancePromptDeliveryAsync(
+            new WorkerProfileCatalog([WorkerProfileCatalog.Default().GetRequired("codex-cli")]),
+            inputs);
+
+        Xunit.Assert.Equal("codex-spark", lightDelivery.ProfileName);
+        Xunit.Assert.Equal("codex-cli", fallbackDelivery.ProfileName);
+        foreach (var delivery in new[] { lightDelivery, fallbackDelivery })
+        {
+            Xunit.Assert.False(string.IsNullOrWhiteSpace(delivery.StandardInput));
+            Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("dddddddddddddddddddddddddddddd", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("ddddddddddddddddddddddddddddddd", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("tttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("ttttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("--sandbox 'read-only'", delivery.Command, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_concern_surfaces_only_after_same_round_failure")]
@@ -236,6 +256,36 @@ public sealed class ProgressiveReviewGlanceTests
                 BaseCommit: "base"));
         return (kernel, goal, task);
     }
+
+    private static async Task<CapturedPromptDelivery> CaptureGlancePromptDeliveryAsync(
+        WorkerProfileCatalog profiles,
+        ProgressiveReviewGlanceInputs inputs)
+    {
+        var selection = SubscriptionCliProgressiveReviewGlanceRunner.SelectProfile(profiles);
+        string? capturedCommand = null;
+        string? capturedStandardInput = null;
+        var completer = new SubscriptionCliCompleter(
+            profiles.GetRequired(selection.ProfileName).CommandTemplate,
+            selection.ProfileName,
+            selection.ModelAlias,
+            AgentCatalog.RoutineSubscriptionReasoningEffort,
+            (command, _, standardInput, _) =>
+            {
+                capturedCommand = command;
+                capturedStandardInput = standardInput;
+                return Task.FromResult("""{"verdict":"on-track","note":"ok","evidenceLine":"prompt delivered"}""");
+            });
+
+        var prompt = ProgressiveReviewGlanceCoordinator.BuildPrompt(inputs);
+        _ = await completer.CompleteAsync(prompt, "progressive-review-glance.md", default);
+
+        return new CapturedPromptDelivery(selection.ProfileName, capturedCommand!, capturedStandardInput);
+    }
+
+    private sealed record CapturedPromptDelivery(
+        string ProfileName,
+        string Command,
+        string? StandardInput);
 
     private sealed class ControlledGlanceRunner : IProgressiveReviewGlanceRunner
     {
