@@ -136,10 +136,10 @@ public sealed class GoalDependencyTests
     // ── Conductor: B depends on A; B held until A is Done ────────────────────
     //
     // A is pre-set to Verified (via PassVerification) and requires 3 more driver
-    // advances to reach CleanedUp: Verified→land→Merged, Merged→record→Recorded,
-    // Recorded→cleanup→CleanedUp. Then CleanedUp→Done on the fourth advance.
-    // B is held each tick until A is in completedGoals. Ticks 1–3 always hold B
-    // (A is Executed but not Done), making the 'held ≥ 3' assertion ordering-independent.
+    // advances to reach CleanedUp: Verified -> land -> Merged, Merged -> record -> Recorded,
+    // Recorded -> cleanup -> CleanedUp. Then CleanedUp -> Done on the fourth advance.
+    // B is held each tick until A is in completedGoals. Ticks 1-3 always hold B
+    // (A is Executed but not Done), making the 'held >= 3' assertion ordering-independent.
 
     [Xunit.Fact(DisplayName = "GoalDependency_Chain_BHeldUntilADone")]
     public void GoalDependency_Chain_BHeldUntilADone()
@@ -174,7 +174,11 @@ public sealed class GoalDependencyTests
             getRunningPaidWorkerCount: () => 0,
             createWorkspace: g =>
             {
-                if (g.Id == b.Id) bWorkspaceCreated = true;
+                if (g.Id == b.Id)
+                {
+                    bWorkspaceCreated = true;
+                }
+
                 return "/tmp/ws";
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
@@ -203,9 +207,13 @@ public sealed class GoalDependencyTests
             classifyChangeRisk: _ => null);
 
         var summary = new ConductorBatchLoop().Run(
-            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 10);
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 10);
 
-        // Ticks 1–3: A advances (Executed), B held regardless of ordering.
+        // Ticks 1-3: A advances (Executed), B held regardless of ordering.
         Assert.True(summary.Held >= 3);
         Assert.True(bWorkspaceCreated);
         Assert.True(kernel.IsKnownCompletedDependencyGoal(a.Id));

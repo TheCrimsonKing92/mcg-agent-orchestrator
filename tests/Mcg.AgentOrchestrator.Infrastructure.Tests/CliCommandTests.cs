@@ -593,7 +593,6 @@ public abstract class CliCommandTestBase
 
         public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>(_kernel.Goals
-                .Where(goal => !CleanedUpGoalIds.Contains(goal.Id.Value))
                 .Select(goal => new GoalSummary(
                     goal.Id.Value,
                     CleanedUpGoalIds.Contains(goal.Id.Value) ? "CleanedUp" : goal.Status.ToString(),

@@ -17,8 +17,12 @@ param(
     [switch]$List,
 
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
-    [ValidateSet('Cli', 'WorkerDispatch', 'GoalWorktree', 'Dashboard', 'Conductor')]
-    [string]$Partition
+    [ValidateSet('Cli', 'WorkerDispatch', 'GoalWorktree', 'Dashboard', 'Conductor', 'Remainder')]
+    [string]$Partition,
+
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateRange(1, 25)]
+    [int]$Repeat = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,9 +62,22 @@ $partitions = [ordered]@{
         Filters = @(
             'FullyQualifiedName~AdvanceLoopTests',
             'FullyQualifiedName~ConductorBatchLoopTests',
-            'FullyQualifiedName~ConductorBatchLoopVerificationReconcileTests',
             'FullyQualifiedName~ConductorDriverTests',
             'FullyQualifiedName~ConductWatchSweepScopingTests'
+        )
+    }
+    Remainder = [pscustomobject]@{
+        Description = 'Acceptance-gate remainder lane: all Infrastructure tests outside the named high-cost partitions.'
+        Filters = @(
+            'FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests' +
+            '&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests' +
+            '&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests' +
+            '&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests' +
+            '&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests' +
+            '&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardHostTests' +
+            '&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests' +
+            '&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests' +
+            '&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration'
         )
     }
 }
@@ -123,36 +140,67 @@ function Write-TrxSummary {
     $script:LastTrxGreen = $green
 }
 
-$isolatedDotnet = Join-Path $PSScriptRoot 'Invoke-IsolatedDotnet.ps1'
+$orchestrator = Join-Path $repoRoot 'mcg-orchestrator.cmd'
+$appDll = Join-Path $repoRoot 'src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll'
 $resultsRoot = Join-Path $repoRoot '.test-results'
+
+function Ensure-AppDllAvailable {
+    if (Test-Path -LiteralPath $appDll -PathType Leaf) {
+        return
+    }
+
+    & $orchestrator gate-status | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
+        throw "Unable to prepare orchestrator app DLL for stable-slot-dotnet: $appDll"
+    }
+}
+
 for ($index = 0; $index -lt $selected.Filters.Count; $index++) {
     $filter = $selected.Filters[$index]
-    "Running filter: $filter"
-
-    New-Item -ItemType Directory -Force $resultsRoot | Out-Null
-    Get-ChildItem $resultsRoot -Filter *.trx -ErrorAction SilentlyContinue | Remove-Item -Force
-
-    $testArguments = @(
-        '-GoalPrefix', 'infra-partition',
-        '-AttemptName', "infra-$($Partition.ToLowerInvariant())-$index",
-        'test',
-        (Join-Path $repoRoot $target),
-        '--logger', 'trx',
-        '--results-directory', $resultsRoot,
-        '-clp:ErrorsOnly',
-        '--filter', $filter
-    )
-
-    & $isolatedDotnet @testArguments | Out-Null
-    $testExit = $LASTEXITCODE
-    $script:LastTrxGreen = $false
-    Write-TrxSummary -ResultsPath $resultsRoot
-    if ($testExit -ne 0 -or -not $script:LastTrxGreen) {
-        if ($testExit -ne 0) {
-            exit $testExit
+    for ($attempt = 1; $attempt -le $Repeat; $attempt++) {
+        "Running filter: $filter"
+        if ($Repeat -gt 1) {
+            "Repeat attempt: $attempt/$Repeat"
         }
 
-        exit 1
+        New-Item -ItemType Directory -Force $resultsRoot | Out-Null
+        Get-ChildItem $resultsRoot -Filter *.trx -ErrorAction SilentlyContinue | Remove-Item -Force
+
+        $hasFilterMetacharacters = $filter.IndexOfAny([char[]]'&|<>()') -ge 0
+        $dotnetArguments = @(
+            'test',
+            (Join-Path $repoRoot $target),
+            '--logger', 'trx',
+            '--results-directory', $resultsRoot,
+            '-clp:ErrorsOnly',
+            '--filter', $filter
+        )
+
+        if ($hasFilterMetacharacters) {
+            Ensure-AppDllAvailable
+            $responsePath = Join-Path $resultsRoot "infra-$($Partition.ToLowerInvariant())-$index-r$attempt.rsp"
+            try {
+                $dotnetArguments | Set-Content -LiteralPath $responsePath -Encoding UTF8
+                & dotnet $appDll stable-slot-dotnet "@$responsePath" | Out-Null
+            }
+            finally {
+                Remove-Item -LiteralPath $responsePath -Force -ErrorAction SilentlyContinue
+            }
+        }
+        else {
+            & $orchestrator stable-slot-dotnet @dotnetArguments | Out-Null
+        }
+
+        $testExit = $LASTEXITCODE
+        $script:LastTrxGreen = $false
+        Write-TrxSummary -ResultsPath $resultsRoot
+        if ($testExit -ne 0 -or -not $script:LastTrxGreen) {
+            if ($testExit -ne 0) {
+                exit $testExit
+            }
+
+            exit 1
+        }
     }
 }
 "PARTITION GREEN"; exit 0
