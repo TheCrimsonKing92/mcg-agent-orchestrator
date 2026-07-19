@@ -517,8 +517,8 @@ public sealed class DispatchExecutionTests
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
 }
 
-    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_typed_provider_rate_limit_without_output_text")]
-    public void RecordDispatchExecutionResultReopensTaskOnTypedProviderRateLimitWithoutOutputText()
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_on_typed_provider_rate_limit_without_output_text")]
+    public void RecordDispatchExecutionResultFailsTaskOnTypedProviderRateLimitWithoutOutputText()
 {
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
@@ -544,22 +544,26 @@ public sealed class DispatchExecutionTests
             clock.UtcNow),
         ProviderFailureKind.RateLimit);
 
-    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
-    Assert.Null(task.LastVerification);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
     Assert.Equal(ProviderFailureKind.RateLimit, task.VerificationHistory.Single().ProviderFailureKind);
-    Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
-    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
+    Assert.Equal(ProviderFailureKind.RateLimit, task.LastVerification!.ProviderFailureKind);
+    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+    Assert.Equal(0, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
     Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed);
+    Assert.False(goal.Timeline.Any(evt =>
+        evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
-        evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal));
+        evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal)));
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
     Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch!.WorkerProviderKind);
-    Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.VerificationHistory.Single().ProviderFailureKind);
-    Assert.True(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
+    Assert.Equal(ProviderFailureKind.RateLimit, restoredTask.LastVerification!.ProviderFailureKind);
+    Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(restoredTask));
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_provider_connectivity_failure")]

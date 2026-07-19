@@ -1884,6 +1884,7 @@ public static class DispatchFailureClassifier
     {
         if (line.Length == 0 ||
             char.IsWhiteSpace(line[0]) ||
+            LooksLikeSourceLocationEcho(line) ||
             !IsRecoverableSubscriptionLimitText(line))
         {
             return false;
@@ -1893,6 +1894,24 @@ public static class DispatchFailureClassifier
             line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
             line.StartsWith("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("you've hit your usage limit", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeSourceLocationEcho(string line)
+    {
+        var firstColon = line.IndexOf(':');
+        if (firstColon <= 0)
+        {
+            return false;
+        }
+
+        var prefix = line[..firstColon];
+        return prefix.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".vb", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
