@@ -41,6 +41,27 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
+    private static TaskSpec RetryTaskWithBaseCommit(string baseCommit, AgentRole role = AgentRole.Developer)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify verify-only retry test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == role);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec prompt",
+                "C:\\repo",
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["gate-failure feedback: rerun receipts against current branch"]);
+        return task;
+    }
+
     private static TaskSpec DispatchedTaskWithResultCommit(string baseCommit, string resultCommit)
     {
         var clock = new FakeClock();
@@ -103,6 +124,14 @@ public sealed class DispatchOutcomeClassifyTests
         $"blockers: {blockers}{Environment.NewLine}" +
         "END_WORKER_RESULT";
 
+    private static string WorkerResultStdoutWithCommit(string tests, string commit, string blockers = "none") =>
+        $"WORKER_RESULT:{Environment.NewLine}" +
+        $"files: none{Environment.NewLine}" +
+        $"tests: {tests}{Environment.NewLine}" +
+        $"commit: {commit}{Environment.NewLine}" +
+        $"blockers: {blockers}{Environment.NewLine}" +
+        "END_WORKER_RESULT";
+
     [Xunit.Fact(DisplayName = "Classify returns VerifiedSuccess for exit zero success")]
     public void ClassifyVerifiedSuccess()
     {
@@ -150,6 +179,24 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("retry round produced no commit and no deferral", outcome.EvidenceSummary, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify completes verify-only retry round with existing commit receipt")]
+    public void ClassifyCompletesVerifyOnlyRetryRoundWithExistingCommitReceipt()
+    {
+        const string existingCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(existingCommit),
+            WorkerResultVerification(WorkerResultStdoutWithCommit(
+                "pass - DispatchOutcomeClassifyTests 4/4 passed; build-check exit code 0",
+                existingCommit)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=verified-no-new-commit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verified-no-new-commit", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains(existingCommit, outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify completes retry developer round with explicit deferral and no commit")]
@@ -444,6 +491,61 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.DoesNotContain("provider-rate-limit", outcome.ClassifierReceipt, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Xunit.Fact(DisplayName = "Classify ignores typed rate limit without provider stream evidence")]
+    public void ClassifyIgnoresTypedRateLimitWithoutProviderStreamEvidence()
+    {
+        const string stderr =
+            "sandbox-preflight: low-integrity sandbox prepared\n" +
+            "src/ProviderParser.cs:77: text.Contains(\"usage limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "src/ProviderParser.cs:78: text.Contains(\"rate limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "src/ProviderParser.cs:79: text.Contains(\"429\", StringComparison.OrdinalIgnoreCase)";
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.RateLimit };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification));
+        Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-rate-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves genuine codex usage limit provider footer")]
+    public void ClassifyPreservesGenuineCodexUsageLimitProviderFooter()
+    {
+        const string stderr = "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.";
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.RateLimit };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
+        Xunit.Assert.Contains("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("You've hit your usage limit", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains("evidence=ERROR: You've hit your usage limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify treats substantive stderr without limit evidence as real failure")]
+    public void ClassifyTreatsSubstantiveStderrWithoutLimitEvidenceAsRealFailure()
+    {
+        const string stderr =
+            "WORKER_RESULT assembly failed before final marker\n" +
+            "Implemented classifier fixture setup and reviewed source snippets.\n" +
+            "src/ProviderParser.cs:77: text.Contains(\"rate limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "powershell.exe: ParserError: Missing closing quote in command argument.\n" +
+            "At line:1 char:42";
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.RateLimit };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+        var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(TaskOutcomeClass.RealFailure, classification.Class);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=empty-output-flake", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify auth evidence before connectivity or rate limit")]
     public void ClassifyAuthEvidenceBeforeConnectivityOrRateLimit()
     {
@@ -560,7 +662,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderAuthentication, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
-        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "Classify preserves genuine CLI provider diagnostics with evidence")]

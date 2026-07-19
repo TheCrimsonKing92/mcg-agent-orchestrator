@@ -139,6 +139,9 @@ public static class DispatchFailureClassifier
     private static readonly Regex Http429StatusPattern = new(
         @"\b(?:429\s+Too\s+Many\s+Requests|HTTP(?:/\d(?:\.\d)?)?\s+429|(?:http(?:\s+status)?|status(?:\s+code)?|response(?:\s+status)?|error(?:\s+code)?)\s*[:=]?\s*429)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CommitShaPattern = new(
+        @"\b[0-9a-f]{7,64}\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
@@ -166,8 +169,7 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        return verification.ProviderFailureKind == ProviderFailureKind.RateLimit ||
-            TryGetRecoverableSubscriptionLimitLine(verification, out _);
+        return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
     public static bool HasRecoverableSubscriptionLimitEvidence(TaskVerificationRecord verification) =>
@@ -209,7 +211,8 @@ public static class DispatchFailureClassifier
 
         if (verification.ExitCode != 0)
         {
-            return string.IsNullOrWhiteSpace(verification.StandardOutput);
+            return string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+                !HasSubstantiveStandardError(verification.StandardError);
         }
 
         if (!string.IsNullOrWhiteSpace(verification.StandardOutput) ||
@@ -247,6 +250,24 @@ public static class DispatchFailureClassifier
 
         return new FileInfo(verification.StandardOutputPath).Length > 0;
     }
+
+    private static bool HasSubstantiveStandardError(string standardError)
+    {
+        if (string.IsNullOrWhiteSpace(standardError))
+        {
+            return false;
+        }
+
+        return standardError
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(line => !IsRunnerBookkeepingLine(line));
+    }
+
+    private static bool IsRunnerBookkeepingLine(string line) =>
+        line.StartsWith("RESOURCE ", StringComparison.Ordinal) ||
+        line.StartsWith("CLASSIFIER ", StringComparison.Ordinal) ||
+        line.StartsWith("Dispatch recovery policy action=", StringComparison.Ordinal) ||
+        line.StartsWith("Developer/Tester dispatch did not produce required relevant file-change evidence.", StringComparison.Ordinal);
 
     public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)
     {
@@ -330,6 +351,24 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.None,
                 BuildEvidenceSummary(verification)));
+        }
+
+        if (IsRetryRoundVerifiedNoNewCommit(task, verification, workerResultPresent, hasCommittedChanges))
+        {
+            return BuildOutcome(
+                "verified-no-new-commit",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.VerifiedSuccess,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.None,
+                BuildVerifiedNoNewCommitEvidenceSummary(task, verification)));
         }
 
         if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
@@ -893,6 +932,18 @@ public static class DispatchFailureClassifier
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
 
+    private static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
+    {
+        var commitEvidence = TryGetKnownWorkerResultCommitSha(task, verification, out var commitSha)
+            ? $"commit {commitSha}"
+            : "known commit";
+        var testsEvidence = WorkerResultBlockers.TryFindTests(verification, out var tests)
+            ? $"; tests: {TruncateEvidence(tests)}"
+            : string.Empty;
+
+        return $"verified-no-new-commit: {commitEvidence}{testsEvidence}";
+    }
+
     private static string BuildProviderAuthenticationEvidenceSummary(TaskVerificationRecord verification) =>
         TryGetProviderAuthenticationLine(verification, out var line)
             ? $"provider-authentication: {TruncateEvidence(line)}; remediation=codex login / provider re-auth"
@@ -1094,6 +1145,69 @@ public static class DispatchFailureClassifier
         task.RequiredRole == AgentRole.Developer &&
         (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
         !HasWorkerResultDeferral(verification);
+
+    private static bool IsRetryRoundVerifiedNoNewCommit(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges) =>
+        verification.Succeeded &&
+        workerResultPresent &&
+        !hasCommittedChanges &&
+        task.RequiredRole == AgentRole.Developer &&
+        (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
+        HasVerifiedNoNewCommitWorkerResult(task, verification);
+
+    private static bool HasVerifiedNoNewCommitWorkerResult(TaskSpec task, TaskVerificationRecord verification) =>
+        HasPopulatedStandardOutput(verification) &&
+        WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+        blockersStatus == WorkerResultBlockers.BlockersStatus.None &&
+        WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+        testsStatus == WorkerResultBlockers.TestsStatus.Pass &&
+        !WorkerResultBlockers.TryFindBlocker(verification, out _) &&
+        !HasStructuredFailingTests(verification) &&
+        TryGetKnownWorkerResultCommitSha(task, verification, out _);
+
+    private static bool TryGetKnownWorkerResultCommitSha(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        out string commitSha)
+    {
+        commitSha = string.Empty;
+        if (!TryGetWorkerResultFieldValue(verification, "commit", out var commitValue) ||
+            IsNoWorkerResultBlockersValue(commitValue))
+        {
+            return false;
+        }
+
+        var match = CommitShaPattern.Match(commitValue);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var candidate = match.Value;
+        if (MatchesKnownDispatchCommit(task.LastDispatch?.BaseCommit, candidate) ||
+            MatchesKnownDispatchCommit(task.LastDispatch?.ResultCommit, candidate))
+        {
+            commitSha = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesKnownDispatchCommit(string? knownCommit, string candidate)
+    {
+        if (string.IsNullOrWhiteSpace(knownCommit))
+        {
+            return false;
+        }
+
+        var known = knownCommit.Trim();
+        return known.StartsWith(candidate, StringComparison.OrdinalIgnoreCase) ||
+            candidate.StartsWith(known, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
         (WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
