@@ -49,6 +49,7 @@ internal sealed class ConductorDriver
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
+    private readonly bool _parallelAcceptanceEnabled;
 
     internal Action<string>? PhaseTimingSink { get; set; }
 
@@ -64,6 +65,7 @@ internal sealed class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _parallelAcceptanceEnabled = true;
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir);
@@ -598,6 +600,9 @@ internal sealed class ConductorDriver
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
         _executionDirectory = null;
+        _parallelAcceptanceEnabled = parallelAcceptanceAttemptCoordinator is not null ||
+            runAcceptanceVerificationWithSlot is not null ||
+            runAcceptanceVerificationWithLease is not null;
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-acceptance-attempts", Guid.NewGuid().ToString("N")),
@@ -608,6 +613,8 @@ internal sealed class ConductorDriver
         _parallelAcceptanceAttemptCoordinator;
 
     internal string? ExecutionDirectory => _executionDirectory;
+
+    internal bool ParallelAcceptanceEnabled => _parallelAcceptanceEnabled;
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {

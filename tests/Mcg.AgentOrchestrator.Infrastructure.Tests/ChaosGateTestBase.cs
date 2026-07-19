@@ -6,6 +6,7 @@ using System.Diagnostics;
 /// Shared helpers for chaos/red-team tests proving each orchestrator safety gate fires under adversarial worker behavior.
 /// Uses only fake/scripted runners - no live workers, no network calls, no cost.
 /// </summary>
+[Xunit.Collection(TestCollections.ChaosGateGit)]
 public abstract class ChaosGateTestBase
 {
     protected static readonly DateTimeOffset DispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
