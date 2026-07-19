@@ -2,6 +2,11 @@
 [Xunit.CollectionDefinition(TestCollections.EnvMutation, DisableParallelization = true)]
 public sealed class EnvMutationCollection;
 
+// Chaos gate tests run many real git operations and refresh fake dispatch records.
+// Keep that fixture family serial so one adversarial gate scenario cannot perturb another.
+[Xunit.CollectionDefinition(TestCollections.ChaosGateGit, DisableParallelization = true)]
+public sealed class ChaosGateGitCollection;
+
 // Dotnet build-slot tests share a run-scoped isolated root so they never touch the host slot lanes.
 [Xunit.CollectionDefinition(TestCollections.DotnetBuildSlots, DisableParallelization = true)]
 public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;

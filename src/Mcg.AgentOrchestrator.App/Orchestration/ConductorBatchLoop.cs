@@ -1184,6 +1184,11 @@ internal sealed class ConductorBatchLoop
         Goal goal,
         ConductorDriver driver)
     {
+        if (!driver.ParallelAcceptanceEnabled)
+        {
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
         {
             return true;
