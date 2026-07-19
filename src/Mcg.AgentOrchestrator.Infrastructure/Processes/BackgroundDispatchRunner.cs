@@ -2307,11 +2307,6 @@ public sealed class BackgroundDispatchRunner
         var processIds = new HashSet<int>(processRecord.TrackedProcessIds.Where(pid => pid > 0));
         if (heartbeat is not null)
         {
-            if (heartbeat.ProcessId > 0)
-            {
-                processIds.Add(heartbeat.ProcessId);
-            }
-
             if (heartbeat.ChildProcessId is > 0)
             {
                 processIds.Add(heartbeat.ChildProcessId.Value);

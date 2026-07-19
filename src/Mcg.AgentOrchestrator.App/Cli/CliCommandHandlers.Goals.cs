@@ -1452,6 +1452,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
 
     var diagnosticsSweep = TerminalGoalSweep.Diagnose(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
     ConsoleViews.PrintTerminalGoalSweep(diagnosticsSweep, includeRepairs: false);
+    TerminalGoalSweepAttention.Surface(context.Kernel, diagnosticsSweep, context.Workspace.OrchestratorDirectory, goal.Id);
 
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
     var dispatchSurface = new DispatchStateSurface(inspectWorktree: false);
