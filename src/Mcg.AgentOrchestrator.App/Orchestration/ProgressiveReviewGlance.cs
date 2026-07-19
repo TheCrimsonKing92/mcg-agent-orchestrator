@@ -30,6 +30,10 @@ internal sealed record ProgressiveReviewGlanceOptions(
     TimeSpan? SmallRoundSuppressionThreshold = null,
     int ObjectiveCharacterLimit = 2000,
     int AcceptanceCharacterLimit = 4000,
+    int CriteriaCorrectionOverlayCharacterLimit = 2000,
+    int CriteriaCorrectionOverlayItemLimit = 20,
+    int ChangedFilePromptLimit = 20,
+    int ChangedFileListCharacterLimit = 3000,
     int DiffCharacterLimit = 8000,
     int TranscriptCharacterLimit = 3000)
 {
@@ -72,6 +76,9 @@ internal sealed record ProgressiveReviewGlanceObservationResult(
 
 internal sealed class ProgressiveReviewGlanceCoordinator
 {
+    private const string CriteriaCorrectionLabel = "criteria correction(s)";
+    private const string ChangedFileLabel = "changed file(s)";
+
     private readonly ProgressiveReviewGlanceOptions _options;
     private readonly IProgressiveReviewGlanceRunner _runner;
     private readonly IGoalLifecycleEventWriter _eventWriter;
@@ -99,7 +106,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         _collaborationStore = collaborationStore;
         _options = options ?? new ProgressiveReviewGlanceOptions();
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFileThreshold));
+        _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFilePromptLimit));
         _diffReader = diffReader ?? ReadDiff;
         _transcriptReader = transcriptReader ?? ReadTranscriptTail;
     }
@@ -120,6 +127,23 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         AgentOrchestratorKernel kernel,
         IReadOnlyList<Goal> goals,
         IReadOnlyList<TaskDurationStatsRecord>? durationStats = null)
+    {
+        try
+        {
+            return ObserveCore(kernel, goals, durationStats);
+        }
+        catch (Exception ex)
+        {
+            return new ProgressiveReviewGlanceObservationResult(
+                false,
+                [$"GLANCE result=advisory-error error={BoundSingleLine(ex.Message, 300)}"]);
+        }
+    }
+
+    private ProgressiveReviewGlanceObservationResult ObserveCore(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<Goal> goals,
+        IReadOnlyList<TaskDurationStatsRecord>? durationStats)
     {
         var lines = new List<string>();
         var mutated = HarvestCompleted(lines);
@@ -150,10 +174,18 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     {
         var overlay = inputs.CriteriaCorrectionOverlay.Count == 0
             ? "none"
-            : string.Join(Environment.NewLine, inputs.CriteriaCorrectionOverlay.Select(item => "- " + item));
+            : string.Join(Environment.NewLine, BoundList(
+                inputs.CriteriaCorrectionOverlay,
+                maxItems: 20,
+                charLimit: 2000,
+                omittedLabel: CriteriaCorrectionLabel).Select(item => "- " + item));
         var files = inputs.ChangedFiles.Count == 0
             ? "none"
-            : string.Join(Environment.NewLine, inputs.ChangedFiles.Select(item => "- " + item));
+            : string.Join(Environment.NewLine, BoundList(
+                inputs.ChangedFiles,
+                maxItems: 20,
+                charLimit: 3000,
+                omittedLabel: ChangedFileLabel).Select(item => "- " + item));
 
         return $$"""
 You are a progressive review glance for an in-flight Developer dispatch.
@@ -267,8 +299,12 @@ Transcript tail:
             triggerDetail,
             BoundBlock(goal.Objective, _options.ObjectiveCharacterLimit),
             ExtractAcceptanceSection(task.Description, _options.AcceptanceCharacterLimit),
-            task.CriterionRetryFeedback,
-            snapshot.Files,
+            BoundList(
+                task.CriterionRetryFeedback,
+                _options.CriteriaCorrectionOverlayItemLimit,
+                _options.CriteriaCorrectionOverlayCharacterLimit,
+                CriteriaCorrectionLabel),
+            BoundChangedFiles(snapshot),
             BoundBlock(_diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit), _options.DiffCharacterLimit),
             BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit));
         var inputHash = HashInputs(inputs);
@@ -278,7 +314,7 @@ Transcript tail:
         {
             run = _runner.RunAsync(inputs);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             run = Task.FromResult(new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
@@ -309,6 +345,37 @@ Transcript tail:
             var outputTokens = result.OutputTokens ?? EstimateTokens(result.Note + result.EvidenceLine);
             var totalTokens = inputTokens + outputTokens;
 
+            TryAppendReceipt(running, result, inputTokens, outputTokens, totalTokens, lines);
+
+            UpdateSummary(running, result, totalTokens);
+            var summary = _summaries[running.GoalId.Value];
+            TryAppendSummary(running, summary, lines);
+
+            if (result.Verdict == ProgressiveReviewGlanceVerdict.Concern)
+            {
+                GetRoundState(running.RoundKey).QueuedConcerns.Add(result.Note);
+            }
+            else if (result.Verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
+            {
+                TryRaiseMisdirectionAttention(running, result, lines);
+            }
+
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=receipt verdict={result.Verdict} tokens={totalTokens} wall_ms={(long)running.Stopwatch.Elapsed.TotalMilliseconds}");
+        }
+
+        return mutated;
+    }
+
+    private void TryAppendReceipt(
+        RunningGlance running,
+        ProgressiveReviewGlanceDispatchResult result,
+        int inputTokens,
+        int outputTokens,
+        int totalTokens,
+        List<string> lines)
+    {
+        try
+        {
             _eventWriter.AppendProgressiveReviewGlanceReceipt(
                 running.GoalId,
                 running.TaskId,
@@ -322,9 +389,20 @@ Transcript tail:
                 running.Stopwatch.Elapsed,
                 result.Model,
                 result.Profile);
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=receipt-write-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
+    }
 
-            UpdateSummary(running, result, totalTokens);
-            var summary = _summaries[running.GoalId.Value];
+    private void TryAppendSummary(
+        RunningGlance running,
+        GoalSummary summary,
+        List<string> lines)
+    {
+        try
+        {
             _eventWriter.AppendProgressiveReviewGlanceSummary(
                 running.GoalId,
                 summary.Total,
@@ -333,20 +411,11 @@ Transcript tail:
                 summary.FundamentalMisdirection,
                 summary.Invalid,
                 summary.TotalTokens);
-
-            if (result.Verdict == ProgressiveReviewGlanceVerdict.Concern)
-            {
-                GetRoundState(running.RoundKey).QueuedConcerns.Add(result.Note);
-            }
-            else if (result.Verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
-            {
-                RaiseMisdirectionAttention(running, result);
-            }
-
-            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=receipt verdict={result.Verdict} tokens={totalTokens} wall_ms={(long)running.Stopwatch.Elapsed.TotalMilliseconds}");
         }
-
-        return mutated;
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} result=summary-write-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
     }
 
     private bool SurfaceQueuedConcernsOnFailure(AgentOrchestratorKernel kernel)
@@ -389,7 +458,7 @@ Transcript tail:
         {
             return running.Task.GetAwaiter().GetResult();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             return new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
@@ -417,6 +486,21 @@ Note: {result.Note}
             body,
             $"progressive-review-glance:misdirection:{running.RoundKey}",
             CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    private void TryRaiseMisdirectionAttention(
+        RunningGlance running,
+        ProgressiveReviewGlanceDispatchResult result,
+        List<string> lines)
+    {
+        try
+        {
+            RaiseMisdirectionAttention(running, result);
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=attention-write-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
     }
 
     private bool IsSmallRound(
@@ -514,6 +598,14 @@ Note: {result.Note}
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
     }
 
+    private IReadOnlyList<string> BoundChangedFiles(DispatchLiveChangeSnapshot snapshot) =>
+        BoundList(
+            snapshot.DisplayFiles.Count > 0 ? snapshot.DisplayFiles : snapshot.Files,
+            _options.ChangedFilePromptLimit,
+            _options.ChangedFileListCharacterLimit,
+            ChangedFileLabel,
+            snapshot.RemainingFileCount);
+
     private static string ExtractAcceptanceSection(string description, int limit)
     {
         var markers = new[] { "## Acceptance", "ACCEPTANCE", "Acceptance criteria:", "Acceptance Criteria:" };
@@ -580,6 +672,42 @@ Note: {result.Note}
         return text.Length <= limit
             ? text
             : $"...(tail truncated to {limit} chars){Environment.NewLine}" + text[^limit..];
+    }
+
+    private static IReadOnlyList<string> BoundList(
+        IEnumerable<string> values,
+        int maxItems,
+        int charLimit,
+        string omittedLabel,
+        int extraOmittedCount = 0)
+    {
+        var result = new List<string>();
+        var usedCharacters = 0;
+        var omitted = Math.Max(0, extraOmittedCount);
+        foreach (var value in values)
+        {
+            var text = BoundSingleLine(value, Math.Min(500, Math.Max(1, charLimit)));
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            if (result.Count >= maxItems || usedCharacters + text.Length > charLimit)
+            {
+                omitted++;
+                continue;
+            }
+
+            result.Add(text);
+            usedCharacters += text.Length;
+        }
+
+        if (omitted > 0)
+        {
+            result.Add($"... {omitted} more {omittedLabel} omitted");
+        }
+
+        return result;
     }
 
     private static string BoundSingleLine(string? value, int limit)

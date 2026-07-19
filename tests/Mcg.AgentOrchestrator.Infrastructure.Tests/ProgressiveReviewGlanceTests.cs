@@ -106,15 +106,29 @@ public sealed class ProgressiveReviewGlanceTests
 
         var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
         var (kernel, goal, task) = RunningDeveloperRound(now, description: "Do work\n\nACCEPTANCE\n- Include correction overlay");
-        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["Correct criterion B before retry."]);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, [
+            "Correct criterion B before retry.",
+            new string('x', 5000),
+            "Extra correction 01",
+            "Extra correction 02",
+            "Extra correction 03"
+        ]);
+        var allFiles = Enumerable.Range(1, 100).Select(index => $"src/File{index:D2}.cs").ToArray();
+        var displayFiles = allFiles.Take(40).ToArray();
         var runner = new ControlledGlanceRunner();
         runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok", "bounded", 1, 1));
         var coordinator = NewCoordinator(
             runner,
             new RecordingGlanceEvents(),
             utcNow: () => now,
-            options: new ProgressiveReviewGlanceOptions(DiffCharacterLimit: 30, TranscriptCharacterLimit: 20),
-            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            options: new ProgressiveReviewGlanceOptions(
+                CriteriaCorrectionOverlayCharacterLimit: 80,
+                CriteriaCorrectionOverlayItemLimit: 3,
+                ChangedFilePromptLimit: 5,
+                ChangedFileListCharacterLimit: 80,
+                DiffCharacterLimit: 30,
+                TranscriptCharacterLimit: 20),
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(allFiles, displayFiles, allFiles.Length - displayFiles.Length),
             diffReader: (_, _) => new string('d', 100),
             transcriptReader: _ => new string('t', 100));
 
@@ -122,7 +136,12 @@ public sealed class ProgressiveReviewGlanceTests
 
         var inputs = runner.Calls.Single();
         Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Correct criterion B", inputs.CriteriaCorrectionOverlay.Single(), StringComparison.Ordinal);
+        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("xxxxxxxxxx", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("more criteria correction", StringComparison.Ordinal));
+        Xunit.Assert.Contains("src/File01.cs", inputs.ChangedFiles);
+        Xunit.Assert.DoesNotContain("src/File06.cs", inputs.ChangedFiles);
+        Xunit.Assert.Contains(inputs.ChangedFiles, item => item.Contains("more changed file", StringComparison.Ordinal));
         Xunit.Assert.True(inputs.DiffExcerpt.Length < 90);
         Xunit.Assert.True(inputs.TranscriptTail.Length < 90);
 
@@ -139,6 +158,10 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("xxxxxxxxxx", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("src/File01.cs", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("src/File06.cs", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("more changed file", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("dddddddddddddddddddddddddddddd", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("ddddddddddddddddddddddddddddddd", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("tttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
@@ -214,6 +237,38 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Single(items);
         Xunit.Assert.Equal(CollaborationItemType.Decision, items.Single().Type);
         Xunit.Assert.Contains("cancel plus resume-with-guidance", items.Single().Body, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_receipt_and_attention_failures_are_advisory_only")]
+    public void ReceiptAndAttentionFailuresAreAdvisoryOnly()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, task) = RunningDeveloperRound(now);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Task asks for forbidden session resume work.",
+            "diff adds session resume primitive",
+            5,
+            5));
+        var coordinator = new ProgressiveReviewGlanceCoordinator(
+            runner,
+            new RecordingGlanceEvents { ThrowOnProgressiveWrites = true },
+            new ThrowingCollaborationItemStore(),
+            new ProgressiveReviewGlanceOptions(),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            (_, _) => "diff",
+            _ => "transcript");
+
+        _ = coordinator.Observe(kernel, [goal]);
+        var result = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.False(result.MutatedTaskState);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.Contains(result.ProgressLines, line => line.Contains("receipt-write-failed", StringComparison.Ordinal));
+        Xunit.Assert.Contains(result.ProgressLines, line => line.Contains("summary-write-failed", StringComparison.Ordinal));
+        Xunit.Assert.Contains(result.ProgressLines, line => line.Contains("attention-write-failed", StringComparison.Ordinal));
     }
 
     private static ProgressiveReviewGlanceCoordinator NewCoordinator(
@@ -318,6 +373,7 @@ public sealed class ProgressiveReviewGlanceTests
     {
         public List<Receipt> Receipts { get; } = [];
         public List<Summary> Summaries { get; } = [];
+        public bool ThrowOnProgressiveWrites { get; init; }
 
         public void AppendTimelineEvent(ProgressEvent progressEvent) { }
         public void AppendGoalCreated(GoalId goalId, string objective) { }
@@ -341,8 +397,15 @@ public sealed class ProgressiveReviewGlanceTests
             int totalTokens,
             TimeSpan wallTime,
             string? model,
-            string? profile) =>
+            string? profile)
+        {
+            if (ThrowOnProgressiveWrites)
+            {
+                throw new InvalidOperationException("receipt sink unavailable");
+            }
+
             Receipts.Add(new Receipt(trigger, inputsHash, verdict, note, inputTokens, outputTokens, totalTokens, wallTime, model, profile));
+        }
 
         public void AppendProgressiveReviewGlanceSummary(
             GoalId goalId,
@@ -351,8 +414,84 @@ public sealed class ProgressiveReviewGlanceTests
             int concern,
             int fundamentalMisdirection,
             int invalid,
-            int totalTokens) =>
+            int totalTokens)
+        {
+            if (ThrowOnProgressiveWrites)
+            {
+                throw new InvalidOperationException("summary sink unavailable");
+            }
+
             Summaries.Add(new Summary(totalGlances, onTrack, concern, fundamentalMisdirection, invalid, totalTokens));
+        }
+    }
+
+    private sealed class ThrowingCollaborationItemStore : ICollaborationItemStore
+    {
+        public Task<CollaborationItem> RaiseAsync(
+            CollaborationItemType type,
+            string? goalId,
+            string subject,
+            string body,
+            string? correlationKey = null,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("attention store unavailable");
+
+        public Task<CollaborationItem> RaiseWithActionsAsync(
+            CollaborationItemType type,
+            string? goalId,
+            string subject,
+            string body,
+            string correlationKey,
+            IReadOnlyList<CollaborationActionBinding> actions,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<bool> TryResolveAsync(string correlationKey, string resolution, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<int> ResolveOpenForGoalAsync(string goalId, string resolution, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<bool> TryMarkDeliveredAsync(string correlationKey, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<CollaborationItem>> GetAttentionQueueAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<CollaborationItem>> ListAsync(string? goalId = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<CollaborationItem>> ListForGoalIdsAsync(IEnumerable<string> goalIds, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<CollaborationBoundAction>> ListActionsAsync(string correlationKey, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateRenderedContentHashAsync(IEnumerable<string> correlationKeys, string renderedContentHash, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<CollaborationActionApplyResult> TryClaimActionAsync(
+            string correlationKey,
+            int actionIndex,
+            string actorId,
+            string interactionId,
+            long? currentGoalStateVersion,
+            DateTimeOffset decidedAt,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<CollaborationDecisionAuditEntry> RecordRejectedDecisionAsync(
+            string correlationKey,
+            int? actionIndex,
+            string actorId,
+            string interactionId,
+            string reason,
+            DateTimeOffset decidedAt,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<CollaborationDecisionAuditEntry>> ListDecisionAuditAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed record Receipt(
