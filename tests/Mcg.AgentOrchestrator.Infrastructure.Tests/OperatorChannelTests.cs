@@ -522,6 +522,64 @@ public sealed class OperatorChannelTests
         Assert.Equal(12, action.ExpectedGoalStateVersion);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_prefixes_task_scoped_commands_before_persisting")]
+    public async Task DiscordOperatorChannelPrefixesTaskScopedCommandsBeforePersisting()
+    {
+        var stateDir = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
+        var escalation = new OperatorEscalation(
+            "inbox-prefixed",
+            "goal-id-abc123456",
+            "abc12345",
+            "FailedTask",
+            "Task action",
+            "summary",
+            "evidence",
+            [
+                new OperatorEscalationAction("Retry", "retry 2 <note> --autonomy safe-auto"),
+                new OperatorEscalationAction("Refresh", "refresh-dispatch 3"),
+                new OperatorEscalationAction("Re-delegate", "re-delegate 4 --autonomy safe-auto")
+            ],
+            null);
+
+        await channel.SendEscalationAsync(escalation);
+
+        var commands = (await store.ListActionsAsync("inbox-prefixed"))
+            .Select(action => action.Command)
+            .ToArray();
+        Assert.Equal(
+            [
+                "retry abc12345 2 <note> --autonomy safe-auto",
+                "refresh-dispatch abc12345 3",
+                "re-delegate abc12345 4 --autonomy safe-auto"
+            ],
+            commands);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_preserves_already_goal_scoped_commands")]
+    public async Task DiscordOperatorChannelPreservesAlreadyGoalScopedCommands()
+    {
+        var stateDir = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(store);
+        var escalation = new OperatorEscalation(
+            "inbox-already-prefixed",
+            "goal-id-abc123456",
+            "abc12345",
+            "AcceptanceGate",
+            "Acceptance",
+            "summary",
+            "evidence",
+            [new OperatorEscalationAction("Accept", "acceptance abc12345 --autonomy supervised-auto")],
+            null);
+
+        await channel.SendEscalationAsync(escalation);
+
+        var action = (await store.ListActionsAsync("inbox-already-prefixed")).Single();
+        Assert.Equal("acceptance abc12345 --autonomy supervised-auto", action.Command);
+    }
+
     // ---- OperatorChannelFactory ----
 
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_catalog_is_null_type")]

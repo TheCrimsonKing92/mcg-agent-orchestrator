@@ -318,6 +318,29 @@ public sealed class DiscordGatewayTests
         Assert.False(api.SentMessages[0].Buttons[0].Disabled);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_failed_render_does_not_persist_render_hash")]
+    public async Task DiscordCollaborationViewFailedRenderDoesNotPersistRenderHash()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        api.CreateThreadFailures.Enqueue(new InvalidOperationException("Discord rejected render."));
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-abc123",
+            "Need decision",
+            "Body",
+            "corr-render-fail",
+            [new CollaborationActionBinding("Next", "next abc123")]);
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        var action = (await store.ListActionsAsync("corr-render-fail")).Single();
+        Assert.Null(action.RenderedContentHash);
+        Assert.Empty(api.SentMessages);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_aggregates_same_goal_items_into_one_message")]
     public async Task DiscordCollaborationViewAggregatesSameGoalItemsIntoOneMessage()
     {

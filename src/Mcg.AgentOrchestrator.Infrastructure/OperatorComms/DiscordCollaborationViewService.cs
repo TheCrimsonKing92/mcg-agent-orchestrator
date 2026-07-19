@@ -275,13 +275,13 @@ public sealed class DiscordCollaborationViewService
             else
             {
                 var content = BuildGoalContent(goalKey, remaining, $"✅ resolved one by {userId}");
+                await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId,
+                    content,
+                    await BuildGoalButtonsAsync(remaining, cancellationToken), cancellationToken);
                 await _store.UpdateRenderedContentHashAsync(
                     remaining.Select(item => item.CorrelationKey!),
                     ComputeContentHash(content),
                     cancellationToken);
-                await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId,
-                    content,
-                    await BuildGoalButtonsAsync(remaining, cancellationToken), cancellationToken);
             }
         }
 
@@ -296,22 +296,23 @@ public sealed class DiscordCollaborationViewService
         DiscordCollaborationRefs refs, string goalKey, IReadOnlyList<CollaborationItem> items, CancellationToken cancellationToken)
     {
         var content = BuildGoalContent(goalKey, items, footer: null);
-        await _store.UpdateRenderedContentHashAsync(
-            items
-                .Where(item => !string.IsNullOrWhiteSpace(item.CorrelationKey))
-                .Select(item => item.CorrelationKey!),
-            ComputeContentHash(content),
-            cancellationToken);
         var buttons = await BuildGoalButtonsAsync(items, cancellationToken);
+        var correlationKeys = items
+            .Where(item => !string.IsNullOrWhiteSpace(item.CorrelationKey))
+            .Select(item => item.CorrelationKey!)
+            .ToList();
+        var contentHash = ComputeContentHash(content);
 
         if (refs.GoalMessages.TryGetValue(goalKey, out var messageRef))
         {
             await _api.EditMessageAsync(messageRef.ThreadId, messageRef.MessageId, content, buttons, cancellationToken);
+            await _store.UpdateRenderedContentHashAsync(correlationKeys, contentHash, cancellationToken);
             return;
         }
 
         var threadId = await _api.CreateThreadAsync(_forumChannelId, BuildGoalThreadTitle(goalKey), content, cancellationToken);
         var messageId = await _api.SendMessageAsync(threadId, content, buttons, cancellationToken);
+        await _store.UpdateRenderedContentHashAsync(correlationKeys, contentHash, cancellationToken);
         refs.GoalMessages[goalKey] = new GoalMessageRef(threadId, messageId);
     }
 
