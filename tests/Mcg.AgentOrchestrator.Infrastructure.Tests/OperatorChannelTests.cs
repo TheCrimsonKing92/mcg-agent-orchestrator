@@ -198,9 +198,9 @@ public sealed class OperatorChannelTests
     public void DiscordInteractionHandlerDirectActionMapsToDecision()
     {
         var inboxItemId = "inbox-abc123def456";
-        var command = "next abc123";
+        var actionIndex = 0;
         var userId = "111222333";
-        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, command);
+        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, actionIndex);
         var payload = BuildInteractionPayload(userId, customId);
 
         var result = DiscordInteractionHandler.Process(payload, [userId]);
@@ -208,7 +208,7 @@ public sealed class OperatorChannelTests
         Assert.True(result.ErrorMessage is null);
         Assert.True(result.Decision is not null);
         Assert.Equal(inboxItemId, result.Decision!.InboxItemId);
-        Assert.Equal(command, result.Decision.Command);
+        Assert.Equal(actionIndex, result.Decision.ActionIndex);
         Assert.Equal($"discord:{userId}", result.Decision.ActorId);
         Assert.False(result.RequiresConfirmation);
     }
@@ -217,9 +217,9 @@ public sealed class OperatorChannelTests
     public void DiscordInteractionHandlerConfirmActionReturnsRequiresConfirmation()
     {
         var inboxItemId = "inbox-abc123def456";
-        var command = "land abc123";
+        var actionIndex = 0;
         var userId = "111222333";
-        var customId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, command);
+        var customId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, actionIndex);
         var payload = BuildInteractionPayload(userId, customId);
 
         var result = DiscordInteractionHandler.Process(payload, [userId]);
@@ -235,9 +235,9 @@ public sealed class OperatorChannelTests
     public void DiscordInteractionHandlerConfirmedActionMapsToDecision()
     {
         var inboxItemId = "inbox-abc123def456";
-        var command = "land abc123";
+        var actionIndex = 0;
         var userId = "111222333";
-        var confirmCustomId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, command);
+        var confirmCustomId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, actionIndex);
         var confirmPayload = BuildInteractionPayload(userId, confirmCustomId);
         var confirmResult = DiscordInteractionHandler.Process(confirmPayload, [userId]);
 
@@ -246,13 +246,13 @@ public sealed class OperatorChannelTests
 
         Assert.True(result.ErrorMessage is null);
         Assert.True(result.Decision is not null);
-        Assert.Equal(command, result.Decision!.Command);
+        Assert.Equal(actionIndex, result.Decision!.ActionIndex);
     }
 
     [Xunit.Fact(DisplayName = "DiscordInteractionHandler_rejects_unauthorized_user")]
     public void DiscordInteractionHandlerRejectsUnauthorizedUser()
     {
-        var customId = DiscordInteractionHandler.BuildDirectCustomId("inbox-abc", "next abc123");
+        var customId = DiscordInteractionHandler.BuildDirectCustomId("inbox-abc", 0);
         var payload = BuildInteractionPayload("unauthorized-user-999", customId);
 
         var result = DiscordInteractionHandler.Process(payload, ["authorized-user-111"]);
@@ -275,7 +275,7 @@ public sealed class OperatorChannelTests
     public void OperatorDecisionLogRecordsAndDetectsDuplicate()
     {
         var dir = CreateTempDirectory();
-        var decision = new OperatorDecision("inbox-001", "next abc123", null, "discord:user1", "key-001");
+        var decision = new OperatorDecision("inbox-001", 0, null, "discord:user1", "key-001");
 
         var first = OperatorDecisionLog.TryRecord(dir, decision, DateTimeOffset.UtcNow);
         var second = OperatorDecisionLog.TryRecord(dir, decision, DateTimeOffset.UtcNow);
@@ -289,8 +289,8 @@ public sealed class OperatorChannelTests
     public void OperatorDecisionLogDifferentItemsBothRecord()
     {
         var dir = CreateTempDirectory();
-        var d1 = new OperatorDecision("inbox-001", "next abc", null, "discord:user1", "key-1");
-        var d2 = new OperatorDecision("inbox-002", "next def", null, "discord:user1", "key-2");
+        var d1 = new OperatorDecision("inbox-001", 0, null, "discord:user1", "key-1");
+        var d2 = new OperatorDecision("inbox-002", 1, null, "discord:user1", "key-2");
 
         OperatorDecisionLog.TryRecord(dir, d1, DateTimeOffset.UtcNow);
         OperatorDecisionLog.TryRecord(dir, d2, DateTimeOffset.UtcNow);
@@ -311,7 +311,7 @@ public sealed class OperatorChannelTests
     public void OperatorDecisionLogAuditPersistsAcrossLoads()
     {
         var dir = CreateTempDirectory();
-        var decision = new OperatorDecision("inbox-persist-001", "next xyz", null, "discord:op1", "idem-key-1");
+        var decision = new OperatorDecision("inbox-persist-001", 0, null, "discord:op1", "idem-key-1");
         var now = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
 
         OperatorDecisionLog.TryRecord(dir, decision, now);
@@ -319,7 +319,7 @@ public sealed class OperatorChannelTests
 
         Assert.Equal(1, entries.Count);
         Assert.Equal("inbox-persist-001", entries[0].InboxItemId);
-        Assert.Equal("next xyz", entries[0].Command);
+        Assert.Equal(0, entries[0].ActionIndex);
         Assert.Equal("discord:op1", entries[0].ActorId);
         Assert.Equal(now, entries[0].DecidedAt);
     }
@@ -405,6 +405,9 @@ public sealed class OperatorChannelTests
         Assert.Equal(escalation.GoalId, item.GoalId);
         Assert.Equal(escalation.InboxItemId, item.CorrelationKey);
         Assert.Equal(escalation.Title, item.Subject);
+        var action = (await store.ListActionsAsync(escalation.InboxItemId)).Single();
+        Assert.Equal("Retry", action.Label);
+        Assert.Equal("next testgoal", action.Command);
     }
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_second_escalation_raises_second_queue_item")]

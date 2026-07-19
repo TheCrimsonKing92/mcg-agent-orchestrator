@@ -144,6 +144,100 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.False(result);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_bound_actions_are_one_use_and_idempotent_by_interaction")]
+    public async Task BoundActionsAreOneUseAndIdempotentByInteraction()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-action-1",
+            [new CollaborationActionBinding("Run", "next abc123")]);
+
+        var first = await store.TryClaimActionAsync(
+            "corr-action-1", 0, "discord:user1", "interaction-1", null, DateTimeOffset.UtcNow);
+        var duplicate = await store.TryClaimActionAsync(
+            "corr-action-1", 0, "discord:user1", "interaction-1", null, DateTimeOffset.UtcNow);
+        var secondInteraction = await store.TryClaimActionAsync(
+            "corr-action-1", 0, "discord:user1", "interaction-2", null, DateTimeOffset.UtcNow);
+
+        Xunit.Assert.True(first.Applied);
+        Xunit.Assert.True(duplicate.Duplicate);
+        Xunit.Assert.False(secondInteraction.Applied);
+        Xunit.Assert.Equal("Action already consumed.", secondInteraction.ErrorMessage);
+        Xunit.Assert.Equal(2, (await store.ListDecisionAuditAsync()).Count);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_bound_action_expiry_rejects_and_audits")]
+    public async Task BoundActionExpiryRejectsAndAudits()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        var expiresAt = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-expired",
+            [new CollaborationActionBinding("Run", "next abc123", ExpiresAt: expiresAt)]);
+
+        var result = await store.TryClaimActionAsync(
+            "corr-expired", 0, "discord:user1", "interaction-expired", null, expiresAt.AddSeconds(1));
+
+        Xunit.Assert.False(result.Applied);
+        Xunit.Assert.Equal("Action expired.", result.ErrorMessage);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Xunit.Assert.Equal("Rejected", audit.Outcome);
+        Xunit.Assert.Equal("Action expired.", audit.RejectionReason);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_stale_goal_state_version_rejects_and_audits")]
+    public async Task StaleGoalStateVersionRejectsAndAudits()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-stale",
+            [new CollaborationActionBinding("Run", "acceptance abc123", ExpectedGoalStateVersion: 7)]);
+
+        var result = await store.TryClaimActionAsync(
+            "corr-stale", 0, "discord:user1", "interaction-stale", 8, DateTimeOffset.UtcNow);
+
+        Xunit.Assert.False(result.Applied);
+        Xunit.Assert.Equal("Stale goal state version.", result.ErrorMessage);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Xunit.Assert.Equal(7, audit.ExpectedGoalStateVersion);
+        Xunit.Assert.Equal(8, audit.ActualGoalStateVersion);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_decision_audit_records_rendered_content_hash")]
+    public async Task DecisionAuditRecordsRenderedContentHash()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-hash",
+            [new CollaborationActionBinding("Run", "next abc123")]);
+        await store.UpdateRenderedContentHashAsync(["corr-hash"], "sha256-card");
+
+        var result = await store.TryClaimActionAsync(
+            "corr-hash", 0, "discord:user1", "interaction-hash", null, DateTimeOffset.UtcNow);
+
+        Xunit.Assert.True(result.Applied);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Xunit.Assert.Equal("discord:user1", audit.ActorId);
+        Xunit.Assert.Equal("interaction-hash", audit.InteractionId);
+        Xunit.Assert.Equal("sha256-card", audit.RenderedContentHash);
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_mark_delivered_transitions_Raised_to_Delivered")]
     public async Task MarkDeliveredTransitionsRaisedToDelivered()
     {
@@ -251,6 +345,8 @@ public sealed class CollaborationItemStoreTests
 internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
 {
     private readonly List<CollaborationItem> _items = [];
+    private readonly Dictionary<string, List<CollaborationBoundAction>> _actions = new(StringComparer.Ordinal);
+    private readonly List<CollaborationDecisionAuditEntry> _audits = [];
 
     public IReadOnlyList<CollaborationItem> Items => _items;
 
@@ -267,6 +363,34 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
             type, goalId, CollaborationItemStatus.Raised,
             subject, body, correlationKey, DateTimeOffset.UtcNow, null, null);
         _items.Add(item);
+        return Task.FromResult(item);
+    }
+
+    public Task<CollaborationItem> RaiseWithActionsAsync(
+        CollaborationItemType type,
+        string? goalId,
+        string subject,
+        string body,
+        string correlationKey,
+        IReadOnlyList<CollaborationActionBinding> actions,
+        CancellationToken cancellationToken = default)
+    {
+        var item = new CollaborationItem(
+            Guid.NewGuid().ToString("n"),
+            type, goalId, CollaborationItemStatus.Raised,
+            subject, body, correlationKey, DateTimeOffset.UtcNow, null, null);
+        _items.Add(item);
+        _actions[correlationKey] = actions.Select((action, index) => new CollaborationBoundAction(
+            correlationKey,
+            index,
+            action.Label,
+            action.Command,
+            action.RequiresConfirmation,
+            action.RequiresInput,
+            action.ExpectedGoalStateVersion,
+            action.ExpiresAt ?? DateTimeOffset.UtcNow.AddHours(12),
+            null,
+            null)).ToList();
         return Task.FromResult(item);
     }
 
@@ -338,5 +462,98 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         var scopedGoalIds = goalIds.ToHashSet(StringComparer.Ordinal);
         return Task.FromResult<IReadOnlyList<CollaborationItem>>(
             _items.Where(item => item.GoalId is not null && scopedGoalIds.Contains(item.GoalId)).ToList());
+    }
+
+    public Task<IReadOnlyList<CollaborationBoundAction>> ListActionsAsync(
+        string correlationKey,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<CollaborationBoundAction>>(
+            _actions.TryGetValue(correlationKey, out var actions) ? actions : []);
+
+    public Task UpdateRenderedContentHashAsync(
+        IEnumerable<string> correlationKeys,
+        string renderedContentHash,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var key in correlationKeys)
+        {
+            if (!_actions.TryGetValue(key, out var actions))
+                continue;
+            _actions[key] = actions.Select(action => action with { RenderedContentHash = renderedContentHash }).ToList();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<CollaborationActionApplyResult> TryClaimActionAsync(
+        string correlationKey,
+        int actionIndex,
+        string actorId,
+        string interactionId,
+        long? currentGoalStateVersion,
+        DateTimeOffset decidedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var existing = _audits.FirstOrDefault(audit => audit.InteractionId == interactionId);
+        if (existing is not null)
+            return Task.FromResult(new CollaborationActionApplyResult(false, true, null, existing, "Duplicate interaction."));
+
+        var action = _actions.TryGetValue(correlationKey, out var actions)
+            ? actions.FirstOrDefault(candidate => candidate.ActionIndex == actionIndex)
+            : null;
+        if (action is null)
+        {
+            var audit = AddAudit(correlationKey, actionIndex, actorId, interactionId, "Rejected", null, "Unknown action reference.", null, currentGoalStateVersion, null, decidedAt);
+            return Task.FromResult(new CollaborationActionApplyResult(false, false, null, audit, audit.RejectionReason));
+        }
+
+        var appliedAudit = AddAudit(correlationKey, actionIndex, actorId, interactionId, "Applied", action.Command, null, action.ExpectedGoalStateVersion, currentGoalStateVersion, action.RenderedContentHash, decidedAt);
+        _actions[correlationKey] = actions.Select(candidate =>
+            candidate.ActionIndex == actionIndex ? candidate with { ConsumedAt = decidedAt } : candidate).ToList();
+        return Task.FromResult(new CollaborationActionApplyResult(true, false, action, appliedAudit, null));
+    }
+
+    public Task<CollaborationDecisionAuditEntry> RecordRejectedDecisionAsync(
+        string correlationKey,
+        int? actionIndex,
+        string actorId,
+        string interactionId,
+        string reason,
+        DateTimeOffset decidedAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(AddAudit(correlationKey, actionIndex, actorId, interactionId, "Rejected", null, reason, null, null, null, decidedAt));
+
+    public Task<IReadOnlyList<CollaborationDecisionAuditEntry>> ListDecisionAuditAsync(
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<CollaborationDecisionAuditEntry>>(_audits);
+
+    private CollaborationDecisionAuditEntry AddAudit(
+        string correlationKey,
+        int? actionIndex,
+        string actorId,
+        string interactionId,
+        string outcome,
+        string? command,
+        string? rejectionReason,
+        long? expectedGoalStateVersion,
+        long? actualGoalStateVersion,
+        string? renderedContentHash,
+        DateTimeOffset decidedAt)
+    {
+        var audit = new CollaborationDecisionAuditEntry(
+            _audits.Count + 1,
+            correlationKey,
+            actionIndex,
+            actorId,
+            interactionId,
+            outcome,
+            command,
+            rejectionReason,
+            expectedGoalStateVersion,
+            actualGoalStateVersion,
+            renderedContentHash,
+            decidedAt);
+        _audits.Add(audit);
+        return audit;
     }
 }

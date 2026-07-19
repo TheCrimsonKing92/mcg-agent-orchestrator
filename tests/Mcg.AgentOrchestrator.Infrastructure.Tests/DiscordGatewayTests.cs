@@ -38,17 +38,17 @@ public sealed class DiscordGatewayTests
     public void DiscordInteractionHandlerOverloadDirectActionMapsToDecision()
     {
         var inboxItemId = "inbox-abc123def456";
-        var command = "next abc123";
+        var actionIndex = 0;
         var userId = "111222333";
         var interactionId = "interaction-999";
-        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, command);
+        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, actionIndex);
 
         var result = DiscordInteractionHandler.Process(customId, userId, interactionId, [userId]);
 
         Assert.True(result.ErrorMessage is null);
         Assert.True(result.Decision is not null);
         Assert.Equal(inboxItemId, result.Decision!.InboxItemId);
-        Assert.Equal(command, result.Decision.Command);
+        Assert.Equal(actionIndex, result.Decision.ActionIndex);
         Assert.Equal($"discord:{userId}", result.Decision.ActorId);
         Assert.Equal(interactionId, result.Decision.IdempotencyKey);
         Assert.False(result.RequiresConfirmation);
@@ -58,9 +58,9 @@ public sealed class DiscordGatewayTests
     public void DiscordInteractionHandlerOverloadConfirmReturnsRequiresConfirmation()
     {
         var inboxItemId = "inbox-abc123def456";
-        var command = "land abc123";
+        var actionIndex = 0;
         var userId = "111222333";
-        var customId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, command);
+        var customId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, actionIndex);
 
         var result = DiscordInteractionHandler.Process(customId, userId, "interact-001", [userId]);
 
@@ -75,23 +75,23 @@ public sealed class DiscordGatewayTests
     public void DiscordInteractionHandlerOverloadConfirmedActionMapsToDecision()
     {
         var inboxItemId = "inbox-abc123def456";
-        var command = "land abc123";
+        var actionIndex = 0;
         var userId = "111222333";
-        var confirmCustomId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, command);
+        var confirmCustomId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, actionIndex);
         var confirmResult = DiscordInteractionHandler.Process(confirmCustomId, userId, "interact-001", [userId]);
 
         var result = DiscordInteractionHandler.Process(confirmResult.ConfirmationCustomId!, userId, "interact-002", [userId]);
 
         Assert.True(result.ErrorMessage is null);
         Assert.True(result.Decision is not null);
-        Assert.Equal(command, result.Decision!.Command);
+        Assert.Equal(actionIndex, result.Decision!.ActionIndex);
         Assert.Equal(inboxItemId, result.Decision.InboxItemId);
     }
 
     [Xunit.Fact(DisplayName = "DiscordInteractionHandler_overload_unauthorized_user_rejected")]
     public void DiscordInteractionHandlerOverloadUnauthorizedUserRejected()
     {
-        var customId = DiscordInteractionHandler.BuildDirectCustomId("inbox-abc", "next abc123");
+        var customId = DiscordInteractionHandler.BuildDirectCustomId("inbox-abc", 0);
 
         var result = DiscordInteractionHandler.Process(customId, "unauthorized-999", "interact-001", ["authorized-111"]);
 
@@ -134,15 +134,16 @@ public sealed class DiscordGatewayTests
         // and calls Process. This test verifies that mapping is correct end-to-end by calling
         // the overload with component-equivalent values.
         var inboxItemId = "inbox-gateway-001";
-        var command = "next gw001";
+        var actionIndex = 0;
         var userId = "555666777";
         var interactionId = "888999000";
-        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, command);
+        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, actionIndex);
 
         var result = DiscordInteractionHandler.Process(customId, userId, interactionId, [userId]);
 
         Assert.True(result.Decision is not null);
         Assert.Equal(inboxItemId, result.Decision!.InboxItemId);
+        Assert.Equal(actionIndex, result.Decision.ActionIndex);
         Assert.Equal($"discord:{userId}", result.Decision.ActorId);
         Assert.Equal(interactionId, result.Decision.IdempotencyKey);
     }
@@ -153,17 +154,27 @@ public sealed class DiscordGatewayTests
     public async Task DiscordDecisionApplierValidDecisionDispatchesAcksAndPostsResult()
     {
         var auditDir = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
         var dispatched = new List<string>();
         var acknowledged = new List<string>();
         var posted = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-apply-001",
+            "Apply",
+            "Body",
+            "inbox-apply-001",
+            [new CollaborationActionBinding("Next", "next abc123")]);
 
         var applier = new DiscordDecisionApplier(
             auditDir,
             dispatch: (cmd, _) => { dispatched.Add(cmd); return Task.CompletedTask; },
+            collaborationStore: store,
+            allowedUserIds: ["user1"],
             acknowledge: itemId => acknowledged.Add(itemId),
             postResult: (msg, _) => { posted.Add(msg); return Task.CompletedTask; });
 
-        var decision = new OperatorDecision("inbox-apply-001", "next abc123", null, "discord:user1", "key-001");
+        var decision = new OperatorDecision("inbox-apply-001", 0, null, "discord:user1", "key-001");
 
         var applied = await applier.ApplyAsync(decision);
 
@@ -173,20 +184,33 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, acknowledged.Count);
         Assert.Equal("inbox-apply-001", acknowledged[0]);
         Assert.Equal(1, posted.Count);
-        Assert.True(OperatorDecisionLog.IsRecorded(auditDir, "inbox-apply-001"));
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Assert.Equal("Applied", audit.Outcome);
+        Assert.Equal("discord:user1", audit.ActorId);
+        Assert.Equal("key-001", audit.InteractionId);
     }
 
     [Xunit.Fact(DisplayName = "DiscordDecisionApplier_duplicate_decision_not_re_executed")]
     public async Task DiscordDecisionApplierDuplicateDecisionNotReExecuted()
     {
         var auditDir = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
         var dispatched = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-dup-001",
+            "Apply",
+            "Body",
+            "inbox-dup-001",
+            [new CollaborationActionBinding("Next", "next abc123")]);
 
         var applier = new DiscordDecisionApplier(
             auditDir,
-            dispatch: (cmd, _) => { dispatched.Add(cmd); return Task.CompletedTask; });
+            dispatch: (cmd, _) => { dispatched.Add(cmd); return Task.CompletedTask; },
+            collaborationStore: store,
+            allowedUserIds: ["user1"]);
 
-        var decision = new OperatorDecision("inbox-dup-001", "next abc123", null, "discord:user1", "key-dup-001");
+        var decision = new OperatorDecision("inbox-dup-001", 0, null, "discord:user1", "key-dup-001");
 
         var first = await applier.ApplyAsync(decision);
         var second = await applier.ApplyAsync(decision);
@@ -196,22 +220,44 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, dispatched.Count);
     }
 
-    [Xunit.Fact(DisplayName = "DiscordDecisionApplier_without_optional_seams_applies_successfully")]
-    public async Task DiscordDecisionApplierWithoutOptionalSeamsAppliesSuccessfully()
+    [Xunit.Fact(DisplayName = "DiscordDecisionApplier_fabricated_wire_command_is_inert")]
+    public async Task DiscordDecisionApplierFabricatedWireCommandIsInert()
     {
         var auditDir = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
         var dispatched = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-safe-001",
+            "Safe",
+            "Body",
+            "inbox-noop-001",
+            [new CollaborationActionBinding("Next", "next xyz")]);
 
         var applier = new DiscordDecisionApplier(
             auditDir,
-            dispatch: (cmd, _) => { dispatched.Add(cmd); return Task.CompletedTask; });
+            dispatch: (cmd, _) => { dispatched.Add(cmd); return Task.CompletedTask; },
+            collaborationStore: store,
+            allowedUserIds: ["user1"]);
 
-        var decision = new OperatorDecision("inbox-noop-001", "next xyz", null, "discord:user1", "key-noop-001");
+        var payload = """
+            {
+              "id": "key-noop-001",
+              "member": { "user": { "id": "user1" } },
+              "data": {
+                "custom_id": "mcgo|inbox-noop-001|0",
+                "command": "recover compromised",
+                "values": ["land unsafe"]
+              }
+            }
+            """;
+        var parsed = DiscordInteractionHandler.Process(payload, ["user1"]);
 
-        var applied = await applier.ApplyAsync(decision);
+        var applied = await applier.ApplyAsync(parsed.Decision!);
 
         Assert.True(applied);
         Assert.Equal(1, dispatched.Count);
+        Assert.Equal("next xyz", dispatched[0]);
     }
 
     // ---- Factory no-op when Discord unconfigured ----
@@ -324,7 +370,7 @@ public sealed class DiscordGatewayTests
         await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc123", "Need decision", "Body", "corr-dup");
         var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
         await view.ReconcileAsync();
-        var customId = DiscordInteractionHandler.BuildDirectCustomId("corr-dup", "resolved");
+        var customId = DiscordInteractionHandler.BuildDirectCustomId("corr-dup", 0);
 
         await view.ApplyInteractionAsync(customId, "user1", "interaction-1");
         await view.ApplyInteractionAsync(customId, "user1", "interaction-2");
@@ -336,6 +382,48 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, api.SentMessages.Count);
         Assert.True(api.EditedMessages.Count >= 1);
         Assert.Equal(0, api.EditedMessages[^1].Buttons.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_non_allowlisted_user_rejected_and_logged")]
+    public async Task DiscordCollaborationViewNonAllowlistedUserRejectedAndLogged()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc123", "Need decision", "Body", "corr-auth");
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+        var customId = api.SentMessages.Single().Buttons.Single().CustomId;
+
+        var result = await view.ApplyInteractionAsync(customId, "intruder", "interaction-auth-1");
+
+        Assert.True(result.ErrorMessage is not null);
+        Assert.Contains("allowlist", result.ErrorMessage);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Assert.Equal("Rejected", audit.Outcome);
+        Assert.Equal("discord:intruder", audit.ActorId);
+        Assert.Equal("interaction-auth-1", audit.InteractionId);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_applied_decision_audit_records_actor_interaction_and_render_hash")]
+    public async Task DiscordCollaborationViewAppliedDecisionAuditRecordsActorInteractionAndRenderHash()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseAsync(CollaborationItemType.Decision, "goal-abc123", "Need decision", "Body", "corr-audit");
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+        var sent = api.SentMessages.Single();
+
+        var result = await view.ApplyInteractionAsync(sent.Buttons.Single().CustomId, "user1", "interaction-audit-1");
+
+        Assert.True(result.ErrorMessage is null);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Assert.Equal("Applied", audit.Outcome);
+        Assert.Equal("discord:user1", audit.ActorId);
+        Assert.Equal("interaction-audit-1", audit.InteractionId);
+        Assert.Equal(DiscordCollaborationViewService.ComputeContentHash(sent.Content), audit.RenderedContentHash);
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_modal_answer_writes_back_spec_and_unblocks_clarification")]

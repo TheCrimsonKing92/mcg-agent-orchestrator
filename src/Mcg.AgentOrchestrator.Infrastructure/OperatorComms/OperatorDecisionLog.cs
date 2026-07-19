@@ -14,7 +14,7 @@ public static class OperatorDecisionLog
 
         entries.Add(new AuditEntry(
             decision.InboxItemId,
-            decision.Command,
+            decision.ActionIndex,
             decision.FreeText,
             decision.ActorId,
             decision.IdempotencyKey,
@@ -62,7 +62,7 @@ public static class OperatorDecisionLog
 
     public sealed record AuditEntry(
         string InboxItemId,
-        string Command,
+        int ActionIndex,
         string? FreeText,
         string ActorId,
         string IdempotencyKey,

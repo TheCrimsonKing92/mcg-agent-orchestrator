@@ -15,13 +15,29 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
     public string ChannelType => "discord";
 
     public Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default) =>
-        _store.RaiseAsync(
+        _store.RaiseWithActionsAsync(
             CollaborationItemType.Decision,
             escalation.GoalId,
             escalation.Title,
             BuildContent(escalation),
             escalation.InboxItemId,
+            BuildBindings(escalation.Actions),
             cancellationToken);
+
+    private static IReadOnlyList<CollaborationActionBinding> BuildBindings(IReadOnlyList<OperatorEscalationAction> actions)
+    {
+        var bindings = actions
+            .Take(3)
+            .Select(action => new CollaborationActionBinding(
+                action.Label,
+                action.Command,
+                action.RequiresConfirm,
+                action.RequiresInput,
+                action.ExpectedGoalStateVersion,
+                action.ExpiresAt))
+            .ToList();
+        return bindings.Count == 0 ? [new CollaborationActionBinding("Resolve", "resolved")] : bindings;
+    }
 
     private static string BuildContent(OperatorEscalation escalation)
     {
