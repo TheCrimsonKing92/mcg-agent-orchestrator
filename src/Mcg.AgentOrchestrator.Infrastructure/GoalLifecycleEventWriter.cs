@@ -157,6 +157,52 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         return retired;
     }
 
+    public void AppendProgressiveReviewGlanceReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        string trigger,
+        string inputsHash,
+        string verdict,
+        string note,
+        int inputTokens,
+        int outputTokens,
+        int totalTokens,
+        TimeSpan wallTime,
+        string? model,
+        string? profile) =>
+        Append(goalId, "ProgressiveReviewGlanceReceipt", obj =>
+        {
+            obj["taskId"] = taskId.Value;
+            obj["trigger"] = trigger;
+            obj["inputsHash"] = inputsHash;
+            obj["verdict"] = verdict;
+            obj["note"] = note;
+            obj["inputTokens"] = inputTokens;
+            obj["outputTokens"] = outputTokens;
+            obj["totalTokens"] = totalTokens;
+            obj["wallTimeMs"] = (long)wallTime.TotalMilliseconds;
+            obj["model"] = model;
+            obj["profile"] = profile;
+        });
+
+    public void AppendProgressiveReviewGlanceSummary(
+        GoalId goalId,
+        int totalGlances,
+        int onTrack,
+        int concern,
+        int fundamentalMisdirection,
+        int invalid,
+        int totalTokens) =>
+        Append(goalId, "ProgressiveReviewGlanceSummary", obj =>
+        {
+            obj["totalGlances"] = totalGlances;
+            obj["onTrack"] = onTrack;
+            obj["concern"] = concern;
+            obj["fundamentalMisdirection"] = fundamentalMisdirection;
+            obj["invalid"] = invalid;
+            obj["totalTokens"] = totalTokens;
+        });
+
     private void Append(GoalId goalId, string eventType, Action<JsonObject> addFields)
     {
         var key = goalId.Value;

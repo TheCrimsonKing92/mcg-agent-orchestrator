@@ -340,6 +340,29 @@ public abstract class GoalWorktreeTestBase
         public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
 
         public void AppendCleanedUp(GoalId goalId) => order.Add("remove-worktree");
+
+        public void AppendProgressiveReviewGlanceReceipt(
+            GoalId goalId,
+            TaskId taskId,
+            string trigger,
+            string inputsHash,
+            string verdict,
+            string note,
+            int inputTokens,
+            int outputTokens,
+            int totalTokens,
+            TimeSpan wallTime,
+            string? model,
+            string? profile) { }
+
+        public void AppendProgressiveReviewGlanceSummary(
+            GoalId goalId,
+            int totalGlances,
+            int onTrack,
+            int concern,
+            int fundamentalMisdirection,
+            int invalid,
+            int totalTokens) { }
     }
 
     private protected sealed class CapturingGoalWorktreeService : ICliGoalWorktreeService
