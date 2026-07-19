@@ -833,10 +833,16 @@ public sealed class LandingExecutorTests
         public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default) =>
             inner.LoadGoalAsync(goalId, cancellationToken);
 
-        public Task SaveGoalSnapshotsAsync(
+        public async Task SaveGoalSnapshotsAsync(
             IReadOnlyCollection<GoalSnapshot> goals,
-            CancellationToken cancellationToken = default) =>
-            inner.SaveGoalSnapshotsAsync(goals, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            await inner.SaveGoalSnapshotsAsync(goals, cancellationToken).ConfigureAwait(false);
+            if (goals.Count > 0)
+            {
+                Interlocked.Increment(ref _saveCount);
+            }
+        }
 
         public Task<T> TransactGoalAsync<T>(
             GoalId goalId,

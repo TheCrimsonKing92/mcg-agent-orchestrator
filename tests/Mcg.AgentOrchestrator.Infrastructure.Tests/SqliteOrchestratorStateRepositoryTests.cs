@@ -818,6 +818,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
         var changed = kernel.ExportSnapshot().Goals
             .Where(goal => goal.Id == goalA.Id.Value || goal.Id == goalB.Id.Value)
+            .Select(goal => goal with { Objective = goal.Objective + " changed" })
             .ToArray();
 
         await repo.SaveGoalSnapshotsAsync(changed);
@@ -828,6 +829,49 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             "SELECT id || ':' || version FROM goals ORDER BY objective");
         Assert.Equal(2, versions.Count(v => v.EndsWith(":2", StringComparison.Ordinal)));
         Assert.Contains($"{untouched.Id.Value}:1", versions);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_SaveAsync_skips_unchanged_goal_rows")]
+    public async Task SaveAsyncSkipsUnchangedGoalRows()
+    {
+        var db = TempDb();
+        var diagnosticsPath = DiagnosticsPath(db);
+        var repo = new SqliteOrchestratorStateRepository(
+            db,
+            statementObserver: null,
+            new SqliteWriteTelemetryOptions
+            {
+                DiagnosticsPath = diagnosticsPath,
+                WarningHoldThreshold = TimeSpan.Zero,
+                MirrorToConductEventStream = false
+            });
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal("No-change full save A");
+        var goalB = kernel.CreateGoal("No-change full save B");
+        await repo.SaveAsync(kernel);
+
+        using var beforeConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        beforeConn.Open();
+        var beforeVersions = QueryStrings(beforeConn, "SELECT id || ':' || version FROM goals ORDER BY objective");
+
+        await repo.SaveAsync(kernel);
+
+        using var afterConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        afterConn.Open();
+        var afterVersions = QueryStrings(afterConn, "SELECT id || ':' || version FROM goals ORDER BY objective");
+        var receipts = File.ReadAllLines(diagnosticsPath)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .ToArray();
+        var secondSaveReceipt = receipts.Last(receipt =>
+            receipt["eventType"]?.GetValue<string>() == "sqlite-state-write-hold" &&
+            receipt["operation"]?.GetValue<string>() == "SaveAsync");
+
+        Assert.Contains($"{goalA.Id.Value}:1", beforeVersions);
+        Assert.Contains($"{goalB.Id.Value}:1", beforeVersions);
+        Assert.Equal(beforeVersions, afterVersions);
+        Assert.Equal(0, secondSaveReceipt["rowsWritten"]?.GetValue<long>());
+        Assert.Equal(0, secondSaveReceipt["serializedBytes"]?.GetValue<long>());
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_stale_version_retries_and_succeeds")]
@@ -851,7 +895,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                 if (delegateCalls == 1)
                 {
                     // Concurrent writer increments the version before our CAS write.
-                    await repo.SaveAsync(kernel);
+                    await repo.SaveGoalSnapshotsAsync([snap! with { Objective = "CAS retry goal concurrent update" }], ct);
                 }
                 return (true, snap, true);
             });
@@ -1071,8 +1115,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => m.Status == GoalStatus.Draft.ToString()));
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_conduct_loop_metadata_with_completed_sweep_candidates")]
-    public async Task SqliteRepositoryListsConductLoopMetadataWithCompletedSweepCandidates()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_conduct_loop_metadata_with_terminal_candidates")]
+    public async Task SqliteRepositoryListsConductLoopMetadataWithTerminalCandidates()
     {
         var db = TempDb();
         var repo = new SqliteOrchestratorStateRepository(db);
@@ -1109,7 +1153,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var ids = listing.Select(goal => goal.Id).ToHashSet(StringComparer.Ordinal);
 
         Assert.Contains(completed.Id.Value, ids);
-        Assert.DoesNotContain(cleanedUp.Id.Value, ids);
+        Assert.Contains(cleanedUp.Id.Value, ids);
         Assert.Contains(active.Id.Value, ids);
         Assert.Contains(failed.Id.Value, ids);
         Assert.Contains(waiting.Id.Value, ids);
