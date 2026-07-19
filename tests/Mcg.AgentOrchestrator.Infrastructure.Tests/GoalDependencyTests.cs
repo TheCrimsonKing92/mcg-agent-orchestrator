@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 /// Tests for goal dependency edges: DAG model, cycle/self rejection,
 /// conductor hold/unblock, and failed-predecessor propagation.
 /// </summary>
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class GoalDependencyTests
 {
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -135,11 +136,9 @@ public sealed class GoalDependencyTests
 
     // ── Conductor: B depends on A; B held until A is Done ────────────────────
     //
-    // A is pre-set to Verified (via PassVerification) and requires 3 more driver
-    // advances to reach CleanedUp: Verified→land→Merged, Merged→record→Recorded,
-    // Recorded→cleanup→CleanedUp. Then CleanedUp→Done on the fourth advance.
-    // B is held each tick until A is in completedGoals. Ticks 1–3 always hold B
-    // (A is Executed but not Done), making the 'held ≥ 3' assertion ordering-independent.
+    // A is pre-set to Verified (via PassVerification). B must not create a
+    // workspace until A is in the completed-dependency set, regardless of
+    // whether A lands through the serial or parallel acceptance path.
 
     [Xunit.Fact(DisplayName = "GoalDependency_Chain_BHeldUntilADone")]
     public void GoalDependency_Chain_BHeldUntilADone()
@@ -157,6 +156,7 @@ public sealed class GoalDependencyTests
         var aRecorded = false;
         var aCleaned = false;
         var bWorkspaceCreated = false;
+        var bStartedAfterACompleted = false;
 
         var driver = new ConductorDriver(
             getFacts: g =>
@@ -174,7 +174,12 @@ public sealed class GoalDependencyTests
             getRunningPaidWorkerCount: () => 0,
             createWorkspace: g =>
             {
-                if (g.Id == b.Id) bWorkspaceCreated = true;
+                if (g.Id == b.Id)
+                {
+                    bWorkspaceCreated = true;
+                    bStartedAfterACompleted = kernel.IsKnownCompletedDependencyGoal(a.Id);
+                }
+
                 return "/tmp/ws";
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
@@ -203,12 +208,16 @@ public sealed class GoalDependencyTests
             classifyChangeRisk: _ => null);
 
         var summary = new ConductorBatchLoop().Run(
-            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 10);
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 10);
 
-        // Ticks 1–3: A advances (Executed), B held regardless of ordering.
-        Assert.True(summary.Held >= 3);
-        Assert.True(bWorkspaceCreated);
-        Assert.True(kernel.IsKnownCompletedDependencyGoal(a.Id));
+        var summaryDetail = $"summary={summary} aKnown={kernel.IsKnownCompletedDependencyGoal(a.Id)}";
+        Assert.True(bWorkspaceCreated, summaryDetail);
+        Assert.True(bStartedAfterACompleted, summaryDetail);
+        Assert.True(kernel.IsKnownCompletedDependencyGoal(a.Id), summaryDetail);
         Assert.Equal(0, summary.Escalated);
     }
 

@@ -17,8 +17,12 @@ param(
     [switch]$List,
 
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
-    [ValidateSet('Cli', 'WorkerDispatch', 'GoalWorktree', 'Dashboard', 'Conductor')]
-    [string]$Partition
+    [ValidateSet('Cli', 'WorkerDispatch', 'GoalWorktree', 'Dashboard', 'Conductor', 'Remainder')]
+    [string]$Partition,
+
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateRange(1, 25)]
+    [int]$Repeat = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +65,20 @@ $partitions = [ordered]@{
             'FullyQualifiedName~ConductorBatchLoopVerificationReconcileTests',
             'FullyQualifiedName~ConductorDriverTests',
             'FullyQualifiedName~ConductWatchSweepScopingTests'
+        )
+    }
+    Remainder = [pscustomobject]@{
+        Description = 'Acceptance-gate remainder lane: all Infrastructure tests outside the named high-cost partitions.'
+        Filters = @(
+            'FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests' +
+            '&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests' +
+            '&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests' +
+            '&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests' +
+            '&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests' +
+            '&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardHostTests' +
+            '&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests' +
+            '&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests' +
+            '&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration'
         )
     }
 }
@@ -127,32 +145,37 @@ $isolatedDotnet = Join-Path $PSScriptRoot 'Invoke-IsolatedDotnet.ps1'
 $resultsRoot = Join-Path $repoRoot '.test-results'
 for ($index = 0; $index -lt $selected.Filters.Count; $index++) {
     $filter = $selected.Filters[$index]
-    "Running filter: $filter"
-
-    New-Item -ItemType Directory -Force $resultsRoot | Out-Null
-    Get-ChildItem $resultsRoot -Filter *.trx -ErrorAction SilentlyContinue | Remove-Item -Force
-
-    $testArguments = @(
-        '-GoalPrefix', 'infra-partition',
-        '-AttemptName', "infra-$($Partition.ToLowerInvariant())-$index",
-        'test',
-        (Join-Path $repoRoot $target),
-        '--logger', 'trx',
-        '--results-directory', $resultsRoot,
-        '-clp:ErrorsOnly',
-        '--filter', $filter
-    )
-
-    & $isolatedDotnet @testArguments | Out-Null
-    $testExit = $LASTEXITCODE
-    $script:LastTrxGreen = $false
-    Write-TrxSummary -ResultsPath $resultsRoot
-    if ($testExit -ne 0 -or -not $script:LastTrxGreen) {
-        if ($testExit -ne 0) {
-            exit $testExit
+    for ($attempt = 1; $attempt -le $Repeat; $attempt++) {
+        "Running filter: $filter"
+        if ($Repeat -gt 1) {
+            "Repeat attempt: $attempt/$Repeat"
         }
 
-        exit 1
+        New-Item -ItemType Directory -Force $resultsRoot | Out-Null
+        Get-ChildItem $resultsRoot -Filter *.trx -ErrorAction SilentlyContinue | Remove-Item -Force
+
+        $testArguments = @(
+            '-GoalPrefix', 'infra-partition',
+            '-AttemptName', "infra-$($Partition.ToLowerInvariant())-$index-r$attempt",
+            'test',
+            (Join-Path $repoRoot $target),
+            '--logger', 'trx',
+            '--results-directory', $resultsRoot,
+            '-clp:ErrorsOnly',
+            '--filter', $filter
+        )
+
+        & $isolatedDotnet @testArguments | Out-Null
+        $testExit = $LASTEXITCODE
+        $script:LastTrxGreen = $false
+        Write-TrxSummary -ResultsPath $resultsRoot
+        if ($testExit -ne 0 -or -not $script:LastTrxGreen) {
+            if ($testExit -ne 0) {
+                exit $testExit
+            }
+
+            exit 1
+        }
     }
 }
 "PARTITION GREEN"; exit 0
