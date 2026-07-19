@@ -312,6 +312,7 @@ public sealed class ConductorBatchLoopTests
             Assert.False(overlapped);
             Assert.Equal(2, observedSlots.Length);
             Assert.All(observedSlots, slot => Assert.True(slot.HasValue));
+            Assert.Equal(2, observedSlots.Select(slot => slot!.Value).Distinct().Count());
         }
         finally
         {
