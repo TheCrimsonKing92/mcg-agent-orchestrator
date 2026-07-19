@@ -27,10 +27,13 @@ internal sealed record TerminalGoalSweepResult(
     IReadOnlyList<TerminalGoalSweepGoalResult> Goals,
     int ExcludedGoalCount = 0,
     int CacheHitCount = 0,
-    int CacheMissCount = 0)
+    int CacheMissCount = 0,
+    IReadOnlyList<GoalId>? SweptGoalIds = null)
 {
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
+    public IReadOnlyList<GoalId> ExplicitlySweptGoalIds =>
+        SweptGoalIds ?? Goals.Select(goal => goal.GoalId).Distinct().ToArray();
 }
 
 internal sealed class TerminalGoalSweepCache
@@ -278,6 +281,7 @@ internal static class TerminalGoalSweep
         var dispatchRunner = new BackgroundDispatchRunner();
         GoalGitFactIndex? branchFactIndex = null;
         var results = new List<TerminalGoalSweepGoalResult>();
+        var sweptGoalIds = new List<GoalId>();
         var cacheHits = 0;
         var cacheMisses = 0;
 
@@ -303,6 +307,7 @@ internal static class TerminalGoalSweep
                 cacheMisses++;
             }
 
+            sweptGoalIds.Add(originalGoal.Id);
             var repairs = new List<TerminalGoalSweepRepair>();
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
@@ -526,7 +531,8 @@ internal static class TerminalGoalSweep
             results,
             CountGlobalStaleTerminalExclusions(results),
             cacheHits,
-            cacheMisses);
+            cacheMisses,
+            sweptGoalIds);
     }
 
     private static bool TryReconcileVerifiedMissingBranchOrWorktree(
@@ -743,7 +749,10 @@ internal static class TerminalGoalSweep
             }
         }
 
-        return new TerminalGoalSweepResult(results, CountGlobalStaleTerminalExclusions(results));
+        return new TerminalGoalSweepResult(
+            results,
+            CountGlobalStaleTerminalExclusions(results),
+            SweptGoalIds: kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).Select(goal => goal.Id).ToArray());
     }
 
     private static void AddOwnedEphemeralCleanupRepair(

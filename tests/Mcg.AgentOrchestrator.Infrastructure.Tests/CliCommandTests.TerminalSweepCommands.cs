@@ -119,7 +119,12 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.Contains(blocker.Evidence, item.Body, StringComparison.Ordinal);
         Xunit.Assert.Contains($"Command: acceptance {goal.Id.Value[..8]}", item.Body, StringComparison.Ordinal);
 
-        await TerminalGoalSweepAttention.SurfaceAsync(kernel, new TerminalGoalSweepResult([]), store);
+        await TerminalGoalSweepAttention.SurfaceAsync(kernel, new TerminalGoalSweepResult([], CacheHitCount: 1), store);
+
+        var stillRaised = (await store.ListAsync(goal.Id.Value)).Single();
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, stillRaised.Status);
+
+        await TerminalGoalSweepAttention.SurfaceAsync(kernel, new TerminalGoalSweepResult([], SweptGoalIds: [goal.Id]), store);
 
         var resolved = (await store.ListAsync(goal.Id.Value)).Single();
         Xunit.Assert.Equal(CollaborationItemStatus.Resolved, resolved.Status);

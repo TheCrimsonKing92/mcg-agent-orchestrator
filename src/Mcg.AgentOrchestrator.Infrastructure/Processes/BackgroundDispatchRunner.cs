@@ -336,6 +336,7 @@ public sealed class BackgroundDispatchRunner
                 var process = task.LastProcess;
                 if (process is null ||
                     process.WasCancelled ||
+                    IsTerminalProcessRecord(process) ||
                     HasRecordedCompletionForProcess(task, process))
                 {
                     continue;
@@ -366,6 +367,9 @@ public sealed class BackgroundDispatchRunner
             verification.WorkingDirectory.Equals(process.WorkingDirectory, StringComparison.OrdinalIgnoreCase) &&
             verification.CompletedAt == process.CompletedAt);
     }
+
+    private static bool IsTerminalProcessRecord(TaskProcessRecord process) =>
+        process.CompletedAt is not null || process.ExitCode is not null;
 
     public TaskProcessRecord RefreshLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {

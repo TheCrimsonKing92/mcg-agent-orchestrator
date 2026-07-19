@@ -36,6 +36,10 @@ internal static class TerminalGoalSweepAttention
         }
 
         var activeKeys = new HashSet<string>(StringComparer.Ordinal);
+        var sweptGoalIds = result.ExplicitlySweptGoalIds
+            .Select(goalId => goalId.Value)
+            .Where(scopedGoalIds.Contains)
+            .ToHashSet(StringComparer.Ordinal);
         var changes = 0;
 
         foreach (var goalResult in result.Goals)
@@ -60,7 +64,7 @@ internal static class TerminalGoalSweepAttention
             }
         }
 
-        var items = await store.ListForGoalIdsAsync(scopedGoalIds, cancellationToken);
+        var items = await store.ListForGoalIdsAsync(sweptGoalIds, cancellationToken);
         foreach (var item in items)
         {
             if (item.CorrelationKey is not { Length: > 0 } correlationKey ||

@@ -533,8 +533,10 @@ public sealed class VerificationAndProcessLogTests
 
     var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
     var swept = runner.SweepExitedProcesses(kernel);
+    var secondSwept = runner.SweepExitedProcesses(kernel);
 
     Assert.Equal(1, swept);
+    Assert.Equal(0, secondSwept);
     Assert.False(workTask.LastProcess!.IsRunning);
     Assert.Equal(1, workTask.LastProcess.ExitCode);
     Assert.NotNull(workTask.LastVerification);
