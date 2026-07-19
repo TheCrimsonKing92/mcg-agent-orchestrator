@@ -223,6 +223,17 @@ public sealed partial class AgentOrchestratorKernel
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var blocker))
         {
+            var goal = GetGoal(goalId);
+            if (TrySuppressSupersededReviewerBlocker(goal, task, blocker, out var effectiveBlocker))
+            {
+                if (string.IsNullOrWhiteSpace(effectiveBlocker))
+                {
+                    return false;
+                }
+
+                blocker = effectiveBlocker;
+            }
+
             ReportTaskProgress(
                 goalId,
                 task.Id,

@@ -55,6 +55,39 @@ public sealed class TaskBriefTests
     Assert.Contains("/api/source-survey?max=8", brief, StringComparison.Ordinal);
     Assert.Contains("before broad recursive file reads", brief, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_renders_effective_criteria_overlay_above_refined_spec_acceptance")]
+    public void BuildTaskBriefReviewerRendersEffectiveCriteriaOverlayAboveRefinedSpecAcceptance()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var developer = new TaskSpec(TaskId.New(), "Implement corrected contract", AgentRole.Developer);
+    var reviewer = new TaskSpec(TaskId.New(), "Review corrected contract", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Correct prompt criteria", [developer, reviewer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Ship corrected prompt behavior",
+        ["run the full Infrastructure suite before review", "keep unrelated findings blocking"],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    kernel.RecordTaskNote(
+        goal.Id,
+        developer.Id,
+        "CRITERIA CORRECTION: supersedes=\"run the full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient for this slice\"");
+
+    var developerBrief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+    var overlayIndex = brief.IndexOf("## EFFECTIVE ACCEPTANCE CRITERIA - OPERATOR CORRECTIONS", StringComparison.Ordinal);
+    var acceptanceIndex = brief.IndexOf("Acceptance criteria:", StringComparison.Ordinal);
+    Assert.True(overlayIndex >= 0);
+    Assert.True(acceptanceIndex > overlayIndex);
+    Assert.Contains("## EFFECTIVE ACCEPTANCE CRITERIA - OPERATOR CORRECTIONS", developerBrief, StringComparison.Ordinal);
+    Assert.Contains("Operator corrections in this overlay supersede conflicting brief text", brief, StringComparison.Ordinal);
+    Assert.Contains("Do not enforce or re-raise findings that apply only to superseded criteria", brief, StringComparison.Ordinal);
+    Assert.Contains("focused build-check evidence is sufficient for this slice", brief, StringComparison.Ordinal);
+    Assert.Contains("suspected-defective-criterion", brief, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "AgentTaskRunner_prefers_bounded_source_survey_for_research_prompts")]
     public async Task AgentTaskRunnerPrefersBoundedSourceSurveyForResearchPrompts()
 {

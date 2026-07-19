@@ -357,6 +357,25 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains("fedcba98 Completed: Ship the gadget", output);
     }
 
+    [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoal_renders_effective_acceptance_criteria_corrections")]
+    public void PrintGoalRendersEffectiveAcceptanceCriteriaCorrections()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Render correction overlay");
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CRITERIA CORRECTION: supersedes=\"full suite required\"; correction=\"focused build-check accepted\"");
+
+        var output = CaptureConsole(() => ConsoleViews.PrintGoal(goal));
+
+        Xunit.Assert.Contains("Effective acceptance criteria corrections:", output);
+        Xunit.Assert.Contains("supersedes: full suite required", output);
+        Xunit.Assert.Contains("correction: focused build-check accepted", output);
+        Xunit.Assert.Contains("provenance: operator", output);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]
     public void PersistentRunnerAcceptanceIgnoresVolatileSnapshotChurn()
     {

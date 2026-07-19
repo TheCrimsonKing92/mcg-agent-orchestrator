@@ -39,6 +39,19 @@ public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? st
     {
         Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");
     }
+
+    if (goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)
+    {
+        Console.WriteLine("Effective acceptance criteria corrections:");
+        foreach (var correction in goal.EffectiveAcceptanceCriteriaCorrections.OrderByDescending(item => item.RecordedAt))
+        {
+            var source = correction.SourceTaskId is null ? "goal" : ShortId(correction.SourceTaskId.Value);
+            Console.WriteLine($"  - supersedes: {OutputTextPreview.CreateSummary(correction.SupersededCriterion).Text}");
+            Console.WriteLine($"    correction: {OutputTextPreview.CreateSummary(correction.Correction).Text}");
+            Console.WriteLine($"    provenance: {correction.Actor} {correction.RecordedAt:u} {correction.SourceKind} {source}");
+        }
+    }
+
     Console.WriteLine("Tasks:");
 
     for (var index = 0; index < goal.Tasks.Count; index++)

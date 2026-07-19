@@ -5,7 +5,7 @@ public sealed partial class AgentOrchestratorKernel
     public GoalVerificationGate BuildVerificationGate(GoalId goalId)
     {
         var goal = GetGoal(goalId);
-        var gates = goal.Tasks.Select(BuildTaskVerificationGate).ToList();
+        var gates = goal.Tasks.Select(task => BuildTaskVerificationGate(goal, task)).ToList();
 
         return new GoalVerificationGate(
             goal.Id,

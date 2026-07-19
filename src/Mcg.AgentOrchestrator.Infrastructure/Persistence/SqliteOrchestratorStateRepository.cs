@@ -810,7 +810,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
             SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
             RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
-            LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure)
+            LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
+            EffectiveAcceptanceCriteriaCorrections = PickStoreOwnedList(
+                baseline.EffectiveAcceptanceCriteriaCorrections,
+                stored.EffectiveAcceptanceCriteriaCorrections,
+                current.EffectiveAcceptanceCriteriaCorrections)
         };
         reason = "stored version advanced during tick; reapplied tick snapshot delta onto fresh goal row";
         return true;

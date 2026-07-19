@@ -13,7 +13,16 @@ public sealed record GoalSnapshot(
     IReadOnlyList<string>? DependsOn = null,
     string? SourceBacklogItemId = null,
     RefinedSpecSnapshot? RefinedSpec = null,
-    AcceptanceFailureSnapshot? LatestAcceptanceFailure = null);
+    AcceptanceFailureSnapshot? LatestAcceptanceFailure = null,
+    IReadOnlyList<EffectiveAcceptanceCriteriaCorrectionSnapshot>? EffectiveAcceptanceCriteriaCorrections = null);
+
+public sealed record EffectiveAcceptanceCriteriaCorrectionSnapshot(
+    string SupersededCriterion,
+    string Correction,
+    string Actor,
+    DateTimeOffset RecordedAt,
+    string? SourceTaskId,
+    ProgressKind SourceKind);
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,
