@@ -600,7 +600,7 @@ internal sealed class ConductorDriver
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
         _executionDirectory = null;
-        _parallelAcceptanceEnabled = parallelAcceptanceAttemptCoordinator is not null ||
+        _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
             runAcceptanceVerificationWithLease is not null;
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator

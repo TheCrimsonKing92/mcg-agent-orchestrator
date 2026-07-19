@@ -987,6 +987,7 @@ public sealed class ConductorBatchLoopTests
             launchOwnedProcess: _ => throw new IOException("The process cannot access the file 'attempt.out.log' because it is being used by another process"));
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             writeEscalation: (_, _, reason) => escalations.Add(reason),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/TransientLaunch.cs"],
             parallelAcceptanceAttemptCoordinator: coordinator);
@@ -1249,6 +1250,7 @@ public sealed class ConductorBatchLoopTests
                 });
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
                 getLandingFileScopes: goal =>
                 {
                     if (goal.Id == older.Id)
@@ -1690,6 +1692,7 @@ public sealed class ConductorBatchLoopTests
                 launchOwnedProcess: _ => throw new InvalidOperationException("parent should reconcile, not launch"));
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
                 writeEscalation: (_, _, reason) => escalationReasons.Add(reason),
                 recordMissingBranchRetirement: (retiredGoal, retirementDetail) =>
                 {
@@ -1768,6 +1771,7 @@ public sealed class ConductorBatchLoopTests
                 launchOwnedProcess: _ => throw new InvalidOperationException("parent should reconcile, not launch"));
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
                 writeEscalation: (_, state, reason) =>
                 {
                     Assert.Equal(GoalLifecycleState.Verified, state);
