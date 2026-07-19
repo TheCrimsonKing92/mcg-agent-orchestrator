@@ -551,6 +551,42 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.DoesNotContain("rule=empty-output-flake", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify includes substantive stderr artifact tail in real failure receipt")]
+    public void ClassifyIncludesSubstantiveStderrArtifactTailInRealFailureReceipt()
+    {
+        var stderrPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                stderrPath,
+                "Worker produced extensive retry evidence before process failure.\n" +
+                "Reviewed fixture output and replayed focused classifier checks.\n" +
+                "powershell.exe: ParserError: Missing closing quote in command argument.\n" +
+                "At line:1 char:42");
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                "C:\\repo",
+                1,
+                string.Empty,
+                "worker stderr was captured in the artifact path",
+                DateTimeOffset.UtcNow,
+                StandardErrorPath: stderrPath,
+                ProviderFailureKind: ProviderFailureKind.RateLimit);
+
+            var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+            Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+            Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("powershell.exe: ParserError", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(stderrPath);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Classify auth evidence before connectivity or rate limit")]
     public void ClassifyAuthEvidenceBeforeConnectivityOrRateLimit()
     {

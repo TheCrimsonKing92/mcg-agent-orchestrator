@@ -618,7 +618,7 @@ public static class DispatchFailureClassifier
         }
 
         if (verification.ExitCode != 0 &&
-            HasSubstantiveStandardError(verification.StandardError))
+            HasPromptRetryRealFailureEvidence(verification))
         {
             return BuildOutcome(
                 "real-failure",
@@ -683,7 +683,7 @@ public static class DispatchFailureClassifier
             return receipt;
         }
 
-        return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary)}";
+        return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary, maxLength: 240)}";
     }
 
     private static string BuildClassifierReceipt(
@@ -869,7 +869,7 @@ public static class DispatchFailureClassifier
             value.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string SanitizeReceiptValue(string value)
+    private static string SanitizeReceiptValue(string value, int maxLength = 80)
     {
         var sanitized = value
             .Replace("\r", " ", StringComparison.Ordinal)
@@ -877,7 +877,7 @@ public static class DispatchFailureClassifier
             .Replace(";", ",", StringComparison.Ordinal)
             .Trim();
 
-        return sanitized.Length > 80 ? sanitized[..80] : sanitized;
+        return sanitized.Length > maxLength ? sanitized[..maxLength] : sanitized;
     }
 
     private static bool HasDispatchResultCommitEvidence(TaskSpec task)
@@ -946,9 +946,7 @@ public static class DispatchFailureClassifier
 
     private static string BuildRealFailureEvidenceSummary(TaskVerificationRecord verification)
     {
-        var substantiveLines = verification.StandardError
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(line => !IsRunnerBookkeepingLine(line))
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
             .TakeLast(3)
             .ToArray();
 
@@ -956,6 +954,39 @@ public static class DispatchFailureClassifier
             ? BuildEvidenceSummary(verification)
             : $"real-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
     }
+
+    private static bool HasPromptRetryRealFailureEvidence(TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification).ToArray();
+        return substantiveLines.Length >= 3 ||
+            substantiveLines.Any(IsScriptingOrEnvironmentFailureLine);
+    }
+
+    private static IEnumerable<string> GetSubstantiveStandardErrorLines(TaskVerificationRecord verification) =>
+        GetStandardErrorEvidenceLines(verification)
+            .Where(line => !IsRunnerBookkeepingLine(line));
+
+    private static IEnumerable<string> GetStandardErrorEvidenceLines(TaskVerificationRecord verification)
+    {
+        foreach (var line in SplitEvidenceLines(verification.StandardError))
+        {
+            yield return line;
+        }
+
+        foreach (var line in SplitEvidenceLines(ReadEvidenceFile(verification.StandardErrorPath)))
+        {
+            yield return line;
+        }
+    }
+
+    private static bool IsScriptingOrEnvironmentFailureLine(string line) =>
+        line.Contains("ParserError", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("powershell.exe", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("CommandNotFoundException", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("NativeCommandError", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("cannot access the file", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("is not recognized", StringComparison.OrdinalIgnoreCase);
 
     private static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
@@ -1759,7 +1790,8 @@ public static class DispatchFailureClassifier
                 // a raw line-start "ERROR:" diagnostic or an ISO timestamped "ERROR codex_*" line.
                 // Do not trim leading whitespace here; indented worker-echoed source must stay inert.
                 var providerLine = rawLine.TrimEnd();
-                if (IsProviderErrorLine(providerLine))
+                if (IsProviderErrorLine(providerLine) ||
+                    IsProviderLimitFooterLine(providerLine))
                 {
                     yield return providerLine;
                 }
@@ -1846,6 +1878,21 @@ public static class DispatchFailureClassifier
         return line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains(" : ERROR:", StringComparison.Ordinal) ||
             CodexCliDiagnosticPrefix.IsMatch(line);
+    }
+
+    private static bool IsProviderLimitFooterLine(string line)
+    {
+        if (line.Length == 0 ||
+            char.IsWhiteSpace(line[0]) ||
+            !IsRecoverableSubscriptionLimitText(line))
+        {
+            return false;
+        }
+
+        return line.StartsWith("rate limit", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("you've hit your usage limit", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
