@@ -238,6 +238,27 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("sha256-card", audit.RenderedContentHash);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_allowlist_accepts_existing_operator_inbox_verbs")]
+    public async Task AllowlistAcceptsExistingOperatorInboxVerbs()
+    {
+        var store = new CollaborationItemStore(DbPath());
+
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-verbs",
+            [
+                new CollaborationActionBinding("Verify", "verify-needed abc12345"),
+                new CollaborationActionBinding("Workspace", "workspace create abc12345"),
+                new CollaborationActionBinding("Readiness", "readiness abc12345")
+            ]);
+
+        var actions = await store.ListActionsAsync("corr-verbs");
+        Xunit.Assert.Equal(["verify-needed abc12345", "workspace create abc12345", "readiness abc12345"], actions.Select(action => action.Command).ToArray());
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_mark_delivered_transitions_Raised_to_Delivered")]
     public async Task MarkDeliveredTransitionsRaisedToDelivered()
     {

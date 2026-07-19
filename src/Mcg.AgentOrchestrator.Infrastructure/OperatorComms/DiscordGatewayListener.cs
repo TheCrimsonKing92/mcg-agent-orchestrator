@@ -55,6 +55,23 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                 return;
             }
 
+            var actionInput = _view.TryBuildActionInputModalRequest(customId, userId, out var actionInputError);
+            if (actionInputError is not null)
+            {
+                await component.RespondAsync(actionInputError, ephemeral: true);
+                return;
+            }
+
+            if (actionInput is not null)
+            {
+                var builder = new ModalBuilder()
+                    .WithTitle("Provide action input")
+                    .WithCustomId(actionInput.ModalCustomId)
+                    .AddTextInput("Input", actionInput.TextInputCustomId, TextInputStyle.Paragraph, required: true, maxLength: 1800);
+                await component.RespondWithModalAsync(builder.Build());
+                return;
+            }
+
             // Acknowledge within Discord's 3-second window before doing any non-modal work.
             await component.DeferAsync(ephemeral: true);
             var result = await _view.ApplyInteractionAsync(customId, userId, interactionId);
@@ -91,6 +108,20 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
             var answer = modal.Data.Components
                 .FirstOrDefault(component => component.CustomId == DiscordInteractionHandler.AnswerTextInputCustomId)
                 ?.Value ?? string.Empty;
+            if (modal.Data.CustomId.StartsWith("mcgo-input-modal|", StringComparison.Ordinal))
+            {
+                var modalText = modal.Data.Components
+                    .FirstOrDefault(component => component.CustomId == DiscordInteractionHandler.ActionInputTextInputCustomId)
+                    ?.Value ?? string.Empty;
+                var actionResult = await _view.ApplyActionInputModalAsync(
+                    modal.Data.CustomId,
+                    modalText,
+                    modal.User.Id.ToString(),
+                    modal.Id.ToString());
+                await modal.FollowupAsync(actionResult.ErrorMessage ?? "Action applied.", ephemeral: true);
+                return;
+            }
+
             var result = await _view.ApplyAnswerModalAsync(
                 modal.Data.CustomId,
                 answer,

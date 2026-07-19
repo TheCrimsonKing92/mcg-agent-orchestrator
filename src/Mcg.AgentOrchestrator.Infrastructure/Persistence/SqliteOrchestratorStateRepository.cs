@@ -1041,6 +1041,34 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         }, cancellationToken);
     }
 
+    public static async Task<long?> TryLoadGoalStateVersionAsync(
+        string dbPath,
+        string goalId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(dbPath) ||
+            string.IsNullOrWhiteSpace(goalId) ||
+            !File.Exists(dbPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False;");
+            await conn.OpenAsync(cancellationToken);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(version, 0) FROM goals WHERE id = $id LIMIT 1";
+            cmd.Parameters.AddWithValue("$id", goalId);
+            var value = await cmd.ExecuteScalarAsync(cancellationToken);
+            return value is null or DBNull ? null : Convert.ToInt64(value);
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
     public async Task<T> TransactGoalAsync<T>(
         GoalId goalId,
         Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,

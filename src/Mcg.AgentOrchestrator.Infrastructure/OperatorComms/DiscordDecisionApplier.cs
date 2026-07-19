@@ -33,6 +33,14 @@ public sealed class DiscordDecisionApplier
 
     public async Task<bool> ApplyAsync(OperatorDecision decision, CancellationToken cancellationToken = default)
     {
+        var result = await ApplyDetailedAsync(decision, cancellationToken);
+        return result.Applied;
+    }
+
+    public async Task<DiscordDecisionApplicationResult> ApplyDetailedAsync(
+        OperatorDecision decision,
+        CancellationToken cancellationToken = default)
+    {
         var userId = decision.ActorId.StartsWith("discord:", StringComparison.Ordinal)
             ? decision.ActorId["discord:".Length..]
             : decision.ActorId;
@@ -46,7 +54,7 @@ public sealed class DiscordDecisionApplier
                 $"User '{userId}' is not in the operator allowlist.",
                 _clock(),
                 cancellationToken);
-            return false;
+            return new DiscordDecisionApplicationResult(false, false, $"User '{userId}' is not in the operator allowlist.", null);
         }
 
         var currentVersion = _currentGoalStateVersion is null
@@ -61,7 +69,7 @@ public sealed class DiscordDecisionApplier
             _clock(),
             cancellationToken);
         if (!claim.Applied)
-            return false;
+            return new DiscordDecisionApplicationResult(false, claim.Duplicate, claim.ErrorMessage, claim.Action?.Command);
 
         var command = PrepareCommand(claim.Action!.Command, decision.FreeText);
         await _dispatch(command, cancellationToken);
@@ -69,7 +77,7 @@ public sealed class DiscordDecisionApplier
         if (_postResult is not null)
             await _postResult($"Applied: {command}", cancellationToken);
         await _collaborationStore.TryResolveAsync(decision.InboxItemId, command, cancellationToken);
-        return true;
+        return new DiscordDecisionApplicationResult(true, false, null, command);
     }
 
     private string PrepareCommand(string command, string? freeText)
@@ -94,3 +102,9 @@ public sealed class DiscordDecisionApplier
         return $"{command} --text-file {quotedPath}";
     }
 }
+
+public sealed record DiscordDecisionApplicationResult(
+    bool Applied,
+    bool Duplicate,
+    string? ErrorMessage,
+    string? Command);

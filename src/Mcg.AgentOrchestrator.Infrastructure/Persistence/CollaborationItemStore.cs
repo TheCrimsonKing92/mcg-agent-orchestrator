@@ -130,13 +130,20 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         "conduct",
         "doctor",
         "inbox-ack",
+        "input-needed",
         "land",
         "next",
+        "operator-inbox-ack",
         "recover",
         "retry",
+        "readiness",
+        "refresh-dispatch",
+        "subscription-plan",
         "verify",
+        "verify-needed",
         "resolved",
-        "verified"
+        "verified",
+        "workspace"
     };
 
     public CollaborationItemStore(string dbPath)

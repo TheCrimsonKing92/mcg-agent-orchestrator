@@ -481,6 +481,31 @@ public sealed class OperatorChannelTests
         Assert.Contains("**Response:**", content);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_binds_current_goal_state_version_to_actions")]
+    public async Task DiscordOperatorChannelBindsCurrentGoalStateVersionToActions()
+    {
+        var stateDir = CreateTempDirectory();
+        var store = CollaborationItemStore.ForDirectory(stateDir);
+        var channel = new DiscordOperatorChannel(
+            store,
+            (goalId, _) => Task.FromResult<long?>(goalId == "goal-id-abc123456" ? 12 : null));
+        var escalation = new OperatorEscalation(
+            "inbox-versioned",
+            "goal-id-abc123456",
+            "abc12345",
+            "AcceptanceGate",
+            "Acceptance ready",
+            "Goal ready",
+            "evidence",
+            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)],
+            null);
+
+        await channel.SendEscalationAsync(escalation);
+
+        var action = (await store.ListActionsAsync("inbox-versioned")).Single();
+        Assert.Equal(12, action.ExpectedGoalStateVersion);
+    }
+
     // ---- OperatorChannelFactory ----
 
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_catalog_is_null_type")]

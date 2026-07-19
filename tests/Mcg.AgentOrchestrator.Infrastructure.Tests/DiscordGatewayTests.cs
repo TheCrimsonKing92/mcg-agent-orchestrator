@@ -426,6 +426,130 @@ public sealed class DiscordGatewayTests
         Assert.Equal(DiscordCollaborationViewService.ComputeContentHash(sent.Content), audit.RenderedContentHash);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_applies_bound_command_through_server_dispatch")]
+    public async Task DiscordCollaborationViewAppliesBoundCommandThroughServerDispatch()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        var dispatched = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-abc123",
+            "Need decision",
+            "Body",
+            "corr-dispatch",
+            [new CollaborationActionBinding("Next", "next abc123")]);
+        var view = new DiscordCollaborationViewService(
+            store,
+            api,
+            42UL,
+            root,
+            ["user1"],
+            dispatchAction: (command, _) =>
+            {
+                dispatched.Add(command);
+                return Task.CompletedTask;
+            });
+        await view.ReconcileAsync();
+
+        var result = await view.ApplyInteractionAsync(
+            api.SentMessages.Single().Buttons.Single().CustomId,
+            "user1",
+            "interaction-dispatch-1");
+
+        Assert.True(result.ErrorMessage is null);
+        Assert.Equal(["next abc123"], dispatched);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_stale_goal_state_version_rejects_before_dispatch")]
+    public async Task DiscordCollaborationViewStaleGoalStateVersionRejectsBeforeDispatch()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        var dispatched = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-abc123",
+            "Need decision",
+            "Body",
+            "corr-stale-view",
+            [new CollaborationActionBinding("Accept", "acceptance abc123", ExpectedGoalStateVersion: 3)]);
+        var view = new DiscordCollaborationViewService(
+            store,
+            api,
+            42UL,
+            root,
+            ["user1"],
+            currentGoalStateVersion: (_, _) => Task.FromResult<long?>(4),
+            dispatchAction: (command, _) =>
+            {
+                dispatched.Add(command);
+                return Task.CompletedTask;
+            });
+        await view.ReconcileAsync();
+
+        var result = await view.ApplyInteractionAsync(
+            api.SentMessages.Single().Buttons.Single().CustomId,
+            "user1",
+            "interaction-stale-view-1");
+
+        Assert.True(result.ErrorMessage is not null);
+        Assert.Contains("Stale goal state version", result.ErrorMessage);
+        Xunit.Assert.Empty(dispatched);
+        var audit = (await store.ListDecisionAuditAsync()).Single();
+        Assert.Equal("Rejected", audit.Outcome);
+        Assert.Equal(3, audit.ExpectedGoalStateVersion);
+        Assert.Equal(4, audit.ActualGoalStateVersion);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_action_modal_text_flows_only_to_text_file")]
+    public async Task DiscordCollaborationViewActionModalTextFlowsOnlyToTextFile()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        var dispatched = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-abc123",
+            "Need answer",
+            "Body",
+            "corr-input",
+            [new CollaborationActionBinding("Answer", "answer request123 <answer>", RequiresInput: true)]);
+        var view = new DiscordCollaborationViewService(
+            store,
+            api,
+            42UL,
+            root,
+            ["user1"],
+            dispatchAction: (command, _) =>
+            {
+                dispatched.Add(command);
+                return Task.CompletedTask;
+            });
+        await view.ReconcileAsync();
+        var button = api.SentMessages.Single().Buttons.Single();
+        var modal = view.TryBuildActionInputModalRequest(button.CustomId, "user1", out var modalError);
+
+        var result = await view.ApplyActionInputModalAsync(
+            modal!.ModalCustomId,
+            "malicious --autonomy unsafe",
+            "user1",
+            "interaction-input-1");
+
+        Assert.True(modalError is null);
+        Assert.True(result.ErrorMessage is null);
+        var command = dispatched.Single();
+        Assert.Contains("answer request123 --text-file", command);
+        Assert.DoesNotContain("malicious --autonomy unsafe", command);
+        var pathStart = command.IndexOf('"') + 1;
+        var pathEnd = command.IndexOf('"', pathStart);
+        var textFile = command[pathStart..pathEnd];
+        Assert.Equal("malicious --autonomy unsafe", File.ReadAllText(textFile));
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_modal_answer_writes_back_spec_and_unblocks_clarification")]
     public async Task DiscordCollaborationViewModalAnswerWritesBackSpecAndUnblocksClarification()
     {

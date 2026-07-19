@@ -6,25 +6,36 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DiscordOperatorChannel : IOperatorChannel
 {
     private readonly ICollaborationItemStore _store;
+    private readonly Func<string, CancellationToken, Task<long?>>? _currentGoalStateVersion;
 
-    public DiscordOperatorChannel(ICollaborationItemStore store)
+    public DiscordOperatorChannel(
+        ICollaborationItemStore store,
+        Func<string, CancellationToken, Task<long?>>? currentGoalStateVersion = null)
     {
         _store = store;
+        _currentGoalStateVersion = currentGoalStateVersion;
     }
 
     public string ChannelType => "discord";
 
-    public Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default) =>
-        _store.RaiseWithActionsAsync(
+    public async Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default)
+    {
+        var expectedGoalStateVersion = _currentGoalStateVersion is null
+            ? null
+            : await _currentGoalStateVersion(escalation.GoalId, cancellationToken);
+        await _store.RaiseWithActionsAsync(
             CollaborationItemType.Decision,
             escalation.GoalId,
             escalation.Title,
             BuildContent(escalation),
             escalation.InboxItemId,
-            BuildBindings(escalation.Actions),
+            BuildBindings(escalation.Actions, expectedGoalStateVersion),
             cancellationToken);
+    }
 
-    private static IReadOnlyList<CollaborationActionBinding> BuildBindings(IReadOnlyList<OperatorEscalationAction> actions)
+    private static IReadOnlyList<CollaborationActionBinding> BuildBindings(
+        IReadOnlyList<OperatorEscalationAction> actions,
+        long? expectedGoalStateVersion)
     {
         var bindings = actions
             .Take(3)
@@ -33,10 +44,12 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
                 action.Command,
                 action.RequiresConfirm,
                 action.RequiresInput,
-                action.ExpectedGoalStateVersion,
+                action.ExpectedGoalStateVersion ?? expectedGoalStateVersion,
                 action.ExpiresAt))
             .ToList();
-        return bindings.Count == 0 ? [new CollaborationActionBinding("Resolve", "resolved")] : bindings;
+        return bindings.Count == 0
+            ? [new CollaborationActionBinding("Resolve", "resolved", ExpectedGoalStateVersion: expectedGoalStateVersion)]
+            : bindings;
     }
 
     private static string BuildContent(OperatorEscalation escalation)
