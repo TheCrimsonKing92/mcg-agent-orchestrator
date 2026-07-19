@@ -538,7 +538,9 @@ internal static partial class CliCommandHandlers
                                 correlationKey,
                                 answer,
                                 cancellationToken);
-                        });
+                        },
+                        (command, cancellationToken) =>
+                            DispatchOperatorDecisionCommandAsync(command, context, cancellationToken));
                 }
                 catch (Exception ex) when (DiscordOperatorFaultClassifier.IsAuthError(ex))
                 {
@@ -795,6 +797,32 @@ internal static partial class CliCommandHandlers
                 break;
             }
         }
+    }
+
+    private static Task DispatchOperatorDecisionCommandAsync(
+        string command,
+        CliExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var parts = CliArgumentParser.SplitCommand(command);
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var stateRepository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+            var agents = context.Agents;
+            var workerProfiles = context.WorkerProfiles;
+            Goal? currentGoal = null;
+            CliPersistentStateRunner.ExecuteCommand(
+                parts,
+                stateRepository,
+                context.Workspace,
+                ref agents,
+                context.Providers,
+                ref workerProfiles,
+                ref currentGoal,
+                NullOperatorChannel.Instance);
+        }, cancellationToken);
     }
 
     internal static async Task RunDiscordRefreshWithRetryAsync(

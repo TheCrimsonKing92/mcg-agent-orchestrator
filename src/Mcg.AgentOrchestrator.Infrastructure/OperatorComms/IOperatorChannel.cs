@@ -4,7 +4,9 @@ public sealed record OperatorEscalationAction(
     string Label,
     string Command,
     bool RequiresConfirm = false,
-    bool RequiresInput = false);
+    bool RequiresInput = false,
+    long? ExpectedGoalStateVersion = null,
+    DateTimeOffset? ExpiresAt = null);
 
 public sealed record OperatorEscalation(
     string InboxItemId,
@@ -19,7 +21,7 @@ public sealed record OperatorEscalation(
 
 public sealed record OperatorDecision(
     string InboxItemId,
-    string Command,
+    int ActionIndex,
     string? FreeText,
     string ActorId,
     string IdempotencyKey);

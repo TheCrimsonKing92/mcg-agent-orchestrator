@@ -6,22 +6,73 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DiscordOperatorChannel : IOperatorChannel
 {
     private readonly ICollaborationItemStore _store;
+    private readonly Func<string, CancellationToken, Task<long?>>? _currentGoalStateVersion;
 
-    public DiscordOperatorChannel(ICollaborationItemStore store)
+    public DiscordOperatorChannel(
+        ICollaborationItemStore store,
+        Func<string, CancellationToken, Task<long?>>? currentGoalStateVersion = null)
     {
         _store = store;
+        _currentGoalStateVersion = currentGoalStateVersion;
     }
 
     public string ChannelType => "discord";
 
-    public Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default) =>
-        _store.RaiseAsync(
+    public async Task SendEscalationAsync(OperatorEscalation escalation, CancellationToken cancellationToken = default)
+    {
+        var expectedGoalStateVersion = _currentGoalStateVersion is null
+            ? null
+            : await _currentGoalStateVersion(escalation.GoalId, cancellationToken);
+        await _store.RaiseWithActionsAsync(
             CollaborationItemType.Decision,
             escalation.GoalId,
             escalation.Title,
             BuildContent(escalation),
             escalation.InboxItemId,
+            BuildBindings(escalation.InboxItemId, escalation.GoalPrefix, escalation.Actions, expectedGoalStateVersion),
             cancellationToken);
+    }
+
+    private static IReadOnlyList<CollaborationActionBinding> BuildBindings(
+        string inboxItemId,
+        string goalPrefix,
+        IReadOnlyList<OperatorEscalationAction> actions,
+        long? expectedGoalStateVersion)
+    {
+        var bindings = actions
+            .Take(3)
+            .Select(action => new CollaborationActionBinding(
+                action.Label,
+                BindTaskScopedCommandToGoal(action.Command, goalPrefix),
+                action.RequiresConfirm,
+                action.RequiresInput,
+                action.ExpectedGoalStateVersion ?? expectedGoalStateVersion,
+                action.ExpiresAt))
+            .ToList();
+        return bindings.Count == 0
+            ? [new CollaborationActionBinding("Resolve", $"operator-inbox-ack {inboxItemId}", ExpectedGoalStateVersion: expectedGoalStateVersion)]
+            : bindings;
+    }
+
+    private static string BindTaskScopedCommandToGoal(string command, string goalPrefix)
+    {
+        if (string.IsNullOrWhiteSpace(goalPrefix) || string.IsNullOrWhiteSpace(command))
+            return command;
+
+        var parts = command.Trim().Split([' ', '\t'], 3, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2 || !int.TryParse(parts[1], out _))
+            return command.Trim();
+
+        return parts[0].ToLowerInvariant() switch
+        {
+            "retry" or "re-delegate" or "redelegate" or "refresh-dispatch" or
+            "subscription-dispatch" or "execute-dispatch" or "start-dispatch" or
+            "verify" => parts.Length == 2
+                ? $"{parts[0]} {goalPrefix} {parts[1]}"
+                : $"{parts[0]} {goalPrefix} {parts[1]} {parts[2]}",
+            _ => command.Trim()
+        };
+    }
 
     private static string BuildContent(OperatorEscalation escalation)
     {
@@ -38,7 +89,7 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
             sb.AppendLine("**Suggested command(s):**");
             foreach (var action in escalation.Actions.Take(3))
             {
-                sb.AppendLine($"- `{action.Command}`");
+                sb.AppendLine($"- `{BindTaskScopedCommandToGoal(action.Command, escalation.GoalPrefix)}`");
             }
         }
 

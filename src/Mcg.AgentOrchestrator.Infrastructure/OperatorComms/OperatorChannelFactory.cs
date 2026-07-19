@@ -38,7 +38,9 @@ public static class OperatorChannelFactory
         if (!IsDiscordConfigured(catalog, botToken, out _))
             return NullOperatorChannel.Instance;
 
-        return new DiscordOperatorChannel(CollaborationItemStore.ForDirectory(stateDirectory));
+        return new DiscordOperatorChannel(
+            CollaborationItemStore.ForDirectory(stateDirectory),
+            BuildGoalStateVersionReader(stateDirectory));
     }
 
     public static IOperatorChannel CreateWithApi(
@@ -52,7 +54,9 @@ public static class OperatorChannelFactory
             !ulong.TryParse(catalog.ForumChannelId, out _))
             return NullOperatorChannel.Instance;
 
-        return new DiscordOperatorChannel(CollaborationItemStore.ForDirectory(stateDirectory));
+        return new DiscordOperatorChannel(
+            CollaborationItemStore.ForDirectory(stateDirectory),
+            BuildGoalStateVersionReader(stateDirectory));
     }
 
     public static DiscordGatewayListener? CreateGatewayListener(
@@ -60,14 +64,23 @@ public static class OperatorChannelFactory
         string? botToken,
         ICollaborationItemStore store,
         string stateDirectory,
-        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
+        Func<string, CancellationToken, Task>? dispatchAction = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var view = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds, resolveClarificationAnswer);
+        var view = new DiscordCollaborationViewService(
+            store,
+            api,
+            forumChannelId,
+            stateDirectory,
+            allowedUserIds,
+            resolveClarificationAnswer,
+            BuildCorrelationGoalStateVersionReader(store, stateDirectory),
+            dispatchAction);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view)
             .GetAwaiter().GetResult();
     }
@@ -78,14 +91,23 @@ public static class OperatorChannelFactory
         string? botToken,
         ICollaborationItemStore store,
         string stateDirectory,
-        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null)
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
+        Func<string, CancellationToken, Task>? dispatchAction = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
         var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var collaborationView = new DiscordCollaborationViewService(store, api, forumChannelId, stateDirectory, allowedUserIds, resolveClarificationAnswer);
+        var collaborationView = new DiscordCollaborationViewService(
+            store,
+            api,
+            forumChannelId,
+            stateDirectory,
+            allowedUserIds,
+            resolveClarificationAnswer,
+            BuildCorrelationGoalStateVersionReader(store, stateDirectory),
+            dispatchAction);
         var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView)
             .GetAwaiter().GetResult();
         var progressView = new DiscordProgressViewService(api, forumChannelId, catalogPath);
@@ -125,5 +147,27 @@ public static class OperatorChannelFactory
                !string.IsNullOrWhiteSpace(botToken) &&
                !string.IsNullOrWhiteSpace(catalog.ForumChannelId) &&
                ulong.TryParse(catalog.ForumChannelId, out forumChannelId);
+    }
+
+    private static Func<string, CancellationToken, Task<long?>> BuildGoalStateVersionReader(string stateDirectory)
+    {
+        var stateDbPath = Path.Combine(stateDirectory, "state.db");
+        return (goalId, cancellationToken) =>
+            SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(stateDbPath, goalId, cancellationToken);
+    }
+
+    private static Func<string, CancellationToken, Task<long?>> BuildCorrelationGoalStateVersionReader(
+        ICollaborationItemStore store,
+        string stateDirectory)
+    {
+        var goalVersionReader = BuildGoalStateVersionReader(stateDirectory);
+        return async (correlationKey, cancellationToken) =>
+        {
+            var item = (await store.ListAsync(null, cancellationToken))
+                .FirstOrDefault(candidate => string.Equals(candidate.CorrelationKey, correlationKey, StringComparison.Ordinal));
+            return string.IsNullOrWhiteSpace(item?.GoalId)
+                ? null
+                : await goalVersionReader(item.GoalId, cancellationToken);
+        };
     }
 }

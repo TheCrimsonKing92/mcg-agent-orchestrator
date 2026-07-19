@@ -14,11 +14,21 @@ public sealed record DiscordClarificationAnswerModalRequest(
     string ModalCustomId,
     string TextInputCustomId);
 
+public sealed record DiscordActionInputModalRequest(
+    string CorrelationKey,
+    int ActionIndex,
+    string ModalCustomId,
+    string TextInputCustomId);
+
 public sealed record DiscordClarificationAnswerSubmit(
     string CorrelationKey,
     string Answer,
     string UserId,
     string InteractionId,
+    string? ErrorMessage);
+
+public sealed record DiscordActionInputSubmit(
+    OperatorDecision? Decision,
     string? ErrorMessage);
 
 public static class DiscordInteractionHandler
@@ -28,7 +38,10 @@ public static class DiscordInteractionHandler
     private const string ConfirmedPrefix = "mcgo-confirmed|";
     private const string AnswerPrefix = "mcgo-answer|";
     private const string AnswerModalPrefix = "mcgo-modal|";
+    private const string ActionInputPrefix = "mcgo-input|";
+    private const string ActionInputModalPrefix = "mcgo-input-modal|";
     public const string AnswerTextInputCustomId = "answer";
+    public const string ActionInputTextInputCustomId = "action-input";
 
     public static DiscordInteractionResult Process(
         string interactionJson,
@@ -80,12 +93,12 @@ public static class DiscordInteractionHandler
         if (customId.StartsWith(ConfirmedPrefix, StringComparison.Ordinal))
         {
             var rest = customId[ConfirmedPrefix.Length..];
-            var (inboxItemId, command) = SplitCustomIdParts(rest);
-            if (inboxItemId is null || command is null)
+            var (inboxItemId, actionIndex) = SplitActionCustomIdParts(rest);
+            if (inboxItemId is null || actionIndex is null)
                 return Error($"Malformed confirmed custom_id: {customId}");
 
             return new DiscordInteractionResult(
-                new OperatorDecision(inboxItemId, command, null, $"discord:{userId}", interactionId),
+                new OperatorDecision(inboxItemId, actionIndex.Value, null, $"discord:{userId}", interactionId),
                 RequiresConfirmation: false,
                 ConfirmationCustomId: null,
                 ErrorMessage: null);
@@ -94,8 +107,8 @@ public static class DiscordInteractionHandler
         if (customId.StartsWith(ConfirmPrefix, StringComparison.Ordinal))
         {
             var rest = customId[ConfirmPrefix.Length..];
-            var (inboxItemId, command) = SplitCustomIdParts(rest);
-            if (inboxItemId is null || command is null)
+            var (inboxItemId, actionIndex) = SplitActionCustomIdParts(rest);
+            if (inboxItemId is null || actionIndex is null)
                 return Error($"Malformed confirm custom_id: {customId}");
 
             var confirmedId = ConfirmedPrefix + rest;
@@ -109,12 +122,12 @@ public static class DiscordInteractionHandler
         if (customId.StartsWith(DirectPrefix, StringComparison.Ordinal))
         {
             var rest = customId[DirectPrefix.Length..];
-            var (inboxItemId, command) = SplitCustomIdParts(rest);
-            if (inboxItemId is null || command is null)
+            var (inboxItemId, actionIndex) = SplitActionCustomIdParts(rest);
+            if (inboxItemId is null || actionIndex is null)
                 return Error($"Malformed direct custom_id: {customId}");
 
             return new DiscordInteractionResult(
-                new OperatorDecision(inboxItemId, command, null, $"discord:{userId}", interactionId),
+                new OperatorDecision(inboxItemId, actionIndex.Value, null, $"discord:{userId}", interactionId),
                 RequiresConfirmation: false,
                 ConfirmationCustomId: null,
                 ErrorMessage: null);
@@ -158,6 +171,43 @@ public static class DiscordInteractionHandler
             AnswerTextInputCustomId);
     }
 
+    public static DiscordActionInputModalRequest? TryBuildActionInputModalRequest(
+        string customId,
+        string userId,
+        IReadOnlyList<string> allowedUserIds,
+        out string? errorMessage)
+    {
+        errorMessage = null;
+        if (!customId.StartsWith(ActionInputPrefix, StringComparison.Ordinal))
+            return null;
+
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            errorMessage = "Interaction missing user id.";
+            return null;
+        }
+
+        if (!allowedUserIds.Contains(userId, StringComparer.Ordinal))
+        {
+            errorMessage = $"User '{userId}' is not in the operator allowlist.";
+            return null;
+        }
+
+        var rest = customId[ActionInputPrefix.Length..];
+        var (correlationKey, actionIndex) = SplitActionCustomIdParts(rest);
+        if (correlationKey is null || actionIndex is null)
+        {
+            errorMessage = $"Malformed action input custom_id: {customId}";
+            return null;
+        }
+
+        return new DiscordActionInputModalRequest(
+            correlationKey,
+            actionIndex.Value,
+            ActionInputModalPrefix + rest,
+            ActionInputTextInputCustomId);
+    }
+
     public static DiscordClarificationAnswerSubmit ProcessAnswerModalSubmit(
         string modalCustomId,
         string answer,
@@ -184,21 +234,100 @@ public static class DiscordInteractionHandler
         return new DiscordClarificationAnswerSubmit(correlationKey, answer.Trim(), userId, interactionId, null);
     }
 
-    public static string BuildDirectCustomId(string inboxItemId, string command) =>
-        $"{DirectPrefix}{inboxItemId}|{command}";
+    public static DiscordActionInputSubmit ProcessActionInputModalSubmit(
+        string modalCustomId,
+        string modalText,
+        string userId,
+        string interactionId,
+        IReadOnlyList<string> allowedUserIds)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+            return new DiscordActionInputSubmit(null, "Interaction missing user id.");
+
+        if (!allowedUserIds.Contains(userId, StringComparer.Ordinal))
+            return new DiscordActionInputSubmit(null, $"User '{userId}' is not in the operator allowlist.");
+
+        if (!modalCustomId.StartsWith(ActionInputModalPrefix, StringComparison.Ordinal))
+            return new DiscordActionInputSubmit(null, $"Unrecognised modal custom_id prefix: {modalCustomId}");
+
+        var rest = modalCustomId[ActionInputModalPrefix.Length..];
+        var (correlationKey, actionIndex) = SplitActionCustomIdParts(rest);
+        if (correlationKey is null || actionIndex is null)
+            return new DiscordActionInputSubmit(null, $"Malformed action input modal custom_id: {modalCustomId}");
+
+        if (string.IsNullOrWhiteSpace(modalText))
+            return new DiscordActionInputSubmit(null, "Action input cannot be empty.");
+
+        return new DiscordActionInputSubmit(
+            new OperatorDecision(correlationKey, actionIndex.Value, modalText, $"discord:{userId}", interactionId),
+            null);
+    }
+
+    public static string BuildDirectCustomId(string inboxItemId, int actionIndex) =>
+        $"{DirectPrefix}{inboxItemId}|{actionIndex}";
+
+    public static string BuildActionInputCustomId(string inboxItemId, int actionIndex) =>
+        $"{ActionInputPrefix}{inboxItemId}|{actionIndex}";
 
     public static string BuildAnswerCustomId(string correlationKey) =>
         $"{AnswerPrefix}{correlationKey}";
 
-    public static string BuildConfirmCustomId(string inboxItemId, string command) =>
-        $"{ConfirmPrefix}{inboxItemId}|{command}";
+    public static string BuildConfirmCustomId(string inboxItemId, int actionIndex) =>
+        $"{ConfirmPrefix}{inboxItemId}|{actionIndex}";
 
-    private static (string? InboxItemId, string? Command) SplitCustomIdParts(string rest)
+    internal static bool TryReadActionReference(
+        string customId,
+        out string correlationKey,
+        out int? actionIndex)
+    {
+        correlationKey = string.Empty;
+        actionIndex = null;
+        string rest;
+        if (customId.StartsWith(ConfirmedPrefix, StringComparison.Ordinal))
+        {
+            rest = customId[ConfirmedPrefix.Length..];
+        }
+        else if (customId.StartsWith(ActionInputModalPrefix, StringComparison.Ordinal))
+        {
+            rest = customId[ActionInputModalPrefix.Length..];
+        }
+        else if (customId.StartsWith(ActionInputPrefix, StringComparison.Ordinal))
+        {
+            rest = customId[ActionInputPrefix.Length..];
+        }
+        else if (customId.StartsWith(ConfirmPrefix, StringComparison.Ordinal))
+        {
+            rest = customId[ConfirmPrefix.Length..];
+        }
+        else if (customId.StartsWith(DirectPrefix, StringComparison.Ordinal))
+        {
+            rest = customId[DirectPrefix.Length..];
+        }
+        else
+        {
+            return false;
+        }
+
+        var parsed = SplitActionCustomIdParts(rest);
+        if (parsed.InboxItemId is null)
+            return false;
+        correlationKey = parsed.InboxItemId;
+        actionIndex = parsed.ActionIndex;
+        return true;
+    }
+
+    private static (string? InboxItemId, int? ActionIndex) SplitActionCustomIdParts(string rest)
     {
         var sep = rest.IndexOf('|');
         if (sep < 0)
             return (null, null);
-        return (rest[..sep], rest[(sep + 1)..]);
+        var inboxItemId = rest[..sep];
+        var indexText = rest[(sep + 1)..];
+        return string.IsNullOrWhiteSpace(inboxItemId) ||
+            !int.TryParse(indexText, out var actionIndex) ||
+            actionIndex < 0
+            ? (null, null)
+            : (inboxItemId, actionIndex);
     }
 
     private static DiscordInteractionResult Error(string message) =>
