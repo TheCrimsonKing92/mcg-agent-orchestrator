@@ -88,6 +88,44 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.Equal(0, CountLinesContaining(output, "SWEEP_BLOCKER"));
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweepAttention_raises_one_remediation_item_and_resolves_when_blocker_clears")]
+    public async Task TerminalGoalSweepAttentionRaisesOneRemediationItemAndResolvesWhenBlockerClears()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Completed branch needs acceptance", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var blocker = new TerminalGoalSweepBlocker(
+            "completed-branch-unmerged",
+            $"completed goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
+            $"acceptance {goal.Id.Value[..8]}");
+        var result = new TerminalGoalSweepResult([
+            new TerminalGoalSweepGoalResult(goal.Id, goal.Id.Value[..8], [], [blocker])
+        ]);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await TerminalGoalSweepAttention.SurfaceAsync(kernel, result, store);
+        await TerminalGoalSweepAttention.SurfaceAsync(kernel, result, store);
+
+        var raised = await store.ListAsync(goal.Id.Value);
+        var item = Xunit.Assert.Single(raised);
+        Xunit.Assert.Equal(CollaborationItemType.Decision, item.Type);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, item.Status);
+        Xunit.Assert.Contains("completed-branch-unmerged", item.Subject, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Goal: {goal.Id.Value[..8]}", item.Body, StringComparison.Ordinal);
+        Xunit.Assert.Contains("SWEEP_BLOCKER", item.Body, StringComparison.Ordinal);
+        Xunit.Assert.Contains(blocker.Evidence, item.Body, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Command: acceptance {goal.Id.Value[..8]}", item.Body, StringComparison.Ordinal);
+
+        await TerminalGoalSweepAttention.SurfaceAsync(kernel, new TerminalGoalSweepResult([]), store);
+
+        var resolved = (await store.ListAsync(goal.Id.Value)).Single();
+        Xunit.Assert.Equal(CollaborationItemStatus.Resolved, resolved.Status);
+        Xunit.Assert.Equal("terminal sweep blocker resolved", resolved.Resolution);
+    }
+
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_reachable_from_main_reconciles_to_cleaned_up")]
     public void TerminalGoalSweepVerifiedMissingBranchReachableFromMainReconcilesToCleanedUp()

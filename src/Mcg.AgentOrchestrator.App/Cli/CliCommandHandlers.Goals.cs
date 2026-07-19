@@ -851,6 +851,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
+                    TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,

@@ -504,6 +504,7 @@ internal static class CliPersistentStateRunner
             }
 
             ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
+            TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId);
             if (sweep.Changed)
             {
                 PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
@@ -1028,6 +1029,7 @@ internal static class CliPersistentStateRunner
         var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId);
         reconcileStarted.Stop();
         ConsoleViews.PrintTerminalGoalSweep(targetSweep);
+        TerminalGoalSweepAttention.Surface(kernel, targetSweep, workspace.OrchestratorDirectory, goalId);
         phaseTimings.Record(
             "reconcile-sweep",
             reconcileStarted.Elapsed,

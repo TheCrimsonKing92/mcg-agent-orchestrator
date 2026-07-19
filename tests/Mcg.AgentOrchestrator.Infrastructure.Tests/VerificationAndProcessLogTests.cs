@@ -270,12 +270,12 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(task.LastVerification.StandardError.Contains("Reaped", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "RefreshLatestProcess_reaps_all_tracked_owned_pids_when_exit_file_exists")]
-    public void RefreshLatestProcessReapsAllTrackedOwnedPidsWhenExitFileExists()
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_holds_live_tracked_owned_pids_when_exit_file_exists")]
+    public void RefreshLatestProcessHoldsLiveTrackedOwnedPidsWhenExitFileExists()
 {
     var root = CreateTempDirectory();
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Refresh reaps tracked pids");
+    var goal = kernel.CreateGoal("Refresh holds live tracked pids");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
     var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
     var stdoutPath = Path.Combine(root, "out.log");
@@ -303,10 +303,11 @@ public sealed class VerificationAndProcessLogTests
         isStillRunning: pid => running.Contains(pid),
         tryKillOwnedProcess: pid => { killed.Add(pid); running.Remove(pid); return true; });
 
-    runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var refreshed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal<int>([111, 222], killed);
-    Assert.False(task.LastProcess!.IsRunning);
+    Assert.Empty(killed);
+    Assert.True(refreshed.IsRunning);
+    Assert.True(task.LastProcess!.IsRunning);
 }
 
     [Xunit.Fact(DisplayName = "Build_daemon_reaping_requires_command_line_ownership_evidence")]
@@ -507,6 +508,73 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(1, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(workTask));
 }
 
+    [Xunit.Fact(DisplayName = "SweepExitedProcesses_reconciles_verified_task_with_dead_heartbeat_pids_and_exit_artifact")]
+    public void SweepExitedProcessesReconcilesVerifiedTaskWithDeadHeartbeatPidsAndExitArtifact()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "already verified worker task", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Sweep verified terminal dispatch", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var workTask = goal.Tasks.Single();
+
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "Worker had already completed.");
+    File.WriteAllText(stderrPath, string.Empty);
+    File.WriteAllText(exitPath, "1");
+
+    kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(111, "codex exec prompt", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, workTask.Id, processRecord);
+    kernel.RecordTaskVerification(goal.Id, workTask.Id, new TaskVerificationRecord("manual", root, 0, "already accepted", string.Empty, DateTimeOffset.UtcNow));
+    WriteHeartbeat(processRecord, pid: 32640, childPid: 32641, ownedPids: [32642], state: "exiting");
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    var swept = runner.SweepExitedProcesses(kernel);
+
+    Assert.Equal(1, swept);
+    Assert.False(workTask.LastProcess!.IsRunning);
+    Assert.Equal(1, workTask.LastProcess.ExitCode);
+    Assert.NotNull(workTask.LastVerification);
+    Assert.Equal(0, workTask.LastVerification!.ExitCode);
+    Assert.Single(workTask.VerificationHistory);
+}
+
+    [Xunit.Fact(DisplayName = "SweepExitedProcesses_does_not_reap_live_heartbeat_pid_when_exit_artifact_exists")]
+    public void SweepExitedProcessesDoesNotReapLiveHeartbeatPidWhenExitArtifactExists()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "live heartbeat worker task", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Sweep live heartbeat dispatch", [task]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var workTask = goal.Tasks.Single();
+
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, "Worker still alive.");
+    File.WriteAllText(exitPath, "0");
+
+    kernel.RecordTaskDispatch(goal.Id, workTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(111, "codex exec prompt", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, workTask.Id, processRecord);
+    WriteHeartbeat(processRecord, pid: 32640, childPid: 32641, ownedPids: [], state: "exiting");
+
+    var killed = new List<int>();
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: pid => pid == 32641,
+        tryKillOwnedProcess: pid => { killed.Add(pid); return true; });
+    var swept = runner.SweepExitedProcesses(kernel);
+
+    Assert.Equal(0, swept);
+    Assert.Empty(killed);
+    Assert.True(workTask.LastProcess!.IsRunning);
+    Assert.Null(workTask.LastVerification);
+}
+
 private static TaskProcessRecord CreateProcessRecord(string root, string exitPath)
 {
     return new TaskProcessRecord(
@@ -519,6 +587,19 @@ private static TaskProcessRecord CreateProcessRecord(string root, string exitPat
         DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
         null,
         null);
+}
+
+private static void WriteHeartbeat(
+    TaskProcessRecord process,
+    int pid,
+    int? childPid,
+    IReadOnlyList<int> ownedPids,
+    string state)
+{
+    var heartbeat = $$"""
+{"pid":{{pid}},"childPid":{{(childPid is null ? "null" : childPid.Value.ToString())}},"ownedPids":[{{string.Join(",", ownedPids)}}],"state":"{{state}}","lastObservedAt":"2026-07-19T12:00:00Z","lastProgressAt":"2026-07-19T11:59:00Z","stdoutBytes":42,"stderrBytes":0}
+""";
+    File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), heartbeat);
 }
 }
 
