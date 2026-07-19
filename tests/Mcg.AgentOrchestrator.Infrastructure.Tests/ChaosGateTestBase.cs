@@ -10,6 +10,14 @@ public abstract class ChaosGateTestBase
 {
     protected static readonly DateTimeOffset DispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
     protected static readonly DateTimeOffset CommittedAt  = DateTimeOffset.Parse("2026-06-02T12:01:00Z");
+    private const int GitTimeoutMilliseconds = 60_000;
+    private const int GitDrainTimeoutMilliseconds = 5_000;
+    private static readonly string[] GitHardeningConfig =
+    [
+        "-c", "core.fsmonitor=false",
+        "-c", "gc.auto=0",
+        "-c", "maintenance.auto=false"
+    ];
 
     // Shared setup helpers
     protected static string CreateSeededRepo()
@@ -103,30 +111,28 @@ public abstract class ChaosGateTestBase
 
     protected static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
     {
-        var startInfo = new ProcessStartInfo
+        var result = RunGitProcess(workingDirectory, arguments, commitTime);
+        if (result.ExitCode != 0 && IsGitStdoutWriteTransient(result.Error))
         {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        startInfo.Environment["GIT_AUTHOR_DATE"]    = commitTime.ToString("O");
-        startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
-        foreach (var arg in arguments)
-            startInfo.ArgumentList.Add(arg);
+            result = RunGitProcess(workingDirectory, arguments, commitTime);
+        }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {result.Error}");
     }
 
     protected static string ReadGit(string workingDirectory, string[] arguments)
+    {
+        var result = RunGitProcess(workingDirectory, arguments, commitTime: null);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {result.Error}");
+        return result.Output.Trim();
+    }
+
+    private static GitProcessResult RunGitProcess(
+        string workingDirectory,
+        string[] arguments,
+        DateTimeOffset? commitTime)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -137,18 +143,50 @@ public abstract class ChaosGateTestBase
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
         };
+        foreach (var config in GitHardeningConfig)
+            startInfo.ArgumentList.Add(config);
         foreach (var arg in arguments)
             startInfo.ArgumentList.Add(arg);
+        startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        startInfo.Environment["GIT_PAGER"] = "cat";
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (commitTime is not null)
+        {
+            startInfo.Environment["GIT_AUTHOR_DATE"]    = commitTime.Value.ToString("O");
+            startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.Value.ToString("O");
+        }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start git.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error  = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
-        return output.Trim();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(GitTimeoutMilliseconds))
+        {
+            TryKillGitProcess(process);
+            return new GitProcessResult(-1, string.Empty, $"git {string.Join(' ', arguments)} timed out after {GitTimeoutMilliseconds}ms");
+        }
+
+        if (!Task.WaitAll([outputTask, errorTask], GitDrainTimeoutMilliseconds))
+        {
+            TryKillGitProcess(process);
+        }
+
+        var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
+        var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
+        return new GitProcessResult(process.ExitCode, output, error);
     }
+
+    private static bool IsGitStdoutWriteTransient(string error) =>
+        error.Contains("write failure on 'stdout': Bad file descriptor", StringComparison.OrdinalIgnoreCase);
+
+    private static void TryKillGitProcess(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch { }
+    }
+
+    private readonly record struct GitProcessResult(int ExitCode, string Output, string Error);
 
     protected static string WorkerResultBlock(
         string files,
