@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
@@ -47,6 +49,12 @@ public sealed class BackgroundDispatchRunner
     // the bare pwsh wrapper baseline - one of the signals that the tool was invoked.
     private const long CpuStartupBurstMs = 1000L;
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
+    private sealed record DispatchSpawnReceipt(
+        string Command,
+        string? ProviderSessionId,
+        string? WorktreeHeadSha,
+        string? DirtyStateHash);
+
     private readonly IClock _clock;
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly TimeSpan _progressStallTimeout;
@@ -153,12 +161,23 @@ public sealed class BackgroundDispatchRunner
 
         var isLocalDispatch = IsLocalDispatch(dispatch);
         var parametersPath = Path.Combine(logRoot, $"{prefix}.dispatch.json");
+        var workerProvider = ResolveWorkerProvider(dispatch);
+        var spawnReceipt = BuildDispatchSpawnReceipt(dispatch, workerProvider);
+        kernel.RecordDispatchSpawnReceipt(
+            goalId,
+            taskId,
+            spawnReceipt.Command,
+            spawnReceipt.ProviderSessionId,
+            spawnReceipt.WorktreeHeadSha,
+            spawnReceipt.DirtyStateHash);
+        dispatch = kernel.GetTask(goalId, taskId).LastDispatch
+            ?? throw new InvalidOperationException($"Task '{taskId}' lost its dispatch while recording spawn metadata.");
 
         // OS worker sandbox: implementation roles receive a Low-labeled writable worktree. Read-only
         // Codex roles also run Low so Codex can skip its expensive nested Windows sandbox setup, but
         // their worktree stays Medium and MIC therefore denies writes.
         var sandbox = WorkerSandboxOptions.FromEnvironment();
-        var sandboxProvider = ResolveSandboxProvider(dispatch);
+        var sandboxProvider = ResolveSandboxProvider(workerProvider);
         var sandboxWorktreeWritable = IsSandboxWorktreeWritable(task.RequiredRole);
         var useSandbox = ShouldUseOsSandbox(
             sandbox.Enabled,
@@ -179,7 +198,10 @@ public sealed class BackgroundDispatchRunner
             SandboxLowIntegrity: useSandbox,
             Provider: sandboxProvider,
             PromptPath: dispatch.PromptPath,
-            SandboxWorktreeWritable: sandboxWorktreeWritable));
+            SandboxWorktreeWritable: sandboxWorktreeWritable,
+            ProviderSessionId: dispatch.ProviderSessionId,
+            WorktreeHeadSha: dispatch.WorktreeHeadSha,
+            DirtyStateHash: dispatch.DirtyStateHash));
 
         if (useSandbox && OperatingSystem.IsWindows())
         {
@@ -217,9 +239,8 @@ public sealed class BackgroundDispatchRunner
         startInfo.ArgumentList.Add(parametersPath);
 
         // Capture baseCommit immediately before spawning — the left boundary for file attribution.
-        var baseCommit = TryGetWorktreeHead(dispatch.WorkingDirectory);
-        if (baseCommit is not null)
-            kernel.RecordDispatchBaseCommit(goalId, taskId, baseCommit);
+        if (spawnReceipt.WorktreeHeadSha is not null)
+            kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
 
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = Process.Start(startInfo)
@@ -412,6 +433,7 @@ public sealed class BackgroundDispatchRunner
         var observedHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var refreshHeartbeat)
             ? refreshHeartbeat
             : null;
+        RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, task, observedHeartbeat);
         var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
         var hasDirtyWorktreeEvidence =
             !hasLiveProcess &&
@@ -529,6 +551,7 @@ public sealed class BackgroundDispatchRunner
     {
         var hasHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat);
         var observedHeartbeat = hasHeartbeat ? heartbeat : null;
+        RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, kernel.GetTask(goalId, taskId), observedHeartbeat);
         if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
         {
             if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
@@ -1066,11 +1089,83 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
+    private static DispatchSpawnReceipt BuildDispatchSpawnReceipt(TaskDispatchRecord dispatch, IWorkerProvider provider)
+    {
+        var command = dispatch.Command;
+        string? providerSessionId = null;
+
+        if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
+        {
+            providerSessionId = TryReadClaudeSessionId(command) ?? Guid.NewGuid().ToString();
+            if (!ContainsClaudeSessionIdOption(command))
+            {
+                command = $"{command} --session-id {providerSessionId}";
+            }
+        }
+
+        return new DispatchSpawnReceipt(
+            command,
+            providerSessionId,
+            TryGetWorktreeHead(dispatch.WorkingDirectory),
+            TryGetDirtyStateHash(dispatch.WorkingDirectory));
+    }
+
+    private static bool ContainsClaudeSessionIdOption(string command) =>
+        Regex.IsMatch(command, @"(?<!\S)--session-id(?!\S)", RegexOptions.CultureInvariant);
+
+    private static string? TryReadClaudeSessionId(string command)
+    {
+        var match = Regex.Match(
+            command,
+            @"(?<!\S)--session-id\s+(?:""(?<id>[^""]+)""|'(?<id>[^']+)'|(?<id>\S+))",
+            RegexOptions.CultureInvariant);
+        return match.Success && match.Groups["id"].Value is { Length: > 0 } value
+            ? value
+            : null;
+    }
+
+    private static string? TryGetDirtyStateHash(string workingDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(workingDirectory))
+                return null;
+
+            var result = GitCli.Run(workingDirectory, "status", "--porcelain=v1", "--untracked-files=all");
+            if (!result.Succeeded)
+                return null;
+
+            var normalized = result.Output.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static bool RequiresFileChangeEvidence(TaskSpec task)
     {
         return task.LastDispatch is { } dispatch &&
             !IsLocalDispatch(dispatch) &&
             task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
+    }
+
+    private static void RecordProviderSessionFromHeartbeat(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskSpec task,
+        DispatchHeartbeat? heartbeat)
+    {
+        if (heartbeat is null ||
+            string.IsNullOrWhiteSpace(heartbeat.ProviderSessionId) ||
+            !string.IsNullOrWhiteSpace(task.LastDispatch?.ProviderSessionId))
+        {
+            return;
+        }
+
+        kernel.RecordDispatchProviderSessionId(goalId, taskId, heartbeat.ProviderSessionId);
     }
 
     private static bool RequiresPostDispatchCommitEvidence(
@@ -2082,7 +2177,10 @@ public sealed class BackgroundDispatchRunner
                 GetInt64(root, "stdoutBytes"),
                 GetInt64(root, "stderrBytes"),
                 GetNullableInt64(root, "ownedCpuMs"),
-                GetInt32Array(root, "ownedPids"));
+                GetInt32Array(root, "ownedPids"),
+                GetNullableString(root, "providerSessionId"),
+                GetNullableString(root, "worktreeHeadSha"),
+                GetNullableString(root, "dirtyStateHash"));
             return true;
         }
         catch (IOException)
@@ -2112,6 +2210,15 @@ public sealed class BackgroundDispatchRunner
         return root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString() ?? "unknown"
             : "unknown";
+    }
+
+    private static string? GetNullableString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(property.GetString())
+            ? property.GetString()
+            : null;
     }
 
     private static int GetInt32(JsonElement root, string propertyName)
@@ -2688,7 +2795,10 @@ public sealed class BackgroundDispatchRunner
         long StandardOutputBytes,
         long StandardErrorBytes,
         long? OwnedCpuMs = null,
-        IReadOnlyList<int>? OwnedProcessIds = null)
+        IReadOnlyList<int>? OwnedProcessIds = null,
+        string? ProviderSessionId = null,
+        string? WorktreeHeadSha = null,
+        string? DirtyStateHash = null)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
     }

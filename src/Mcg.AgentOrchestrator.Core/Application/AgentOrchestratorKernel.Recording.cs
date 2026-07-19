@@ -291,6 +291,33 @@ public sealed partial class AgentOrchestratorKernel
         task.SetDispatchSandboxLowIntegrity(sandboxLowIntegrity);
     }
 
+    public void RecordDispatchSpawnReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        string command,
+        string? providerSessionId,
+        string? worktreeHeadSha,
+        string? dirtyStateHash)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.SetDispatchSpawnReceipt(command, providerSessionId, worktreeHeadSha, dirtyStateHash);
+    }
+
+    public void RecordDispatchProviderSessionId(GoalId goalId, TaskId taskId, string providerSessionId)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.SetDispatchProviderSessionId(providerSessionId);
+    }
+
+    public void RetireDispatchProviderSession(GoalId goalId, TaskId taskId, DateTimeOffset retiredAt)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.RetireDispatchProviderSession(retiredAt);
+    }
+
     public void RecordTaskDispatch(
         GoalId goalId,
         TaskId taskId,

@@ -108,6 +108,86 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_claude_dispatch_records_session_tuple_before_worker_start")]
+    public void BackgroundDispatchRunnerClaudeDispatchRecordsSessionTupleBeforeWorkerStart()
+    {
+        using var sandboxEnv = ClearWorkerSandboxEnv();
+        var root = CreateTempDirectory();
+        var logs = Path.Combine(root, "logs");
+        var workingDirectory = InfrastructureTestSupport.FindRepositoryRoot();
+        var expectedHead = ReadGit(workingDirectory, "rev-parse", "HEAD");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Claude spawn tuple", [new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single(candidate => candidate.RequiredRole == AgentRole.Planner);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "claude-cli",
+            "claude --model claude-sonnet-4-6 --permission-mode plan",
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.AnthropicClaudeCli));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new BackgroundDispatchRunner().StartLatestDispatch(
+                kernel,
+                goal.Id,
+                task.Id,
+                logs,
+                checkpointBeforeWorkerStart: (_, _, _) => throw new InvalidOperationException("stop before worker start")));
+
+        Assert.Contains("stop before worker start", ex.Message, StringComparison.Ordinal);
+        var dispatch = task.LastDispatch!;
+        Assert.True(Guid.TryParse(dispatch.ProviderSessionId, out _));
+        Assert.Contains($"--session-id {dispatch.ProviderSessionId}", dispatch.Command, StringComparison.Ordinal);
+        Assert.Equal(expectedHead, dispatch.WorktreeHeadSha);
+        Assert.Equal(expectedHead, dispatch.BaseCommit);
+        Assert.Equal(64, dispatch.DirtyStateHash?.Length);
+
+        var parametersPath = Assert.Single(Directory.EnumerateFiles(logs, "*.dispatch.json"));
+        var parametersJson = File.ReadAllText(parametersPath);
+        Assert.Contains($@"""providerSessionId"":""{dispatch.ProviderSessionId}""", parametersJson, StringComparison.Ordinal);
+        Assert.Contains($@"""worktreeHeadSha"":""{expectedHead}""", parametersJson, StringComparison.Ordinal);
+        Assert.Contains(@"""dirtyStateHash"":", parametersJson, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_dispatch_records_reported_session_tuple_in_receipt_and_heartbeat")]
+    public void BackgroundDispatchRunnerCodexDispatchRecordsReportedSessionTupleInReceiptAndHeartbeat()
+    {
+        using var sandboxEnv = ClearWorkerSandboxEnv();
+        var root = CreateTempDirectory();
+        var logs = Path.Combine(root, "logs");
+        var workingDirectory = InfrastructureTestSupport.FindRepositoryRoot();
+        var expectedHead = ReadGit(workingDirectory, "rev-parse", "HEAD");
+        var providerSessionId = "codex-session-abc12345";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Codex spawn tuple", [new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single(candidate => candidate.RequiredRole == AgentRole.Planner);
+        var command = $"Write-Output 'session id: {providerSessionId}'";
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            command,
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+
+        var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
+        WaitForExitFile(process.ExitCodePath);
+        new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        var dispatch = task.LastDispatch!;
+        Assert.Equal(providerSessionId, dispatch.ProviderSessionId);
+        Assert.Equal(expectedHead, dispatch.WorktreeHeadSha);
+        Assert.Equal(expectedHead, dispatch.BaseCommit);
+        Assert.Equal(64, dispatch.DirtyStateHash?.Length);
+
+        var heartbeat = ProcessLogReader.ReadHeartbeat(process);
+        Assert.True(heartbeat.IsAvailable);
+        Assert.Equal(providerSessionId, heartbeat.ProviderSessionId);
+        Assert.Equal(expectedHead, heartbeat.WorktreeHeadSha);
+        Assert.Equal(dispatch.DirtyStateHash, heartbeat.DirtyStateHash);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reaped_startup_hang_records_job_accounting")]
     public void BackgroundDispatchRunnerReapedStartupHangRecordsJobAccounting()
     {
@@ -250,5 +330,24 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private static string ReadGit(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        Assert.True(result.Succeeded, result.Error);
+        return result.Output.Trim();
+    }
+
+    private static IDisposable ClearWorkerSandboxEnv()
+    {
+        var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, null);
+        return new RestoreEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
+    }
+
+    private sealed class RestoreEnvironmentVariable(string name, string? value) : IDisposable
+    {
+        public void Dispose() => Environment.SetEnvironmentVariable(name, value);
     }
 }

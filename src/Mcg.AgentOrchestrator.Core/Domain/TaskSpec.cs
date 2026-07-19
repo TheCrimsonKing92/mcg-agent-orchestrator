@@ -129,7 +129,11 @@ public sealed class TaskSpec
                     LastDispatch.WorkerProviderKind,
                     LastDispatch.ReasoningEffortReason,
                     LastDispatch.DispatchLane,
-                    LastDispatch.ModelSelectionReason),
+                    LastDispatch.ModelSelectionReason,
+                    LastDispatch.ProviderSessionId,
+                    LastDispatch.WorktreeHeadSha,
+                    LastDispatch.DirtyStateHash,
+                    LastDispatch.ProviderSessionRetiredAt),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -250,7 +254,11 @@ public sealed class TaskSpec
                 snapshot.LastDispatch.WorkerProviderKind,
                 ReasoningEffortReason: snapshot.LastDispatch.ReasoningEffortReason,
                 DispatchLane: snapshot.LastDispatch.DispatchLane,
-                ModelSelectionReason: snapshot.LastDispatch.ModelSelectionReason));
+                ModelSelectionReason: snapshot.LastDispatch.ModelSelectionReason,
+                ProviderSessionId: snapshot.LastDispatch.ProviderSessionId,
+                WorktreeHeadSha: snapshot.LastDispatch.WorktreeHeadSha,
+                DirtyStateHash: snapshot.LastDispatch.DirtyStateHash,
+                ProviderSessionRetiredAt: snapshot.LastDispatch.ProviderSessionRetiredAt));
         }
 
         if (snapshot.LastProcess is not null)
@@ -387,7 +395,40 @@ public sealed class TaskSpec
             LastDispatch = LastDispatch with { SandboxLowIntegrity = sandboxLowIntegrity };
     }
 
+    internal void SetDispatchSpawnReceipt(
+        string command,
+        string? providerSessionId,
+        string? worktreeHeadSha,
+        string? dirtyStateHash)
+    {
+        if (LastDispatch is not null)
+        {
+            LastDispatch = LastDispatch with
+            {
+                Command = command,
+                ProviderSessionId = NormalizeOptional(providerSessionId),
+                WorktreeHeadSha = NormalizeOptional(worktreeHeadSha),
+                DirtyStateHash = NormalizeOptional(dirtyStateHash)
+            };
+        }
+    }
+
+    internal void SetDispatchProviderSessionId(string providerSessionId)
+    {
+        if (LastDispatch is not null && !string.IsNullOrWhiteSpace(providerSessionId))
+            LastDispatch = LastDispatch with { ProviderSessionId = providerSessionId.Trim() };
+    }
+
+    internal void RetireDispatchProviderSession(DateTimeOffset retiredAt)
+    {
+        if (LastDispatch is not null)
+            LastDispatch = LastDispatch with { ProviderSessionRetiredAt = retiredAt };
+    }
+
     internal void RecordProcess(TaskProcessRecord process) => LastProcess = process;
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string RequireText(string value, string parameterName)
     {
