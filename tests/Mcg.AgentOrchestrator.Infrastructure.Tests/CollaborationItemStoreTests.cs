@@ -253,6 +253,31 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.Equal("next abc123", result.Action!.Command);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_explicit_actions_replace_unconsumed_default_fallback")]
+    public async Task ExplicitActionsReplaceUnconsumedDefaultFallback()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s",
+            "b",
+            "corr-default-then-explicit");
+
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "g1",
+            "s refreshed",
+            "b refreshed",
+            "corr-default-then-explicit",
+            [new CollaborationActionBinding("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirmation: true)]);
+
+        var action = (await store.ListActionsAsync("corr-default-then-explicit")).Single();
+        Xunit.Assert.Equal("Accept Goal", action.Label);
+        Xunit.Assert.Equal("acceptance abc12345 --autonomy supervised-auto", action.Command);
+        Xunit.Assert.True(action.RequiresConfirmation);
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_bound_action_expiry_rejects_and_audits")]
     public async Task BoundActionExpiryRejectsAndAudits()
     {

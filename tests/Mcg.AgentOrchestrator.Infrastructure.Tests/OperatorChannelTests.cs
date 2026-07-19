@@ -742,6 +742,8 @@ public sealed class OperatorChannelTests
         Assert.Equal(CollaborationItemStatus.Raised, item.Status);
         Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
         Assert.Contains("LandingEscalation", item.Body);
+        var action = (await store.ListActionsAsync(item.CorrelationKey!)).Single();
+        Assert.Equal($"land {goal.Id.Value[..8]}", action.Command);
     }
 
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_conductor_escalation_uses_state_aware_actionable_content")]
@@ -775,6 +777,9 @@ public sealed class OperatorChannelTests
         Assert.Contains("Acceptance output tail: Unit test failed", content);
         Assert.Contains($"`acceptance {goal.Id.Value[..8]} --autonomy supervised-auto`", content);
         Assert.Contains("**Response:**", content);
+        var action = (await store.ListActionsAsync(queued.CorrelationKey!)).Single();
+        Assert.Equal($"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto", action.Command);
+        Assert.True(action.RequiresConfirmation);
 
         var report = Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.Build(
             kernel,

@@ -328,7 +328,8 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                         refresh.Parameters.AddWithValue("$id", existing.Id);
                         await refresh.ExecuteNonQueryAsync(cancellationToken);
                         if (actions is not null &&
-                            !await HasActionRowsAsync(conn, correlationKey!, cancellationToken))
+                            (!await HasActionRowsAsync(conn, correlationKey!, cancellationToken) ||
+                             await HasOnlyUnconsumedDefaultActionsAsync(conn, existing.Type, correlationKey!, cancellationToken)))
                         {
                             await ReplaceActionsAsync(conn, correlationKey!, actions, cancellationToken);
                         }
@@ -883,6 +884,59 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         cmd.Parameters.AddWithValue("$key", correlationKey);
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return result is not null;
+    }
+
+    private static async Task<bool> HasOnlyUnconsumedDefaultActionsAsync(
+        SqliteConnection conn,
+        CollaborationItemType type,
+        string correlationKey,
+        CancellationToken cancellationToken)
+    {
+        var defaults = BuildDefaultActions(type, correlationKey);
+        if (defaults is null || defaults.Count == 0)
+            return false;
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT action_index, label, command, requires_confirmation, requires_input, consumed_at
+            FROM collaboration_item_actions
+            WHERE correlation_key = $key
+            ORDER BY action_index ASC
+            """;
+        cmd.Parameters.AddWithValue("$key", correlationKey);
+
+        var rows = new List<(int Index, string Label, string Command, bool RequiresConfirmation, bool RequiresInput, string? ConsumedAt)>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add((
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt32(3) != 0,
+                reader.GetInt32(4) != 0,
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
+        }
+
+        if (rows.Count != defaults.Count)
+            return false;
+
+        for (var i = 0; i < defaults.Count; i++)
+        {
+            var expected = NormalizeAction(defaults[i]);
+            var actual = rows[i];
+            if (actual.Index != i ||
+                actual.ConsumedAt is not null ||
+                !string.Equals(actual.Label, expected.Label, StringComparison.Ordinal) ||
+                !string.Equals(actual.Command, expected.Command, StringComparison.Ordinal) ||
+                actual.RequiresConfirmation != expected.RequiresConfirmation ||
+                actual.RequiresInput != expected.RequiresInput)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static CollaborationActionBinding NormalizeAction(CollaborationActionBinding action)
