@@ -126,6 +126,7 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
     private static readonly HashSet<string> AllowedActionVerbs = new(StringComparer.OrdinalIgnoreCase)
     {
         "acceptance",
+        "agent-add",
         "answer",
         "conduct",
         "doctor",
@@ -135,6 +136,7 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         "next",
         "operator-inbox-ack",
         "recover",
+        "re-delegate",
         "retry",
         "readiness",
         "refresh-dispatch",

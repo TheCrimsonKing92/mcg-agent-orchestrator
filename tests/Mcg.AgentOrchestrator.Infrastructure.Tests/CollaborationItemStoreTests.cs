@@ -252,11 +252,21 @@ public sealed class CollaborationItemStoreTests
             [
                 new CollaborationActionBinding("Verify", "verify-needed abc12345"),
                 new CollaborationActionBinding("Workspace", "workspace create abc12345"),
-                new CollaborationActionBinding("Readiness", "readiness abc12345")
+                new CollaborationActionBinding("Readiness", "readiness abc12345"),
+                new CollaborationActionBinding("Re-delegate", "re-delegate 2 --autonomy safe-auto"),
+                new CollaborationActionBinding("Agent Add", "agent-add Developer <provider> <model>")
             ]);
 
         var actions = await store.ListActionsAsync("corr-verbs");
-        Xunit.Assert.Equal(["verify-needed abc12345", "workspace create abc12345", "readiness abc12345"], actions.Select(action => action.Command).ToArray());
+        Xunit.Assert.Equal(
+            [
+                "verify-needed abc12345",
+                "workspace create abc12345",
+                "readiness abc12345",
+                "re-delegate 2 --autonomy safe-auto",
+                "agent-add Developer <provider> <model>"
+            ],
+            actions.Select(action => action.Command).ToArray());
     }
 
     [Xunit.Fact(DisplayName = "CollaborationItemStore_mark_delivered_transitions_Raised_to_Delivered")]
