@@ -62,7 +62,6 @@ $partitions = [ordered]@{
         Filters = @(
             'FullyQualifiedName~AdvanceLoopTests',
             'FullyQualifiedName~ConductorBatchLoopTests',
-            'FullyQualifiedName~ConductorBatchLoopVerificationReconcileTests',
             'FullyQualifiedName~ConductorDriverTests',
             'FullyQualifiedName~ConductWatchSweepScopingTests'
         )
@@ -141,8 +140,21 @@ function Write-TrxSummary {
     $script:LastTrxGreen = $green
 }
 
-$isolatedDotnet = Join-Path $PSScriptRoot 'Invoke-IsolatedDotnet.ps1'
+$orchestrator = Join-Path $repoRoot 'mcg-orchestrator.cmd'
+$appDll = Join-Path $repoRoot 'src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll'
 $resultsRoot = Join-Path $repoRoot '.test-results'
+
+function Ensure-AppDllAvailable {
+    if (Test-Path -LiteralPath $appDll -PathType Leaf) {
+        return
+    }
+
+    & $orchestrator gate-status | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
+        throw "Unable to prepare orchestrator app DLL for stable-slot-dotnet: $appDll"
+    }
+}
+
 for ($index = 0; $index -lt $selected.Filters.Count; $index++) {
     $filter = $selected.Filters[$index]
     for ($attempt = 1; $attempt -le $Repeat; $attempt++) {
@@ -154,9 +166,8 @@ for ($index = 0; $index -lt $selected.Filters.Count; $index++) {
         New-Item -ItemType Directory -Force $resultsRoot | Out-Null
         Get-ChildItem $resultsRoot -Filter *.trx -ErrorAction SilentlyContinue | Remove-Item -Force
 
-        $testArguments = @(
-            '-GoalPrefix', 'infra-partition',
-            '-AttemptName', "infra-$($Partition.ToLowerInvariant())-$index-r$attempt",
+        $hasFilterMetacharacters = $filter.IndexOfAny([char[]]'&|<>()') -ge 0
+        $dotnetArguments = @(
             'test',
             (Join-Path $repoRoot $target),
             '--logger', 'trx',
@@ -165,7 +176,21 @@ for ($index = 0; $index -lt $selected.Filters.Count; $index++) {
             '--filter', $filter
         )
 
-        & $isolatedDotnet @testArguments | Out-Null
+        if ($hasFilterMetacharacters) {
+            Ensure-AppDllAvailable
+            $responsePath = Join-Path $resultsRoot "infra-$($Partition.ToLowerInvariant())-$index-r$attempt.rsp"
+            try {
+                $dotnetArguments | Set-Content -LiteralPath $responsePath -Encoding UTF8
+                & dotnet $appDll stable-slot-dotnet "@$responsePath" | Out-Null
+            }
+            finally {
+                Remove-Item -LiteralPath $responsePath -Force -ErrorAction SilentlyContinue
+            }
+        }
+        else {
+            & $orchestrator stable-slot-dotnet @dotnetArguments | Out-Null
+        }
+
         $testExit = $LASTEXITCODE
         $script:LastTrxGreen = $false
         Write-TrxSummary -ResultsPath $resultsRoot

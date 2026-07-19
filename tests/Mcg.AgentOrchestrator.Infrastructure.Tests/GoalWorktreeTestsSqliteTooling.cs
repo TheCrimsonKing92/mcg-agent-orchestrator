@@ -187,6 +187,39 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             stdout);
     }
 
+    [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_keeps_reconcile_tests_in_remainder")]
+    public void InfrastructurePartitionHelperKeepsReconcileTestsInRemainder()
+    {
+        var repoRoot = FindCurrentSourceRoot();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+        startInfo.ArgumentList.Add("scripts\\Invoke-InfrastructureTestPartition.ps1");
+        startInfo.ArgumentList.Add("-List");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Invoke-InfrastructureTestPartition.ps1.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+
+        Assert.True(process.WaitForExit(30000), "Invoke-InfrastructureTestPartition.ps1 -List did not exit within 30 seconds.");
+        Assert.Equal(0, process.ExitCode);
+        Assert.Contains("- Remainder: Acceptance-gate remainder lane", stdout);
+        Assert.DoesNotContain("ConductorBatchLoopVerificationReconcileTests", stdout, StringComparison.Ordinal);
+        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+    }
+
     [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_fails_when_filter_runs_zero_tests")]
     public void InfrastructurePartitionHelperFailsWhenFilterRunsZeroTests()
     {
@@ -199,7 +232,12 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             File.Copy(
                 Path.Combine(repoRoot, "scripts", "Invoke-InfrastructureTestPartition.ps1"),
                 Path.Combine(scriptsPath, "Invoke-InfrastructureTestPartition.ps1"));
-            File.WriteAllText(Path.Combine(scriptsPath, "Invoke-IsolatedDotnet.ps1"), """
+            File.WriteAllText(Path.Combine(sandboxPath, "mcg-orchestrator.cmd"), """
+                @echo off
+                powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\FakeStableSlotDotnet.ps1" %*
+                exit /b %ERRORLEVEL%
+                """);
+            File.WriteAllText(Path.Combine(scriptsPath, "FakeStableSlotDotnet.ps1"), """
                 param(
                     [Parameter(ValueFromRemainingArguments = $true)]
                     [string[]]$Arguments
