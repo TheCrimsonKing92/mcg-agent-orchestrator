@@ -1358,6 +1358,50 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_auto_review_retry_drops_superseded_findings_before_retry_feedback")]
+    public void ConductorDriverAutoReviewRetryDropsSupersededFindingsBeforeRetryFeedback()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        kernel.RecordTaskNote(
+            goal.Id,
+            reviewer.Id,
+            "CRITERIA CORRECTION: supersedes=\"full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient\"");
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "missing full Infrastructure suite before review; Developer omitted retry receipt injection in TaskBriefs.");
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
+            {
+                retryMessage = msg;
+                return kernel.RetryTask(gid, tid, msg, retryRoundKind: roundKind);
+            },
+            recordTaskNote: (gid, tid, message) => kernel.RecordTaskNote(gid, tid, message));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Contains("Developer omitted retry receipt injection in TaskBriefs", retryMessage);
+        Assert.DoesNotContain("missing full Infrastructure suite before review", retryMessage);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Suppressed auto-review-retry finding", StringComparison.Ordinal) &&
+            evt.Message.Contains("missing full Infrastructure suite before review", StringComparison.Ordinal));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
     public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly()
     {
