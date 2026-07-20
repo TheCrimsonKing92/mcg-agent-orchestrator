@@ -28,4 +28,13 @@ public sealed class WorkerShellTests
         // -ExecutionPolicy is Windows-only.
         Assert.Equal(OperatingSystem.IsWindows(), args.Any(a => a == "-ExecutionPolicy"));
     }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessRunner_stdin_encoding_does_not_emit_bom")]
+    public void WorkerProcessRunnerStdinEncodingDoesNotEmitBom()
+    {
+        var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo("Write-Output ok", Directory.GetCurrentDirectory());
+
+        Assert.True(startInfo.RedirectStandardInput);
+        Assert.Empty(startInfo.StandardInputEncoding?.GetPreamble() ?? []);
+    }
 }
