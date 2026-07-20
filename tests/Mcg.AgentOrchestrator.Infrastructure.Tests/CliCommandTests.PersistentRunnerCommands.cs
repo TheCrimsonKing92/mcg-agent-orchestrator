@@ -462,6 +462,54 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_progress_preserves_pending_human_input_status")]
+    public async Task PersistentRunnerGoalScopedProgressPreservesPendingHumanInputStatus()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Progress while waiting for human", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Choose a retry path.");
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            ThrowOnLoadAsync = true,
+            ThrowOnLoadWhileInTransaction = true
+        };
+
+        CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["progress", "1", "running", "worker restarted while input remains pending"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        var storedSnapshot = await repository.LoadGoalAsync(goal.Id);
+        var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([storedSnapshot!], kernel.ExportSnapshot().HumanInputRequests));
+        var storedGoal = storedKernel.GetGoal(goal.Id);
+        var storedTask = storedGoal.Tasks.Single();
+        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, storedGoal.Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, storedTask.Status);
+        Xunit.Assert.Contains(storedKernel.HumanInputRequests, item => item.Id == request.Id && !item.IsCompleted);
+        Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+        Xunit.Assert.Equal(1, repository.TransactGoalCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(0, repository.LoadWhileInTransactionCount);
+    }
+
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_progress_retries_stale_CAS_against_fresh_goal")]
     public async Task PersistentRunnerGoalScopedProgressRetriesStaleCasAgainstFreshGoal()
     {

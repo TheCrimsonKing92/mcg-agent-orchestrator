@@ -355,6 +355,30 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(nonTerminal.Goals, goal => goal.Id == failed.Id);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadGoalsAsync_loads_requested_goal_human_input_only")]
+    public async Task LoadGoalsAsyncLoadsRequestedGoalHumanInputOnly()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal("Target waiting goal", [new TaskSpec(TaskId.New(), "Target task", AgentRole.Developer)]);
+        var other = kernel.CreateGoal("Other waiting goal", [new TaskSpec(TaskId.New(), "Other task", AgentRole.Developer)]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(target.Id, agents);
+        kernel.ActivateGoal(other.Id, agents);
+        var targetRequest = kernel.RequestHumanInput(target.Id, target.Tasks.Single().Id, "Target input?");
+        var otherRequest = kernel.RequestHumanInput(other.Id, other.Tasks.Single().Id, "Other input?");
+        await repo.SaveAsync(kernel);
+
+        var loaded = await repo.LoadGoalsAsync([target.Id]);
+
+        Assert.Single(loaded.Goals);
+        Assert.Equal(target.Id, loaded.Goals.Single().Id);
+        var request = Assert.Single(loaded.HumanInputRequests);
+        Assert.Equal(targetRequest.Id, request.Id);
+        Assert.DoesNotContain(loaded.HumanInputRequests, item => item.Id == otherRequest.Id);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadAsync_quarantines_malformed_goal_row_and_loads_remaining_state")]
     public async Task LoadAsyncQuarantinesMalformedGoalRowAndLoadsRemainingState()
     {

@@ -598,8 +598,15 @@ public abstract class CliCommandTestBase
             var filtered = snapshot.Goals
                 .Where(goal => goalIds.Any(id => id.Value == goal.Id))
                 .ToList();
+            var filteredHumanInput = snapshot.HumanInputRequests
+                .Where(request => goalIds.Any(id => id.Value == request.GoalId))
+                .ToList();
             LoadedGoalIds.AddRange(filtered.Select(goal => goal.Id));
-            return Task.FromResult(AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = filtered }));
+            return Task.FromResult(AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = filtered,
+                HumanInputRequests = filteredHumanInput
+            }));
         }
 
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)

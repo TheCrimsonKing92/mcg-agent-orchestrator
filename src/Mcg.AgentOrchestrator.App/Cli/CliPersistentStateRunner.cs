@@ -864,6 +864,7 @@ internal static class CliPersistentStateRunner
         var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
         var commandAgents = agents;
         var commandProfiles = workerProfiles;
+        var humanInputRequests = LoadGoalHumanInputSnapshots(stateRepository, goalId);
 
         var result = stateRepository.TransactGoalAsync(
                 $"cli:{args[0].ToLowerInvariant()}",
@@ -875,7 +876,7 @@ internal static class CliPersistentStateRunner
                         throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
                     }
 
-                    var kernel = KernelFromGoalSnapshot(snapshot);
+                    var kernel = KernelFromGoalSnapshot(snapshot, humanInputRequests);
                     var transactionAgents = commandAgents;
                     var transactionProfiles = commandProfiles;
                     var transactionCurrentGoal = ResolveCurrentGoal(kernel, goalId.Value);
@@ -1724,6 +1725,20 @@ internal static class CliPersistentStateRunner
         return KernelFromGoalSnapshot(snapshot);
     }
 
+    private static IReadOnlyList<HumanInputRequestSnapshot> LoadGoalHumanInputSnapshots(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        GoalId goalId,
+        CancellationToken cancellationToken = default)
+    {
+        var kernel = stateRepository.LoadGoalsAsync([goalId], cancellationToken).GetAwaiter().GetResult();
+        if (!kernel.Goals.Any(goal => goal.Id == goalId))
+        {
+            throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        }
+
+        return kernel.ExportSnapshot().HumanInputRequests;
+    }
+
     private static AgentOrchestratorKernel LoadGoalSnapshotsById(
         ITransactionalOrchestratorStateRepository stateRepository,
         IReadOnlyList<GoalId> goalIds,
@@ -1742,8 +1757,10 @@ internal static class CliPersistentStateRunner
         return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(snapshots, []));
     }
 
-    private static AgentOrchestratorKernel KernelFromGoalSnapshot(GoalSnapshot snapshot) =>
-        AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []));
+    private static AgentOrchestratorKernel KernelFromGoalSnapshot(
+        GoalSnapshot snapshot,
+        IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests = null) =>
+        AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], humanInputRequests ?? []));
 
     private static GoalSnapshot ExportGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>
         kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
