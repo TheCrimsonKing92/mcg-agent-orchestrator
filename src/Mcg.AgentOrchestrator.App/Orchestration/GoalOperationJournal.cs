@@ -158,8 +158,9 @@ internal static class GoalOperationJournal
         string operation,
         string? branchHeadSha,
         string? mainHeadSha,
-        string? detail = null) =>
-        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "passed", branchHeadSha, mainHeadSha, detail);
+        string? detail = null,
+        DateTimeOffset? attemptStartedAt = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt);
 
     public static void AcceptanceFailed(
         string executionDirectory,
@@ -167,8 +168,9 @@ internal static class GoalOperationJournal
         string operation,
         string? branchHeadSha,
         string? mainHeadSha,
-        string? detail = null) =>
-        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail);
+        string? detail = null,
+        DateTimeOffset? attemptStartedAt = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail, attemptStartedAt);
 
     public static void AcceptanceBlocked(
         string executionDirectory,
@@ -177,7 +179,8 @@ internal static class GoalOperationJournal
         string blockerKind,
         string? branchHeadSha,
         string? mainHeadSha,
-        string? detail = null) =>
+        string? detail = null,
+        DateTimeOffset? attemptStartedAt = null) =>
         AppendAcceptanceOutcome(
             executionDirectory,
             goal,
@@ -186,9 +189,19 @@ internal static class GoalOperationJournal
             $"blocked:{NormalizeBlockerKind(blockerKind)}",
             branchHeadSha,
             mainHeadSha,
-            detail);
+            detail,
+            attemptStartedAt);
 
     public static GoalOperationJournalEntry? NewestAcceptanceOutcomeForCandidate(
+        GoalOperationJournalSummary journal,
+        string? branchHeadSha,
+        string? mainHeadSha)
+    {
+        return AcceptanceOutcomesForCandidate(journal, branchHeadSha, mainHeadSha)
+            .FirstOrDefault();
+    }
+
+    public static IReadOnlyList<GoalOperationJournalEntry> AcceptanceOutcomesForCandidate(
         GoalOperationJournalSummary journal,
         string? branchHeadSha,
         string? mainHeadSha)
@@ -197,8 +210,8 @@ internal static class GoalOperationJournal
             .Where(entry =>
                 !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) &&
                 entry.HasCandidate(branchHeadSha, mainHeadSha))
-            .OrderBy(entry => entry.At)
-            .LastOrDefault();
+            .OrderByDescending(entry => entry.At)
+            .ToArray();
     }
 
     public static IReadOnlyList<GoalOperationJournalEntry> SupersededAcceptanceOutcomes(
@@ -415,24 +428,9 @@ internal static class GoalOperationJournal
         string acceptanceOutcome,
         string? branchHeadSha,
         string? mainHeadSha,
-        string? detail)
+        string? detail,
+        DateTimeOffset? attemptStartedAt)
     {
-        Append(
-            executionDirectory,
-            goal.Id,
-            Key(goal.Id, operation),
-            operation,
-            status,
-            detail,
-            branchHeadSha: null,
-            mainHeadSha: null,
-            acceptanceOutcome);
-
-        if (string.IsNullOrWhiteSpace(branchHeadSha) && string.IsNullOrWhiteSpace(mainHeadSha))
-        {
-            return;
-        }
-
         Append(
             executionDirectory,
             goal.Id,
@@ -442,7 +440,8 @@ internal static class GoalOperationJournal
             detail,
             NormalizeSha(branchHeadSha),
             NormalizeSha(mainHeadSha),
-            acceptanceOutcome);
+            acceptanceOutcome,
+            attemptStartedAt);
     }
 
     private static void Append(
@@ -454,7 +453,8 @@ internal static class GoalOperationJournal
         string? detail,
         string? branchHeadSha,
         string? mainHeadSha,
-        string? acceptanceOutcome)
+        string? acceptanceOutcome,
+        DateTimeOffset? at = null)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -468,7 +468,7 @@ internal static class GoalOperationJournal
             goalId,
             operation,
             status,
-            DateTimeOffset.UtcNow,
+            at ?? DateTimeOffset.UtcNow,
             detail,
             branchHeadSha,
             mainHeadSha,
@@ -482,7 +482,7 @@ internal static class GoalOperationJournal
 
     private static string NormalizeBlockerKind(string value)
     {
-        var normalized = value.Trim().ToLowerInvariant();
+        var normalized = value.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? "unknown" : normalized;
     }
 

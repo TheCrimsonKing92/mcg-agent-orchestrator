@@ -252,7 +252,9 @@ internal static class OperatorInbox
         }
 
         var summary = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
-        if (summary.IsAccepted)
+        if (summary.OpenVerificationCount == 0 &&
+            summary.PendingHumanInputCount == 0 &&
+            summary.Blockers.Count == 0)
         {
             Add(items, BuildItem(
                 goal,

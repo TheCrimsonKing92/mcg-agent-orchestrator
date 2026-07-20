@@ -11,6 +11,11 @@ internal static class GoalAcceptanceStatusProjector
         string? executionDirectory)
     {
         var summary = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        if (summary.Status != GoalStatus.Verified)
+        {
+            return summary;
+        }
+
         if (string.IsNullOrWhiteSpace(executionDirectory) ||
             TryResolveCurrentCandidate(executionDirectory, goal.Id) is not { } candidate)
         {
@@ -18,26 +23,24 @@ internal static class GoalAcceptanceStatusProjector
         }
 
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-        var current = GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(
+        var currentOutcomes = GoalOperationJournal.AcceptanceOutcomesForCandidate(
             journal,
             candidate.BranchHeadSha,
             candidate.MainHeadSha);
-        var historical = GoalOperationJournal.SupersededAcceptanceOutcomes(
-                journal,
-                candidate.BranchHeadSha,
-                candidate.MainHeadSha)
-            .Select(entry => ToOutcome(entry, isCurrentCandidate: false))
-            .ToList();
 
         var blockers = summary.Blockers
             .Where(blocker => blocker.Kind != GoalAcceptanceBlockerKind.AcceptanceFailed)
             .ToList();
 
-        if (current is not null)
+        var outcomes = currentOutcomes
+            .Select(entry => ToOutcome(entry, isCurrentCandidate: true))
+            .ToList();
+        var hasCurrentPassedOutcome = false;
+        if (outcomes.Count > 0)
         {
-            var currentOutcome = ToOutcome(current, isCurrentCandidate: true);
-            historical.Add(currentOutcome);
-            if (IsBlockingOutcome(current.AcceptanceOutcome))
+            var currentOutcome = outcomes[0];
+            hasCurrentPassedOutcome = currentOutcome.Outcome.Equals("passed", StringComparison.OrdinalIgnoreCase);
+            if (!hasCurrentPassedOutcome)
             {
                 blockers.Add(new GoalAcceptanceBlocker(
                     GoalAcceptanceBlockerKind.AcceptanceFailed,
@@ -47,26 +50,17 @@ internal static class GoalAcceptanceStatusProjector
                     $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the current candidate outcome."));
             }
         }
-        else if (IsCurrentFailure(goal.LatestAcceptanceFailure, candidate))
+        else
         {
-            var failure = goal.LatestAcceptanceFailure!;
-            blockers.Add(new GoalAcceptanceBlocker(
-                GoalAcceptanceBlockerKind.AcceptanceFailed,
-                null,
-                null,
-                $"Latest acceptance failed for current candidate {FormatCandidate(candidate.BranchHeadSha, candidate.MainHeadSha)} at {failure.OccurredAt:u}: {string.Join(", ", failure.FailedChecks)}.",
-                $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the blocker."));
+            outcomes.Add(UnverifiedOutcome());
         }
-
-        var outcomes = historical
-            .OrderBy(outcome => outcome.OccurredAt)
-            .ToArray();
 
         return summary with
         {
             IsAccepted = summary.OpenVerificationCount == 0 &&
                 summary.PendingHumanInputCount == 0 &&
-                blockers.Count == 0,
+                blockers.Count == 0 &&
+                hasCurrentPassedOutcome,
             Blockers = blockers,
             Outcomes = outcomes
         };
@@ -92,17 +86,19 @@ internal static class GoalAcceptanceStatusProjector
             candidate.MainHeadSha);
         return current is not null
             ? IsBlockingOutcome(current.AcceptanceOutcome)
-            : IsCurrentFailure(goal.LatestAcceptanceFailure, candidate);
+            : false;
     }
-
-    private static bool IsCurrentFailure(AcceptanceFailureSummary? failure, AcceptanceCandidate candidate) =>
-        failure is not null &&
-        ShaEquals(failure.BranchHeadSha, candidate.BranchHeadSha) &&
-        ShaEquals(failure.MainHeadSha, candidate.MainHeadSha);
 
     private static bool IsBlockingOutcome(string? outcome) =>
         outcome is not null &&
         !outcome.Equals("passed", StringComparison.OrdinalIgnoreCase);
+
+    private static GoalAcceptanceOutcome UnverifiedOutcome() =>
+        new(
+            "unverified (needs a gate run)",
+            true,
+            DateTimeOffset.MinValue,
+            "unverified (needs a gate run)");
 
     private static GoalAcceptanceOutcome ToOutcome(GoalOperationJournalEntry entry, bool isCurrentCandidate)
     {
@@ -143,12 +139,6 @@ internal static class GoalAcceptanceStatusProjector
             return null;
         }
     }
-
-    private static bool ShaEquals(string? left, string? right) =>
-        string.Equals(NormalizeSha(left), NormalizeSha(right), StringComparison.OrdinalIgnoreCase);
-
-    private static string? NormalizeSha(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string FormatCandidate(string? branchHeadSha, string? mainHeadSha) =>
         $"branch={FormatShortSha(branchHeadSha)} main={FormatShortSha(mainHeadSha)}";

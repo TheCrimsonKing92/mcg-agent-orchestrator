@@ -697,6 +697,7 @@ public abstract class CliCommandTestBase
     private protected sealed class ProbeAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         private readonly Action<DotnetBuildEnvironmentLease?> _onRun;
+        private readonly Func<string, AcceptanceVerificationResult>? _resultFactory;
 
         public ProbeAcceptanceVerifier(Action onRun)
             : this(_ => onRun())
@@ -704,8 +705,21 @@ public abstract class CliCommandTestBase
         }
 
         public ProbeAcceptanceVerifier(Action<DotnetBuildEnvironmentLease?> onRun)
+            : this(onRun, null)
+        {
+        }
+
+        public ProbeAcceptanceVerifier(AcceptanceVerificationResult result)
+            : this(_ => { }, _ => result)
+        {
+        }
+
+        private ProbeAcceptanceVerifier(
+            Action<DotnetBuildEnvironmentLease?> onRun,
+            Func<string, AcceptanceVerificationResult>? resultFactory)
         {
             _onRun = onRun;
+            _resultFactory = resultFactory;
         }
 
         public int RunCount { get; private set; }
@@ -724,6 +738,11 @@ public abstract class CliCommandTestBase
             LastStableSlotIndex = stableSlotIndex;
             LastStableSlotLease = stableSlotLease;
             _onRun(stableSlotLease);
+            if (_resultFactory is not null)
+            {
+                return Task.FromResult(_resultFactory(worktreePath));
+            }
+
             return Task.FromResult(new AcceptanceVerificationResult(
                 true,
                 false,

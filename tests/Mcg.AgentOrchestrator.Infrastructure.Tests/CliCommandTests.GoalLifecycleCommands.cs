@@ -2908,7 +2908,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("goal remains ready", output);
         Xunit.Assert.Contains("Acceptance outcomes:", output);
         Xunit.Assert.Contains("current:", output);
-        Xunit.Assert.Contains("blocked:build-lock", output);
+        Xunit.Assert.Contains("blocked:BUILD_LOCK_BLOCKED", output);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
         Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
@@ -2922,7 +2922,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("12345", conductEvent.Detail, StringComparison.Ordinal);
 
         var journal = GoalOperationJournal.Read(root, goal.Id);
-        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:build-lock");
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:BUILD_LOCK_BLOCKED");
         Xunit.Assert.NotNull(blockedOutcome);
         Xunit.Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
         Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
@@ -2967,15 +2967,99 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("goal remains ready", output);
         Xunit.Assert.Contains("Acceptance outcomes:", output);
         Xunit.Assert.Contains("current:", output);
-        Xunit.Assert.Contains("blocked:build-slot", output);
+        Xunit.Assert.Contains("blocked:slot-unavailable", output);
         Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
         Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
         var journal = GoalOperationJournal.Read(root, goal.Id);
-        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:build-slot");
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:slot-unavailable");
         Xunit.Assert.NotNull(blockedOutcome);
         Xunit.Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
         Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
         Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_timeout_journals_blocked_outcome")]
+    public void CliAcceptanceTimeoutJournalsBlockedOutcome()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Timeout acceptance", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: new ProbeAcceptanceVerifier(new AcceptanceVerificationResult(
+                false,
+                false,
+                -1,
+                "timed out waiting for tests",
+                ArtifactsPath: Path.Combine(root, "artifacts"),
+                Checks:
+                [
+                    new AcceptanceCheckResult(
+                        "acceptance-check-timeout: infrastructure-tests elapsed=25m budget=25m",
+                        false,
+                        -1,
+                        "timed out waiting for tests",
+                        ArtifactsPath: Path.Combine(root, "artifacts"),
+                        ResultSummary: "timed out")
+                ])),
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("BLOCKER step=verification reason=timeout", output);
+        Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:timeout");
+        Xunit.Assert.NotNull(blockedOutcome);
+        Xunit.Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
+    }
+
+    [Xunit.Fact(DisplayName = "Acceptance_journal_orders_current_pair_outcomes_newest_first")]
+    public void AcceptanceJournalOrdersCurrentPairOutcomesNewestFirst()
+    {
+        var goalId = new GoalId("11112222333344445555666677778888");
+        var older = DateTimeOffset.Parse("2026-07-20T12:00:00Z");
+        var newer = DateTimeOffset.Parse("2026-07-20T12:05:00Z");
+        var journal = new GoalOperationJournalSummary(
+            "journal.jsonl",
+            [
+                new GoalOperationJournalEntry("legacy", goalId, "acceptance", GoalOperationStatus.Failed, newer.AddMinutes(1), "legacy", null, null, "failed"),
+                new GoalOperationJournalEntry("old-pair", goalId, "acceptance", GoalOperationStatus.Failed, newer.AddMinutes(2), "old pair", "branch-old", "main-old", "failed"),
+                new GoalOperationJournalEntry("current-older", goalId, "acceptance", GoalOperationStatus.Failed, older, "older current", "branch-current", "main-current", "failed"),
+                new GoalOperationJournalEntry("current-newer", goalId, "acceptance", GoalOperationStatus.Completed, newer, "newer current", "branch-current", "main-current", "passed")
+            ],
+            [],
+            []);
+
+        var outcomes = GoalOperationJournal.AcceptanceOutcomesForCandidate(
+            journal,
+            "branch-current",
+            "main-current");
+
+        Xunit.Assert.Collection(
+            outcomes,
+            first => Xunit.Assert.Equal("passed", first.AcceptanceOutcome),
+            second => Xunit.Assert.Equal("failed", second.AcceptanceOutcome));
     }
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_treats_old_candidate_failure_as_historical_after_rebase")]
@@ -3017,8 +3101,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
 
         Xunit.Assert.Contains("superseded failure is historical", output);
-        Xunit.Assert.Contains("Acceptance outcomes:", output);
-        Xunit.Assert.Contains("historical:", output);
+        Xunit.Assert.DoesNotContain("historical:", output);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Null(kernel.GetGoal(goal.Id)!.LatestAcceptanceFailure);
         var journal = GoalOperationJournal.Read(root, goal.Id);
@@ -3057,12 +3140,12 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var dto = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(kernel.GetGoal(goal.Id), summary, lifecycle);
 
         Xunit.Assert.Equal(GoalStatus.Verified, dto.Status);
-        Xunit.Assert.True(dto.IsAccepted);
+        Xunit.Assert.False(dto.IsAccepted);
         Xunit.Assert.DoesNotContain(dto.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed);
-        var historical = Xunit.Assert.Single(dto.Outcomes);
-        Xunit.Assert.Equal("failed", historical.Outcome);
-        Xunit.Assert.False(historical.IsCurrentCandidate);
-        Xunit.Assert.Contains("historical candidate", historical.Message, StringComparison.Ordinal);
+        var current = Xunit.Assert.Single(dto.Outcomes);
+        Xunit.Assert.Equal("unverified (needs a gate run)", current.Outcome);
+        Xunit.Assert.True(current.IsCurrentCandidate);
+        Xunit.Assert.Equal("unverified (needs a gate run)", current.Message);
     }
 
     [Xunit.Fact(DisplayName = "Operator_inbox_ignores_superseded_candidate_failure")]

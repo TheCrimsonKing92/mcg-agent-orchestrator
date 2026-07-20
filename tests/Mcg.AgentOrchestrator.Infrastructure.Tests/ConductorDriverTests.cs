@@ -371,7 +371,7 @@ public sealed class ConductorDriverTests
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         Assert.Contains("slots busy", held.Reason, StringComparison.OrdinalIgnoreCase);
         var journal = GoalOperationJournal.Read(root, goal.Id);
-        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:build-slot");
+        var blockedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "blocked:slot-unavailable");
         Assert.NotNull(blockedOutcome);
         Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
         Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
