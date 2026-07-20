@@ -483,7 +483,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "concurrent writer failed the task before CAS")
         };
 
-        CaptureConsole(() =>
+        var output = CaptureConsole(() =>
         {
             var changed = CliPersistentStateRunner.ExecuteCommand(
                 ["progress", "1", "running", "operator restarted after stale CAS"],
@@ -504,6 +504,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(0, repository.TransactAsyncCount);
         Xunit.Assert.Equal(1, repository.TransactGoalCount);
         Xunit.Assert.Equal(0, repository.LoadWhileInTransactionCount);
+        Xunit.Assert.Equal(1, CountOccurrences(output, "Objective: Retry stale goal CAS"));
         Xunit.Assert.Equal(WorkTaskStatus.Running, storedTask.Status);
         Xunit.Assert.Contains(storedGoal.Timeline, evt =>
             evt.Kind == ProgressKind.TaskFailed &&
@@ -1847,5 +1848,17 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         }
     }
 
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
 
 }

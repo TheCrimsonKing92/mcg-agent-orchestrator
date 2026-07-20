@@ -7,6 +7,263 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
+internal sealed record GoalScopedTaskMutationCommand(
+    string Command,
+    IReadOnlyList<string> Parts,
+    string? Text,
+    WorkTaskStatus? ProgressStatus,
+    TaskVerificationRecord? ManualVerification,
+    RetryRoundKind? RetryRoundKind,
+    AutonomyPolicy RetryPolicy);
+
+internal enum GoalScopedTaskMutationRenderKind
+{
+    None,
+    Goal,
+    Task,
+    NoteAcknowledgement,
+    Text
+}
+
+internal sealed record GoalScopedTaskMutationOutcome(
+    bool ShouldSave,
+    Goal Goal,
+    TaskSpec? Task,
+    GoalScopedTaskMutationRenderKind RenderKind,
+    string? Text = null);
+
+internal static GoalScopedTaskMutationCommand PrepareGoalScopedTaskMutationCommand(
+    IReadOnlyList<string> parts,
+    bool hasInlineGoalPrefix,
+    OrchestratorWorkspace workspace)
+{
+    if (parts.Count == 0)
+    {
+        throw new ArgumentException("Missing command.");
+    }
+
+    var command = parts[0].ToLowerInvariant();
+    return command switch
+    {
+        "progress" => PrepareProgressMutation(parts, hasInlineGoalPrefix),
+        "verify-manual" => PrepareManualVerificationMutation(parts, hasInlineGoalPrefix, workspace),
+        "retry" => PrepareRetryMutation(parts, hasInlineGoalPrefix),
+        "verification-plan" => PrepareVerificationPlanMutation(parts, hasInlineGoalPrefix),
+        "note" => PrepareNoteMutation(parts, hasInlineGoalPrefix),
+        _ => throw new ArgumentException($"Unsupported goal-scoped task mutation command: {parts[0]}")
+    };
+}
+
+internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWithoutRendering(
+    GoalScopedTaskMutationCommand command,
+    CliExecutionContext context)
+{
+    switch (command.Command)
+    {
+        case "progress":
+            var progressUsage = "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>|progress <task-number> <status> --text-file <path>";
+            var progressTarget = ResolveCommandTaskTarget(command.Parts, context, progressUsage);
+            context.Kernel.ReportTaskProgress(
+                context.CurrentGoal!.Id,
+                progressTarget.Task.Id,
+                command.ProgressStatus ?? throw new InvalidOperationException("Prepared progress command is missing a status."),
+                command.Text ?? throw new InvalidOperationException("Prepared progress command is missing text."));
+            return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, progressTarget.Task, GoalScopedTaskMutationRenderKind.Goal);
+
+        case "verify-manual":
+            var manualUsage = "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>|verify-manual <task-number> <passed|failed> --text-file <path>";
+            var manualTarget = ResolveCommandTaskTarget(command.Parts, context, manualUsage);
+            context.Kernel.RecordTaskVerification(
+                context.CurrentGoal!.Id,
+                manualTarget.Task.Id,
+                command.ManualVerification ?? throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence."));
+            return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, manualTarget.Task, GoalScopedTaskMutationRenderKind.Task);
+
+        case "retry":
+            var retryUsage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+            var retryTarget = ResolveCommandTaskTarget(command.Parts, context, retryUsage);
+            var retryTask = retryTarget.Task;
+            EnsurePolicyAllows(context, context.CurrentGoal!, command.RetryPolicy, AutonomyAction.Retry, "retry");
+            var retryMessage = command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text.");
+            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage, retryRoundKind: command.RetryRoundKind);
+            GoalLifecycleCommands.RecordCapabilityWarnings(
+                context.Kernel,
+                context.CurrentGoal.Id,
+                GoalObjectivePlanner.BuildCapabilityWarnings(retryMessage));
+            return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, retryTask, GoalScopedTaskMutationRenderKind.Task);
+
+        case "verification-plan":
+            var planUsage = "verification-plan <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [plan]";
+            var planTarget = ResolveCommandTaskTarget(command.Parts, context, planUsage);
+            var planTask = planTarget.Task;
+            if (command.Text is null)
+            {
+                return new GoalScopedTaskMutationOutcome(false, context.CurrentGoal!, planTask, GoalScopedTaskMutationRenderKind.Text, planTask.VerificationPlan ?? "none");
+            }
+
+            context.Kernel.SetTaskVerificationPlan(context.CurrentGoal!.Id, planTask.Id, command.Text);
+            return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, planTask, GoalScopedTaskMutationRenderKind.Task);
+
+        case "note":
+            var noteUsage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>|note <task-number> --text-file <path>";
+            var noteTarget = ResolveCommandTaskTarget(command.Parts, context, noteUsage);
+            context.Kernel.RecordTaskNote(
+                context.CurrentGoal!.Id,
+                noteTarget.Task.Id,
+                command.Text ?? throw new InvalidOperationException("Prepared note command is missing text."));
+            return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, noteTarget.Task, GoalScopedTaskMutationRenderKind.NoteAcknowledgement);
+
+        default:
+            throw new ArgumentException($"Unsupported goal-scoped task mutation command: {command.Command}");
+    }
+}
+
+internal static void RenderGoalScopedTaskMutation(GoalScopedTaskMutationOutcome outcome)
+{
+    switch (outcome.RenderKind)
+    {
+        case GoalScopedTaskMutationRenderKind.None:
+            break;
+        case GoalScopedTaskMutationRenderKind.Goal:
+            ConsoleViews.PrintGoal(outcome.Goal);
+            break;
+        case GoalScopedTaskMutationRenderKind.Task:
+            ConsoleViews.PrintTask(outcome.Goal, outcome.Task ?? throw new InvalidOperationException("Task render requires a task."));
+            break;
+        case GoalScopedTaskMutationRenderKind.NoteAcknowledgement:
+            Console.WriteLine($"Note added to task {(outcome.Task ?? throw new InvalidOperationException("Note render requires a task.")).Id}");
+            break;
+        case GoalScopedTaskMutationRenderKind.Text:
+            Console.WriteLine(outcome.Text ?? string.Empty);
+            break;
+        default:
+            throw new ArgumentOutOfRangeException(nameof(outcome.RenderKind), outcome.RenderKind, "Unknown goal-scoped task mutation render kind.");
+    }
+}
+
+private static GoalScopedTaskMutationCommand PrepareProgressMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
+{
+    var usage = "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>|progress <task-number> <status> --text-file <path>";
+    var taskIndex = ResolveGoalScopedTaskArgumentIndex(parts, hasInlineGoalPrefix, usage);
+    var statusIndex = taskIndex + 1;
+    RequireRemainingArgument(parts, statusIndex + 1, usage);
+    return new GoalScopedTaskMutationCommand(
+        "progress",
+        parts,
+        ResolveTextArgument(parts, statusIndex + 1, usage, "--text-file"),
+        CliArgumentParser.ParseReportableStatus(parts[statusIndex]),
+        ManualVerification: null,
+        RetryRoundKind: null,
+        RetryPolicy: AutonomyPolicy.Default);
+}
+
+private static GoalScopedTaskMutationCommand PrepareManualVerificationMutation(
+    IReadOnlyList<string> parts,
+    bool hasInlineGoalPrefix,
+    OrchestratorWorkspace workspace)
+{
+    var usage = "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>|verify-manual <task-number> <passed|failed> --text-file <path>";
+    var taskIndex = ResolveGoalScopedTaskArgumentIndex(parts, hasInlineGoalPrefix, usage);
+    var resultIndex = taskIndex + 1;
+    RequireRemainingArgument(parts, resultIndex + 1, usage);
+    var manualVerification = ManualVerificationRecorder.Create(
+        CliArgumentParser.ParseManualVerificationPassed(parts[resultIndex]),
+        ResolveTextArgument(parts, resultIndex + 1, usage, "--text-file"),
+        workspace.RootDirectory,
+        DateTimeOffset.UtcNow);
+    return new GoalScopedTaskMutationCommand(
+        "verify-manual",
+        parts,
+        Text: null,
+        ProgressStatus: null,
+        manualVerification,
+        RetryRoundKind: null,
+        RetryPolicy: AutonomyPolicy.Default);
+}
+
+private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
+{
+    var usage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+    var retryPolicy = ResolveCliAutonomyPolicy(parts);
+    var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
+        ? RetryRoundKind.Mechanical
+        : (RetryRoundKind?)null;
+    var retryParts = RemoveStandaloneFlag(parts, "--mechanical");
+    var taskIndex = ResolveGoalScopedTaskArgumentIndex(retryParts, hasInlineGoalPrefix, usage);
+    var messageIndex = taskIndex + 1;
+    RequireRemainingArgument(retryParts, messageIndex, usage);
+    return new GoalScopedTaskMutationCommand(
+        "retry",
+        retryParts,
+        ResolveTextArgument(retryParts, messageIndex, usage, "--text-file"),
+        ProgressStatus: null,
+        ManualVerification: null,
+        retryRoundKind,
+        retryPolicy);
+}
+
+private static GoalScopedTaskMutationCommand PrepareVerificationPlanMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
+{
+    var usage = "verification-plan <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [plan]";
+    var taskIndex = ResolveGoalScopedTaskArgumentIndex(parts, hasInlineGoalPrefix, usage);
+    var planIndex = taskIndex + 1;
+    var plan = parts.Count == planIndex ? null : parts[planIndex];
+    return new GoalScopedTaskMutationCommand(
+        "verification-plan",
+        parts,
+        plan,
+        ProgressStatus: null,
+        ManualVerification: null,
+        RetryRoundKind: null,
+        RetryPolicy: AutonomyPolicy.Default);
+}
+
+private static GoalScopedTaskMutationCommand PrepareNoteMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
+{
+    var usage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>|note <task-number> --text-file <path>";
+    var taskIndex = ResolveGoalScopedTaskArgumentIndex(parts, hasInlineGoalPrefix, usage);
+    var messageIndex = taskIndex + 1;
+    RequireRemainingArgument(parts, messageIndex, usage);
+    return new GoalScopedTaskMutationCommand(
+        "note",
+        parts,
+        ResolveTextArgument(parts, messageIndex, usage, "--text-file"),
+        ProgressStatus: null,
+        ManualVerification: null,
+        RetryRoundKind: null,
+        RetryPolicy: AutonomyPolicy.Default);
+}
+
+private static int ResolveGoalScopedTaskArgumentIndex(IReadOnlyList<string> parts, bool hasInlineGoalPrefix, string usage)
+{
+    if (parts.Count < 2)
+    {
+        throw new ArgumentException($"Usage: {usage}");
+    }
+
+    if (parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+    {
+        if (parts.Count < 4)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        return 3;
+    }
+
+    if (hasInlineGoalPrefix)
+    {
+        if (parts.Count < 3)
+        {
+            throw new ArgumentException($"Usage: {usage}");
+        }
+
+        return 2;
+    }
+
+    return 1;
+}
+
 private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)

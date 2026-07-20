@@ -13,7 +13,8 @@ internal static class CliPersistentStateRunner
         IReadOnlyList<AgentDefinition> Agents,
         WorkerProfileCatalog WorkerProfiles,
         Goal? CurrentGoal,
-        GoalSnapshot Snapshot);
+        GoalSnapshot Snapshot,
+        CliCommandHandlers.GoalScopedTaskMutationOutcome Outcome);
 
     public static bool ExecuteCommand(
         IReadOnlyList<string> args,
@@ -859,6 +860,8 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null)
     {
         var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, args);
+        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, args);
+        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
         var commandAgents = agents;
         var commandProfiles = workerProfiles;
 
@@ -876,24 +879,28 @@ internal static class CliPersistentStateRunner
                     var transactionAgents = commandAgents;
                     var transactionProfiles = commandProfiles;
                     var transactionCurrentGoal = ResolveCurrentGoal(kernel, goalId.Value);
-                    var shouldSave = CliCommandDispatcher.ExecuteCommand(
-                        args,
+                    var context = new CliExecutionContext(
                         kernel,
                         workspace,
-                        ref transactionAgents,
                         providers,
-                        ref transactionProfiles,
-                        ref transactionCurrentGoal,
-                        channel);
-
-                    var updatedSnapshot = shouldSave ? ExportGoalSnapshot(kernel, goalId) : snapshot;
-                    var transactionResult = new GoalScopedTaskMutationResult(
-                        shouldSave,
                         transactionAgents,
                         transactionProfiles,
                         transactionCurrentGoal,
-                        updatedSnapshot);
-                    return Task.FromResult((shouldSave, updatedSnapshot, transactionResult));
+                        channel);
+                    var outcome = CliCommandHandlers.ExecuteGoalScopedTaskMutationWithoutRendering(preparedCommand, context);
+
+                    transactionAgents = context.Agents;
+                    transactionProfiles = context.WorkerProfiles;
+                    transactionCurrentGoal = context.CurrentGoal;
+                    var updatedSnapshot = outcome.ShouldSave ? ExportGoalSnapshot(kernel, goalId) : snapshot;
+                    var transactionResult = new GoalScopedTaskMutationResult(
+                        outcome.ShouldSave,
+                        transactionAgents,
+                        transactionProfiles,
+                        transactionCurrentGoal,
+                        updatedSnapshot,
+                        outcome);
+                    return Task.FromResult((outcome.ShouldSave, updatedSnapshot, transactionResult));
                 })
             .GetAwaiter()
             .GetResult();
@@ -901,7 +908,24 @@ internal static class CliPersistentStateRunner
         agents = result.Agents;
         workerProfiles = result.WorkerProfiles;
         currentGoal = result.CurrentGoal;
+        CliCommandHandlers.RenderGoalScopedTaskMutation(result.Outcome);
         return result.ShouldSave;
+    }
+
+    private static bool HasInlineGoalPrefixForGoalScopedTaskMutation(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        IReadOnlyList<string> parts)
+    {
+        if (parts.Count <= 2 ||
+            parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
+            parts[2].StartsWith("--", StringComparison.Ordinal) ||
+            (int.TryParse(parts[1], out _) && parts[1].Length < 8))
+        {
+            return false;
+        }
+
+        return stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Any(goal => goal.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ExecuteProvenanceWithoutFullHydration(
