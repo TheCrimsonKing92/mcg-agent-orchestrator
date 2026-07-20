@@ -199,6 +199,88 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains(task.CriterionRetryFeedback, item => item.Contains("Progressive review glance concern", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_concern_survives_developer_success_until_reviewer_failure")]
+    public void ConcernSurvivesDeveloperSuccessUntilReviewerFailure()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, developer, reviewer) = RunningDeveloperAndReviewerRound(now, clock);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Concern,
+            "Acceptance criterion B appears untouched.",
+            "diff lacks criterion B",
+            5,
+            5));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            utcNow: () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord("verify", "C:\\work", 0, "passed", "", now.AddMinutes(1)));
+        _ = coordinator.Observe(kernel, [goal]);
+        Xunit.Assert.Empty(developer.CriterionRetryFeedback);
+
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "review",
+                "C:\\work",
+                now.AddMinutes(2),
+                BaseCommit: "base"));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord("review", "C:\\work", 1, "needs-work", "", now.AddMinutes(3)));
+        var result = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.True(result.MutatedTaskState);
+        Xunit.Assert.Contains(developer.CriterionRetryFeedback, item => item.Contains("Progressive review glance concern", StringComparison.Ordinal));
+
+        clock.UtcNow = now.AddMinutes(4);
+        kernel.RetryTask(goal.Id, developer.Id, "Reviewer auto-review-retry found criterion B still missing.");
+        _ = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.Equal(1, developer.CriterionRetryFeedback.Count(item => item.Contains("Progressive review glance concern", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_default_diff_includes_untracked_file_content")]
+    public void DefaultDiffIncludesUntrackedFileContent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-diff-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        File.WriteAllText(Path.Combine(root, "src", "NewFile.cs"), "public sealed class NewFile {}\n");
+        var saved = ProgressiveReviewGlanceCoordinator.RunGit;
+        try
+        {
+            ProgressiveReviewGlanceCoordinator.RunGit = (_, args) =>
+            {
+                if (args.SequenceEqual(["ls-files", "--others", "--exclude-standard"]))
+                {
+                    return new GitCli.GitResult(0, "src/NewFile.cs\n", string.Empty);
+                }
+
+                return new GitCli.GitResult(0, string.Empty, string.Empty);
+            };
+
+            var diff = ProgressiveReviewGlanceCoordinator.ReadDiff(root, "base");
+
+            Xunit.Assert.Contains("diff --git a/src/NewFile.cs b/src/NewFile.cs", diff, StringComparison.Ordinal);
+            Xunit.Assert.Contains("+++ b/src/NewFile.cs", diff, StringComparison.Ordinal);
+            Xunit.Assert.Contains("+public sealed class NewFile {}", diff, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ProgressiveReviewGlanceCoordinator.RunGit = saved;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_misdirection_raises_one_deduped_attention_item")]
     public void MisdirectionRaisesOneDedupedAttentionItem()
     {
@@ -294,9 +376,10 @@ public sealed class ProgressiveReviewGlanceTests
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloperRound(
         DateTimeOffset dispatchedAt,
-        string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests")
+        string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
+        IClock? clock = null)
     {
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = new AgentOrchestratorKernel(clock);
         var task = new TaskSpec(new TaskId("developer-task-0001"), description, AgentRole.Developer);
         var goal = kernel.CreateGoal(new GoalId("goal-progressive-review-0001"), "Progressive review goal objective", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
@@ -310,6 +393,27 @@ public sealed class ProgressiveReviewGlanceTests
                 dispatchedAt,
                 BaseCommit: "base"));
         return (kernel, goal, task);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer, TaskSpec Reviewer) RunningDeveloperAndReviewerRound(
+        DateTimeOffset dispatchedAt,
+        IClock clock)
+    {
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(new TaskId("developer-task-0001"), "Implement feature.\n\nACCEPTANCE\n- Pass focused tests", AgentRole.Developer);
+        var reviewer = new TaskSpec(new TaskId("reviewer-task-0001"), "Review implementation.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal(new GoalId("goal-progressive-review-0001"), "Progressive review goal objective", [developer, reviewer]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                @"C:\work",
+                dispatchedAt,
+                BaseCommit: "base"));
+        return (kernel, goal, developer, reviewer);
     }
 
     private static async Task<CapturedPromptDelivery> CaptureGlancePromptDeliveryAsync(
@@ -341,6 +445,11 @@ public sealed class ProgressiveReviewGlanceTests
         string ProfileName,
         string Command,
         string? StandardInput);
+
+    private sealed class TestClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+    }
 
     private sealed class ControlledGlanceRunner : IProgressiveReviewGlanceRunner
     {

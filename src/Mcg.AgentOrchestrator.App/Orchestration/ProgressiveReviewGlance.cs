@@ -78,6 +78,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
 {
     private const string CriteriaCorrectionLabel = "criteria correction(s)";
     private const string ChangedFileLabel = "changed file(s)";
+    private const int UntrackedDiffFileLimit = 20;
+    private const int UntrackedDiffFileCharacterLimit = 6000;
 
     private readonly ProgressiveReviewGlanceOptions _options;
     private readonly IProgressiveReviewGlanceRunner _runner;
@@ -90,6 +92,9 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly Dictionary<string, RoundState> _rounds = new(StringComparer.Ordinal);
     private readonly List<RunningGlance> _running = [];
     private readonly Dictionary<string, GoalSummary> _summaries = new(StringComparer.Ordinal);
+
+    internal static Func<string, string[], GitCli.GitResult> RunGit { get; set; } =
+        (dir, args) => GitCli.Run(dir, args);
 
     public ProgressiveReviewGlanceCoordinator(
         IProgressiveReviewGlanceRunner runner,
@@ -434,7 +439,7 @@ Transcript tail:
                 continue;
             }
 
-            if (task.LastVerification?.Succeeded is false)
+            if (ShouldSurfaceQueuedConcerns(goal, task, pair.Key))
             {
                 kernel.RecordCriterionRetryFeedback(
                     goal.Id,
@@ -442,10 +447,6 @@ Transcript tail:
                     task.CriterionRetryFeedback.Concat(state.QueuedConcerns.Select(note => $"Progressive review glance concern: {note}")).ToArray());
                 state.ConcernsSurfaced = true;
                 mutated = true;
-            }
-            else if (task.LastVerification?.Succeeded is true || task.Status != WorkTaskStatus.Running)
-            {
-                state.QueuedConcerns.Clear();
             }
         }
 
@@ -592,6 +593,56 @@ Note: {result.Note}
     private static string RoundKey(Goal goal, TaskSpec task) =>
         $"{goal.Id.Value}|{task.Id.Value}|{task.LastDispatch!.DispatchedAt.UtcTicks}";
 
+    private static bool ShouldSurfaceQueuedConcerns(Goal goal, TaskSpec task, string roundKey) =>
+        task.LastVerification?.Succeeded is false ||
+        WasOriginalRoundRetried(roundKey, task) ||
+        HasDownstreamFailureAfterRound(goal, task, roundKey);
+
+    private static bool WasOriginalRoundRetried(string roundKey, TaskSpec task) =>
+        task.LatestRetryAt is { } latestRetryAt &&
+        TryGetRoundDispatchAt(roundKey, out var dispatchedAt) &&
+        latestRetryAt > dispatchedAt;
+
+    private static bool HasDownstreamFailureAfterRound(Goal goal, TaskSpec origin, string roundKey)
+    {
+        if (!TryGetRoundDispatchAt(roundKey, out var dispatchedAt))
+        {
+            return false;
+        }
+
+        return goal.Tasks.Any(candidate =>
+            IsDownstreamRole(origin.RequiredRole, candidate.RequiredRole) &&
+            candidate.LastVerification is { Succeeded: false } verification &&
+            verification.CompletedAt >= dispatchedAt);
+    }
+
+    private static bool IsDownstreamRole(AgentRole upstream, AgentRole candidate) =>
+        SdlcRoleOrder(candidate) > SdlcRoleOrder(upstream);
+
+    private static int SdlcRoleOrder(AgentRole role) => role switch
+    {
+        AgentRole.Planner => 0,
+        AgentRole.Ideation => 1,
+        AgentRole.Researcher => 2,
+        AgentRole.Developer => 3,
+        AgentRole.Tester => 4,
+        AgentRole.Reviewer => 5,
+        _ => int.MaxValue
+    };
+
+    private static bool TryGetRoundDispatchAt(string roundKey, out DateTimeOffset dispatchedAt)
+    {
+        var parts = roundKey.Split('|');
+        if (parts.Length >= 3 && long.TryParse(parts[2], out var ticks))
+        {
+            dispatchedAt = new DateTimeOffset(new DateTime(ticks, DateTimeKind.Utc));
+            return true;
+        }
+
+        dispatchedAt = default;
+        return false;
+    }
+
     private static string HashInputs(ProgressiveReviewGlanceInputs inputs)
     {
         var text = JsonSerializer.Serialize(inputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -617,7 +668,7 @@ Note: {result.Note}
         return BoundBlock(description[start..], limit);
     }
 
-    private static string ReadDiff(string workingDirectory, string? baseCommit)
+    internal static string ReadDiff(string workingDirectory, string? baseCommit)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
         {
@@ -626,11 +677,103 @@ Note: {result.Note}
 
         var committed = string.IsNullOrWhiteSpace(baseCommit)
             ? string.Empty
-            : GitCli.Run(workingDirectory, "diff", $"{baseCommit}..HEAD", "--").Output;
-        var working = GitCli.Run(workingDirectory, "diff", "--").Output;
-        var staged = GitCli.Run(workingDirectory, "diff", "--cached", "--").Output;
-        var combined = string.Join(Environment.NewLine, new[] { committed, staged, working }.Where(text => !string.IsNullOrWhiteSpace(text)));
+            : RunGit(workingDirectory, ["diff", $"{baseCommit}..HEAD", "--"]).Output;
+        var working = RunGit(workingDirectory, ["diff", "--"]).Output;
+        var staged = RunGit(workingDirectory, ["diff", "--cached", "--"]).Output;
+        var untracked = ReadUntrackedDiff(workingDirectory);
+        var combined = string.Join(Environment.NewLine, new[] { committed, staged, working, untracked }.Where(text => !string.IsNullOrWhiteSpace(text)));
         return string.IsNullOrWhiteSpace(combined) ? "(no diff content available)" : combined;
+    }
+
+    internal static string ReadUntrackedDiff(string workingDirectory)
+    {
+        var result = RunGit(workingDirectory, ["ls-files", "--others", "--exclude-standard"]);
+        if (result.ExitCode != 0)
+        {
+            return string.Empty;
+        }
+
+        var files = GoalChangesReader.ParseFileList(result.Output);
+        if (files.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        foreach (var file in files.Take(UntrackedDiffFileLimit))
+        {
+            if (!TryResolveWorktreeFile(workingDirectory, file, out var fullPath) ||
+                !File.Exists(fullPath))
+            {
+                continue;
+            }
+
+            var normalized = file.Replace('\\', '/');
+            builder.AppendLine($"diff --git a/{normalized} b/{normalized}");
+            builder.AppendLine("new file mode 100644");
+            builder.AppendLine("index 0000000..0000000");
+            builder.AppendLine("--- /dev/null");
+            builder.AppendLine($"+++ b/{normalized}");
+            AppendAddedLines(builder, fullPath);
+        }
+
+        var remaining = files.Count - UntrackedDiffFileLimit;
+        if (remaining > 0)
+        {
+            builder.AppendLine($"[... {remaining} more untracked file(s) omitted ...]");
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryResolveWorktreeFile(string workingDirectory, string relativePath, out string fullPath)
+    {
+        fullPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
+        {
+            return false;
+        }
+
+        var root = Path.GetFullPath(workingDirectory);
+        var candidate = Path.GetFullPath(Path.Combine(root, relativePath));
+        var rootWithSeparator = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        fullPath = candidate;
+        return true;
+    }
+
+    private static void AppendAddedLines(StringBuilder builder, string fullPath)
+    {
+        var text = ReadTextPrefix(fullPath, UntrackedDiffFileCharacterLimit, out var truncated);
+        if (text.IndexOf('\0') >= 0)
+        {
+            builder.AppendLine("+[binary content omitted]");
+            return;
+        }
+
+        foreach (var line in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            builder.Append('+');
+            builder.AppendLine(line);
+        }
+
+        if (truncated)
+        {
+            builder.AppendLine("+[untracked file truncated]");
+        }
+    }
+
+    private static string ReadTextPrefix(string fullPath, int characterLimit, out bool truncated)
+    {
+        using var reader = new StreamReader(fullPath, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buffer = new char[Math.Max(0, characterLimit) + 1];
+        var read = reader.ReadBlock(buffer, 0, buffer.Length);
+        truncated = read > characterLimit || !reader.EndOfStream;
+        return new string(buffer, 0, Math.Min(read, characterLimit));
     }
 
     private static string ReadTranscriptTail(TaskProcessRecord? process)
