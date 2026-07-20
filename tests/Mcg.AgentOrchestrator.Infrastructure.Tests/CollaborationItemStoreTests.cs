@@ -527,6 +527,10 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     private readonly List<CollaborationItem> _items = [];
     private readonly Dictionary<string, List<CollaborationBoundAction>> _actions = new(StringComparer.Ordinal);
     private readonly List<CollaborationDecisionAuditEntry> _audits = [];
+    private readonly Dictionary<string, DecisionRequest> _decisionRequests = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DecisionReceipt> _decisionReceipts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, EffectReceipt> _effectReceipts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NotificationDelivery> _notificationDeliveries = new(StringComparer.Ordinal);
 
     public IReadOnlyList<CollaborationItem> Items => _items;
 
@@ -706,6 +710,116 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     public Task<IReadOnlyList<CollaborationDecisionAuditEntry>> ListDecisionAuditAsync(
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<CollaborationDecisionAuditEntry>>(_audits);
+
+    public Task<DecisionRequest> RaiseDecisionRequestAsync(
+        DecisionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _decisionRequests.TryAdd(request.Id, request);
+        return Task.FromResult(_decisionRequests[request.Id]);
+    }
+
+    public Task<DecisionState?> GetDecisionStateAsync(
+        string requestId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_decisionRequests.TryGetValue(requestId, out var request))
+            return Task.FromResult<DecisionState?>(null);
+
+        var receipt = _decisionReceipts.Values.FirstOrDefault(receipt => receipt.RequestId == requestId);
+        var effect = _effectReceipts.Values.FirstOrDefault(effect => effect.RequestId == requestId);
+        return Task.FromResult<DecisionState?>(DecisionState.Create(
+            request,
+            receipt is null ? null : receipt with { EffectResult = effect },
+            effect));
+    }
+
+    public Task<IReadOnlyList<DecisionRequest>> ListDecisionRequestsAsync(
+        string? goalId = null,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<DecisionRequest>>(
+            _decisionRequests.Values.Where(request => goalId is null || request.GoalId == goalId).ToList());
+
+    public Task<NotificationDelivery> RecordNotificationDeliveryAsync(
+        NotificationDelivery delivery,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(_notificationDeliveries.TryAdd(delivery.Id, delivery) ? delivery : _notificationDeliveries[delivery.Id]);
+
+    public Task<IReadOnlyList<NotificationDelivery>> ListNotificationDeliveriesAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<NotificationDelivery>>(
+            _notificationDeliveries.Values.Where(delivery => delivery.RequestId == requestId).ToList());
+
+    public Task<DecisionReceipt> RecordDecisionAsync(
+        string requestId,
+        string actorId,
+        string channel,
+        AuthorizationTier authenticationAssurance,
+        long? expectedGoalStateVersion,
+        DecisionResponse response,
+        DateTimeOffset recordedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var request = _decisionRequests[requestId];
+        var existing = _decisionReceipts.Values.FirstOrDefault(receipt => receipt.RequestId == requestId);
+        if (existing is not null)
+            return Task.FromResult(existing);
+
+        var receipt = new DecisionReceipt(
+            Guid.NewGuid().ToString("n"),
+            requestId,
+            request.RenderedText,
+            request.TemplateVersion,
+            request.EvidenceManifest.Entries,
+            request.EvidenceManifest.ManifestHash,
+            actorId,
+            channel,
+            authenticationAssurance,
+            expectedGoalStateVersion,
+            response,
+            recordedAt,
+            null);
+        _decisionReceipts[receipt.Id] = receipt;
+        return Task.FromResult(receipt);
+    }
+
+    public Task<DecisionReceipt> RecordExpiredDefaultDispositionAsync(
+        string requestId,
+        DateTimeOffset expiredAt,
+        CancellationToken cancellationToken = default)
+    {
+        var request = _decisionRequests[requestId];
+        var response = new DecisionResponse(new DecisionActionRef("expired-default"), $"default:{request.DefaultDisposition}", DecisionReuseScope.ThisOccurrence, false);
+        return RecordDecisionAsync(requestId, "system:expiry", "system", AuthorizationTier.Answer, null, response, expiredAt, cancellationToken);
+    }
+
+    public Task<DecisionEffectApplyResult> TryApplyDecisionEffectAsync(
+        string requestId,
+        string decisionReceiptId,
+        DecisionActionRef actionRef,
+        long? currentGoalStateVersion,
+        string result,
+        DateTimeOffset appliedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var key = $"{requestId}:{decisionReceiptId}:{actionRef.Value}";
+        if (_effectReceipts.TryGetValue(key, out var existing))
+            return Task.FromResult(new DecisionEffectApplyResult(existing.Status == EffectReceiptStatus.Applied, true, existing, null));
+
+        var effect = new EffectReceipt(
+            Guid.NewGuid().ToString("n"),
+            requestId,
+            decisionReceiptId,
+            actionRef,
+            EffectReceiptStatus.Applied,
+            null,
+            currentGoalStateVersion,
+            result,
+            appliedAt);
+        _effectReceipts[key] = effect;
+        return Task.FromResult(new DecisionEffectApplyResult(true, false, effect, null));
+    }
 
     private CollaborationDecisionAuditEntry AddAudit(
         string correlationKey,
