@@ -206,6 +206,35 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_task_mutation_delegate_has_no_reload_callback")]
+    public void PersistentRunnerGoalScopedTaskMutationDelegateHasNoReloadCallback()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Cli",
+            "CliPersistentStateRunner.cs"));
+        var methodStart = source.IndexOf(
+            "private static bool ExecuteGoalScopedTaskMutationCommand",
+            StringComparison.Ordinal);
+        Xunit.Assert.True(methodStart >= 0, "Could not find ExecuteGoalScopedTaskMutationCommand.");
+
+        var methodEnd = source.IndexOf(
+            "private static bool ExecuteProvenanceWithoutFullHydration",
+            methodStart,
+            StringComparison.Ordinal);
+
+        Xunit.Assert.True(methodEnd > methodStart, "Could not isolate ExecuteGoalScopedTaskMutationCommand.");
+        var methodSource = source[methodStart..methodEnd];
+
+        Xunit.Assert.Contains("TransactGoalAsync", methodSource, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("LoadSingleGoalKernel", methodSource, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("LoadAsync", methodSource, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("reloadKernel", methodSource, StringComparison.Ordinal);
+    }
+
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_task_mutations_use_goal_CAS_without_LoadAsync")]
     public async Task PersistentRunnerGoalScopedTaskMutationsUseGoalCasWithoutLoadAsync()
     {

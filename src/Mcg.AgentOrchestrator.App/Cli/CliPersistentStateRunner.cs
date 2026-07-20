@@ -884,8 +884,7 @@ internal static class CliPersistentStateRunner
                         providers,
                         ref transactionProfiles,
                         ref transactionCurrentGoal,
-                        channel,
-                        () => LoadSingleGoalKernel(stateRepository, goalId));
+                        channel);
 
                     var updatedSnapshot = shouldSave ? ExportGoalSnapshot(kernel, goalId) : snapshot;
                     var transactionResult = new GoalScopedTaskMutationResult(
