@@ -1283,7 +1283,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 result = verifier.RunAsync(
                     root,
                     new GoalId("12345678123456781234567812345678"),
-                    changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs"],
+                    changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs"],
                     stableSlotIndex: 0)
                     .GetAwaiter()
                     .GetResult());
@@ -1304,6 +1304,116 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("Core=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("built_projects=Infrastructure.Tests", output, StringComparison.Ordinal);
+            Assert.Contains(result.Checks!, check =>
+                check.ResultSummary?.Contains("base-build-cache", StringComparison.Ordinal) == true &&
+                check.ResultSummary.Contains("build_phase_ms=", StringComparison.Ordinal));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
+            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_base_build_cache_receipts_show_warm_gate_under_one_third_cold_gate")]
+    public async Task GoalAcceptanceVerifierBaseBuildCacheReceiptsShowWarmGateUnderOneThirdColdGate()
+    {
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var cacheRoot = Path.Combine(root, "base-cache");
+        var cache = new DotnetBaseBuildCache(cacheRoot);
+        File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
+        var mainSha = new string('b', 40);
+        string[] cacheableProjects =
+        [
+            "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
+            "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+        ];
+
+        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
+                    args.Length > 0 && args[0] == "git")
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                if (args.Length >= 3 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    var artifactsPath = GetArtifactsPath(args);
+                    if (args[2].EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Thread.Sleep(450);
+                        foreach (var project in cacheableProjects)
+                        {
+                            WriteProjectArtifacts(artifactsPath, project, $"cold:{project}");
+                        }
+                    }
+                    else
+                    {
+                        Thread.Sleep(5);
+                        WriteProjectArtifacts(artifactsPath, args[2], $"warm:{args[2]}");
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            static long ExtractBuildPhaseMilliseconds(string output)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    output,
+                    @"build_phase_ms=(\d+)",
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+                Assert.True(match.Success, output);
+                return long.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            var firstOutput = AsyncLocalConsoleRouter.Capture(() =>
+                verifier.RunAsync(
+                    root,
+                    new GoalId("12345678123456781234567812345678"),
+                    changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs"],
+                    stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
+            var secondOutput = AsyncLocalConsoleRouter.Capture(() =>
+                verifier.RunAsync(
+                    root,
+                    new GoalId("12345678123456781234567812345678"),
+                    changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs"],
+                    stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
+
+            var firstBuildPhaseMs = ExtractBuildPhaseMilliseconds(firstOutput);
+            var secondBuildPhaseMs = ExtractBuildPhaseMilliseconds(secondOutput);
+            Console.WriteLine(
+                $"BASE_BUILD_CACHE_MEASUREMENT main_sha={mainSha} cold_build_phase_ms={firstBuildPhaseMs} warm_build_phase_ms={secondBuildPhaseMs}");
+            Assert.Contains($"main_sha={mainSha}", firstOutput, StringComparison.Ordinal);
+            Assert.Contains($"main_sha={mainSha}", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Core=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
+            Assert.True(
+                secondBuildPhaseMs * 3 < firstBuildPhaseMs,
+                $"Expected warm build phase under one-third cold build phase; cold={firstBuildPhaseMs}ms warm={secondBuildPhaseMs}ms");
         }
         finally
         {
