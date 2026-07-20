@@ -742,9 +742,25 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             }
         }
 
-        await using (var cmd = conn.CreateCommand())
+        if (goalIds is null || goalIds.Count > 0)
         {
-            cmd.CommandText = "SELECT snapshot_json FROM human_input_requests";
+            await using var cmd = conn.CreateCommand();
+            if (goalIds is null)
+            {
+                cmd.CommandText = "SELECT snapshot_json FROM human_input_requests";
+            }
+            else
+            {
+                var parameterNames = goalIds.Select((_, index) => $"$goal_id{index}").ToArray();
+                cmd.CommandText = $"SELECT snapshot_json FROM human_input_requests WHERE goal_id IN ({string.Join(", ", parameterNames)})";
+                var index = 0;
+                foreach (var goalId in goalIds)
+                {
+                    cmd.Parameters.AddWithValue(parameterNames[index], goalId.Value);
+                    index++;
+                }
+            }
+
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {

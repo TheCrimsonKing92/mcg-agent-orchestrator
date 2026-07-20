@@ -8,6 +8,14 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliPersistentStateRunner
 {
+    private sealed record GoalScopedTaskMutationResult(
+        bool ShouldSave,
+        IReadOnlyList<AgentDefinition> Agents,
+        WorkerProfileCatalog WorkerProfiles,
+        Goal? CurrentGoal,
+        GoalSnapshot Snapshot,
+        CliCommandHandlers.GoalScopedTaskMutationOutcome Outcome);
+
     public static bool ExecuteCommand(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -121,6 +129,11 @@ internal static class CliPersistentStateRunner
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalScopedTaskMutationCommand(args))
+        {
+            return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (IsGoalLifecycleDispositionCommand(args))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -225,6 +238,24 @@ internal static class CliPersistentStateRunner
             "monitor-goal" or
             "operator-channel" => false,
             _ => true
+        };
+    }
+
+    internal static bool IsGoalScopedTaskMutationCommand(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+        {
+            return false;
+        }
+
+        return args[0].ToLowerInvariant() switch
+        {
+            "progress" or
+            "verify-manual" or
+            "retry" or
+            "verification-plan" or
+            "note" => true,
+            _ => false
         };
     }
 
@@ -816,6 +847,86 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool ExecuteGoalScopedTaskMutationCommand(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, args);
+        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, args);
+        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
+        var commandAgents = agents;
+        var commandProfiles = workerProfiles;
+
+        var result = stateRepository.TransactGoalAsync(
+                $"cli:{args[0].ToLowerInvariant()}",
+                goalId,
+                (snapshot, cancellationToken) =>
+                {
+                    if (snapshot is null)
+                    {
+                        throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+                    }
+
+                    var humanInputRequests = LoadGoalHumanInputSnapshots(stateRepository, goalId, cancellationToken);
+                    var kernel = KernelFromGoalSnapshot(snapshot, humanInputRequests);
+                    var transactionAgents = commandAgents;
+                    var transactionProfiles = commandProfiles;
+                    var transactionCurrentGoal = ResolveCurrentGoal(kernel, goalId.Value);
+                    var context = new CliExecutionContext(
+                        kernel,
+                        workspace,
+                        providers,
+                        transactionAgents,
+                        transactionProfiles,
+                        transactionCurrentGoal,
+                        channel);
+                    var outcome = CliCommandHandlers.ExecuteGoalScopedTaskMutationWithoutRendering(preparedCommand, context);
+
+                    transactionAgents = context.Agents;
+                    transactionProfiles = context.WorkerProfiles;
+                    transactionCurrentGoal = context.CurrentGoal;
+                    var updatedSnapshot = outcome.ShouldSave ? ExportGoalSnapshot(kernel, goalId) : snapshot;
+                    var transactionResult = new GoalScopedTaskMutationResult(
+                        outcome.ShouldSave,
+                        transactionAgents,
+                        transactionProfiles,
+                        transactionCurrentGoal,
+                        updatedSnapshot,
+                        outcome);
+                    return Task.FromResult((outcome.ShouldSave, updatedSnapshot, transactionResult));
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        agents = result.Agents;
+        workerProfiles = result.WorkerProfiles;
+        currentGoal = result.CurrentGoal;
+        CliCommandHandlers.RenderGoalScopedTaskMutation(result.Outcome);
+        return result.ShouldSave;
+    }
+
+    private static bool HasInlineGoalPrefixForGoalScopedTaskMutation(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        IReadOnlyList<string> parts)
+    {
+        if (parts.Count <= 2 ||
+            parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
+            parts[2].StartsWith("--", StringComparison.Ordinal) ||
+            (int.TryParse(parts[1], out _) && parts[1].Length < 8))
+        {
+            return false;
+        }
+
+        return stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Any(goal => goal.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ExecuteProvenanceWithoutFullHydration(
@@ -1477,6 +1588,34 @@ internal static class CliPersistentStateRunner
         return null;
     }
 
+    private static GoalId ResolveGoalScopedTaskMutationGoalId(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string? currentGoalId,
+        IReadOnlyList<string> parts)
+    {
+        if (parts.Count > 2 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        {
+            return ResolveSingleGoalCommandGoalId(stateRepository, currentGoalId, parts[2]);
+        }
+
+        if (parts.Count > 2 &&
+            !parts[2].StartsWith("--", StringComparison.Ordinal) &&
+            (!int.TryParse(parts[1], out _) || parts[1].Length >= 8))
+        {
+            var matches = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+                .Where(goal => goal.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count > 0)
+            {
+                return matches.Count == 1
+                    ? new GoalId(matches[0].Id)
+                    : throw new InvalidOperationException($"Goal prefix '{parts[1]}' is ambiguous.");
+            }
+        }
+
+        return ResolveSingleGoalCommandGoalId(stateRepository, currentGoalId, idOrPrefix: null);
+    }
+
     private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
     {
         for (var i = 1; i < parts.Count; i++)
@@ -1586,6 +1725,20 @@ internal static class CliPersistentStateRunner
         return KernelFromGoalSnapshot(snapshot);
     }
 
+    private static IReadOnlyList<HumanInputRequestSnapshot> LoadGoalHumanInputSnapshots(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        GoalId goalId,
+        CancellationToken cancellationToken = default)
+    {
+        var kernel = stateRepository.LoadGoalsAsync([goalId], cancellationToken).GetAwaiter().GetResult();
+        if (!kernel.Goals.Any(goal => goal.Id == goalId))
+        {
+            throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        }
+
+        return kernel.ExportSnapshot().HumanInputRequests;
+    }
+
     private static AgentOrchestratorKernel LoadGoalSnapshotsById(
         ITransactionalOrchestratorStateRepository stateRepository,
         IReadOnlyList<GoalId> goalIds,
@@ -1604,8 +1757,10 @@ internal static class CliPersistentStateRunner
         return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(snapshots, []));
     }
 
-    private static AgentOrchestratorKernel KernelFromGoalSnapshot(GoalSnapshot snapshot) =>
-        AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []));
+    private static AgentOrchestratorKernel KernelFromGoalSnapshot(
+        GoalSnapshot snapshot,
+        IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests = null) =>
+        AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], humanInputRequests ?? []));
 
     private static GoalSnapshot ExportGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>
         kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
