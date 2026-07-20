@@ -109,6 +109,25 @@ public sealed class StewardTests
         Assert.All(outputs, receipt => Assert.NotEmpty(receipt.InputsHash));
     }
 
+    [Xunit.Fact(DisplayName = "Steward_daily_backlog_digest_registers_all_scopes_for_overlapping_candidates")]
+    public void StewardDailyBacklogDigestRegistersAllScopesForOverlappingCandidates()
+    {
+        var digest = new StewardComposer().ComposeDailyBacklogDigest(
+            Bundle(),
+            [
+                new StewardBacklogCandidate("a", "First", 30, 1, ["operator-comms", "dashboard"]),
+                new StewardBacklogCandidate("b", "Overlap and new", 20, 1, ["operator-comms", "worker-dispatch"]),
+                new StewardBacklogCandidate("c", "Later overlap", 10, 1, ["worker-dispatch"])
+            ],
+            DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+
+        Assert.Collection(
+            digest.Value.Items,
+            item => Assert.True(item.ScopeDisjoint),
+            item => Assert.False(item.ScopeDisjoint),
+            item => Assert.False(item.ScopeDisjoint));
+    }
+
     [Xunit.Fact(DisplayName = "StewardComposer_composes_numbers_not_prose_decision_card_with_quoted_worker_prose")]
     public void StewardComposerComposesNumbersNotProseDecisionCardWithQuotedWorkerProse()
     {

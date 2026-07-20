@@ -108,7 +108,17 @@ public sealed class StewardComposer : IStewardTriageEngine
             .ThenBy(item => item.PipelineUnits)
             .Select((item, index) =>
             {
-                var disjoint = item.ScopeKeys.All(usedScopes.Add);
+                var scopeKeys = item.ScopeKeys
+                    .Where(scope => !string.IsNullOrWhiteSpace(scope))
+                    .Select(scope => scope.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var disjoint = scopeKeys.All(scope => !usedScopes.Contains(scope));
+                foreach (var scope in scopeKeys)
+                {
+                    usedScopes.Add(scope);
+                }
+
                 return new StewardRankedBacklogItem(item.Id, item.Title, index + 1, item.PipelineUnits, disjoint);
             })
             .ToList();
