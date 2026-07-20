@@ -3032,6 +3032,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
     string? testedWorktreeHead = null;
+    DateTimeOffset? acceptanceAttemptStartedAt = null;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
     if (worktreePath is not null)
     {
@@ -3096,6 +3097,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         }
 
         var changedFiles = context.Worktrees.GetChangedFiles(worktreePath);
+        acceptanceAttemptStartedAt = DateTimeOffset.UtcNow;
         if (skipVerify)
         {
             context.PhaseTimings.Record(
@@ -3129,10 +3131,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                     context.Workspace.ExecutionDirectory,
                     goal,
                     "acceptance",
-                    "build-slot",
+                    "slot-unavailable",
                     testedWorktreeHead,
                     testedMainHead,
-                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}.");
+                    $"Acceptance blocked:slot-unavailable for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}.",
+                    acceptanceAttemptStartedAt);
                 return false;
             }
             catch (IOException ex)
@@ -3143,10 +3146,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                     context.Workspace.ExecutionDirectory,
                     goal,
                     "acceptance",
-                    "build-slot",
+                    "slot-unavailable",
                     testedWorktreeHead,
                     testedMainHead,
-                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {ex.Message}");
+                    $"Acceptance blocked:slot-unavailable for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {ex.Message}",
+                    acceptanceAttemptStartedAt);
                 throw new InvalidOperationException("acceptance blocked waiting for a stable dotnet build slot.", ex);
             }
 
@@ -3168,10 +3172,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                         context.Workspace.ExecutionDirectory,
                         goal,
                         "acceptance",
-                        "build-lock",
+                        "BUILD_LOCK_BLOCKED",
                         testedWorktreeHead,
                         testedMainHead,
-                        $"Acceptance blocked:build-lock for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {FormatBuildLockBlocked(ex.Attribution)}");
+                        $"Acceptance blocked:BUILD_LOCK_BLOCKED for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {FormatBuildLockBlocked(ex.Attribution)}",
+                        acceptanceAttemptStartedAt);
                     return false;
                 }
             }
@@ -3237,7 +3242,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         {
             Console.WriteLine($"Verification: failed (exit {verification.ExitCode}); merge blocked");
             Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
-            if (TryBuildVerificationTimeoutBlocker(verification) is { } timeoutBlocker)
+            var timeoutBlocker = TryBuildVerificationTimeoutBlocker(verification);
+            if (timeoutBlocker is not null)
             {
                 Console.WriteLine(timeoutBlocker);
             }
@@ -3245,6 +3251,27 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             if (!string.IsNullOrWhiteSpace(verification.OutputTail))
             {
                 Console.WriteLine(verification.OutputTail);
+            }
+
+            if (timeoutBlocker is not null)
+            {
+                var timedOutChecks = verification.Checks?
+                    .Where(IsBlockingTimeoutCheck)
+                    .Select(c => c.Name)
+                    .ToList() ?? ["acceptance-check-timeout"];
+                GoalOperationJournal.AcceptanceBlocked(
+                    context.Workspace.ExecutionDirectory,
+                    goal,
+                    "acceptance",
+                    "timeout",
+                    testedWorktreeHead,
+                    testedMainHead,
+                    $"Acceptance blocked:timeout for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", timedOutChecks)}.",
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+                context.EventWriter.AppendAcceptanceResult(goal.Id, false, timedOutChecks);
+                AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=blocked type=timeout checks={FormatConductEventChecks(timedOutChecks)}");
+                return false;
             }
         }
         else
@@ -3263,7 +3290,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             "acceptance",
             testedWorktreeHead,
             testedMainHead,
-            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", failedChecks)}.");
+            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", failedChecks)}.",
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks={FormatConductEventChecks(failedChecks)}");
         return false;
@@ -3301,7 +3330,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             "acceptance",
             testedWorktreeHead,
             testedMainHead,
-            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: stop-host.");
+            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: stop-host.",
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["stop-host"]);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks=stop-host");
         return false;
@@ -3349,7 +3380,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             "acceptance",
             testedWorktreeHead,
             testedMainHead,
-            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {failedChecks[0]}.");
+            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {failedChecks[0]}.",
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=state-guard checks={FormatConductEventChecks(failedChecks)}");
         Console.WriteLine($"BLOCKER step=acceptance-state-guard reason=state-changed detail=\"{EscapeBlockerDetail(failedChecks[0])}\" action=\"Resolve concurrent goal or worktree changes, then rerun acceptance.\"");
@@ -3364,7 +3397,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
         {
-            RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead);
+            RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
         }
         else
         {
@@ -3376,7 +3409,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 "acceptance",
                 testedWorktreeHead,
                 testedMainHead,
-                $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: merge.");
+                $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: merge.",
+                acceptanceAttemptStartedAt,
+                GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
             AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=merge checks=merge");
             Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {context.Worktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
@@ -3384,7 +3419,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return mergeCommit.FastForwarded;
     }
 
-    RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead);
+    RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
     return true;
 }
 
@@ -3449,7 +3484,13 @@ private static bool TryNormalizePrematureCompletedGoalForAcceptance(
     return true;
 }
 
-private static void RecordAcceptanceCompleted(CliExecutionContext context, Goal goal, string? branchHeadSha, string? mainHeadSha)
+private static void RecordAcceptanceCompleted(
+    CliExecutionContext context,
+    Goal goal,
+    string? branchHeadSha,
+    string? mainHeadSha,
+    DateTimeOffset? acceptanceAttemptStartedAt,
+    AcceptanceVerificationResult? verification)
 {
     GoalOperationJournal.AcceptancePassed(
         context.Workspace.ExecutionDirectory,
@@ -3457,7 +3498,9 @@ private static void RecordAcceptanceCompleted(CliExecutionContext context, Goal 
         "acceptance",
         branchHeadSha,
         mainHeadSha,
-        $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} and merge completed.");
+        $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} and merge completed.",
+        acceptanceAttemptStartedAt,
+        GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     if (goal.Status == GoalStatus.Verified)
     {
@@ -3545,12 +3588,7 @@ private static bool ClearSupersededAcceptanceFailureForCandidate(
 private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerificationResult verification)
 {
     var timedOutCheck = verification.Checks?
-        .FirstOrDefault(check =>
-            !check.Advisory &&
-            !check.Passed &&
-            (check.Name.StartsWith("acceptance-check-timeout:", StringComparison.OrdinalIgnoreCase) ||
-             check.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true ||
-             check.OutputTail?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true));
+        .FirstOrDefault(IsBlockingTimeoutCheck);
 
     if (timedOutCheck is null)
         return null;
@@ -3561,6 +3599,13 @@ private static string? TryBuildVerificationTimeoutBlocker(AcceptanceVerification
     var artifactDetail = string.IsNullOrWhiteSpace(artifactPath) ? "none" : artifactPath;
     return $"BLOCKER step=verification reason=timeout check=\"{timedOutCheck.Name}\" artifacts={artifactDetail} action=\"Inspect verification command, artifact path, and last output above; rerun acceptance after clearing the blocker.\"";
 }
+
+private static bool IsBlockingTimeoutCheck(AcceptanceCheckResult check) =>
+    !check.Advisory &&
+    !check.Passed &&
+    (check.Name.StartsWith("acceptance-check-timeout:", StringComparison.OrdinalIgnoreCase) ||
+     check.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true ||
+     check.OutputTail?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true);
 
 private static string FormatBuildLockBlocked(BuildLockAttribution attribution)
 {

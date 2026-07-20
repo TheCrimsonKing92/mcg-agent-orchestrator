@@ -246,6 +246,7 @@ internal sealed class ConductorDriver
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
             var slotSuffix = stableSlotIndex.HasValue ? $" on stable slot {stableSlotIndex.Value}" : string.Empty;
+            var acceptanceAttemptStartedAt = DateTimeOffset.UtcNow;
             GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", $"Running acceptance verification{slotSuffix}.");
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var branchHeadSha = TryResolveGitHead(worktreePath);
@@ -271,10 +272,11 @@ internal sealed class ConductorDriver
                     dir,
                     goal,
                     "conductor:acceptance",
-                    "build-slot",
+                    "slot-unavailable",
                     branchHeadSha,
                     mainHeadSha,
-                    $"Acceptance blocked:build-slot for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatSlotsBusy(ex.SlotsBusy)}");
+                    $"Acceptance blocked:slot-unavailable for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatSlotsBusy(ex.SlotsBusy)}",
+                    acceptanceAttemptStartedAt);
                 throw;
             }
             catch (BuildLockBlockedException ex)
@@ -283,10 +285,11 @@ internal sealed class ConductorDriver
                     dir,
                     goal,
                     "conductor:acceptance",
-                    "build-lock",
+                    "BUILD_LOCK_BLOCKED",
                     branchHeadSha,
                     mainHeadSha,
-                    $"Acceptance blocked:build-lock for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatBuildLockBlocked(ex.Attribution)}");
+                    $"Acceptance blocked:BUILD_LOCK_BLOCKED for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {FormatBuildLockBlocked(ex.Attribution)}",
+                    acceptanceAttemptStartedAt);
                 throw;
             }
             var unmetCriteria = verification.Checks?
@@ -305,10 +308,19 @@ internal sealed class ConductorDriver
                 GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
                         ? $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode})."
-                        : $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.");
+                        : $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.",
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+            else if (failedChecks.Any(IsBlockingTimeoutCheck))
+                GoalOperationJournal.AcceptanceBlocked(dir, goal, "conductor:acceptance", "timeout", branchHeadSha, mainHeadSha,
+                    $"Acceptance blocked:timeout for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}",
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             else
                 GoalOperationJournal.AcceptanceFailed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
-                    $"Acceptance failed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}");
+                    $"Acceptance failed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}",
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             return new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
@@ -1580,6 +1592,9 @@ internal sealed class ConductorDriver
         return $" Acceptance output tail: {tail}";
     }
 
+    private static bool IsBlockingTimeoutCheck(string checkName) =>
+        checkName.StartsWith("acceptance-check-timeout:", StringComparison.OrdinalIgnoreCase);
+
     private static string? TryResolveGitHead(string path)
     {
         var result = GitCli.Run(path, "rev-parse", "HEAD");
@@ -1730,13 +1745,17 @@ internal sealed class ConductorDriver
     {
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
         {
-            if (acceptance.FailedChecks is { Count: > 0 })
+            var failedChecks = acceptance.FailedChecks ?? [];
+            var timedOut = failedChecks.Any(IsBlockingTimeoutCheck);
+            if (!timedOut && acceptance.FailedChecks is { Count: > 0 })
             {
-                _recordAcceptanceFailure(goal, acceptance.FailedChecks, acceptance.BranchHeadSha, acceptance.MainHeadSha);
+                _recordAcceptanceFailure(goal, failedChecks, acceptance.BranchHeadSha, acceptance.MainHeadSha);
             }
 
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                "Acceptance verification failed; review and fix before landing." +
+                (timedOut
+                    ? "Acceptance verification timed out; rerun acceptance after clearing the blocker."
+                    : "Acceptance verification failed; review and fix before landing.") +
                 FormatFailureTail(acceptance.FailureDetail));
         }
 
