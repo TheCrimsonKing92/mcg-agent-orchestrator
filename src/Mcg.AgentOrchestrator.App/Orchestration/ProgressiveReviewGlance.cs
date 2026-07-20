@@ -21,6 +21,11 @@ internal enum ProgressiveReviewGlanceVerdict
     Invalid
 }
 
+internal static class ProgressiveReviewGlanceLimits
+{
+    public const int DefaultTranscriptTailByteLimit = 32 * 1024;
+}
+
 internal sealed record ProgressiveReviewGlanceOptions(
     int ChangedFileThreshold = 3,
     TimeSpan? FirstElapsedThreshold = null,
@@ -36,6 +41,7 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int ChangedFileListCharacterLimit = 3000,
     int DiffCharacterLimit = 8000,
     int TranscriptCharacterLimit = 3000,
+    int TranscriptTailByteLimit = ProgressiveReviewGlanceLimits.DefaultTranscriptTailByteLimit,
     TimeSpan? DispatchTimeout = null)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
@@ -115,7 +121,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFilePromptLimit));
         _diffReader = diffReader ?? ReadDiff;
-        _transcriptReader = transcriptReader ?? ReadTranscriptTail;
+        _transcriptReader = transcriptReader ?? (process => ReadTranscriptTail(process, _options.TranscriptTailByteLimit));
     }
 
     public static ProgressiveReviewGlanceCoordinator CreateDefault(
@@ -810,19 +816,64 @@ Note: {result.Note}
         return new string(buffer, 0, Math.Min(read, characterLimit));
     }
 
-    private static string ReadTranscriptTail(TaskProcessRecord? process)
+    internal static string ReadTranscriptTail(
+        TaskProcessRecord? process,
+        int transcriptTailByteLimit = ProgressiveReviewGlanceLimits.DefaultTranscriptTailByteLimit)
     {
         if (process is null)
         {
             return "(no process transcript yet)";
         }
 
-        var snapshot = ProcessLogReader.Read(process);
         return string.Join(Environment.NewLine, [
             "stdout:",
-            snapshot.StandardOutput,
+            ReadLogTail(process.StandardOutputPath, transcriptTailByteLimit),
             "stderr:",
-            snapshot.StandardError]);
+            ReadLogTail(process.StandardErrorPath, transcriptTailByteLimit)]);
+    }
+
+    internal static string ReadLogTail(string path, int byteLimit)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || byteLimit <= 0)
+        {
+            return string.Empty;
+        }
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var length = stream.Length;
+        var bytesToRead = (int)Math.Min(byteLimit, length);
+        var start = length - bytesToRead;
+        var buffer = new byte[bytesToRead];
+        stream.Seek(start, SeekOrigin.Begin);
+        var totalRead = 0;
+        while (totalRead < bytesToRead)
+        {
+            var read = stream.Read(buffer, totalRead, bytesToRead - totalRead);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
+        }
+
+        var offset = start == 0 ? 0 : LeadingPartialLineByteCount(buffer, totalRead);
+        using var tail = new MemoryStream(buffer, offset, totalRead - offset, writable: false);
+        using var reader = new StreamReader(tail, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    private static int LeadingPartialLineByteCount(byte[] buffer, int length)
+    {
+        for (var index = 0; index < length; index++)
+        {
+            if (buffer[index] == '\n')
+            {
+                return index + 1;
+            }
+        }
+
+        return length;
     }
 
     private static string BoundBlock(string text, int limit)

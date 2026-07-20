@@ -1,3 +1,4 @@
+using System.Text;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -193,6 +194,110 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.Contains("tttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("ttttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("--sandbox 'read-only'", delivery.Command, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_default_transcript_reader_tolerates_live_stdout_append_handle")]
+    public void DefaultTranscriptReaderToleratesLiveStdoutAppendHandle()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateTempDirectory("mcg-glance-live-log");
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdout, "first line\nlive worker wrote this\n");
+        File.WriteAllText(stderr, string.Empty);
+        try
+        {
+            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id, CreateProcessRecord(root, stdout, stderr, exit, now));
+            var runner = new ControlledGlanceRunner();
+            var coordinator = NewCoordinator(
+                runner,
+                new RecordingGlanceEvents(),
+                utcNow: () => now,
+                liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+                useDefaultTranscriptReader: true);
+
+            using var liveWriter = new FileStream(stdout, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            liveWriter.Seek(0, SeekOrigin.End);
+            liveWriter.Write(Encoding.UTF8.GetBytes("append still open\n"));
+            liveWriter.Flush();
+
+            var result = coordinator.Observe(kernel, [goal]);
+
+            var inputs = runner.Calls.Single();
+            Xunit.Assert.Contains("result=started", result.ProgressLines.Single(), StringComparison.Ordinal);
+            Xunit.Assert.Contains("live worker wrote this", inputs.TranscriptTail, StringComparison.Ordinal);
+            Xunit.Assert.Contains("append still open", inputs.TranscriptTail, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(result.ProgressLines, line => line.Contains("advisory-error", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_log_tail_is_byte_bounded_and_line_aligned")]
+    public void LogTailIsByteBoundedAndLineAligned()
+    {
+        var root = CreateTempDirectory("mcg-glance-tail");
+        var large = Path.Combine(root, "large.log");
+        var lineAligned = Path.Combine(root, "aligned.log");
+        try
+        {
+            File.WriteAllText(large, string.Concat(Enumerable.Repeat(new string('a', 79) + "\n", 2000)));
+
+            var tail = ProgressiveReviewGlanceCoordinator.ReadLogTail(large, 65536);
+
+            Xunit.Assert.True(Encoding.UTF8.GetByteCount(tail) <= 65536);
+            Xunit.Assert.True(tail.Length < File.ReadAllText(large).Length);
+
+            File.WriteAllText(lineAligned, new string('x', 80) + "\ncomplete-one\ncomplete-two\n");
+
+            var alignedTail = ProgressiveReviewGlanceCoordinator.ReadLogTail(lineAligned, 32);
+
+            Xunit.Assert.StartsWith("complete-one", alignedTail, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("x", alignedTail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_transcript_read_failures_remain_advisory_errors")]
+    public void TranscriptReadFailuresRemainAdvisoryErrors()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateTempDirectory("mcg-glance-locked-log");
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdout, "locked stdout\n");
+        File.WriteAllText(stderr, string.Empty);
+        try
+        {
+            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id, CreateProcessRecord(root, stdout, stderr, exit, now));
+            var runner = new ControlledGlanceRunner();
+            var coordinator = NewCoordinator(
+                runner,
+                new RecordingGlanceEvents(),
+                utcNow: () => now,
+                liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+                useDefaultTranscriptReader: true);
+
+            using var lockedStdout = new FileStream(stdout, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            var result = coordinator.Observe(kernel, [goal]);
+
+            Xunit.Assert.Empty(runner.Calls);
+            Xunit.Assert.Contains(result.ProgressLines, line => line.Contains("GLANCE result=advisory-error", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -429,7 +534,8 @@ public sealed class ProgressiveReviewGlanceTests
         Func<DateTimeOffset>? utcNow = null,
         Func<string?, string?, DispatchLiveChangeSnapshot>? liveChanges = null,
         Func<string, string?, string>? diffReader = null,
-        Func<TaskProcessRecord?, string>? transcriptReader = null)
+        Func<TaskProcessRecord?, string>? transcriptReader = null,
+        bool useDefaultTranscriptReader = false)
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
         return new ProgressiveReviewGlanceCoordinator(
@@ -440,13 +546,14 @@ public sealed class ProgressiveReviewGlanceTests
             utcNow,
             liveChanges,
             diffReader ?? ((_, _) => "diff"),
-            transcriptReader ?? (_ => "transcript"));
+            useDefaultTranscriptReader ? transcriptReader : transcriptReader ?? (_ => "transcript"));
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloperRound(
         DateTimeOffset dispatchedAt,
         string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
-        IClock? clock = null)
+        IClock? clock = null,
+        string workingDirectory = @"C:\work")
     {
         var kernel = new AgentOrchestratorKernel(clock);
         var task = new TaskSpec(new TaskId("developer-task-0001"), description, AgentRole.Developer);
@@ -458,10 +565,25 @@ public sealed class ProgressiveReviewGlanceTests
             new TaskDispatchRecord(
                 "codex-cli",
                 "codex exec",
-                @"C:\work",
+                workingDirectory,
                 dispatchedAt,
                 BaseCommit: "base"));
         return (kernel, goal, task);
+    }
+
+    private static TaskProcessRecord CreateProcessRecord(
+        string root,
+        string stdout,
+        string stderr,
+        string exit,
+        DateTimeOffset startedAt) =>
+        new(12345, "codex exec", root, stdout, stderr, exit, startedAt, null, null);
+
+    private static string CreateTempDirectory(string prefix)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        return root;
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer, TaskSpec Reviewer) RunningDeveloperAndReviewerRound(
