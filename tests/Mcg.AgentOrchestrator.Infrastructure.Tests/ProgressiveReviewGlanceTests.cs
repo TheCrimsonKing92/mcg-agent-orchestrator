@@ -209,14 +209,15 @@ public sealed class ProgressiveReviewGlanceTests
         File.WriteAllText(stderr, string.Empty);
         try
         {
-            var (kernel, goal, task) = RunningDeveloperRound(now);
+            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
             kernel.RecordTaskProcessStarted(goal.Id, task.Id, CreateProcessRecord(root, stdout, stderr, exit, now));
             var runner = new ControlledGlanceRunner();
             var coordinator = NewCoordinator(
                 runner,
                 new RecordingGlanceEvents(),
                 utcNow: () => now,
-                liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+                liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+                useDefaultTranscriptReader: true);
 
             using var liveWriter = new FileStream(stdout, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
             liveWriter.Seek(0, SeekOrigin.End);
@@ -277,14 +278,15 @@ public sealed class ProgressiveReviewGlanceTests
         File.WriteAllText(stderr, string.Empty);
         try
         {
-            var (kernel, goal, task) = RunningDeveloperRound(now);
+            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
             kernel.RecordTaskProcessStarted(goal.Id, task.Id, CreateProcessRecord(root, stdout, stderr, exit, now));
             var runner = new ControlledGlanceRunner();
             var coordinator = NewCoordinator(
                 runner,
                 new RecordingGlanceEvents(),
                 utcNow: () => now,
-                liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+                liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+                useDefaultTranscriptReader: true);
 
             using var lockedStdout = new FileStream(stdout, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
@@ -532,7 +534,8 @@ public sealed class ProgressiveReviewGlanceTests
         Func<DateTimeOffset>? utcNow = null,
         Func<string?, string?, DispatchLiveChangeSnapshot>? liveChanges = null,
         Func<string, string?, string>? diffReader = null,
-        Func<TaskProcessRecord?, string>? transcriptReader = null)
+        Func<TaskProcessRecord?, string>? transcriptReader = null,
+        bool useDefaultTranscriptReader = false)
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
         return new ProgressiveReviewGlanceCoordinator(
@@ -543,13 +546,14 @@ public sealed class ProgressiveReviewGlanceTests
             utcNow,
             liveChanges,
             diffReader ?? ((_, _) => "diff"),
-            transcriptReader ?? (_ => "transcript"));
+            useDefaultTranscriptReader ? transcriptReader : transcriptReader ?? (_ => "transcript"));
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloperRound(
         DateTimeOffset dispatchedAt,
         string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
-        IClock? clock = null)
+        IClock? clock = null,
+        string workingDirectory = @"C:\work")
     {
         var kernel = new AgentOrchestratorKernel(clock);
         var task = new TaskSpec(new TaskId("developer-task-0001"), description, AgentRole.Developer);
@@ -561,7 +565,7 @@ public sealed class ProgressiveReviewGlanceTests
             new TaskDispatchRecord(
                 "codex-cli",
                 "codex exec",
-                @"C:\work",
+                workingDirectory,
                 dispatchedAt,
                 BaseCommit: "base"));
         return (kernel, goal, task);

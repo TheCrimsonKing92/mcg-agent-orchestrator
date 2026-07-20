@@ -840,32 +840,40 @@ Note: {result.Note}
         }
 
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        var start = Math.Max(0L, stream.Length - byteLimit);
-        var startsAtLineBoundary = start == 0 || PreviousByteIsLineFeed(stream, start);
+        var length = stream.Length;
+        var bytesToRead = (int)Math.Min(byteLimit, length);
+        var start = length - bytesToRead;
+        var buffer = new byte[bytesToRead];
         stream.Seek(start, SeekOrigin.Begin);
-        if (!startsAtLineBoundary)
+        var totalRead = 0;
+        while (totalRead < bytesToRead)
         {
-            DiscardPartialLeadingLine(stream);
+            var read = stream.Read(buffer, totalRead, bytesToRead - totalRead);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
         }
 
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var offset = start == 0 ? 0 : LeadingPartialLineByteCount(buffer, totalRead);
+        using var tail = new MemoryStream(buffer, offset, totalRead - offset, writable: false);
+        using var reader = new StreamReader(tail, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         return reader.ReadToEnd();
     }
 
-    private static bool PreviousByteIsLineFeed(Stream stream, long position)
+    private static int LeadingPartialLineByteCount(byte[] buffer, int length)
     {
-        stream.Seek(position - 1, SeekOrigin.Begin);
-        return stream.ReadByte() == '\n';
-    }
-
-    private static void DiscardPartialLeadingLine(Stream stream)
-    {
-        int next;
-        do
+        for (var index = 0; index < length; index++)
         {
-            next = stream.ReadByte();
+            if (buffer[index] == '\n')
+            {
+                return index + 1;
+            }
         }
-        while (next != -1 && next != '\n');
+
+        return length;
     }
 
     private static string BoundBlock(string text, int limit)
