@@ -339,7 +339,17 @@ Transcript tail:
                 BoundSingleLine(ex.Message, 300)));
         }
 
-        _running.Add(new RunningGlance(roundKey, goal.Id, task.Id, task.LastDispatch.DispatchedAt, inputHash, inputs, run, stopwatch));
+        _running.Add(new RunningGlance(
+            roundKey,
+            goal.Id,
+            task.Id,
+            task.LastDispatch.DispatchedAt,
+            task.LastDispatch.WorkingDirectory,
+            task.LastDispatch.ProviderSessionId,
+            inputHash,
+            inputs,
+            run,
+            stopwatch));
         state.FiredCount++;
         lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=started trigger={trigger.Value} inputHash={inputHash}");
     }
@@ -547,6 +557,11 @@ Note: {result.Note}
 
         try
         {
+            var now = _utcNow();
+            var steeringInputsHash = BuildSteeringInputsHash(
+                running,
+                now,
+                TryResolveHead(running.WorkingDirectory));
             var intent = new ProgressiveReviewSteerIntent(
                 Id: $"glance-{running.InputHash}",
                 GoalId: running.GoalId.Value,
@@ -554,12 +569,12 @@ Note: {result.Note}
                 Role: AgentRole.Developer.ToString(),
                 RoundKey: running.RoundKey,
                 TriggerGlanceId: $"glance-{running.InputHash}",
-                InputsHash: running.InputHash,
-                GlanceVerdictTimestamp: _utcNow(),
+                InputsHash: steeringInputsHash,
+                GlanceVerdictTimestamp: now,
                 MisdirectionEvidence: result.EvidenceLine,
                 CorrectiveDirection: result.Note,
                 GuidanceText: BuildSteeringGuidance(running, result),
-                CreatedAt: _utcNow());
+                CreatedAt: now);
             _steeringStore.EnqueueIntentAsync(intent, CancellationToken.None).GetAwaiter().GetResult();
             lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=steer-intent id={intent.Id}");
         }
@@ -749,6 +764,46 @@ Corrective direction:
     {
         var text = JsonSerializer.Serialize(inputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
+    }
+
+    private static string BuildSteeringInputsHash(
+        RunningGlance running,
+        DateTimeOffset verdictTimestamp,
+        string? worktreeHeadSha)
+    {
+        var inputs = new ProgressiveReviewSteeringHashInputs(
+            running.GoalId.Value,
+            running.TaskId.Value,
+            AgentRole.Developer.ToString(),
+            running.ProviderSessionId ?? string.Empty,
+            worktreeHeadSha ?? string.Empty,
+            verdictTimestamp,
+            HashText(running.Inputs.AcceptanceSection),
+            HashLines(running.Inputs.CriteriaCorrectionOverlay));
+        var text = JsonSerializer.Serialize(inputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
+    }
+
+    private static string HashText(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static string HashLines(IReadOnlyList<string> values) =>
+        HashText(string.Join("\n", values));
+
+    private static string? TryResolveHead(string? worktree)
+    {
+        if (string.IsNullOrWhiteSpace(worktree))
+            return null;
+
+        try
+        {
+            var result = RunGit(worktree, ["rev-parse", "HEAD"]);
+            return result.Succeeded ? result.Output.Trim() : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private IReadOnlyList<string> BoundChangedFiles(DispatchLiveChangeSnapshot snapshot) =>
@@ -1067,10 +1122,22 @@ Corrective direction:
         GoalId GoalId,
         TaskId TaskId,
         DateTimeOffset DispatchedAt,
+        string WorkingDirectory,
+        string? ProviderSessionId,
         string InputHash,
         ProgressiveReviewGlanceInputs Inputs,
         Task<ProgressiveReviewGlanceDispatchResult> Task,
         Stopwatch Stopwatch);
+
+    private sealed record ProgressiveReviewSteeringHashInputs(
+        string GoalId,
+        string TaskId,
+        string Role,
+        string SessionId,
+        string WorktreeHeadSha,
+        DateTimeOffset GlanceVerdictTimestamp,
+        string AcceptanceCriteriaHash,
+        string CriteriaCorrectionOverlayHash);
 
     private sealed class RoundState
     {

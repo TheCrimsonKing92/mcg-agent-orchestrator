@@ -117,6 +117,136 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal(head, GitCli.Run(root, "rev-parse", "HEAD").Output.Trim());
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_current_model_differs")]
+    public void FallsBackToFreshDispatchWhenCurrentModelDiffers()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-model-drift");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback after model drift")).GetAwaiter().GetResult();
+        var preparedFresh = false;
+        var agents = AgentCatalog.Default().Agents
+            .Select(agent => agent.Role == AgentRole.Developer
+                ? agent with { Subscription = agent.Subscription! with { ModelAlias = "gpt-other" } }
+                : agent)
+            .ToArray();
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            agents: agents,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                Assert.Equal("fresh-guided", dispatch.Command);
+                var started = new TaskProcessRecord(7003, dispatch.Command, dispatch.WorkingDirectory, "out4.log", "err4.log", "exit4.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            prepareFreshDispatch: (k, g, t, _) =>
+            {
+                preparedFresh = true;
+                k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                    "codex-cli",
+                    "fresh-guided",
+                    root,
+                    now.AddSeconds(2),
+                    "OpenAI",
+                    "gpt-other",
+                    WorkerProviderKind: ProviderKind.OpenAICodexCli));
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.True(preparedFresh);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("fresh-dispatch", receipt.Decision);
+        Assert.Contains(receipt.AdmissionChecks, check => check.Contains("SameModel:Failed", StringComparison.Ordinal));
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_integration_changed_after_spawn")]
+    public void FallsBackToFreshDispatchWhenIntegrationChangedAfterSpawn()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-integration-drift");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        new GoalLifecycleEventWriter(
+            workspace.GoalLifecycleEventsDirectory,
+            new TestClock(now.AddSeconds(5))).AppendGoalLanded(goal.Id, "main", "goal/test");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback after integration changed")).GetAwaiter().GetResult();
+        var preparedFresh = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                Assert.Equal("fresh-guided", dispatch.Command);
+                var started = new TaskProcessRecord(7004, dispatch.Command, dispatch.WorkingDirectory, "out5.log", "err5.log", "exit5.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            prepareFreshDispatch: (k, g, t, _) =>
+            {
+                preparedFresh = true;
+                k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                    "codex-cli",
+                    "fresh-guided",
+                    root,
+                    now.AddSeconds(2),
+                    "OpenAI",
+                    "gpt-5.5",
+                    WorkerProviderKind: ProviderKind.OpenAICodexCli));
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.True(preparedFresh);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("fresh-dispatch", receipt.Decision);
+        Assert.Contains(receipt.AdmissionChecks, check => check.Contains("NoIntegrationChangeSinceCapture:Failed", StringComparison.Ordinal));
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteeringStore_reserves_running_intent_after_loop_restart")]
+    public void StoreReservesRunningIntentAfterLoopRestart()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-steer-store-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var store = new SqliteProgressiveReviewSteeringStore(Path.Combine(root, "steering.db"));
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var intent = new ProgressiveReviewSteerIntent(
+            "intent-running",
+            "goal-1",
+            "task-1",
+            AgentRole.Developer.ToString(),
+            "round-1",
+            "glance-1",
+            "inputs-1",
+            now,
+            "misdirected",
+            "correct it",
+            "guidance",
+            now,
+            ProgressiveReviewSteerIntentStatus.Running);
+        store.EnqueueIntentAsync(intent).GetAwaiter().GetResult();
+
+        var reserved = store.ReserveNextPendingAsync("goal-1").GetAwaiter().GetResult();
+
+        Assert.NotNull(reserved);
+        Assert.Equal("intent-running", reserved!.Id);
+        Assert.Equal(ProgressiveReviewSteerIntentStatus.Running, reserved.Status);
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_routes_to_attention_when_tree_death_is_unconfirmed")]
     public void RoutesToAttentionWhenTreeDeathIsUnconfirmed()
     {
@@ -287,12 +417,13 @@ public sealed class ProgressiveReviewSteeringTests
         Func<TaskProcessRecord, IReadOnlyList<int>>? getLineageDescendants = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelProcess = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
-        Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null)
+        Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
+        IReadOnlyList<AgentDefinition>? agents = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
             workspace,
-            AgentCatalog.Default().Agents,
+            agents ?? AgentCatalog.Default().Agents,
             WorkerProfileCatalog.Default(),
             new InMemoryModelProviderRegistry([]),
             store,
@@ -304,6 +435,16 @@ public sealed class ProgressiveReviewSteeringTests
             startProcess: startProcess,
             prepareFreshDispatch: prepareFreshDispatch);
     }
+
+    private static Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> CancelWithTerminalProof(DateTimeOffset now) =>
+        (k, goalId, taskId) =>
+        {
+            var current = k.GetTask(goalId, taskId).LastProcess!;
+            var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
+            k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+            WriteExitAndHeartbeat(cancelled, now.AddSeconds(1), childPid: null, ownedPids: [6001], state: "exited");
+            return cancelled;
+        };
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloper(
         string root,
@@ -401,5 +542,10 @@ public sealed class ProgressiveReviewSteeringTests
         Directory.CreateDirectory(Path.GetDirectoryName(process.ExitCodePath)!);
         File.WriteAllText(process.ExitCodePath, "1");
         WriteHeartbeat(process, observedAt, childPid, ownedPids, state);
+    }
+
+    private sealed class TestClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
     }
 }

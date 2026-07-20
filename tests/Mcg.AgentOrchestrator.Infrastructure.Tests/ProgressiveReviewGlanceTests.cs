@@ -532,6 +532,18 @@ public sealed class ProgressiveReviewGlanceTests
         Assert.Empty(collaborationStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_steer_inputs_hash_includes_session_context_not_only_glance_inputs")]
+    public void SteerInputsHashIncludesSessionContextNotOnlyGlanceInputs()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var first = CaptureSteerIntentForSession(now, "session-one");
+        var second = CaptureSteerIntentForSession(now, "session-two");
+
+        Assert.Equal(first.GlanceInputHash, second.GlanceInputHash);
+        Assert.NotEqual(first.Intent.InputsHash, first.GlanceInputHash);
+        Assert.NotEqual(first.Intent.InputsHash, second.Intent.InputsHash);
+    }
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_receipt_and_attention_failures_are_advisory_only")]
     public void ReceiptAndAttentionFailuresAreAdvisoryOnly()
     {
@@ -590,7 +602,9 @@ public sealed class ProgressiveReviewGlanceTests
         DateTimeOffset dispatchedAt,
         string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
         IClock? clock = null,
-        string workingDirectory = @"C:\work")
+        string workingDirectory = @"C:\work",
+        string? providerSessionId = null,
+        string? worktreeHeadSha = null)
     {
         var kernel = new AgentOrchestratorKernel(clock);
         var task = new TaskSpec(new TaskId("developer-task-0001"), description, AgentRole.Developer);
@@ -604,8 +618,42 @@ public sealed class ProgressiveReviewGlanceTests
                 "codex exec",
                 workingDirectory,
                 dispatchedAt,
-                BaseCommit: "base"));
+                BaseCommit: "base",
+                ProviderSessionId: providerSessionId,
+                WorktreeHeadSha: worktreeHeadSha));
         return (kernel, goal, task);
+    }
+
+    private static (ProgressiveReviewSteerIntent Intent, string GlanceInputHash) CaptureSteerIntentForSession(
+        DateTimeOffset now,
+        string sessionId)
+    {
+        var (kernel, goal, _) = RunningDeveloperRound(now, providerSessionId: sessionId);
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
+        var steeringStore = new InMemoryProgressiveReviewSteeringStore();
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Correct toward the scoped implementation.",
+            "diff edits the forbidden surface",
+            5,
+            5));
+        var events = new RecordingGlanceEvents();
+        var coordinator = new ProgressiveReviewGlanceCoordinator(
+            runner,
+            events,
+            new CollaborationItemStore(Path.Combine(root, "items.db")),
+            new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            (_, _) => "diff",
+            _ => "transcript",
+            steeringStore);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+
+        return (Assert.Single(steeringStore.Intents), Assert.Single(events.Receipts).InputsHash);
     }
 
     private static TaskProcessRecord CreateProcessRecord(

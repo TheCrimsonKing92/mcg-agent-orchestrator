@@ -89,7 +89,7 @@ public sealed class InMemoryProgressiveReviewSteeringStore : IProgressiveReviewS
     {
         var index = _intents.FindIndex(candidate =>
             candidate.GoalId.Equals(goalId, StringComparison.Ordinal) &&
-            candidate.Status == ProgressiveReviewSteerIntentStatus.Pending);
+            candidate.Status != ProgressiveReviewSteerIntentStatus.Completed);
         if (index < 0)
             return Task.FromResult<ProgressiveReviewSteerIntent?>(null);
 
@@ -173,10 +173,10 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
         cmd.CommandText = """
             UPDATE progressive_review_steer_intents
             SET status = $status
-            WHERE id = $id AND status = $pending
+            WHERE id = $id AND status <> $completed
             """;
         cmd.Parameters.AddWithValue("$status", ProgressiveReviewSteerIntentStatus.Running.ToString());
-        cmd.Parameters.AddWithValue("$pending", ProgressiveReviewSteerIntentStatus.Pending.ToString());
+        cmd.Parameters.AddWithValue("$completed", ProgressiveReviewSteerIntentStatus.Completed.ToString());
         cmd.Parameters.AddWithValue("$id", intent.Id);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
         await tx.CommitAsync(cancellationToken);
@@ -325,12 +325,12 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
                    glance_verdict_timestamp, misdirection_evidence, corrective_direction,
                    guidance_text, created_at, status, completed_at
             FROM progressive_review_steer_intents
-            WHERE goal_id = $goal_id AND status = $status
-            ORDER BY created_at, id
+            WHERE goal_id = $goal_id AND status <> $completed
+            ORDER BY CASE status WHEN 'Running' THEN 0 ELSE 1 END, created_at, id
             LIMIT 1
             """;
         cmd.Parameters.AddWithValue("$goal_id", goalId);
-        cmd.Parameters.AddWithValue("$status", ProgressiveReviewSteerIntentStatus.Pending.ToString());
+        cmd.Parameters.AddWithValue("$completed", ProgressiveReviewSteerIntentStatus.Completed.ToString());
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadIntent(reader) : null;
     }

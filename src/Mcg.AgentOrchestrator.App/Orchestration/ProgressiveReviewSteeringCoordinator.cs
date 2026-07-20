@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -171,21 +172,25 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         TaskProcessRecord originalProcess,
         ProgressiveReviewSteerIntent intent)
     {
-        var currentHead = TryResolveHead(originalDispatch.WorkingDirectory);
+        var currentWorktree = _workspace.ResolveExecutionDirectory(goal.Id);
+        var currentHead = TryResolveHead(currentWorktree);
+        var requestedProvider = ResolveCurrentProviderKind(task);
+        var requestedModel = ResolveCurrentModelName(goal, task);
         var context = new InquiryAdmissionContext(
             goal.Id,
             task.Id,
             AgentRole.Developer,
-            originalDispatch.WorkerProviderKind,
-            originalDispatch.WorkingDirectory,
+            requestedProvider,
+            requestedModel,
+            currentWorktree,
             currentHead,
-            CapturedHeadIsAncestor(originalDispatch.WorkingDirectory, originalDispatch.WorktreeHeadSha, currentHead),
+            CapturedHeadIsAncestor(currentWorktree, originalDispatch.WorktreeHeadSha, currentHead),
             _utcNow(),
             goal.EffectiveAcceptanceCriteriaCorrections
                 .Where(correction => correction.RecordedAt > originalDispatch.DispatchedAt)
                 .Select(correction => (DateTimeOffset?)correction.RecordedAt)
                 .FirstOrDefault(),
-            null,
+            LatestIntegrationChangeAfter(_workspace.GoalLifecycleEventsDirectory, goal.Id, originalDispatch.DispatchedAt),
             false,
             Math.Max(1, EstimateTokens(ProgressiveReviewGlanceCoordinator.ReadTranscriptTail(originalProcess))));
         return InquiryResumeAdmission.Evaluate(
@@ -453,6 +458,101 @@ Evidence: {intent.MisdirectionEvidence}
         {
             return false;
         }
+    }
+
+    private ProviderKind ResolveCurrentProviderKind(TaskSpec task)
+    {
+        var agent = ResolveAssignedAgent(task);
+        var profileName = agent?.Subscription?.WorkerProfileName;
+        if (!string.IsNullOrWhiteSpace(profileName))
+        {
+            try
+            {
+                return WorkerProviderCatalog.Default().ResolveProfile(profileName).Identity.Kind;
+            }
+            catch
+            {
+                return ProviderKind.Unknown;
+            }
+        }
+
+        return ProviderKind.Unknown;
+    }
+
+    private string? ResolveCurrentModelName(Goal goal, TaskSpec task)
+    {
+        var agent = ResolveAssignedAgent(task);
+        if (agent is null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(agent.Subscription?.ModelAlias))
+            return agent.Subscription.ModelAlias;
+
+        var complexity = task.LastDispatch?.TaskComplexity ??
+            TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
+        return complexity == TaskComplexity.Complex && agent.ComplexModel is not null
+            ? agent.ComplexModel.ModelName
+            : agent.Model.ModelName;
+    }
+
+    private AgentDefinition? ResolveAssignedAgent(TaskSpec task)
+    {
+        if (task.AssignedAgentId is not null)
+        {
+            var assigned = _agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId);
+            if (assigned is not null)
+                return assigned;
+        }
+
+        return _agents.FirstOrDefault(agent => agent.Role == task.RequiredRole);
+    }
+
+    private static DateTimeOffset? LatestIntegrationChangeAfter(string eventsDirectory, GoalId goalId, DateTimeOffset cutoff)
+    {
+        var path = Path.Combine(eventsDirectory, $"{goalId.Value}.jsonl");
+        if (!File.Exists(path))
+            return null;
+
+        DateTimeOffset? latest = null;
+        foreach (var line in File.ReadLines(path))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                var eventType = root.TryGetProperty("eventType", out var eventTypeProperty)
+                    ? eventTypeProperty.GetString()
+                    : null;
+                if (!IsIntegrationChangeEvent(eventType, root))
+                    continue;
+
+                if (root.TryGetProperty("timestamp", out var timestampProperty) &&
+                    timestampProperty.TryGetDateTimeOffset(out var timestamp) &&
+                    timestamp > cutoff &&
+                    (latest is null || timestamp > latest))
+                {
+                    latest = timestamp;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return latest;
+    }
+
+    private static bool IsIntegrationChangeEvent(string? eventType, JsonElement root)
+    {
+        if (string.Equals(eventType, "GoalLanded", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.Equals(eventType, "GoalEscalated", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return root.TryGetProperty("source", out var source) &&
+            source.ValueKind == JsonValueKind.String &&
+            source.GetString()?.Contains("integration", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static bool IsProcessRunning(int processId)

@@ -60,6 +60,7 @@ public sealed class InquiryDispatcher
             request.Task.Id,
             request.Task.RequiredRole,
             providerKind,
+            dispatch.ModelName,
             worktree,
             currentHead,
             capturedHeadIsAncestor,
