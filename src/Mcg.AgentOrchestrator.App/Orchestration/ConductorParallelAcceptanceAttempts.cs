@@ -93,6 +93,10 @@ internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptan
     DotnetBuildEnvironmentLease? stableSlotLease,
     CancellationToken cancellationToken);
 
+internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAcceptanceTryRunPreSlot(
+    ConductorParallelAcceptanceCandidate candidate,
+    ConductorAutonomyPolicy policy);
+
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
@@ -107,6 +111,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<int, bool> _isProcessAlive;
     private readonly Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult> _launchOwnedProcess;
     private readonly bool _runInline;
+    private readonly ConductorParallelAcceptanceTryRunPreSlot? _tryRunPreSlot;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -114,7 +119,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Func<DateTimeOffset>? utcNow = null,
         Func<int, bool>? isProcessAlive = null,
         Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult>? launchOwnedProcess = null,
-        bool runInline = false)
+        bool runInline = false,
+        ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null)
     {
         _rootDirectory = rootDirectory;
         _executionDirectory = executionDirectory;
@@ -122,6 +128,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
         _launchOwnedProcess = launchOwnedProcess ?? LaunchExternalOwnedProcess;
         _runInline = runInline;
+        _tryRunPreSlot = tryRunPreSlot;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -343,7 +350,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 attempt.MainHeadSha);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory,
-                executionDirectory);
+                executionDirectory,
+                tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot);
             var activeAttempt = coordinator.TryPersistOwnerProcess(attempt, Environment.ProcessId);
             if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
             {
@@ -396,8 +404,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             WriteHeartbeat(attempt, "running");
-            stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
-            run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+            run = _tryRunPreSlot?.Invoke(candidate, policy);
+            if (run is null)
+            {
+                stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
+                run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+            }
         }
         catch (OperationCanceledException ex)
         {

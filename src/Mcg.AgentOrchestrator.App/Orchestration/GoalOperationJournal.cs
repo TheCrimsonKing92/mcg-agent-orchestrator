@@ -72,6 +72,14 @@ internal sealed record GoalTerminalDisposition(
     GoalTerminalDispositionKind Kind,
     string Detail);
 
+internal sealed record GoalLandingIntent(
+    string GoalId,
+    string GoalBranch,
+    string IntegrationBranch,
+    string MergeCommitSha,
+    DateTimeOffset RecordedAt,
+    string Source);
+
 internal sealed record GoalLifecycleJournalEntry(
     string IdempotencyKey,
     GoalId GoalId,
@@ -82,6 +90,8 @@ internal sealed record GoalLifecycleJournalEntry(
 internal static class GoalOperationJournal
 {
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
+    public const string LandingIntentOperation = "conductor:landing-intent";
+    internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -166,6 +176,51 @@ internal static class GoalOperationJournal
     public static void Failed(string executionDirectory, Goal goal, string operation, string? detail = null) =>
         Append(executionDirectory, goal.Id, operation, GoalOperationStatus.Failed, detail);
 
+    public static void RecordLandingIntent(
+        string executionDirectory,
+        Goal goal,
+        string goalBranch,
+        string integrationBranch,
+        string mergeCommitSha,
+        string source,
+        DateTimeOffset? recordedAt = null)
+    {
+        var intent = new GoalLandingIntent(
+            goal.Id.Value,
+            goalBranch,
+            integrationBranch,
+            mergeCommitSha,
+            recordedAt ?? DateTimeOffset.UtcNow,
+            source);
+        BeforeLandingIntentAppend?.Invoke(intent);
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, LandingIntentOperation),
+            LandingIntentOperation,
+            GoalOperationStatus.Completed,
+            JsonSerializer.Serialize(intent, JsonOptions),
+            branchHeadSha: NormalizeSha(mergeCommitSha),
+            mainHeadSha: null,
+            acceptanceOutcome: null,
+            at: recordedAt);
+    }
+
+    public static void TombstoneLandingIntent(
+        string executionDirectory,
+        Goal goal,
+        string detail) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, LandingIntentOperation),
+            LandingIntentOperation,
+            GoalOperationStatus.Failed,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: null,
+            acceptanceOutcome: null);
+
     public static void AcceptancePassed(
         string executionDirectory,
         Goal goal,
@@ -209,6 +264,26 @@ internal static class GoalOperationJournal
             detail,
             attemptStartedAt,
             attemptReceipt);
+
+    public static void AcceptanceSkippedAlreadyMerged(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string detail,
+        DateTimeOffset? skippedAt = null) =>
+        AppendAcceptanceOutcome(
+            executionDirectory,
+            goal,
+            operation,
+            GoalOperationStatus.Skipped,
+            "skip-already-merged",
+            branchHeadSha,
+            mainHeadSha,
+            detail,
+            skippedAt,
+            attemptReceipt: null);
 
     public static GoalAcceptanceAttemptReceipt? TryExtractBaseBuildCacheReceipt(AcceptanceVerificationResult? verification)
     {
@@ -315,10 +390,22 @@ internal static class GoalOperationJournal
 
     public static bool HasDurableLandingIntent(GoalOperationJournalSummary journal)
     {
+        var latestLandingIntent = journal.LatestByOperation
+            .LastOrDefault(entry => entry.Operation.Equals(LandingIntentOperation, StringComparison.OrdinalIgnoreCase));
+        if (latestLandingIntent?.Status == GoalOperationStatus.Completed)
+        {
+            return true;
+        }
+
         if (TryGetLatestTerminalDisposition(journal) is { } latestTerminalDisposition)
         {
             return latestTerminalDisposition.Kind == GoalTerminalDispositionKind.Landed ||
                 latestTerminalDisposition.Detail.Contains("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (latestLandingIntent is not null)
+        {
+            return false;
         }
 
         return journal.LatestByOperation.Any(entry =>
@@ -326,6 +413,15 @@ internal static class GoalOperationJournal
             (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
              entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)) &&
             !IsLegacyRetiredTerminalDispositionEntry(entry));
+    }
+
+    public static GoalLandingIntent? TryGetLatestLandingIntent(GoalOperationJournalSummary journal)
+    {
+        var latestLandingIntent = journal.LatestByOperation
+            .LastOrDefault(entry => entry.Operation.Equals(LandingIntentOperation, StringComparison.OrdinalIgnoreCase));
+        return latestLandingIntent is null || latestLandingIntent.Status != GoalOperationStatus.Completed
+            ? null
+            : TryDeserializeLandingIntent(latestLandingIntent.Detail);
     }
 
     public static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> ReadAll(string executionDirectory) =>
@@ -416,6 +512,23 @@ internal static class GoalOperationJournal
         try
         {
             return JsonSerializer.Deserialize<GoalTerminalDisposition>(detail, JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static GoalLandingIntent? TryDeserializeLandingIntent(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<GoalLandingIntent>(detail, JsonOptions);
         }
         catch
         {

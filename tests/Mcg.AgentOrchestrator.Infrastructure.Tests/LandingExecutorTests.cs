@@ -132,6 +132,94 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "LandingExecutor_intent_write_failure_prevents_main_merge")]
+    public void LandingExecutorIntentWriteFailurePreventsMainMerge()
+    {
+        var repo = CreateGitRepository();
+        var previousHook = GoalOperationJournal.BeforeLandingIntentAppend;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/intent-write-fails.txt", "goal work");
+            GoalOperationJournal.BeforeLandingIntentAppend = _ => throw new InvalidOperationException("simulated intent write failure");
+
+            var ex = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
+
+            Assert.Contains("simulated intent write failure", ex.Message);
+            Assert.False(IsBranchReachableFromMain(repo, goalBranch));
+            Assert.False(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(repo, goal.Id)));
+        }
+        finally
+        {
+            GoalOperationJournal.BeforeLandingIntentAppend = previousHook;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_main_merge_failure_tombstones_landing_intent")]
+    public void LandingExecutorMainMergeFailureTombstonesLandingIntent()
+    {
+        var repo = CreateGitRepository();
+        var previousGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/main-merge-fails.txt", "goal work");
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+                args.SequenceEqual(["merge", "--ff-only", LandingExecutor.IntegrationBranchName])
+                    ? new GitCli.GitResult(1, string.Empty, "simulated main merge failure")
+                    : GitCli.Run(workingDirectory, args);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            Assert.Contains("simulated main merge failure", result.Message);
+            Assert.False(IsBranchReachableFromMain(repo, goalBranch));
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.False(GoalOperationJournal.HasDurableLandingIntent(journal));
+            Assert.Contains(journal.LatestByOperation, entry =>
+                entry.Operation == GoalOperationJournal.LandingIntentOperation &&
+                entry.Status == GoalOperationStatus.Failed);
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = previousGitRunner;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_success_records_one_landing_intent_and_reaches_main")]
+    public void LandingExecutorSuccessRecordsOneLandingIntentAndReachesMain()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/intent-success.txt", "goal work");
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced);
+            Assert.True(IsBranchReachableFromMain(repo, goalBranch));
+            var journal = GoalOperationJournal.Read(repo, goal.Id);
+            Assert.True(GoalOperationJournal.HasDurableLandingIntent(journal));
+            var intent = Assert.Single(journal.Entries.Where(entry =>
+                entry.Operation == GoalOperationJournal.LandingIntentOperation &&
+                entry.Status == GoalOperationStatus.Completed));
+            Assert.Contains("LandingExecutor", intent.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_holds_only_writing_task_touching_approval_path")]
     public void LandingExecutorGreenGateApprovalDiffHoldsOnlyWritingTaskTouchingApprovalPath()
     {
@@ -883,6 +971,9 @@ public sealed class LandingExecutorTests
         var result = GitCli.Run(repository, "show-ref", "--verify", reference);
         Assert.NotEqual(0, result.ExitCode);
     }
+
+    private static bool IsBranchReachableFromMain(string repository, string branch) =>
+        GitCli.Run(repository, "merge-base", "--is-ancestor", branch, "main").Succeeded;
 
     private static IDisposable WithMirrorTestHooks()
     {

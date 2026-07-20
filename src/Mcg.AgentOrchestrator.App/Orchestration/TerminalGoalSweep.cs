@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Globalization;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -327,6 +328,7 @@ internal static class TerminalGoalSweep
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
             var hasDurableLandingIntent = HasDurableLandingIntentForCleanup(executionDirectory, goal);
+            var skipMergedCleanupThisPass = false;
 
             if (HasStandingRetiredDisposition(executionDirectory, goal, branchFacts))
             {
@@ -367,6 +369,7 @@ internal static class TerminalGoalSweep
             {
                 if (hasDurableLandingIntent)
                 {
+                    AddAutoRepairNoopReceiptIfApplicable(executionDirectory, goal, repairs);
                     foreach (var task in goal.Tasks.Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)).ToArray())
                     {
                         var staleStatus = task.Status;
@@ -386,10 +389,19 @@ internal static class TerminalGoalSweep
                 }
                 else
                 {
-                    blockers.Add(new TerminalGoalSweepBlocker(
-                        "merged-branch-without-landing-intent",
-                        $"goal branch {GoalWorktrees.BranchName(goal.Id)} appears merged, but no durable landing intent was recorded",
-                        $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
+                    if (TryAutoRepairMergedBranchLandingIntent(kernel, executionDirectory, goal, repairs))
+                    {
+                        goal = kernel.GetGoal(originalGoal.Id);
+                        hasDurableLandingIntent = true;
+                        skipMergedCleanupThisPass = true;
+                    }
+                    else
+                    {
+                        blockers.Add(new TerminalGoalSweepBlocker(
+                            "landing-intent-auto-repair-failed",
+                            $"goal branch {GoalWorktrees.BranchName(goal.Id)} appears merged, but auto-repair could not recover the merge commit",
+                            $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
+                    }
                 }
             }
 
@@ -453,6 +465,7 @@ internal static class TerminalGoalSweep
 
             if (!blockedByDirtyWorktree &&
                 hasDurableLandingIntent &&
+                !skipMergedCleanupThisPass &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
                 var removeResult = GoalWorktrees.Remove(
@@ -593,6 +606,147 @@ internal static class TerminalGoalSweep
     private static bool HasDurableLandingIntentForCleanup(string executionDirectory, Goal goal) =>
         goal.Status != GoalStatus.Cancelled &&
         GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(executionDirectory, goal.Id));
+
+    private static void AddAutoRepairNoopReceiptIfApplicable(
+        string executionDirectory,
+        Goal goal,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        var intent = GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(executionDirectory, goal.Id));
+        if (intent is null ||
+            !intent.Source.Equals("auto-repair", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var repairedAtUtc = DateTimeOffset.UtcNow;
+        repairs.Add(new TerminalGoalSweepRepair(
+            "landing-intent-auto-repair-noop",
+            BuildAutoRepairReceipt(goal.Id, intent.MergeCommitSha, repairedAtUtc),
+            $"workspace remove {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}"));
+    }
+
+    private static bool TryAutoRepairMergedBranchLandingIntent(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+        if (GoalOperationJournal.TryGetLatestLandingIntent(journal) is not null)
+        {
+            AddAutoRepairNoopReceiptIfApplicable(executionDirectory, goal, repairs);
+            return true;
+        }
+
+        if (!TryRecoverLandingMerge(executionDirectory, goal, out var recovered))
+        {
+            return false;
+        }
+
+        var goalBranch = GoalWorktrees.BranchName(goal.Id);
+        GoalOperationJournal.RecordLandingIntent(
+            executionDirectory,
+            goal,
+            goalBranch,
+            LandingExecutor.IntegrationBranchName,
+            recovered.MergeCommitSha,
+            "auto-repair",
+            recovered.CommitAtUtc);
+
+        var repairedAtUtc = DateTimeOffset.UtcNow;
+        RecordTerminalDisposition(
+            kernel,
+            executionDirectory,
+            goal,
+            GoalTerminalDispositionKind.Landed,
+            $"Terminal sweep auto-repaired missing landing intent: {BuildAutoRepairReceipt(goal.Id, recovered.MergeCommitSha, repairedAtUtc)}");
+        repairs.Add(new TerminalGoalSweepRepair(
+            "landing-intent-auto-repair",
+            BuildAutoRepairReceipt(goal.Id, recovered.MergeCommitSha, repairedAtUtc),
+            $"workspace remove {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}"));
+        return true;
+    }
+
+    private static string BuildAutoRepairReceipt(GoalId goalId, string mergeCommitSha, DateTimeOffset repairedAtUtc) =>
+        $"goalId={goalId.Value}; mergeCommitSha={mergeCommitSha}; repairedAtUtc={repairedAtUtc:O}; source=auto-repair";
+
+    private static bool TryRecoverLandingMerge(
+        string executionDirectory,
+        Goal goal,
+        out RecoveredLandingMerge recovered)
+    {
+        recovered = default;
+        if (!TryResolveMergedBranchTip(executionDirectory, goal, out var branchTip))
+        {
+            return false;
+        }
+
+        var ancestry = RunGit(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..HEAD");
+        var mergeCommitSha = ancestry.ExitCode == 0
+            ? ancestry.Output
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault()
+            : null;
+        if (string.IsNullOrWhiteSpace(mergeCommitSha))
+        {
+            var tipLog = RunGit(executionDirectory, "log", "--format=%H", "-n", "1", branchTip);
+            mergeCommitSha = tipLog.ExitCode == 0 ? tipLog.Output.Trim() : branchTip;
+        }
+
+        if (string.IsNullOrWhiteSpace(mergeCommitSha))
+        {
+            return false;
+        }
+
+        recovered = new RecoveredLandingMerge(
+            mergeCommitSha.Trim(),
+            TryGetCommitUtc(executionDirectory, mergeCommitSha.Trim()) ?? DateTimeOffset.UtcNow);
+        return true;
+    }
+
+    private static bool TryResolveMergedBranchTip(string executionDirectory, Goal goal, out string branchTip)
+    {
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var branchResult = RunGit(executionDirectory, "rev-parse", $"refs/heads/{branch}");
+        if (branchResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(branchResult.Output))
+        {
+            branchTip = branchResult.Output.Trim();
+            return true;
+        }
+
+        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        if (worktree is not null)
+        {
+            var worktreeResult = RunGit(worktree, "rev-parse", "HEAD");
+            if (worktreeResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(worktreeResult.Output))
+            {
+                branchTip = worktreeResult.Output.Trim();
+                return true;
+            }
+        }
+
+        branchTip = string.Empty;
+        return false;
+    }
+
+    private static DateTimeOffset? TryGetCommitUtc(string executionDirectory, string commitSha)
+    {
+        var result = RunGit(executionDirectory, "show", "-s", "--format=%cI", commitSha);
+        return result.ExitCode == 0 &&
+            DateTimeOffset.TryParse(
+                result.Output.Trim(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
+        GitRunner(executionDirectory, args);
+
+    private readonly record struct RecoveredLandingMerge(string MergeCommitSha, DateTimeOffset CommitAtUtc);
 
     private static bool TryBuildReachableCommitEvidence(
         string executionDirectory,

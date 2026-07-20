@@ -422,6 +422,79 @@ public sealed class ConductorDriverTests
         Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_slot_path_skips_already_merged_branch_before_lease")]
+    public void ConductorDriverAcceptanceSlotPathSkipsAlreadyMergedBranchBeforeLease()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Already merged gate skip");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.WriteAllText(Path.Combine(worktree, "merged-before-gate.txt"), "goal work");
+        RunGit(worktree, "add", "merged-before-gate.txt");
+        RunGit(worktree, "commit", "-m", "goal work");
+        var branchTip = GitCli.Run(worktree, "rev-parse", "HEAD").Output.Trim();
+        RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+        var candidate = driver.TryBuildParallelAcceptanceCandidate(goal, ConductorAutonomyPolicy.Conservative, 0);
+        Assert.NotNull(candidate);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),
+            root,
+            runInline: true,
+            tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot);
+        var acceptanceRan = false;
+
+        var decision = coordinator.Evaluate(
+            candidate!,
+            ConductorAutonomyPolicy.Conservative,
+            (_, _, lease, _) =>
+            {
+                acceptanceRan = true;
+                Assert.NotNull(lease);
+                return ConductorParallelAcceptanceRunResult.Accepted(
+                    candidate!,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+            });
+
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+        Assert.False(acceptanceRan);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, decision.Attempt.Outcome);
+        Assert.Empty(decision.Attempt.LeaseReceipts ?? []);
+        Assert.NotNull(decision.Run?.EarlyResult);
+        Assert.Equal("skip-already-merged", decision.Run!.EarlyOutcome?.Kind);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var skip = Assert.Single(journal.Entries.Where(entry => entry.AcceptanceOutcome == "skip-already-merged"));
+        Assert.Equal(GoalOperationStatus.Skipped, skip.Status);
+        Assert.Contains($"mergeCommitSha={branchTip}", skip.Detail, StringComparison.Ordinal);
+
+        GoalOperationJournal.RecordLandingIntent(
+            root,
+            goal,
+            GoalWorktrees.BranchName(goal.Id),
+            LandingExecutor.IntegrationBranchName,
+            branchTip,
+            "test");
+        var secondSkip = driver.RunParallelLandingAcceptancePreSlot(candidate!, ConductorAutonomyPolicy.Conservative);
+        Assert.NotNull(secondSkip);
+        Assert.Equal("skip-already-merged", secondSkip!.EarlyOutcome?.Kind);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_operator_approval_reasons")]
     public void ConductorDriverEmptyBatchSurfacesOperatorApprovalReasons()
     {
