@@ -34,10 +34,21 @@ public sealed class ConductorDriverTests
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
-    private static void PassVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
+    private static void PassVerification(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        bool hasCommittedChanges = false)
     {
         DispatchTask(kernel, goal, task);
-        var verification = new TaskVerificationRecord("test.exe", "C:\\tmp", 0, "ok", "", DateTimeOffset.UtcNow);
+        var verification = new TaskVerificationRecord(
+            "test.exe",
+            "C:\\tmp",
+            0,
+            "ok",
+            "",
+            DateTimeOffset.UtcNow,
+            HasCommittedChanges: hasCommittedChanges);
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
     }
 
@@ -85,6 +96,39 @@ public sealed class ConductorDriverTests
             StandardOutputPath: stdoutPath,
             WorkerResultPresent: true);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
+    }
+
+    private static void FailTesterBlocker(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec tester,
+        string blocker,
+        string? stdoutPath = "C:\\tmp\\tester.out.log")
+    {
+        DispatchTask(kernel, goal, tester, "test");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "Tests found a correctness issue.",
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: test",
+            "tests: fail - focused behavior check failed",
+            $"blockers: {blocker}",
+            "commit: none",
+            "model_fit: test",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\tmp",
+            1,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: stdoutPath,
+            WorkerResultPresent: true);
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, verification);
     }
 
     private static WorkerSandboxPrepRecoverableAction NewSandboxRecoveryAction() =>
@@ -1366,6 +1410,116 @@ public sealed class ConductorDriverTests
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_tester_worker_result_blocker_auto_retries_developer_with_findings")]
+    public void ConductorDriverTesterWorkerResultBlockerAutoRetriesDeveloperWithFindings()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+
+        var blocker = "Developer left the retry feedback path unwired.";
+        FailTesterBlocker(kernel, goal, tester, blocker);
+        var dispatched = false;
+        var escalated = false;
+        TaskId? retriedTaskId = null;
+        string? retryMessage = null;
+        RetryRoundKind? retryRoundKind = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
+            {
+                retriedTaskId = tid;
+                retryMessage = msg;
+                retryRoundKind = roundKind;
+                return kernel.RetryTask(gid, tid, msg, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(dispatched);
+        Assert.False(escalated);
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Contains("auto-review-retry round 1", retryMessage);
+        Assert.Contains("Tester task", retryMessage);
+        Assert.Contains("WORKER_RESULT blocker", retryMessage);
+        Assert.Contains(blocker, retryMessage);
+        Assert.Contains("C:\\tmp\\tester.out.log", retryMessage);
+        Assert.Null(retryRoundKind);
+        Assert.Null(developer.PendingRetryRoundKind);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_tester_worker_result_blocker_uses_shared_auto_review_retry_cap")]
+    public void ConductorDriverTesterWorkerResultBlockerUsesSharedAutoReviewRetryCap()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        for (var i = 1; i <= 6; i++)
+        {
+            kernel.RetryTask(goal.Id, developer.Id, $"auto-review-retry round {i}: prior verifying-role finding");
+            PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        }
+
+        FailTesterBlocker(kernel, goal, tester, "Developer still misses the tester correctness blocker.");
+        var retried = false;
+        var dispatched = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.False(dispatched);
+        Assert.Contains("auto-review-retry stopped at review round 7/7", escalation);
+        Assert.Contains("operator decision required", escalation);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_tester_empty_output_flake_auto_recovers_without_developer_retry")]
+    public void ConductorDriverTesterEmptyOutputFlakeAutoRecoversWithoutDeveloperRetry()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        DispatchTask(kernel, goal, tester, "test");
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id,
+            new TaskVerificationRecord("test", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+
+        TaskId? retriedTaskId = null;
+        var escalated = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
+            {
+                retriedTaskId = tid;
+                return kernel.RetryTask(gid, tid, msg, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, _) => { escalated = true; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(escalated);
+        Assert.Equal(tester.Id, retriedTaskId);
+        Assert.NotEqual(developer.Id, retriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
