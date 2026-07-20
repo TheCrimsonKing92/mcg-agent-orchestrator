@@ -476,7 +476,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         PartitionVerdictCacheContext? cacheContext,
         AcceptanceManifestCheck check) =>
         cacheContext is null ||
-        !cacheContext.ForceFullRerun ||
         !TryGetInfrastructurePartitionId(check, out _, out _);
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithPartitionVerdictCacheAsync(
@@ -1380,7 +1379,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var aggregateVerdict = checks.Any(check => !check.Advisory && !check.Passed) ? "RED" : "GREEN";
+        var aggregateVerdict = cacheContext.Executed.Any(executed =>
+            executed.Verdict.Equals("RED", StringComparison.OrdinalIgnoreCase))
+                ? "RED"
+                : "GREEN";
         var attemptCount = 0;
         if (cacheContext.ForceFullRerun ||
             (cacheContext.Reused.Count == 0 && cacheContext.Executed.Count >= cacheContext.PartitionCount))

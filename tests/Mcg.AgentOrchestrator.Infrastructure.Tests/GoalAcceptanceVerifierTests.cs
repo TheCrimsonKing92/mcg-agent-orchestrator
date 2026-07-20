@@ -1398,6 +1398,98 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_records_later_partitions_after_early_failure")]
+    public async Task GoalAcceptanceVerifierPartitionVerdictCacheRecordsLaterPartitionsAfterEarlyFailure()
+    {
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var goalId = new GoalId("12345678123456781234567812345678");
+        var calls = new List<string[]>();
+        SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsInfrastructurePartitionTestCall(args) &&
+                    args.Any(arg => arg.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal)))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : ""));
+            });
+
+            var result = await verifier.RunAsync(root, goalId);
+
+            Assert.False(result.Passed);
+            Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
+            var receipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure partition verdict cache");
+            Assert.Contains("{partition_id=cli,verdict=RED}", receipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("{partition_id=remainder,verdict=GREEN}", receipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("aggregate_verdict=RED", receipt.ResultSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_aggregate_ignores_unrelated_check_failures")]
+    public async Task GoalAcceptanceVerifierPartitionVerdictCacheAggregateIgnoresUnrelatedCheckFailures()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "post partition command", "type": "command", "command": "git", "arguments": ["diff", "--check"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var goalId = new GoalId("12345678123456781234567812345678");
+        var calls = new List<string[]>();
+        SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.Length > 1 && args[0] == "git" && args[1] == "diff")
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "unrelated failure"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : ""));
+            });
+
+            var result = await verifier.RunAsync(root, goalId);
+
+            Assert.False(result.Passed);
+            Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
+            var receipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure partition verdict cache");
+            Assert.Contains("aggregate_verdict=GREEN", receipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("{partition_id=cli,verdict=GREEN}", receipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("post partition command", result.Checks!.Single(check => !check.Passed).Name, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_invalidates_on_candidate_or_main_sha_change")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheInvalidatesOnCandidateOrMainShaChange()
     {
