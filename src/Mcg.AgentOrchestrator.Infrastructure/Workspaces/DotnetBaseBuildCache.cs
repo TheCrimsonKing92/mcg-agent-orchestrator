@@ -100,6 +100,7 @@ internal sealed class DotnetBaseBuildCache
 
             if (artifactsPath is not null)
             {
+                ClearProjectArtifactRoots(artifactsPath, project);
                 CopyDirectory(entryPath, artifactsPath, skipManifest: true);
             }
 
@@ -268,6 +269,17 @@ internal sealed class DotnetBaseBuildCache
         var projectName = Path.GetFileNameWithoutExtension(project);
         yield return Path.Combine(artifactsPath, "bin", projectName);
         yield return Path.Combine(artifactsPath, "obj", projectName);
+    }
+
+    private static void ClearProjectArtifactRoots(string artifactsPath, string project)
+    {
+        foreach (var root in ProjectArtifactRoots(artifactsPath, project))
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     private static string ProjectKey(string project)

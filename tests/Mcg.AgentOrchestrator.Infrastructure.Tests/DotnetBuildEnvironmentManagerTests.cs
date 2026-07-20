@@ -79,12 +79,16 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             WriteProjectArtifacts(coldArtifacts, project, "cold");
             var coldHash = DotnetBaseBuildCache.ProjectOutputHash(coldArtifacts, project);
+            WriteProjectArtifacts(warmArtifacts, project, "stale");
+            var staleFile = Path.Combine(warmArtifacts, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "stale-extra.txt");
+            File.WriteAllText(staleFile, "stale");
 
             var publish = cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", coldArtifacts, [project]);
             var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", warmArtifacts, [project]);
 
             Assert.Single(publish.Projects);
             Assert.True(restore.AllHit);
+            Assert.False(File.Exists(staleFile));
             Assert.Equal(coldHash, DotnetBaseBuildCache.ProjectOutputHash(warmArtifacts, project));
         }
         finally

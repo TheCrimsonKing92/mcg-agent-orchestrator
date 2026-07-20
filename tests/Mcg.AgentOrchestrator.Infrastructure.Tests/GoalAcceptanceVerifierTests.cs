@@ -1486,6 +1486,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     stableSlotIndex: 0)
                     .GetAwaiter()
                     .GetResult());
+            var firstBuildArtifactsPath = GetArtifactsPath(calls.First(call =>
+                call.Length >= 3 && call[0] == "dotnet" && call[1] == "build"));
+            var staleRestoredProjectFile = Path.Combine(
+                firstBuildArtifactsPath,
+                "bin",
+                "Mcg.AgentOrchestrator.Core",
+                "debug_net10.0",
+                "stale-extra.txt");
+            File.WriteAllText(staleRestoredProjectFile, "stale");
             var secondOutput = AsyncLocalConsoleRouter.Capture(() =>
                 verifier.RunAsync(
                     root,
@@ -1523,6 +1532,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", secondOutput, StringComparison.Ordinal);
             Assert.Contains("built_projects=Infrastructure.Tests", secondOutput, StringComparison.Ordinal);
+            Assert.False(File.Exists(staleRestoredProjectFile));
             Assert.True(firstBuildPhaseMs >= 0, $"Expected non-negative cold build phase receipt; cold={firstBuildPhaseMs}ms");
             Assert.True(secondBuildPhaseMs >= 0, $"Expected non-negative warm build phase receipt; warm={secondBuildPhaseMs}ms");
         }
