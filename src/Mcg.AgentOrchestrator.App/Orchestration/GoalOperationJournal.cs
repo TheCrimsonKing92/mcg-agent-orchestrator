@@ -30,7 +30,16 @@ internal sealed record GoalOperationJournalEntry(
     string? BaseBuildCacheProjects = null,
     string? BaseBuildCacheBuiltProjects = null,
     string? BaseBuildCacheEvictions = null,
-    string? BaseBuildCacheReceipt = null)
+    string? BaseBuildCacheReceipt = null,
+    string? PartitionVerdictCacheKey = null,
+    string? PartitionPairKey = null,
+    string? PartitionId = null,
+    string? PartitionFilterHash = null,
+    string? PartitionVerdict = null,
+    string? PartitionAttemptId = null,
+    IReadOnlyList<string>? PartitionTestResultPaths = null,
+    int? PartitionReuseAttemptCount = null,
+    bool? PartitionForcedFullRerun = null)
 {
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
