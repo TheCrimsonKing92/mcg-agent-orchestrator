@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed record WorkerProcessRunRequest(
     string Command,
     string WorkingDirectory,
-    TimeSpan? Timeout = null);
+    TimeSpan? Timeout = null,
+    string? StandardInput = null);
 
 public sealed record WorkerProcessRunResult(
     int ExitCode,
@@ -33,6 +34,10 @@ public static class WorkerProcessRunner
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8
         };
+        if (redirectStandardInput)
+        {
+            startInfo.StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        }
 
         foreach (var argument in WorkerShell.BaseArguments())
         {
@@ -69,7 +74,24 @@ public static class WorkerProcessRunner
 
         try
         {
-            try { process.StandardInput.Close(); } catch { }
+            if (request.StandardInput is null)
+            {
+                try { process.StandardInput.Close(); } catch { }
+            }
+            else
+            {
+                try
+                {
+                    await process.StandardInput.WriteAsync(request.StandardInput).ConfigureAwait(false);
+                    await process.StandardInput.FlushAsync(linkedCts.Token).ConfigureAwait(false);
+                    process.StandardInput.Close();
+                }
+                catch
+                {
+                    try { process.StandardInput.Close(); } catch { }
+                    throw;
+                }
+            }
 
             using var stdout = new MemoryStream();
             using var stderr = new MemoryStream();

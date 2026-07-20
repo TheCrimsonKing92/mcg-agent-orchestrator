@@ -22,6 +22,7 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
+    private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -40,7 +41,8 @@ internal sealed class ConductorBatchLoop
         Func<AgentOrchestratorKernel, TerminalGoalSweepResult?>? measuredSweep = null,
         Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
         ConductEventLogWriter? conductEventLogWriter = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -52,6 +54,7 @@ internal sealed class ConductorBatchLoop
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
+        _progressiveReviewGlances = progressiveReviewGlances;
         _handoffOnMaxDuration = handoffOnMaxDuration;
         _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -236,6 +239,9 @@ internal sealed class ConductorBatchLoop
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
             var goalWalkClock = Stopwatch.StartNew();
+            var glanceDurationStats = _progressiveReviewGlances is null
+                ? Array.Empty<TaskDurationStatsRecord>()
+                : kernel.BuildTaskDurationStats();
             foreach (var goal in eligible)
             {
                 var label = goal.Id.Value[..8];
@@ -309,6 +315,20 @@ internal sealed class ConductorBatchLoop
                     {
                         var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
                         _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                        if (_progressiveReviewGlances is not null && watchInterval is not null)
+                        {
+                            var glanceResult = _progressiveReviewGlances.Observe(kernel, [goal], glanceDurationStats);
+                            foreach (var line in glanceResult.ProgressLines)
+                            {
+                                EmitProgress(line, tickLines);
+                            }
+
+                            if (glanceResult.MutatedTaskState)
+                            {
+                                changedGoalIds.Add(goal.Id);
+                            }
+                        }
+
                         goalProjectionCache.Invalidate(goal.Id);
                         var afterRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
                         if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
@@ -613,6 +633,7 @@ internal sealed class ConductorBatchLoop
             "LOOP_STOP" => "loop-stop",
             "TICK_WRITE_BUSY" => "lock-blocker",
             "TICK_WRITE_DEGRADED" => "lock-blocker",
+            "GLANCE" => "progressive-review-glance",
             "WATCH_TRANSITION" => "watch-transition",
             _ => string.Empty
         };
