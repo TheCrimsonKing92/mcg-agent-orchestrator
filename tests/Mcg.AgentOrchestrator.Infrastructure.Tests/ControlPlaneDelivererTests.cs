@@ -44,6 +44,29 @@ public sealed class ControlPlaneDelivererTests
         Assert.Contains("Updated", edit.Content);
     }
 
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_delivers_steward_triage_cards")]
+    public async Task ControlPlaneDelivererDeliversStewardTriageCards()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport);
+        var now = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var stewardCard = Card(
+            "goal-123456",
+            "FailedTask",
+            "task-1",
+            "same-cause",
+            "Steward triage",
+            "numbers=1",
+            raisedAt: now.AddHours(-1)) with { Source = ControlPlaneCardSource.StewardTriage };
+
+        var result = await deliverer.DeliverAsync([stewardCard], now);
+
+        Assert.Contains(result.Operations, operation => operation.Kind == ControlPlaneDeliveryOperationKind.Send);
+        Assert.Single(transport.Sent);
+        Assert.Contains("Steward triage", transport.Sent.Single().Content);
+    }
+
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_resolved_card_strikes_through_and_removes_buttons")]
     public async Task ControlPlaneDelivererResolvedCardStrikesThroughAndRemovesButtons()
     {

@@ -39,4 +39,5 @@ public static class ModelFunctionPurposes
     // no enum churn, no exclusion sets, no square peg.
     public const string AcceptanceJudge = "acceptance-judge";
     public const string SpecRefiner = "spec-refiner";
+    public const string StewardTriage = "steward-triage";
 }
