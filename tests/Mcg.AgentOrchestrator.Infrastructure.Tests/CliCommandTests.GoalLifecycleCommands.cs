@@ -3034,6 +3034,68 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_journals_candidate_outcome_with_base_build_cache_receipt")]
+    public void CliAcceptanceJournalsCandidateOutcomeWithBaseBuildCacheReceipt()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Cached acceptance", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        var mainSha = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: new ProbeAcceptanceVerifier(new AcceptanceVerificationResult(
+                true,
+                false,
+                0,
+                "Passed.",
+                ArtifactsPath: Path.Combine(root, "artifacts"),
+                Checks:
+                [
+                    new AcceptanceCheckResult(
+                        "infrastructure-tests",
+                        true,
+                        0,
+                        "Passed.",
+                        ResultSummary: $"base-build-cache main_sha={mainSha} build_phase_ms=42 projects=Core=hit,Infrastructure=miss,published built_projects=Infrastructure evictions=none; Passed: 1")
+                ])),
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("Verification: passed", output);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var passedOutcome = journal.Entries.LastOrDefault(entry => entry.AcceptanceOutcome == "passed");
+        Xunit.Assert.NotNull(passedOutcome);
+        Xunit.Assert.Equal(GoalOperationStatus.Completed, passedOutcome.Status);
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(passedOutcome.BranchHeadSha));
+        Xunit.Assert.Equal(mainSha, passedOutcome.MainHeadSha, StringComparer.OrdinalIgnoreCase);
+        Xunit.Assert.Equal(mainSha, passedOutcome.BaseBuildCacheMainSha, StringComparer.OrdinalIgnoreCase);
+        Xunit.Assert.Equal(42, passedOutcome.BuildPhaseMilliseconds);
+        Xunit.Assert.Equal("Core=hit,Infrastructure=miss,published", passedOutcome.BaseBuildCacheProjects);
+        Xunit.Assert.Equal("Infrastructure", passedOutcome.BaseBuildCacheBuiltProjects);
+        Xunit.Assert.Equal("none", passedOutcome.BaseBuildCacheEvictions);
+        Xunit.Assert.Equal(
+            $"base-build-cache main_sha={mainSha} build_phase_ms=42 projects=Core=hit,Infrastructure=miss,published built_projects=Infrastructure evictions=none",
+            passedOutcome.BaseBuildCacheReceipt);
+    }
+
     [Xunit.Fact(DisplayName = "Acceptance_journal_orders_current_pair_outcomes_newest_first")]
     public void AcceptanceJournalOrdersCurrentPairOutcomesNewestFirst()
     {

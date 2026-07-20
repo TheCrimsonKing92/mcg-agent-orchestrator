@@ -309,15 +309,18 @@ internal sealed class ConductorDriver
                     unmetCriteria.Length == 0
                         ? $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode})."
                         : $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}) with {unmetCriteria.Length} unmet advisory criterion/criteria.",
-                    acceptanceAttemptStartedAt);
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             else if (failedChecks.Any(IsBlockingTimeoutCheck))
                 GoalOperationJournal.AcceptanceBlocked(dir, goal, "conductor:acceptance", "timeout", branchHeadSha, mainHeadSha,
                     $"Acceptance blocked:timeout for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}",
-                    acceptanceAttemptStartedAt);
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             else
                 GoalOperationJournal.AcceptanceFailed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     $"Acceptance failed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}",
-                    acceptanceAttemptStartedAt);
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             return new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,

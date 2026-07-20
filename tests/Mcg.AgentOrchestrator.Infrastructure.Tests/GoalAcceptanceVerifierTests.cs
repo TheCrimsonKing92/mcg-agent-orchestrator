@@ -1300,12 +1300,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var artifactsPath = GetArtifactsPath(buildCalls[0]);
             Assert.True(File.Exists(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "cache.txt")));
             Assert.Contains("BASE_BUILD_CACHE ", output, StringComparison.Ordinal);
+            Assert.Contains($"main_sha={mainSha}", output, StringComparison.Ordinal);
             Assert.Contains("build_phase_ms=", output, StringComparison.Ordinal);
             Assert.Contains("Core=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("built_projects=Infrastructure.Tests", output, StringComparison.Ordinal);
             Assert.Contains(result.Checks!, check =>
                 check.ResultSummary?.Contains("base-build-cache", StringComparison.Ordinal) == true &&
+                check.ResultSummary.Contains($"main_sha={mainSha}", StringComparison.Ordinal) &&
                 check.ResultSummary.Contains("build_phase_ms=", StringComparison.Ordinal));
         }
         finally
@@ -1393,6 +1395,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var artifactsPath = GetArtifactsPath(buildCalls[0]);
             Assert.True(File.Exists(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "cache.txt")));
             Assert.Contains("BASE_BUILD_CACHE ", output, StringComparison.Ordinal);
+            Assert.Contains($"main_sha={mainSha}", output, StringComparison.Ordinal);
             Assert.Contains("Core=hit", output, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=changed", output, StringComparison.Ordinal);

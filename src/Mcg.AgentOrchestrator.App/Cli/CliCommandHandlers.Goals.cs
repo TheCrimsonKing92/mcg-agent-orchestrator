@@ -3267,7 +3267,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                     testedWorktreeHead,
                     testedMainHead,
                     $"Acceptance blocked:timeout for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", timedOutChecks)}.",
-                    acceptanceAttemptStartedAt);
+                    acceptanceAttemptStartedAt,
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
                 context.EventWriter.AppendAcceptanceResult(goal.Id, false, timedOutChecks);
                 AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=blocked type=timeout checks={FormatConductEventChecks(timedOutChecks)}");
                 return false;
@@ -3290,7 +3291,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             testedWorktreeHead,
             testedMainHead,
             $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {string.Join(", ", failedChecks)}.",
-            acceptanceAttemptStartedAt);
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks={FormatConductEventChecks(failedChecks)}");
         return false;
@@ -3329,7 +3331,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             testedWorktreeHead,
             testedMainHead,
             $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: stop-host.",
-            acceptanceAttemptStartedAt);
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, ["stop-host"]);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed checks=stop-host");
         return false;
@@ -3378,7 +3381,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             testedWorktreeHead,
             testedMainHead,
             $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {failedChecks[0]}.",
-            acceptanceAttemptStartedAt);
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
         context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
         AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=state-guard checks={FormatConductEventChecks(failedChecks)}");
         Console.WriteLine($"BLOCKER step=acceptance-state-guard reason=state-changed detail=\"{EscapeBlockerDetail(failedChecks[0])}\" action=\"Resolve concurrent goal or worktree changes, then rerun acceptance.\"");
@@ -3393,7 +3397,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         Console.WriteLine($"Workspace merge: {mergeCommit.Message}");
         if (mergeCommit.FastForwarded)
         {
-            RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt);
+            RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
         }
         else
         {
@@ -3406,7 +3410,8 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 testedWorktreeHead,
                 testedMainHead,
                 $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: merge.",
-                acceptanceAttemptStartedAt);
+                acceptanceAttemptStartedAt,
+                GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
             context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
             AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=merge checks=merge");
             Console.WriteLine($"BLOCKER step=merge reason={mergeCommit.Message} action=\"Resolve conflicts on {context.Worktrees.BranchName(goal.Id)}, rerun verification, then rerun acceptance.\"");
@@ -3414,7 +3419,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return mergeCommit.FastForwarded;
     }
 
-    RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt);
+    RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
     return true;
 }
 
@@ -3484,7 +3489,8 @@ private static void RecordAcceptanceCompleted(
     Goal goal,
     string? branchHeadSha,
     string? mainHeadSha,
-    DateTimeOffset? acceptanceAttemptStartedAt)
+    DateTimeOffset? acceptanceAttemptStartedAt,
+    AcceptanceVerificationResult? verification)
 {
     GoalOperationJournal.AcceptancePassed(
         context.Workspace.ExecutionDirectory,
@@ -3493,7 +3499,8 @@ private static void RecordAcceptanceCompleted(
         branchHeadSha,
         mainHeadSha,
         $"Acceptance passed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} and merge completed.",
-        acceptanceAttemptStartedAt);
+        acceptanceAttemptStartedAt,
+        GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
     context.Kernel.ClearAcceptanceFailure(goal.Id);
     if (goal.Status == GoalStatus.Verified)
     {
