@@ -78,6 +78,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
         try
         {
             WriteProjectArtifacts(coldArtifacts, project, "cold");
+            var projectName = Path.GetFileNameWithoutExtension(project);
+            var nestedManifest = Path.Combine(coldArtifacts, "bin", projectName, "debug_net10.0", "manifest.json");
+            File.WriteAllText(nestedManifest, "legitimate build output");
             var coldHash = DotnetBaseBuildCache.ProjectOutputHash(coldArtifacts, project);
             WriteProjectArtifacts(warmArtifacts, project, "stale");
             var staleFile = Path.Combine(warmArtifacts, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "stale-extra.txt");
@@ -89,6 +92,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Single(publish.Projects);
             Assert.True(restore.AllHit);
             Assert.False(File.Exists(staleFile));
+            Assert.True(File.Exists(Path.Combine(warmArtifacts, "bin", projectName, "debug_net10.0", "manifest.json")));
             Assert.Equal(coldHash, DotnetBaseBuildCache.ProjectOutputHash(warmArtifacts, project));
         }
         finally

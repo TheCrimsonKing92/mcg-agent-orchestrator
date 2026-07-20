@@ -91,7 +91,7 @@ internal sealed class DotnetBaseBuildCache
                 continue;
             }
 
-            var currentHash = HashDirectory(entryPath, excludeManifest: true);
+            var currentHash = HashDirectory(entryPath, excludeRootManifest: true);
             if (!string.Equals(currentHash, manifest.ContentHash, StringComparison.Ordinal))
             {
                 receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", currentHash));
@@ -101,7 +101,7 @@ internal sealed class DotnetBaseBuildCache
             if (artifactsPath is not null)
             {
                 ClearProjectArtifactRoots(artifactsPath, project);
-                CopyDirectory(entryPath, artifactsPath, skipManifest: true);
+                CopyDirectory(entryPath, artifactsPath, skipRootManifest: true);
             }
 
             receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "hit", null, currentHash));
@@ -140,7 +140,7 @@ internal sealed class DotnetBaseBuildCache
                     CopyDirectory(sourceRoot, Path.Combine(stagingPath, relativeRoot));
                 }
 
-                var hash = HashDirectory(stagingPath, excludeManifest: false);
+                var hash = HashDirectory(stagingPath, excludeRootManifest: false);
                 File.WriteAllText(
                     Path.Combine(stagingPath, ManifestFileName),
                     JsonSerializer.Serialize(
@@ -180,7 +180,7 @@ internal sealed class DotnetBaseBuildCache
                 CopyDirectory(sourceRoot, Path.Combine(stagingPath, relativeRoot));
             }
 
-            return HashDirectory(stagingPath, excludeManifest: false);
+            return HashDirectory(stagingPath, excludeRootManifest: false);
         }
         finally
         {
@@ -297,7 +297,7 @@ internal sealed class DotnetBaseBuildCache
         return string.IsNullOrWhiteSpace(sanitized) ? "entry" : sanitized;
     }
 
-    private static void CopyDirectory(string sourcePath, string destinationPath, bool skipManifest = false)
+    private static void CopyDirectory(string sourcePath, string destinationPath, bool skipRootManifest = false)
     {
         Directory.CreateDirectory(destinationPath);
         foreach (var directory in Directory.EnumerateDirectories(sourcePath, "*", SearchOption.AllDirectories))
@@ -307,7 +307,7 @@ internal sealed class DotnetBaseBuildCache
 
         foreach (var file in Directory.EnumerateFiles(sourcePath, "*", SearchOption.AllDirectories))
         {
-            if (skipManifest && Path.GetFileName(file).Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase))
+            if (skipRootManifest && IsRootManifest(sourcePath, file))
             {
                 continue;
             }
@@ -318,7 +318,7 @@ internal sealed class DotnetBaseBuildCache
         }
     }
 
-    private static string HashDirectory(string path, bool excludeManifest)
+    private static string HashDirectory(string path, bool excludeRootManifest)
     {
         using var sha = SHA256.Create();
         if (!Directory.Exists(path))
@@ -327,7 +327,7 @@ internal sealed class DotnetBaseBuildCache
         }
 
         foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
-            .Where(file => !excludeManifest || !Path.GetFileName(file).Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase))
+            .Where(file => !excludeRootManifest || !IsRootManifest(path, file))
             .OrderBy(file => Path.GetRelativePath(path, file), StringComparer.OrdinalIgnoreCase))
         {
             var relative = Path.GetRelativePath(path, file).Replace('\\', '/');
@@ -342,6 +342,9 @@ internal sealed class DotnetBaseBuildCache
         sha.TransformFinalBlock([], 0, 0);
         return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
     }
+
+    private static bool IsRootManifest(string rootPath, string filePath) =>
+        Path.GetRelativePath(rootPath, filePath).Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase);
 
     private static bool TryDeleteDirectory(string path)
     {
