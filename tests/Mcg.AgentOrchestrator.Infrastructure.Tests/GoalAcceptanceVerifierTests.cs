@@ -1409,9 +1409,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_base_build_cache_receipts_show_warm_gate_under_one_third_cold_gate")]
-    public async Task GoalAcceptanceVerifierBaseBuildCacheReceiptsShowWarmGateUnderOneThirdColdGate()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_base_build_cache_receipts_show_structural_cold_then_warm_attempts")]
+    public async Task GoalAcceptanceVerifierBaseBuildCacheReceiptsShowStructuralColdThenWarmAttempts()
     {
+        var calls = new List<string[]>();
         var root = CreateCheckedInManifestShapeWorkspace();
         var cacheRoot = Path.Combine(root, "base-cache");
         var cache = new DotnetBaseBuildCache(cacheRoot);
@@ -1432,6 +1433,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
+                calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
                     args.Length > 0 && args[0] == "git")
                 {
@@ -1443,7 +1445,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     var artifactsPath = GetArtifactsPath(args);
                     if (args[2].EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
                     {
-                        Thread.Sleep(1200);
                         foreach (var project in cacheableProjects)
                         {
                             WriteProjectArtifacts(artifactsPath, project, $"cold:{project}");
@@ -1451,7 +1452,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     }
                     else
                     {
-                        Thread.Sleep(5);
                         WriteProjectArtifacts(artifactsPath, args[2], $"warm:{args[2]}");
                     }
 
@@ -1499,13 +1499,32 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var secondBuildPhaseMs = ExtractBuildPhaseMilliseconds(secondOutput);
             Console.WriteLine(
                 $"BASE_BUILD_CACHE_MEASUREMENT main_sha={mainSha} cold_build_phase_ms={firstBuildPhaseMs} warm_build_phase_ms={secondBuildPhaseMs}");
+            var buildCalls = calls
+                .Where(call => call.Length >= 3 && call[0] == "dotnet" && call[1] == "build")
+                .ToArray();
+            Assert.Equal(2, buildCalls.Length);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", buildCalls[0], StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", buildCalls[1]);
+            Assert.DoesNotContain("Mcg.AgentOrchestrator.sln", buildCalls[1], StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain(calls, call => call.Any(arg => arg.Contains(cacheRoot, StringComparison.OrdinalIgnoreCase)));
             Assert.Contains($"main_sha={mainSha}", firstOutput, StringComparison.Ordinal);
             Assert.Contains($"main_sha={mainSha}", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("build_phase_ms=", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("build_phase_ms=", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("App=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Core.Tests=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.Tests=changed", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Core,Infrastructure,App,Core.Tests,Infrastructure.Tests", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
-            Assert.True(
-                secondBuildPhaseMs * 3 < firstBuildPhaseMs,
-                $"Expected warm build phase under one-third cold build phase; cold={firstBuildPhaseMs}ms warm={secondBuildPhaseMs}ms");
+            Assert.Contains("Infrastructure=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.Tests=changed", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Infrastructure.Tests", secondOutput, StringComparison.Ordinal);
+            Assert.True(firstBuildPhaseMs >= 0, $"Expected non-negative cold build phase receipt; cold={firstBuildPhaseMs}ms");
+            Assert.True(secondBuildPhaseMs >= 0, $"Expected non-negative warm build phase receipt; warm={secondBuildPhaseMs}ms");
         }
         finally
         {
