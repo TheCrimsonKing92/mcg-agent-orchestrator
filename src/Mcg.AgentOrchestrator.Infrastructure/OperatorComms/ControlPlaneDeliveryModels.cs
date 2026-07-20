@@ -136,6 +136,12 @@ public sealed record ControlPlaneDeliveryMark(
     string ContentHash,
     bool Resolved);
 
+public sealed record ControlPlanePushReceipt(
+    ControlPlaneDeliveryChannel Channel,
+    string DedupKey,
+    DateTimeOffset PushedAt,
+    ControlPlaneDeliveryOperationKind Kind);
+
 public sealed record ControlPlaneDeliveryOperation(
     ControlPlaneDeliveryOperationKind Kind,
     ControlPlaneDeliveryChannel Channel,

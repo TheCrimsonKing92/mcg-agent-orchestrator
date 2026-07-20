@@ -72,13 +72,35 @@ public sealed class ControlPlaneDelivererTests
         var now = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
 
         var result = await deliverer.DeliverAsync([
-            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now),
-            Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: now)
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now.AddHours(-1)),
+            Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: now.AddHours(-1))
         ], now);
 
         var sent = Assert.Single(transport.Sent);
         Assert.Contains(result.Operations, operation => operation.DedupKey == DiscordControlPlaneDeliverer.PendingRollupKey);
         Assert.Contains("over-budget", sent.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_decision_budget_counts_content_change_edits")]
+    public async Task ControlPlaneDelivererDecisionBudgetCountsContentChangeEdits()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 2, SystemicMergeThreshold: 99);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var now = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var original = Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now.AddHours(-1));
+
+        await deliverer.DeliverAsync([original], now);
+        await deliverer.DeliverAsync([original with { Title = "Updated" }], now.AddMinutes(5));
+        var exhausted = await deliverer.DeliverAsync([
+            Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: now.AddHours(-1))
+        ], now.AddMinutes(10));
+
+        Assert.Single(transport.Sent);
+        Assert.Single(transport.Edited);
+        Assert.Equal(2, await store.CountPushesAsync(ControlPlaneDeliveryChannel.Decisions, now.AddHours(-24)));
+        Assert.Contains(exhausted.Operations, operation => operation.Reason == "decision-budget");
     }
 
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_systemic_merge_collapses_three_same_kind_escalations")]
@@ -125,6 +147,29 @@ public sealed class ControlPlaneDelivererTests
         var edit = Assert.Single(transport.Edited);
         Assert.Contains("4 FailedTask escalations", edit.Content);
         Assert.Single(store.Marks.Where(mark => mark.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_incremental_same_kind_storm_sends_only_systemic_card")]
+    public async Task ControlPlaneDelivererIncrementalSameKindStormSendsOnlySystemicCard()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 6, SystemicMergeThreshold: 3);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var start = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var first = Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: start);
+        var second = Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: start.AddMinutes(10));
+        var third = Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: start.AddMinutes(20));
+
+        await deliverer.DeliverAsync([first], start);
+        await deliverer.DeliverAsync([first, second], start.AddMinutes(10));
+        await deliverer.DeliverAsync([first, second, third], start.AddMinutes(20));
+
+        var sent = Assert.Single(transport.Sent);
+        Assert.Contains("SystemicFailedTask", sent.Content);
+        Assert.DoesNotContain(store.Marks, mark =>
+            mark.DedupKey.Contains(":failedtask:", StringComparison.OrdinalIgnoreCase) &&
+            !mark.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_existing_systemic_merge_keeps_aged_originals_collapsed")]
@@ -265,7 +310,7 @@ public sealed class ControlPlaneDelivererTests
         var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
         var quiet = DateTimeOffset.Parse("2026-07-20T23:00:00Z");
         var daytime = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
-        var card = Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: daytime);
+        var card = Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: daytime.AddHours(-1));
 
         var quietResult = await deliverer.DeliverAsync([
             card,
@@ -297,7 +342,7 @@ public sealed class ControlPlaneDelivererTests
             new ControlPlaneDeliveryPolicy(MutedUntil: mutedUntil));
 
         var result = await deliverer.DeliverAsync([
-            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now)
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now.AddHours(-1))
         ], now);
 
         Assert.Empty(transport.Sent);
@@ -465,7 +510,7 @@ public sealed class ControlPlaneDelivererTests
             cause,
             title,
             body,
-            raisedAt ?? DateTimeOffset.Parse("2026-07-20T10:00:00Z"),
+            raisedAt ?? DateTimeOffset.Parse("2026-07-20T09:00:00Z"),
             false,
             isBoardIntegrity,
             actions);

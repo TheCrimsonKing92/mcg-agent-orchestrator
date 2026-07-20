@@ -52,16 +52,30 @@ public sealed class ControlPlaneReplayHarness
         var initialStormKeys = firstStorms.Values
             .SelectMany(storm => storm.InitialMemberKeys)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var batchesByRaisedAt = ordered
+            .GroupBy(card => card.RaisedAt)
+            .ToDictionary(group => group.Key, group => group.ToList());
+        var replayTimes = ordered
+            .Select(card => card.RaisedAt)
+            .Concat(ordered
+                .Where(card => !initialStormKeys.Contains(card.DedupKey))
+                .Select(card => card.RaisedAt + _policy.EffectiveStormWindow + TimeSpan.FromTicks(1)))
+            .Where(time => time <= to)
+            .Distinct()
+            .OrderBy(time => time)
+            .ToList();
 
         var visible = new List<ControlPlaneDecisionCard>();
-        foreach (var batch in ordered.GroupBy(card => card.RaisedAt))
+        foreach (var replayAt in replayTimes)
         {
-            var cardsToReveal = batch
-                .Where(card => !initialStormKeys.Contains(card.DedupKey) ||
-                    firstStorms.TryGetValue(card.Kind, out var storm) &&
-                    card.RaisedAt == storm.TriggerAt)
-                .ToList();
-            foreach (var storm in firstStorms.Values.Where(storm => storm.TriggerAt == batch.Key))
+            var cardsToReveal = batchesByRaisedAt.TryGetValue(replayAt, out var batch)
+                ? batch
+                    .Where(card => !initialStormKeys.Contains(card.DedupKey) ||
+                        firstStorms.TryGetValue(card.Kind, out var storm) &&
+                        card.RaisedAt == storm.TriggerAt)
+                    .ToList()
+                : [];
+            foreach (var storm in firstStorms.Values.Where(storm => storm.TriggerAt == replayAt))
             {
                 cardsToReveal.AddRange(ordered.Where(card =>
                     storm.InitialMemberKeys.Contains(card.DedupKey) &&
@@ -69,10 +83,15 @@ public sealed class ControlPlaneReplayHarness
             }
 
             if (cardsToReveal.Count == 0)
+            {
+                if (visible.Count > 0)
+                    operations.AddRange((await deliverer.DeliverAsync(visible, replayAt, cancellationToken)).Operations);
+
                 continue;
+            }
 
             visible.AddRange(cardsToReveal.OrderBy(card => card.RaisedAt));
-            operations.AddRange((await deliverer.DeliverAsync(visible, batch.Key, cancellationToken)).Operations);
+            operations.AddRange((await deliverer.DeliverAsync(visible, replayAt, cancellationToken)).Operations);
         }
 
         operations.AddRange((await deliverer.DeliverBoardHeartbeatAsync(new ControlPlaneBoardSnapshot(

@@ -94,15 +94,18 @@ public sealed class DiscordControlPlaneDeliverer
         var remainingBudget = Math.Max(0, _policy.DailyDecisionBudget - decisionPushesToday);
         var pendingRollupMark = await _store.TryGetAsync(PendingRollupKey, cancellationToken);
         var nonBoardCount = candidates.Count(card => !card.IsBoardIntegrity && !card.IsResolved);
-        var reserveNewRollupSlot = pendingRollupMark is null && nonBoardCount > remainingBudget && remainingBudget > 0;
-        var remainingCardBudget = reserveNewRollupSlot ? remainingBudget - 1 : remainingBudget;
+        var reserveRollupSlot = nonBoardCount > remainingBudget && remainingBudget > 0;
+        var remainingCardBudget = reserveRollupSlot ? remainingBudget - 1 : remainingBudget;
         var overBudget = new List<ControlPlaneDecisionCard>();
 
         foreach (var card in candidates)
         {
             if (card.IsResolved)
             {
-                operations.Add(await UpsertCardAsync(card, now, cancellationToken));
+                var resolvedOperation = await UpsertCardAsync(card, now, cancellationToken);
+                operations.Add(resolvedOperation);
+                if (ConsumesDecisionBudget(resolvedOperation, card))
+                    remainingCardBudget = Math.Max(0, remainingCardBudget - 1);
                 continue;
             }
 
@@ -120,13 +123,13 @@ public sealed class DiscordControlPlaneDeliverer
 
             var operation = await UpsertCardAsync(card, now, cancellationToken);
             operations.Add(operation);
-            if (operation.Kind == ControlPlaneDeliveryOperationKind.Send && !card.IsBoardIntegrity)
+            if (ConsumesDecisionBudget(operation, card))
                 remainingCardBudget--;
         }
 
         if (overBudget.Count > 0)
         {
-            operations.Add(pendingRollupMark is not null || reserveNewRollupSlot
+            operations.Add(reserveRollupSlot
                 ? await UpsertRollupAsync(overBudget, now, cancellationToken)
                 : new ControlPlaneDeliveryOperation(
                     ControlPlaneDeliveryOperationKind.Suppressed,
@@ -158,12 +161,14 @@ public sealed class DiscordControlPlaneDeliverer
         {
             var id = await _transport.SendAsync(ControlPlaneDeliveryChannel.Board, content, [], cancellationToken);
             await _store.UpsertAsync(new ControlPlaneDeliveryMark(BoardHeartbeatKey, ControlPlaneDeliveryChannel.Board, id, now, now, null, hash, false), cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, now, ControlPlaneDeliveryOperationKind.Send, cancellationToken);
             return new ControlPlaneDeliveryBatchResult(
                 [new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, id, "heartbeat", content)]);
         }
 
         await _transport.EditAsync(ControlPlaneDeliveryChannel.Board, mark.MessageId, content, [], cancellationToken);
         await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        await RecordPushAsync(ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, now, ControlPlaneDeliveryOperationKind.Edit, cancellationToken);
         return new ControlPlaneDeliveryBatchResult(
             [new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, mark.MessageId, "heartbeat", content)]);
     }
@@ -185,11 +190,13 @@ public sealed class DiscordControlPlaneDeliverer
         {
             var id = await _transport.SendAsync(ControlPlaneDeliveryChannel.Digest, content, [], cancellationToken);
             await _store.UpsertAsync(new ControlPlaneDeliveryMark(DigestRollupKey, ControlPlaneDeliveryChannel.Digest, id, now, now, null, hash, false), cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Digest, DigestRollupKey, now, ControlPlaneDeliveryOperationKind.Send, cancellationToken);
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Digest, DigestRollupKey, id, "digest", content);
         }
 
         await _transport.EditAsync(ControlPlaneDeliveryChannel.Digest, mark.MessageId, content, [], cancellationToken);
         await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        await RecordPushAsync(ControlPlaneDeliveryChannel.Digest, DigestRollupKey, now, ControlPlaneDeliveryOperationKind.Edit, cancellationToken);
         return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Digest, DigestRollupKey, mark.MessageId, "digest", content);
     }
 
@@ -210,11 +217,13 @@ public sealed class DiscordControlPlaneDeliverer
         {
             var id = await _transport.SendAsync(ControlPlaneDeliveryChannel.Digest, content, [], cancellationToken);
             await _store.UpsertAsync(new ControlPlaneDeliveryMark(DailyBacklogDigestKey, ControlPlaneDeliveryChannel.Digest, id, now, now, null, hash, false), cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, now, ControlPlaneDeliveryOperationKind.Send, cancellationToken);
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, id, "daily-backlog-digest", content);
         }
 
         await _transport.EditAsync(ControlPlaneDeliveryChannel.Digest, mark.MessageId, content, [], cancellationToken);
         await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        await RecordPushAsync(ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, now, ControlPlaneDeliveryOperationKind.Edit, cancellationToken);
         return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, mark.MessageId, "daily-backlog-digest", content);
     }
 
@@ -236,6 +245,7 @@ public sealed class DiscordControlPlaneDeliverer
             await _store.UpsertAsync(
                 new ControlPlaneDeliveryMark(card.DedupKey, ControlPlaneDeliveryChannel.Decisions, messageId, now, now, null, hash, card.IsResolved),
                 cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Decisions, card.DedupKey, now, ControlPlaneDeliveryOperationKind.Send, cancellationToken);
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, messageId, "new-card", content);
         }
 
@@ -243,6 +253,7 @@ public sealed class DiscordControlPlaneDeliverer
         {
             await _transport.EditAsync(ControlPlaneDeliveryChannel.Decisions, mark.MessageId, content, [], cancellationToken);
             await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash, Resolved = true }, cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Decisions, card.DedupKey, now, ControlPlaneDeliveryOperationKind.Edit, cancellationToken);
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, "resolved", content);
         }
 
@@ -259,6 +270,7 @@ public sealed class DiscordControlPlaneDeliverer
                 ContentHash = hash,
                 Resolved = card.IsResolved
             }, cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Decisions, card.DedupKey, now, ControlPlaneDeliveryOperationKind.Edit, cancellationToken);
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, reminderDue ? "reminder" : "content-change", content);
         }
 
@@ -278,11 +290,13 @@ public sealed class DiscordControlPlaneDeliverer
         {
             var messageId = await _transport.SendAsync(ControlPlaneDeliveryChannel.Decisions, content, [], cancellationToken);
             await _store.UpsertAsync(new ControlPlaneDeliveryMark(PendingRollupKey, ControlPlaneDeliveryChannel.Decisions, messageId, now, now, null, hash, false), cancellationToken);
+            await RecordPushAsync(ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, now, ControlPlaneDeliveryOperationKind.Send, cancellationToken);
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, messageId, "over-budget-rollup", content);
         }
 
         await _transport.EditAsync(ControlPlaneDeliveryChannel.Decisions, mark.MessageId, content, [], cancellationToken);
         await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        await RecordPushAsync(ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, now, ControlPlaneDeliveryOperationKind.Edit, cancellationToken);
         return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, mark.MessageId, "over-budget-rollup", content);
     }
 
@@ -308,7 +322,12 @@ public sealed class DiscordControlPlaneDeliverer
             var existingSystemic = existingSystemicKinds.Contains(group.Key);
             var groupCards = existingSystemic ? unresolved : inWindow;
             if (!existingSystemic && groupCards.Count < _policy.SystemicMergeThreshold)
+            {
+                foreach (var card in inWindow.Where(card => !card.IsBoardIntegrity))
+                    collapsedKeys.Add(card.DedupKey);
+
                 continue;
+            }
 
             foreach (var card in grouped)
                 collapsedKeys.Add(card.DedupKey);
@@ -344,6 +363,21 @@ public sealed class DiscordControlPlaneDeliverer
         result.AddRange(source.Where(card => !collapsedKeys.Contains(card.DedupKey)));
         return result;
     }
+
+    private static bool ConsumesDecisionBudget(
+        ControlPlaneDeliveryOperation operation,
+        ControlPlaneDecisionCard card) =>
+        !card.IsBoardIntegrity &&
+        operation.Channel == ControlPlaneDeliveryChannel.Decisions &&
+        operation.Kind is ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit;
+
+    private Task RecordPushAsync(
+        ControlPlaneDeliveryChannel channel,
+        string dedupKey,
+        DateTimeOffset pushedAt,
+        ControlPlaneDeliveryOperationKind kind,
+        CancellationToken cancellationToken) =>
+        _store.RecordPushAsync(channel, dedupKey, pushedAt, kind, cancellationToken);
 
     private static ControlPlaneDeliveryOperation Suppressed(ControlPlaneDecisionCard card, string reason) =>
         new(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, null, reason, string.Empty);

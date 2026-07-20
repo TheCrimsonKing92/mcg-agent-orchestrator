@@ -13,6 +13,13 @@ public interface IControlPlaneDeliveryStore
         DateTimeOffset since,
         CancellationToken cancellationToken = default);
 
+    Task RecordPushAsync(
+        ControlPlaneDeliveryChannel channel,
+        string dedupKey,
+        DateTimeOffset pushedAt,
+        ControlPlaneDeliveryOperationKind kind,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<SystemicStormDeliveryState>> ListSystemicStormsAsync(
         CancellationToken cancellationToken = default);
 }
@@ -20,8 +27,11 @@ public interface IControlPlaneDeliveryStore
 public sealed class InMemoryControlPlaneDeliveryStore : IControlPlaneDeliveryStore
 {
     private readonly Dictionary<string, ControlPlaneDeliveryMark> _marks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ControlPlanePushReceipt> _pushes = [];
 
     public IReadOnlyCollection<ControlPlaneDeliveryMark> Marks => _marks.Values;
+
+    public IReadOnlyList<ControlPlanePushReceipt> Pushes => _pushes;
 
     public Task<ControlPlaneDeliveryMark?> TryGetAsync(string dedupKey, CancellationToken cancellationToken = default) =>
         Task.FromResult(_marks.TryGetValue(dedupKey, out var mark) ? mark : null);
@@ -36,7 +46,20 @@ public sealed class InMemoryControlPlaneDeliveryStore : IControlPlaneDeliverySto
         ControlPlaneDeliveryChannel channel,
         DateTimeOffset since,
         CancellationToken cancellationToken = default) =>
-        Task.FromResult(_marks.Values.Count(mark => mark.Channel == channel && mark.FirstDeliveredAt >= since));
+        Task.FromResult(_pushes.Count(push => push.Channel == channel && push.PushedAt >= since));
+
+    public Task RecordPushAsync(
+        ControlPlaneDeliveryChannel channel,
+        string dedupKey,
+        DateTimeOffset pushedAt,
+        ControlPlaneDeliveryOperationKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        if (kind is ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit)
+            _pushes.Add(new ControlPlanePushReceipt(channel, dedupKey, pushedAt, kind));
+
+        return Task.CompletedTask;
+    }
 
     public Task<IReadOnlyList<SystemicStormDeliveryState>> ListSystemicStormsAsync(
         CancellationToken cancellationToken = default) =>
@@ -110,12 +133,35 @@ public sealed class SqliteControlPlaneDeliveryStore : IControlPlaneDeliveryStore
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT COUNT(*)
-            FROM control_plane_delivery_marks
-            WHERE channel = $channel AND first_delivered_at >= $since
+            FROM control_plane_push_receipts
+            WHERE channel = $channel AND pushed_at >= $since
             """;
         cmd.Parameters.AddWithValue("$channel", channel.ToString());
         cmd.Parameters.AddWithValue("$since", since.ToString("O"));
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken));
+    }
+
+    public async Task RecordPushAsync(
+        ControlPlaneDeliveryChannel channel,
+        string dedupKey,
+        DateTimeOffset pushedAt,
+        ControlPlaneDeliveryOperationKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        if (kind is not (ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit))
+            return;
+
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO control_plane_push_receipts (channel, dedup_key, pushed_at, operation_kind)
+            VALUES ($channel, $dedup_key, $pushed_at, $operation_kind)
+            """;
+        cmd.Parameters.AddWithValue("$channel", channel.ToString());
+        cmd.Parameters.AddWithValue("$dedup_key", dedupKey);
+        cmd.Parameters.AddWithValue("$pushed_at", pushedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$operation_kind", kind.ToString());
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<SystemicStormDeliveryState>> ListSystemicStormsAsync(
@@ -177,6 +223,21 @@ public sealed class SqliteControlPlaneDeliveryStore : IControlPlaneDeliveryStore
                 content_hash       TEXT NOT NULL,
                 resolved           INTEGER NOT NULL
             )
+            """;
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS control_plane_push_receipts (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel        TEXT NOT NULL,
+                dedup_key      TEXT NOT NULL,
+                pushed_at      TEXT NOT NULL,
+                operation_kind TEXT NOT NULL
+            )
+            """;
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = """
+            CREATE INDEX IF NOT EXISTS idx_control_plane_push_receipts_channel_pushed_at
+            ON control_plane_push_receipts(channel, pushed_at)
             """;
         cmd.ExecuteNonQuery();
     }
