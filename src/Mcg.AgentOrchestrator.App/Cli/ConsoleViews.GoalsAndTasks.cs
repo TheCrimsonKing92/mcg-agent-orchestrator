@@ -28,7 +28,7 @@ public static void PrintHealth(OrchestratorHealthReport report)
     }
 }
 
-public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? statusText = null)
+public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? statusText = null, PortfolioMembership? portfolio = null)
 {
     Console.WriteLine();
     var label = string.IsNullOrWhiteSpace(friendlyLabel) ? string.Empty : $" ({friendlyLabel.Trim().ReplaceLineEndings(" ")})";
@@ -38,6 +38,12 @@ public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? st
     if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId))
     {
         Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");
+    }
+
+    if (portfolio is not null)
+    {
+        var project = string.IsNullOrWhiteSpace(portfolio.ProjectTitle) ? "unassigned" : $"{portfolio.ProjectTitle} ({portfolio.ProjectId![..Math.Min(8, portfolio.ProjectId.Length)]})";
+        Console.WriteLine($"Portfolio: epic={portfolio.EpicTitle} ({portfolio.EpicId[..Math.Min(8, portfolio.EpicId.Length)]}) project={project}");
     }
 
     if (goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)

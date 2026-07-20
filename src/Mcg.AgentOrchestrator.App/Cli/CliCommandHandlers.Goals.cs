@@ -380,7 +380,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoal(
                 context.CurrentGoal,
                 ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
-                ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
+                ResolveGoalStatusText(context.Workspace, context.CurrentGoal),
+                new PortfolioStore(context.Workspace.PortfolioStorePath).GetGoalMembershipAsync(context.CurrentGoal.Id.Value).GetAwaiter().GetResult());
             PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             return false;
 
