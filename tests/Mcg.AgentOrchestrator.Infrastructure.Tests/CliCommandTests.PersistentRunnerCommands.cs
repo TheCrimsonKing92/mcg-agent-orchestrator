@@ -191,6 +191,202 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_identifies_first_batch_goal_scoped_task_mutations")]
+    [Xunit.InlineData(new[] { "progress", "1", "running", "started" }, true)]
+    [Xunit.InlineData(new[] { "verify-manual", "1", "passed", "checked" }, true)]
+    [Xunit.InlineData(new[] { "retry", "1", "again" }, true)]
+    [Xunit.InlineData(new[] { "verification-plan", "1", "dotnet test" }, true)]
+    [Xunit.InlineData(new[] { "note", "1", "operator note" }, true)]
+    [Xunit.InlineData(new[] { "add-task", "Developer", "new task" }, false)]
+    [Xunit.InlineData(new[] { "backlog-add", "new item" }, false)]
+    [Xunit.InlineData(new[] { "reassign-agent", "1", "developer" }, false)]
+    public void PersistentRunnerIdentifiesFirstBatchGoalScopedTaskMutations(string[] args, bool expected)
+    {
+        Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsGoalScopedTaskMutationCommand(args));
+    }
+
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_task_mutations_use_goal_CAS_without_LoadAsync")]
+    public async Task PersistentRunnerGoalScopedTaskMutationsUseGoalCasWithoutLoadAsync()
+    {
+        var cases = new (string Name, IReadOnlyList<string> Args, Action<AgentOrchestratorKernel, Goal, TaskSpec> Arrange, Action<Goal, TaskSpec> AssertState)[]
+        {
+            (
+                "progress",
+                ["progress", "1", "running", "worker started"],
+                (_, _, _) => { },
+                (goal, task) =>
+                {
+                    Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+                    Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == "worker started");
+                }),
+            (
+                "verify-manual",
+                ["verify-manual", "1", "passed", "manual pass"],
+                (_, _, _) => { },
+                (_, task) =>
+                {
+                    Xunit.Assert.NotNull(task.LastVerification);
+                    Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
+                    Xunit.Assert.Equal("manual pass", task.LastVerification.StandardOutput);
+                }),
+            (
+                "retry",
+                ["retry", "1", "retry with evidence"],
+                (kernel, goal, task) => kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed first"),
+                (goal, task) =>
+                {
+                    Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+                    Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == "retry with evidence");
+                }),
+            (
+                "verification-plan",
+                ["verification-plan", "1", "dotnet test --filter scoped"],
+                (_, _, _) => { },
+                (goal, task) =>
+                {
+                    Xunit.Assert.Equal("dotnet test --filter scoped", task.VerificationPlan);
+                    Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskVerificationPlanUpdated);
+                }),
+            (
+                "note",
+                ["note", "1", "operator note"],
+                (_, _, _) => { },
+                (goal, task) =>
+                    Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "operator note"))
+        };
+
+        foreach (var testCase in cases)
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal($"Goal scoped {testCase.Name}", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+            kernel.ActivateGoal(goal.Id, agents);
+            var task = goal.Tasks.Single();
+            testCase.Arrange(kernel, goal, task);
+            var repository = new InMemoryTransactionalStateRepository(kernel)
+            {
+                ThrowOnLoadAsync = true
+            };
+
+            CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    testCase.Args,
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.True(changed);
+            });
+
+            var storedSnapshot = await repository.LoadGoalAsync(goal.Id);
+            var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([storedSnapshot!], []));
+            var storedGoal = storedKernel.GetGoal(goal.Id);
+            var storedTask = storedGoal.Tasks.Single();
+            Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+            Xunit.Assert.Equal(1, repository.TransactGoalCount);
+            Xunit.Assert.Equal(0, repository.LoadCount);
+            testCase.AssertState(storedGoal, storedTask);
+        }
+    }
+
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_retry_preserves_pending_human_input_guard")]
+    public void PersistentRunnerGoalScopedRetryPreservesPendingHumanInputGuard()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry waits for human answer", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        kernel.RequestHumanInput(goal.Id, task.Id, "Choose a retry path.");
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            ThrowOnLoadAsync = true
+        };
+
+        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliPersistentStateRunner.ExecuteCommand(
+            ["retry", "1", "retry too early"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("waiting for human input", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+        Xunit.Assert.Equal(1, repository.TransactGoalCount);
+        Xunit.Assert.Equal(0, repository.LoadCount);
+    }
+
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_concurrent_disjoint_goal_progress_uses_goal_CAS")]
+    public async Task PersistentRunnerConcurrentDisjointGoalProgressUsesGoalCas()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = kernel.CreateGoal("Concurrent progress A", [new TaskSpec(TaskId.New(), "Do A", AgentRole.Developer)]);
+        var goalB = kernel.CreateGoal("Concurrent progress B", [new TaskSpec(TaskId.New(), "Do B", AgentRole.Developer)]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goalA.Id, agents);
+        kernel.ActivateGoal(goalB.Id, agents);
+        await repository.SaveAsync(kernel);
+        using var ready = new CountdownEvent(2);
+        using var start = new ManualResetEventSlim(false);
+
+        async Task RunProgressAsync(GoalId goalId, string message)
+        {
+            await Task.Yield();
+            var localRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            ready.Signal();
+            start.Wait();
+            CliPersistentStateRunner.ExecuteCommand(
+                ["progress", "--goal", goalId.Value[..8], "1", "running", message],
+                localRepository,
+                workspace,
+                ref localAgents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+        }
+
+        var taskA = Task.Run(() => RunProgressAsync(goalA.Id, "A started"));
+        var taskB = Task.Run(() => RunProgressAsync(goalB.Id, "B started"));
+        Xunit.Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "Timed out waiting for concurrent progress tasks to be ready.");
+        var sw = Stopwatch.StartNew();
+        start.Set();
+        await Task.WhenAll(taskA, taskB);
+        sw.Stop();
+
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.True(
+            sw.Elapsed < TimeSpan.FromSeconds(2),
+            $"Concurrent migrated progress commands completed in {sw.ElapsedMilliseconds}ms; expected no tick-long lock wait.");
+        Xunit.Assert.Contains(restored.GetGoal(goalA.Id).Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == "A started");
+        Xunit.Assert.Contains(restored.GetGoal(goalB.Id).Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == "B started");
+    }
+
+
     [Xunit.Fact(DisplayName = "Persistent_runner_unpark_goal_rejects_non_parked_goals_with_nonzero_exit")]
     public async Task PersistentRunnerUnparkGoalRejectsNonParkedGoalsWithNonzeroExit()
     {

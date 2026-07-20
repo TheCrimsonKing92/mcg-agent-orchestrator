@@ -503,6 +503,10 @@ public abstract class CliCommandTestBase
 
         public int TransactionCount { get; private set; }
 
+        public int TransactAsyncCount { get; private set; }
+
+        public int TransactGoalCount { get; private set; }
+
         public bool IsInTransaction { get; private set; }
 
         public int LoadCount { get; private set; }
@@ -523,8 +527,15 @@ public abstract class CliCommandTestBase
 
         public Action<CancellationToken>? BeforeSaveCommit { get; set; }
 
+        public bool ThrowOnLoadAsync { get; set; }
+
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
+            if (ThrowOnLoadAsync)
+            {
+                throw new InvalidOperationException("LoadAsync is not allowed for this test.");
+            }
+
             LoadCount++;
             return Task.FromResult(Clone(_kernel));
         }
@@ -621,6 +632,7 @@ public abstract class CliCommandTestBase
             CancellationToken cancellationToken = default)
         {
             TransactionCount++;
+            TransactAsyncCount++;
             if (BeforeNextTransaction is { } before)
             {
                 BeforeNextTransaction = null;
@@ -666,6 +678,7 @@ public abstract class CliCommandTestBase
             CancellationToken cancellationToken = default)
         {
             TransactionCount++;
+            TransactGoalCount++;
             if (BeforeNextTransaction is { } before)
             {
                 BeforeNextTransaction = null;
