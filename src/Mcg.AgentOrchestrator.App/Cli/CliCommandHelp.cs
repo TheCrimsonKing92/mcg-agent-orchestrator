@@ -21,6 +21,7 @@ internal static class CliCommandHelp
     public const string UnparkGoalUsage = "Usage: unpark-goal <goal-id-prefix> <reason> [--confirm-goal-unpark] | unpark-goal <goal-id-prefix> --text-file <path> [--confirm-goal-unpark]";
     public const string StopUsage = "Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede";
     public const string SubscriptionDispatchUsage = "Usage: subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]";
+    public const string InquiryUsage = "Usage: inquiry <goal-prefix> <task-number> --text-file <question>";
     public const string AgentUsage = "Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
     public const string AgentAddUsage = "Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
@@ -151,6 +152,11 @@ internal static class CliCommandHelp
         SubscriptionDispatchUsage,
         "Prepare a subscription-backed task dispatch.",
         ["--goal", "--confirm-limit-review", "--text-file", "--subscription-model", "--subscription", "--subscription-reasoning", "--allow-git-reference", "--confirm-dispatch-start", "--confirm-large-paid-subscription-start", "--autonomy", "--autonomy-policy", "--confirm-readiness-risk", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Inquiry = new(
+        InquiryUsage,
+        "Ask a post-hoc question of a completed worker dispatch and write an advisory inquiry receipt.",
+        ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Agent = new(
         AgentUsage,
@@ -448,6 +454,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("subscription-dispatch", StringComparison.OrdinalIgnoreCase))
         {
             entry = SubscriptionDispatch;
+            return true;
+        }
+
+        if (args[0].Equals("inquiry", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Inquiry;
             return true;
         }
 

@@ -94,6 +94,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "profile-dispatch-ready",
     "subscription-dispatch",
     "subscription-dispatch-ready",
+    "inquiry",
     "cross-goal-start-plan",
     "start-subscription-ready-goals",
     "start-subscription-ready",
