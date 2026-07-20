@@ -1614,7 +1614,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var cache = BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default();
-        var restore = cache.Restore(plan.MainSha, environment.ArtifactsPath, plan.RestoreProjects);
+        var restore = cache.Probe(plan.MainSha, plan.RestoreProjects);
         var retried = false;
         var lockRemediationApplied = false;
         (AcceptanceCheckResult Result, bool Retried)? lastRun = null;
@@ -1624,6 +1624,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (restore.AllHit)
         {
             builtProjects = plan.BuildProjects;
+            var restoredIntoPreparedSlot = false;
             foreach (var project in plan.BuildProjects)
             {
                 var projectRun = await RunManagedDotnetCheckAsync(
@@ -1634,7 +1635,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     stableSlotIndex,
                     stableSlotLease,
                     $"{attemptName}-build-{Slug(ProjectLabel(project))}",
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    afterLeasePrepared: preparedEnvironment =>
+                    {
+                        if (restoredIntoPreparedSlot)
+                        {
+                            return;
+                        }
+
+                        restore = cache.Restore(plan.MainSha, preparedEnvironment.ArtifactsPath, plan.RestoreProjects);
+                        restoredIntoPreparedSlot = true;
+                    }).ConfigureAwait(false);
                 retried |= projectRun.Retried;
                 lockRemediationApplied |= projectRun.Result.LockRemediationApplied;
                 lastRun = projectRun;
@@ -1759,7 +1770,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         string attemptName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<DotnetBuildEnvironment>? afterLeasePrepared = null)
     {
         var elapsed = Stopwatch.StartNew();
         var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
@@ -1771,6 +1783,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             leaseLock = stableSlotLease is null
                 ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken)
                 : null;
+            afterLeasePrepared?.Invoke(environment);
 
             var lockRemediationApplied = false;
             var result = await RunManagedDotnetCommandAsync(

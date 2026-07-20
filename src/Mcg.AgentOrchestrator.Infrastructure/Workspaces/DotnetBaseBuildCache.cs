@@ -47,6 +47,18 @@ internal sealed class DotnetBaseBuildCache
     public static string DefaultRootPath(string isolatedRootBase) =>
         Path.Combine(isolatedRootBase, CacheDirectoryName);
 
+    public DotnetBaseBuildCacheRestoreResult Probe(
+        string mainSha,
+        IReadOnlyList<string> projects)
+    {
+        Directory.CreateDirectory(_rootPath);
+        var evictions = EvictExpiredAndOverflow();
+        return new DotnetBaseBuildCacheRestoreResult(
+            mainSha,
+            ReadProjectReceipts(mainSha, artifactsPath: null, projects),
+            evictions);
+    }
+
     public DotnetBaseBuildCacheRestoreResult Restore(
         string mainSha,
         string artifactsPath,
@@ -55,6 +67,17 @@ internal sealed class DotnetBaseBuildCache
         Directory.CreateDirectory(_rootPath);
         Directory.CreateDirectory(artifactsPath);
         var evictions = EvictExpiredAndOverflow();
+        return new DotnetBaseBuildCacheRestoreResult(
+            mainSha,
+            ReadProjectReceipts(mainSha, artifactsPath, projects),
+            evictions);
+    }
+
+    private IReadOnlyList<DotnetBaseBuildCacheProjectReceipt> ReadProjectReceipts(
+        string mainSha,
+        string? artifactsPath,
+        IReadOnlyList<string> projects)
+    {
         var receipts = new List<DotnetBaseBuildCacheProjectReceipt>();
 
         foreach (var project in projects)
@@ -75,11 +98,15 @@ internal sealed class DotnetBaseBuildCache
                 continue;
             }
 
-            CopyDirectory(entryPath, artifactsPath, skipManifest: true);
+            if (artifactsPath is not null)
+            {
+                CopyDirectory(entryPath, artifactsPath, skipManifest: true);
+            }
+
             receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "hit", null, currentHash));
         }
 
-        return new DotnetBaseBuildCacheRestoreResult(mainSha, receipts, evictions);
+        return receipts;
     }
 
     public DotnetBaseBuildCachePublishResult Publish(

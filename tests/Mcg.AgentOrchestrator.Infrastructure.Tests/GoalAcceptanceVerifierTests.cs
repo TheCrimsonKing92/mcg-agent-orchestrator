@@ -1443,7 +1443,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     var artifactsPath = GetArtifactsPath(args);
                     if (args[2].EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
                     {
-                        Thread.Sleep(450);
+                        Thread.Sleep(1200);
                         foreach (var project in cacheableProjects)
                         {
                             WriteProjectArtifacts(artifactsPath, project, $"cold:{project}");
