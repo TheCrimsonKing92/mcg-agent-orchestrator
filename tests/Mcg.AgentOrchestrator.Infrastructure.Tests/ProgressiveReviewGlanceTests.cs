@@ -542,6 +542,9 @@ public sealed class ProgressiveReviewGlanceTests
         Assert.Equal(first.GlanceInputHash, second.GlanceInputHash);
         Assert.NotEqual(first.Intent.InputsHash, first.GlanceInputHash);
         Assert.NotEqual(first.Intent.InputsHash, second.Intent.InputsHash);
+        Assert.Equal($"glance-{first.Intent.InputsHash}", first.Intent.Id);
+        Assert.Equal(first.Intent.Id, first.Intent.TriggerGlanceId);
+        Assert.NotEqual(first.Intent.Id, second.Intent.Id);
     }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_receipt_and_attention_failures_are_advisory_only")]

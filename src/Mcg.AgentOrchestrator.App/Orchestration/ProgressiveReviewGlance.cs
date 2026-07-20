@@ -562,13 +562,14 @@ Note: {result.Note}
                 running,
                 now,
                 TryResolveHead(running.WorkingDirectory));
+            var steerIdentity = $"glance-{steeringInputsHash}";
             var intent = new ProgressiveReviewSteerIntent(
-                Id: $"glance-{running.InputHash}",
+                Id: steerIdentity,
                 GoalId: running.GoalId.Value,
                 TaskId: running.TaskId.Value,
                 Role: AgentRole.Developer.ToString(),
                 RoundKey: running.RoundKey,
-                TriggerGlanceId: $"glance-{running.InputHash}",
+                TriggerGlanceId: steerIdentity,
                 InputsHash: steeringInputsHash,
                 GlanceVerdictTimestamp: now,
                 MisdirectionEvidence: result.EvidenceLine,
