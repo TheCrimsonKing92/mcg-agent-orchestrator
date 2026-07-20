@@ -97,6 +97,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         var calls = new List<string[]>();
         var buildAttempts = 0;
+        var delayCallsWhileHeld = new List<TimeSpan>();
+        var timeProvider = new RecordingTimeProvider();
+        var lockReleased = false;
         var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
         var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
         var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
@@ -104,12 +107,22 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
             "handle64-timeout");
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
+        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(30);
         GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
         GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
+            timeProvider.DelayRequested = delay =>
+            {
+                if (!lockReleased)
+                {
+                    delayCallsWhileHeld.Add(delay);
+                    held.Dispose();
+                    lockReleased = true;
+                }
+            };
+
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
@@ -121,18 +134,13 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 buildAttempts++;
                 if (buildAttempts == 1)
                 {
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(500);
-                        held.Dispose();
-                    });
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         1,
                         $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-            });
+            }, timeProvider);
 
             AcceptanceVerificationResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -143,6 +151,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.True(result.Retried);
             Assert.Equal(2, buildAttempts);
             Assert.Equal(4, calls.Count);
+            Assert.NotEmpty(delayCallsWhileHeld);
+            Assert.Equal(TimeSpan.FromMilliseconds(10), Assert.Single(delayCallsWhileHeld));
             Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
             Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
             var check = Assert.Single(result.Checks!);
@@ -150,10 +160,58 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
             Assert.Contains("released=true", output, StringComparison.Ordinal);
-            Assert.Matches(@"waited-ms=([1-9][0-9]*)", output);
             Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
             Assert.Contains("verdict=completed", output, StringComparison.Ordinal);
             Assert.Contains("build-lock=false", output, StringComparison.Ordinal);
+
+            var stuckRoot = CreateManifestWorkspace("""
+                {
+                  "version": 1,
+                  "checks": [
+                    { "name": "app build", "type": "command", "command": "dotnet", "arguments": ["build", "Fake.csproj"] }
+                  ],
+                  "forbiddenChangedPathGlobs": []
+                }
+                """);
+            var stuckPath = Path.Combine(stuckRoot, "artifacts", "Mcg.AgentOrchestrator.Core.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(stuckPath)!);
+            File.WriteAllText(stuckPath, "held");
+            using var stuckHold = new FileStream(stuckPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            var stuckCalls = new List<string[]>();
+            var stuckTimeProvider = new RecordingTimeProvider();
+            var stuckBuildAttempts = 0;
+            var stuckVerifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                stuckCalls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                stuckBuildAttempts++;
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    1,
+                    $"error CS2012: Cannot open '{stuckPath}' for writing because it is being used by another process."));
+            }, stuckTimeProvider);
+
+            BuildLockBlockedException? blocked = null;
+            var stuckOutput = AsyncLocalConsoleRouter.Capture(() =>
+                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => stuckVerifier.RunAsync(stuckRoot))
+                    .GetAwaiter()
+                    .GetResult());
+
+            Assert.NotNull(blocked);
+            Assert.Equal(stuckPath, blocked!.Attribution.Path);
+            Assert.Equal(1, stuckBuildAttempts);
+            Assert.Single(stuckCalls.Where(call => !call.SequenceEqual(["dotnet", "build-server", "shutdown"])));
+            Assert.Contains(stuckCalls, call => call.SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            Assert.Equal(3, stuckTimeProvider.Delays.Count);
+            Assert.All(stuckTimeProvider.Delays, delay => Assert.Equal(TimeSpan.FromMilliseconds(10), delay));
+            Assert.Contains("LOCK_TRANSIENT_WAIT ", stuckOutput, StringComparison.Ordinal);
+            Assert.Contains("released=false", stuckOutput, StringComparison.Ordinal);
+            Assert.Contains("LOCK_TRANSIENT_RETRY ", stuckOutput, StringComparison.Ordinal);
+            Assert.Contains("verdict=wait-exhausted", stuckOutput, StringComparison.Ordinal);
+            Assert.Contains("build-lock=true", stuckOutput, StringComparison.Ordinal);
         }
         finally
         {
@@ -550,6 +608,49 @@ public abstract class GoalAcceptanceVerifierTestBase
         }
 
         Directory.Delete(path, recursive: true);
+    }
+}
+
+internal sealed class RecordingTimeProvider : TimeProvider
+{
+    private long _currentTicks;
+
+    public List<TimeSpan> Delays { get; } = [];
+
+    public Action<TimeSpan>? DelayRequested { get; set; }
+
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public override long GetTimestamp() => _currentTicks;
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+    {
+        if (dueTime != Timeout.InfiniteTimeSpan)
+        {
+            if (dueTime > TimeSpan.Zero)
+            {
+                _currentTicks += dueTime.Ticks;
+            }
+
+            Delays.Add(dueTime);
+            DelayRequested?.Invoke(dueTime);
+        }
+
+        callback(state);
+        return CompletedTimer.Instance;
+    }
+
+    private sealed class CompletedTimer : ITimer
+    {
+        public static readonly CompletedTimer Instance = new();
+
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 
