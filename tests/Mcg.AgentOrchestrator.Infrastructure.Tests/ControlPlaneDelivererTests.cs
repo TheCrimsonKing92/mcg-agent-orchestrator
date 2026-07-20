@@ -76,9 +76,9 @@ public sealed class ControlPlaneDelivererTests
             Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: now)
         ], now);
 
-        Assert.Equal(2, transport.Sent.Count);
+        var sent = Assert.Single(transport.Sent);
         Assert.Contains(result.Operations, operation => operation.DedupKey == DiscordControlPlaneDeliverer.PendingRollupKey);
-        Assert.Contains("over-budget", transport.Sent[1].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("over-budget", sent.Content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_systemic_merge_collapses_three_same_kind_escalations")]
@@ -98,6 +98,33 @@ public sealed class ControlPlaneDelivererTests
 
         var sent = Assert.Single(transport.Sent);
         Assert.Contains("systemic decision", sent.Content);
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_systemic_merge_key_is_stable_as_storm_grows")]
+    public async Task ControlPlaneDelivererSystemicMergeKeyIsStableAsStormGrows()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 6, SystemicMergeThreshold: 3);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var now = DateTimeOffset.Parse("2026-07-20T10:29:00Z");
+        var firstThree = new[]
+        {
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now.AddMinutes(-27)),
+            Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: now.AddMinutes(-5)),
+            Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: now)
+        };
+
+        await deliverer.DeliverAsync(firstThree, now);
+        await deliverer.DeliverAsync([
+            .. firstThree,
+            Card("goal-d", "FailedTask", "task-4", "cause-4", "Fourth", "body", raisedAt: now.AddMinutes(2))
+        ], now.AddMinutes(2));
+
+        Assert.Single(transport.Sent);
+        var edit = Assert.Single(transport.Edited);
+        Assert.Contains("4 FailedTask escalations", edit.Content);
+        Assert.Single(store.Marks.Where(mark => mark.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase)));
     }
 
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_board_wedge_bypasses_budget_after_collapse")]
@@ -181,6 +208,20 @@ public sealed class ControlPlaneDelivererTests
         Assert.Equal(1, report.Digest);
     }
 
+    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_uses_event_times_for_storm_windows")]
+    public async Task ControlPlaneReplayHarnessUsesEventTimesForStormWindows()
+    {
+        var from = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var report = await new ControlPlaneReplayHarness()
+            .ReplayAsync([
+                Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from),
+                Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: from.AddMinutes(40)),
+                Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: from.AddMinutes(50))
+            ], from, from.AddHours(2));
+
+        Assert.DoesNotContain(report.Operations, operation => operation.Content.Contains("systemic decision", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Xunit.Fact(DisplayName = "DeadManHeartbeatClient_default_options_do_not_send")]
     public async Task DeadManHeartbeatClientDefaultOptionsDoNotSend()
     {
@@ -217,7 +258,11 @@ public sealed class ControlPlaneDelivererTests
 
         Assert.Equal(ControlPlaneCardSource.OperatorInboxEscalation, card.Source);
         Assert.Equal("goal-abcdef:failedtask:task-123:" + card.CauseFingerprint, card.DedupKey);
-        Assert.Single(card.ActionList);
+        var action = Assert.Single(card.ActionList);
+        var parsed = DiscordInteractionHandler.Process(action.CustomId, "operator-1", "interaction-1", ["operator-1"]);
+        Assert.Null(parsed.ErrorMessage);
+        Assert.Equal("inbox-1", parsed.Decision?.InboxItemId);
+        Assert.Equal(0, parsed.Decision?.ActionIndex);
     }
 
     private static ControlPlaneDecisionCard Card(

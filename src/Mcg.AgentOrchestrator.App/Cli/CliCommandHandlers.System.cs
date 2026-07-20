@@ -979,8 +979,18 @@ internal static partial class CliCommandHandlers
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
                 var policy = new ControlPlaneDeliveryPolicy(MutedUntil: catalog.ControlPlaneMutedUntil);
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+                var collaborationCards = store.ListAsync().GetAwaiter().GetResult()
+                    .Select(ControlPlaneDecisionCard.FromCollaborationItem);
+                var inboxCards = OperatorInbox.Build(
+                        context.Kernel,
+                        context.Agents,
+                        context.WorkerProfiles,
+                        context.Workspace,
+                        includeAcknowledged: true)
+                    .Items
+                    .Select(OperatorInboxControlPlaneProjection.Project);
                 var report = new ControlPlaneReplayHarness(policy)
-                    .ReplayCollaborationStoreAsync(store, from, now)
+                    .ReplayAsync(collaborationCards.Concat(inboxCards), from, now)
                     .GetAwaiter()
                     .GetResult();
                 Console.WriteLine($"control-plane-replay windowHours={hours} {report.FormatCounts()}");

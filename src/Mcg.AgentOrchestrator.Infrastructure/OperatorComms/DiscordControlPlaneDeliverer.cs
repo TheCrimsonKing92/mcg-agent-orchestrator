@@ -91,6 +91,10 @@ public sealed class DiscordControlPlaneDeliverer
             now.AddHours(-24),
             cancellationToken);
         var remainingBudget = Math.Max(0, _policy.DailyDecisionBudget - decisionPushesToday);
+        var pendingRollupMark = await _store.TryGetAsync(PendingRollupKey, cancellationToken);
+        var nonBoardCount = candidates.Count(card => !card.IsBoardIntegrity);
+        var reserveNewRollupSlot = pendingRollupMark is null && nonBoardCount > remainingBudget && remainingBudget > 0;
+        var remainingCardBudget = reserveNewRollupSlot ? remainingBudget - 1 : remainingBudget;
         var overBudget = new List<ControlPlaneDecisionCard>();
 
         foreach (var card in candidates)
@@ -101,7 +105,7 @@ public sealed class DiscordControlPlaneDeliverer
                 continue;
             }
 
-            if (!card.IsBoardIntegrity && remainingBudget <= 0)
+            if (!card.IsBoardIntegrity && remainingCardBudget <= 0)
             {
                 overBudget.Add(card);
                 continue;
@@ -110,11 +114,21 @@ public sealed class DiscordControlPlaneDeliverer
             var operation = await UpsertCardAsync(card, now, cancellationToken);
             operations.Add(operation);
             if (operation.Kind == ControlPlaneDeliveryOperationKind.Send && !card.IsBoardIntegrity)
-                remainingBudget--;
+                remainingCardBudget--;
         }
 
         if (overBudget.Count > 0)
-            operations.Add(await UpsertRollupAsync(overBudget, now, cancellationToken));
+        {
+            operations.Add(pendingRollupMark is not null || reserveNewRollupSlot
+                ? await UpsertRollupAsync(overBudget, now, cancellationToken)
+                : new ControlPlaneDeliveryOperation(
+                    ControlPlaneDeliveryOperationKind.Suppressed,
+                    ControlPlaneDeliveryChannel.Decisions,
+                    PendingRollupKey,
+                    null,
+                    "decision-budget",
+                    string.Empty));
+        }
 
         return new ControlPlaneDeliveryBatchResult(operations);
     }
@@ -259,7 +273,7 @@ public sealed class DiscordControlPlaneDeliverer
                 "system",
                 $"Systemic{group.Key}",
                 "storm-window",
-                ControlPlaneDecisionCard.ComputeFingerprint(string.Join('|', inWindow.Select(card => card.DedupKey).Order(StringComparer.OrdinalIgnoreCase))),
+                ControlPlaneDecisionCard.ComputeFingerprint(group.Key),
                 $"{inWindow.Count} {group.Key} escalations need one systemic decision",
                 string.Join('\n', inWindow.Take(12).Select(card => $"- {ShortGoal(card.GoalId)}: {Truncate(card.Title, 120)}")),
                 inWindow.Min(card => card.RaisedAt),

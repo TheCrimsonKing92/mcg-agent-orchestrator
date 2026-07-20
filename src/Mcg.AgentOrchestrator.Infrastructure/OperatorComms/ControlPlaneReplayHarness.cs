@@ -24,16 +24,11 @@ public sealed class ControlPlaneReplayHarness
         var deliverer = new DiscordControlPlaneDeliverer(store, transport, _policy);
         var operations = new List<ControlPlaneDeliveryOperation>();
 
-        foreach (var batch in ordered.GroupBy(card => new DateTimeOffset(
-                     card.RaisedAt.Year,
-                     card.RaisedAt.Month,
-                     card.RaisedAt.Day,
-                     card.RaisedAt.Hour,
-                     0,
-                     0,
-                     card.RaisedAt.Offset)))
+        var visible = new List<ControlPlaneDecisionCard>();
+        foreach (var batch in ordered.GroupBy(card => card.RaisedAt))
         {
-            operations.AddRange((await deliverer.DeliverAsync(batch, batch.Key, cancellationToken)).Operations);
+            visible.AddRange(batch);
+            operations.AddRange((await deliverer.DeliverAsync(visible, batch.Key, cancellationToken)).Operations);
         }
 
         operations.AddRange((await deliverer.DeliverBoardHeartbeatAsync(new ControlPlaneBoardSnapshot(

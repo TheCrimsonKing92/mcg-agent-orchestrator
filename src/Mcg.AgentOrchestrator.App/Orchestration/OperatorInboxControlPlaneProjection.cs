@@ -19,7 +19,7 @@ internal static class OperatorInboxControlPlaneProjection
             item.AcknowledgedAt ?? DateTimeOffset.UtcNow,
             item.Acknowledged,
             IsBoardIntegrityKind(item.Kind),
-            [new ControlPlaneAction("Acknowledge", $"operator-inbox-ack:{item.Id}", DiscordButtonStyle.Secondary)]);
+            [new ControlPlaneAction("Acknowledge", DiscordInteractionHandler.BuildDirectCustomId(item.Id, 0), DiscordButtonStyle.Secondary)]);
     }
 
     private static bool IsBoardIntegrityKind(OperatorInboxKind kind) =>
