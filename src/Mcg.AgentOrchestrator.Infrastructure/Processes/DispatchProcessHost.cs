@@ -1198,17 +1198,9 @@ public static void DropToLow() {
 
     internal static void WriteUtf8PromptToStream(string promptPath, Stream target)
     {
-        using var reader = new StreamReader(
-            promptPath,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
-            detectEncodingFromByteOrderMarks: false);
-        using var writer = new StreamWriter(
-            target,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            bufferSize: 16 * 1024,
-            leaveOpen: true);
-        writer.Write(reader.ReadToEnd());
-        writer.Flush();
+        using var source = File.OpenRead(promptPath);
+        source.CopyTo(target);
+        target.Flush();
     }
 
     private static void TryWriteExitCode(string path, int exitCode)

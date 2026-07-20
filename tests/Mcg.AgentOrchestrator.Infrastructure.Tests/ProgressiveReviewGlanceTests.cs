@@ -30,7 +30,13 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Single(runner.Calls);
 
         first.SetResult(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok", "diff aligns", 10, 5));
-        _ = coordinator.Observe(kernel, [goal]);
+        Xunit.Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                _ = coordinator.Observe(kernel, [goal]);
+                return events.Receipts.Count == 1;
+            },
+            TimeSpan.FromSeconds(2)));
         Xunit.Assert.Single(events.Receipts);
         Xunit.Assert.Equal("ChangedFiles", events.Receipts[0].Trigger);
         Xunit.Assert.Equal("OnTrack", events.Receipts[0].Verdict);
@@ -41,7 +47,13 @@ public sealed class ProgressiveReviewGlanceTests
         _ = coordinator.Observe(kernel, [goal]);
         Xunit.Assert.Equal(2, runner.Calls.Count);
         second.SetResult(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok again", "still aligned", 6, 4));
-        _ = coordinator.Observe(kernel, [goal]);
+        Xunit.Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                _ = coordinator.Observe(kernel, [goal]);
+                return events.Receipts.Count == 2;
+            },
+            TimeSpan.FromSeconds(2)));
 
         now += TimeSpan.FromMinutes(16);
         _ = coordinator.Observe(kernel, [goal]);
@@ -196,7 +208,12 @@ public sealed class ProgressiveReviewGlanceTests
         var result = coordinator.Observe(kernel, [goal]);
 
         Xunit.Assert.True(result.MutatedTaskState);
-        Xunit.Assert.Contains(task.CriterionRetryFeedback, item => item.Contains("Progressive review glance concern", StringComparison.Ordinal));
+        Xunit.Assert.Empty(task.CriterionRetryFeedback);
+        Xunit.Assert.Equal(0, task.CriterionRetryCount);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Progressive review glance concern", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_concern_survives_developer_success_until_reviewer_failure")]
@@ -240,13 +257,51 @@ public sealed class ProgressiveReviewGlanceTests
         var result = coordinator.Observe(kernel, [goal]);
 
         Xunit.Assert.True(result.MutatedTaskState);
-        Xunit.Assert.Contains(developer.CriterionRetryFeedback, item => item.Contains("Progressive review glance concern", StringComparison.Ordinal));
+        Xunit.Assert.Empty(developer.CriterionRetryFeedback);
+        Xunit.Assert.Equal(0, developer.CriterionRetryCount);
+        Xunit.Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Progressive review glance concern", StringComparison.Ordinal));
 
         clock.UtcNow = now.AddMinutes(4);
         kernel.RetryTask(goal.Id, developer.Id, "Reviewer auto-review-retry found criterion B still missing.");
         _ = coordinator.Observe(kernel, [goal]);
 
-        Xunit.Assert.Equal(1, developer.CriterionRetryFeedback.Count(item => item.Contains("Progressive review glance concern", StringComparison.Ordinal)));
+        Xunit.Assert.Equal(1, goal.Timeline.Count(evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Progressive review glance concern", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_timeout_records_invalid_receipt_and_releases_cap")]
+    public void TimeoutRecordsInvalidReceiptAndReleasesCap()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, _) = RunningDeveloperRound(now);
+        var runner = new ControlledGlanceRunner();
+        _ = runner.EnqueuePending();
+        var events = new RecordingGlanceEvents();
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            utcNow: () => now,
+            options: new ProgressiveReviewGlanceOptions(
+                PerRoundBudget: 1,
+                DispatchTimeout: TimeSpan.FromMilliseconds(1)),
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                _ = coordinator.Observe(kernel, [goal]);
+                return events.Receipts.Count == 1;
+            },
+            TimeSpan.FromSeconds(2)));
+        Xunit.Assert.Equal("Invalid", events.Receipts.Single().Verdict);
+        Xunit.Assert.Contains("timed out", events.Receipts.Single().Note, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_default_diff_includes_untracked_file_content")]

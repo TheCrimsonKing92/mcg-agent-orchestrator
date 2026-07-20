@@ -35,11 +35,13 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int ChangedFilePromptLimit = 20,
     int ChangedFileListCharacterLimit = 3000,
     int DiffCharacterLimit = 8000,
-    int TranscriptCharacterLimit = 3000)
+    int TranscriptCharacterLimit = 3000,
+    TimeSpan? DispatchTimeout = null)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveElapsedInterval => ElapsedInterval ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveSmallRoundSuppressionThreshold => SmallRoundSuppressionThreshold ?? TimeSpan.FromMinutes(10);
+    public TimeSpan EffectiveDispatchTimeout => DispatchTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
 }
 
 internal sealed record ProgressiveReviewGlanceInputs(
@@ -317,7 +319,7 @@ Transcript tail:
         Task<ProgressiveReviewGlanceDispatchResult> run;
         try
         {
-            run = _runner.RunAsync(inputs);
+            run = RunGlanceWithTimeoutAsync(inputs);
         }
         catch (Exception ex)
         {
@@ -330,6 +332,23 @@ Transcript tail:
         _running.Add(new RunningGlance(roundKey, goal.Id, task.Id, task.LastDispatch.DispatchedAt, inputHash, inputs, run, stopwatch));
         state.FiredCount++;
         lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=started trigger={trigger.Value} inputHash={inputHash}");
+    }
+
+    private async Task<ProgressiveReviewGlanceDispatchResult> RunGlanceWithTimeoutAsync(
+        ProgressiveReviewGlanceInputs inputs)
+    {
+        using var timeoutCts = new CancellationTokenSource(_options.EffectiveDispatchTimeout);
+        try
+        {
+            return await _runner.RunAsync(inputs, timeoutCts.Token).WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            return new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.Invalid,
+                $"glance runner timed out after {(int)Math.Ceiling(_options.EffectiveDispatchTimeout.TotalSeconds)}s",
+                "glance runner timeout");
+        }
     }
 
     private bool HarvestCompleted(List<string> lines)
@@ -441,10 +460,11 @@ Transcript tail:
 
             if (ShouldSurfaceQueuedConcerns(goal, task, pair.Key))
             {
-                kernel.RecordCriterionRetryFeedback(
+                kernel.RecordTaskNote(
                     goal.Id,
                     task.Id,
-                    task.CriterionRetryFeedback.Concat(state.QueuedConcerns.Select(note => $"Progressive review glance concern: {note}")).ToArray());
+                    "Progressive review glance concern(s) queued for this failed round: " +
+                    string.Join(" | ", state.QueuedConcerns.Select(note => BoundSingleLine(note, 300))));
                 state.ConcernsSurfaced = true;
                 mutated = true;
             }
