@@ -138,6 +138,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
     internal static TimeSpan TransientNoHolderBuildLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
     internal static int TransientNoHolderBuildLockMaxRetryCycles { get; set; } = 2;
+    internal static Func<string, string?>? ResolveBaseBuildMainShaForTests { get; set; }
+    internal static DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
+    private static readonly string[] CacheableProjects =
+    [
+        CoreProject,
+        InfrastructureProject,
+        AppProject,
+        CoreTestsProject,
+        InfrastructureTestsProject
+    ];
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
 
@@ -191,7 +201,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles, policyRequiredChecks, policyShardPlan);
         var effectiveChecks = ExpandBroadInfrastructureChecks(policyEffectiveChecks);
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
-            ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks)
+            ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
@@ -384,7 +394,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken).ConfigureAwait(false);
 
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
-            ? CreateDotnetTestBuildPhase(worktreePath, focusedChecks)
+            ? CreateDotnetTestBuildPhase(worktreePath, focusedChecks, changedFiles: null, PolicyShardPlan.NotApplicable("focused evidence"))
             : null;
         var checks = new List<AcceptanceCheckResult>();
         foreach (var check in focusedChecks)
@@ -1531,13 +1541,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var lockRemediationApplied = buildRun.Run.Result.LockRemediationApplied || testRun.Result.LockRemediationApplied;
         var durationMilliseconds = (buildRun.ContributesToCheck ? buildRun.Run.Result.DurationMilliseconds ?? 0 : 0) +
             (testRun.Result.DurationMilliseconds ?? 0);
+        var buildPhaseSummary = buildRun.ContributesToCheck &&
+            buildRun.Run.Result.ResultSummary?.StartsWith("base-build-cache ", StringComparison.Ordinal) == true
+                ? buildRun.Run.Result.ResultSummary
+                : null;
         return (testRun.Result with
         {
             DurationMilliseconds = durationMilliseconds,
             LockRemediationApplied = lockRemediationApplied,
             ResultSummary = lockRemediationApplied && buildRun.Run.Result.LockRemediationApplied
                 ? PrefixResultSummary("build phase remediated", testRun.Result.ResultSummary)
-                : testRun.Result.ResultSummary
+                : buildPhaseSummary is null ? testRun.Result.ResultSummary : PrefixResultSummary(buildPhaseSummary, testRun.Result.ResultSummary)
         }, buildRun.Run.Retried || testRun.Retried);
     }
 
@@ -1556,6 +1570,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return new DotnetTestBuildPhaseResult(completed, ContributesToCheck: false);
         }
 
+        if (phase.CachePlan is not null &&
+            await TryRunCachedDotnetTestBuildPhaseAsync(
+                phase,
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                attemptName,
+                cancellationToken).ConfigureAwait(false) is { } cachedRun)
+        {
+            phase.Run = cachedRun;
+            return new DotnetTestBuildPhaseResult(cachedRun, ContributesToCheck: true);
+        }
+
         phase.Run = await RunManagedDotnetCheckAsync(
             check,
             phase.BuildArguments,
@@ -1566,6 +1595,169 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"{attemptName}-build",
             cancellationToken).ConfigureAwait(false);
         return new DotnetTestBuildPhaseResult(phase.Run.Value, ContributesToCheck: true);
+    }
+
+    private async Task<(AcceptanceCheckResult Result, bool Retried)?> TryRunCachedDotnetTestBuildPhaseAsync(
+        DotnetTestBuildPhase phase,
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        string attemptName,
+        CancellationToken cancellationToken)
+    {
+        var plan = phase.CachePlan;
+        if (plan is null)
+        {
+            return null;
+        }
+
+        var wall = Stopwatch.StartNew();
+        var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : null);
+        if (environment is null)
+        {
+            return null;
+        }
+
+        var cache = BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default();
+        var restore = cache.Restore(plan.MainSha, environment.ArtifactsPath, plan.RestoreProjects);
+        var retried = false;
+        var lockRemediationApplied = false;
+        (AcceptanceCheckResult Result, bool Retried)? lastRun = null;
+        IReadOnlyList<string> builtProjects;
+        DotnetBaseBuildCachePublishResult? publish = null;
+
+        if (restore.AllHit)
+        {
+            builtProjects = plan.BuildProjects;
+            foreach (var project in plan.BuildProjects)
+            {
+                var projectRun = await RunManagedDotnetCheckAsync(
+                    check,
+                    BuildDotnetProjectBuildArguments(project, phase.BuildArguments),
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    $"{attemptName}-build-{Slug(ProjectLabel(project))}",
+                    cancellationToken).ConfigureAwait(false);
+                retried |= projectRun.Retried;
+                lockRemediationApplied |= projectRun.Result.LockRemediationApplied;
+                lastRun = projectRun;
+                if (!projectRun.Result.Passed)
+                {
+                    break;
+                }
+            }
+        }
+        else
+        {
+            builtProjects = CacheableProjects;
+            lastRun = await RunManagedDotnetCheckAsync(
+                check,
+                phase.BuildArguments,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                $"{attemptName}-build",
+                cancellationToken).ConfigureAwait(false);
+            retried |= lastRun.Value.Retried;
+            lockRemediationApplied |= lastRun.Value.Result.LockRemediationApplied;
+            if (lastRun.Value.Result.Passed)
+            {
+                publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, plan.RestoreProjects);
+            }
+        }
+
+        wall.Stop();
+        if (lastRun is null)
+        {
+            return null;
+        }
+
+        var receiptSummary = BuildBaseBuildCacheSummary(
+            plan,
+            restore,
+            publish,
+            builtProjects,
+            (long)wall.Elapsed.TotalMilliseconds);
+        EmitBaseBuildCacheReceipt(receiptSummary);
+        return (lastRun.Value.Result with
+        {
+            DurationMilliseconds = (long)wall.Elapsed.TotalMilliseconds,
+            LockRemediationApplied = lockRemediationApplied,
+            ResultSummary = PrefixResultSummary(receiptSummary, lastRun.Value.Result.ResultSummary)
+        }, retried);
+    }
+
+    private static string BuildBaseBuildCacheSummary(
+        DotnetBaseBuildCachePlan plan,
+        DotnetBaseBuildCacheRestoreResult restore,
+        DotnetBaseBuildCachePublishResult? publish,
+        IReadOnlyList<string> builtProjects,
+        long buildPhaseMilliseconds)
+    {
+        var projectReceipts = CacheableProjects
+            .Select(project =>
+            {
+                var restored = restore.Projects.FirstOrDefault(receipt =>
+                    receipt.Project.Equals(project, StringComparison.OrdinalIgnoreCase));
+                if (restored is not null)
+                {
+                    return $"{ProjectLabel(project)}={restored.Status}";
+                }
+
+                var published = publish?.Projects.FirstOrDefault(receipt =>
+                    receipt.Project.Equals(project, StringComparison.OrdinalIgnoreCase));
+                return published is not null
+                    ? $"{ProjectLabel(project)}=miss,published"
+                    : $"{ProjectLabel(project)}=changed";
+            });
+        var evictions = restore.Evictions.Concat(publish?.Evictions ?? []).ToArray();
+        return
+            $"base-build-cache main_sha={plan.MainSha} build_phase_ms={buildPhaseMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"projects={string.Join(",", projectReceipts)} " +
+            $"built_projects={string.Join(",", builtProjects.Select(ProjectLabel))} " +
+            $"evictions={(evictions.Length == 0 ? "none" : string.Join(",", evictions))}";
+    }
+
+    private static void EmitBaseBuildCacheReceipt(string summary)
+    {
+        Console.WriteLine($"BASE_BUILD_CACHE {summary}");
+        Console.Out.Flush();
+    }
+
+    private static string[] BuildDotnetProjectBuildArguments(string project, string[] templateBuildArguments)
+    {
+        var args = new List<string> { "dotnet", "build", project };
+        var startIndex = templateBuildArguments.Length > 2 && !templateBuildArguments[2].StartsWith("-", StringComparison.Ordinal)
+            ? 3
+            : 2;
+        for (var index = startIndex; index < templateBuildArguments.Length; index++)
+        {
+            var argument = templateBuildArguments[index];
+            if (!IsBuildCompatibleDotnetArgument(argument))
+            {
+                if (ArgumentExpectsValue(argument))
+                {
+                    index++;
+                }
+
+                continue;
+            }
+
+            args.Add(argument);
+            if (ArgumentExpectsValue(argument) && index + 1 < templateBuildArguments.Length)
+            {
+                args.Add(templateBuildArguments[++index]);
+            }
+        }
+
+        return [.. args];
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetCheckAsync(
@@ -2736,8 +2928,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static DotnetTestBuildPhase CreateDotnetTestBuildPhase(
         string worktreePath,
-        IReadOnlyList<AcceptanceManifestCheck> checks)
+        IReadOnlyList<AcceptanceManifestCheck> checks,
+        IReadOnlyList<string>? changedFiles,
+        PolicyShardPlan policyShardPlan)
     {
+        DotnetBaseBuildCachePlan? cachePlan = TryCreateBaseBuildCachePlan(worktreePath, changedFiles, policyShardPlan);
         var dotnetTestChecks = checks
             .Where(check => check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -2746,7 +2941,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
         if (solutionCheck is not null)
         {
-            return new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(solutionCheck));
+            return new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(solutionCheck), cachePlan);
         }
 
         if (TryFindRootSolution(worktreePath) is { } solutionPath)
@@ -2754,13 +2949,91 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var template = dotnetTestChecks.FirstOrDefault();
             var templateArguments = template?.Arguments ?? [];
             return new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(
-                ["dotnet", "test", solutionPath, .. templateArguments]));
+                ["dotnet", "test", solutionPath, .. templateArguments]), cachePlan);
         }
 
         var firstCheck = dotnetTestChecks.FirstOrDefault();
         return new DotnetTestBuildPhase(firstCheck is null
             ? ["dotnet", "build"]
-            : BuildDotnetTestBuildArguments(firstCheck));
+            : BuildDotnetTestBuildArguments(firstCheck), cachePlan);
+    }
+
+    private static DotnetBaseBuildCachePlan? TryCreateBaseBuildCachePlan(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        PolicyShardPlan policyShardPlan)
+    {
+        if (changedFiles is null ||
+            changedFiles.Count == 0 ||
+            !policyShardPlan.Applies ||
+            policyShardPlan.ForceFull)
+        {
+            return null;
+        }
+
+        var buildProjects = policyShardPlan.DependencyClosure
+            .Where(project => CacheableProjects.Contains(project, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(project => Array.IndexOf(CacheableProjects, project))
+            .ToArray();
+        if (buildProjects.Length == 0 || buildProjects.Length == CacheableProjects.Length)
+        {
+            return null;
+        }
+
+        var mainSha = ResolveBaseBuildMainShaForTests?.Invoke(worktreePath) ?? ResolveBaseBuildMainSha(worktreePath);
+        if (string.IsNullOrWhiteSpace(mainSha))
+        {
+            return null;
+        }
+
+        var restoreProjects = CacheableProjects
+            .Where(project => !buildProjects.Contains(project, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        return restoreProjects.Length == 0
+            ? null
+            : new DotnetBaseBuildCachePlan(mainSha, restoreProjects, buildProjects);
+    }
+
+    private static string? ResolveBaseBuildMainSha(string worktreePath)
+    {
+        try
+        {
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = worktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            process.StartInfo.ArgumentList.Add("merge-base");
+            process.StartInfo.ArgumentList.Add("HEAD");
+            process.StartInfo.ArgumentList.Add("main");
+            if (!process.Start())
+            {
+                return null;
+            }
+
+            if (!process.WaitForExit(5000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                return null;
+            }
+
+            var sha = process.StandardOutput.ReadToEnd().Trim();
+            return sha.Length >= 7 && sha.All(Uri.IsHexDigit) ? sha : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static string? TryFindRootSolution(string worktreePath)
@@ -3517,9 +3790,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 
-    private sealed class DotnetTestBuildPhase(string[] buildArguments)
+    private sealed record DotnetBaseBuildCachePlan(
+        string MainSha,
+        IReadOnlyList<string> RestoreProjects,
+        IReadOnlyList<string> BuildProjects);
+
+    private sealed class DotnetTestBuildPhase(string[] buildArguments, DotnetBaseBuildCachePlan? cachePlan)
     {
         public string[] BuildArguments { get; } = buildArguments;
+        public DotnetBaseBuildCachePlan? CachePlan { get; } = cachePlan;
         public (AcceptanceCheckResult Result, bool Retried)? Run { get; set; }
     }
 

@@ -126,6 +126,11 @@ public static class DotnetBuildEnvironmentManager
             StableSlotArtifactsPath(StableSlotName(goalId));
     }
 
+    public static string BaseBuildCacheRoot()
+    {
+        return DotnetBaseBuildCache.DefaultRootPath(IsolatedRootBase());
+    }
+
     public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTesthostFirewallPaths()
     {
         DotnetTesthostFirewallPath[] paths = new DotnetTesthostFirewallPath[StableSlotCount * 4];

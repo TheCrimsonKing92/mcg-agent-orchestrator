@@ -67,6 +67,114 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.True(first.Arguments.Contains(first.ArtifactsPath));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBaseBuildCache_restores_identical_project_outputs_from_main_sha_entry")]
+    public void DotnetBaseBuildCacheRestoresIdenticalProjectOutputsFromMainShaEntry()
+    {
+        var root = CreateTempDirectory();
+        var cache = new DotnetBaseBuildCache(Path.Combine(root, "cache"));
+        var coldArtifacts = Path.Combine(root, "cold-artifacts");
+        var warmArtifacts = Path.Combine(root, "warm-artifacts");
+        const string project = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
+        try
+        {
+            WriteProjectArtifacts(coldArtifacts, project, "cold");
+            var coldHash = DotnetBaseBuildCache.ProjectOutputHash(coldArtifacts, project);
+
+            var publish = cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", coldArtifacts, [project]);
+            var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", warmArtifacts, [project]);
+
+            Assert.Single(publish.Projects);
+            Assert.True(restore.AllHit);
+            Assert.Equal(coldHash, DotnetBaseBuildCache.ProjectOutputHash(warmArtifacts, project));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBaseBuildCache_main_sha_change_misses_previous_entry")]
+    public void DotnetBaseBuildCacheMainShaChangeMissesPreviousEntry()
+    {
+        var root = CreateTempDirectory();
+        var cache = new DotnetBaseBuildCache(Path.Combine(root, "cache"));
+        var artifacts = Path.Combine(root, "artifacts");
+        const string project = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
+        try
+        {
+            WriteProjectArtifacts(artifacts, project, "sha-one");
+            cache.Publish("1111111111111111111111111111111111111111", artifacts, [project]);
+
+            var restore = cache.Restore("2222222222222222222222222222222222222222", Path.Combine(root, "warm"), [project]);
+
+            var receipt = Assert.Single(restore.Projects);
+            Assert.Equal("miss", receipt.Status);
+            Assert.Equal("not-found", receipt.Reason);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBaseBuildCache_restores_into_slot_artifacts_without_using_cache_as_slot")]
+    public void DotnetBaseBuildCacheRestoresIntoSlotArtifactsWithoutUsingCacheAsSlot()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var cacheRoot = Path.Combine(CreateTempDirectory(), "cache");
+        var cache = new DotnetBaseBuildCache(cacheRoot);
+        var sourceArtifacts = Path.Combine(Path.GetTempPath(), "mcg-cache-source", Guid.NewGuid().ToString("N"));
+        const string project = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
+        try
+        {
+            WriteProjectArtifacts(sourceArtifacts, project, "slot");
+            cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", sourceArtifacts, [project]);
+            var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+
+            var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", slot.ArtifactsPath, [project]);
+
+            Assert.True(restore.AllHit);
+            Assert.Contains(Path.Combine("slots", "slot-0", "artifacts"), slot.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(cacheRoot, slot.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(Path.Combine(slot.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug_net10.0", "cache.txt")));
+        }
+        finally
+        {
+            TryDeleteDirectory(cacheRoot);
+            TryDeleteDirectory(sourceArtifacts);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBaseBuildCache_evicts_to_bounded_entry_count")]
+    public void DotnetBaseBuildCacheEvictsToBoundedEntryCount()
+    {
+        var root = CreateTempDirectory();
+        var cacheRoot = Path.Combine(root, "cache");
+        var cache = new DotnetBaseBuildCache(cacheRoot, maxEntries: 2);
+        var artifacts = Path.Combine(root, "artifacts");
+        const string project = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
+        try
+        {
+            for (var index = 0; index < 3; index++)
+            {
+                TryDeleteDirectory(artifacts);
+                WriteProjectArtifacts(artifacts, project, $"entry-{index}");
+                cache.Publish($"{index}{new string('a', 39)}", artifacts, [project]);
+                Thread.Sleep(5);
+            }
+
+            var entries = Directory.EnumerateDirectories(cacheRoot)
+                .Where(path => !Path.GetFileName(path).Equals("_staging", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(Directory.EnumerateDirectories)
+                .Count();
+            Assert.True(entries <= 2);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_artifact_prep_unauthorized_returns_build_lock_blocked_with_holder_identity")]
     public void DotnetBuildEnvironmentManagerArtifactPrepUnauthorizedReturnsBuildLockBlockedWithHolderIdentity()
     {
@@ -2183,6 +2291,17 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var argument = arguments.SingleOrDefault(argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
         Assert.False(string.IsNullOrWhiteSpace(argument));
         return argument!;
+    }
+
+    private static void WriteProjectArtifacts(string artifactsPath, string project, string content)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(project);
+        var binPath = Path.Combine(artifactsPath, "bin", projectName, "debug_net10.0");
+        var objPath = Path.Combine(artifactsPath, "obj", projectName, "debug_net10.0");
+        Directory.CreateDirectory(binPath);
+        Directory.CreateDirectory(objPath);
+        File.WriteAllText(Path.Combine(binPath, "cache.txt"), content);
+        File.WriteAllText(Path.Combine(objPath, "cache.obj"), content);
     }
 
     private static int CountOccurrences(string text, string value)
