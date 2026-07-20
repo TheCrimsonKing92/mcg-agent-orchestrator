@@ -247,6 +247,57 @@ public sealed class ControlPlaneDelivererTests
         Assert.DoesNotContain(await store.ListSystemicStormsAsync(), state => state.Kind == "FailedTask");
     }
 
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_existing_systemic_merge_resolves_when_kind_disappears")]
+    public async Task ControlPlaneDelivererExistingSystemicMergeResolvesWhenKindDisappears()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 6, SystemicMergeThreshold: 3);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var start = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var cards = new[]
+        {
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: start),
+            Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: start.AddMinutes(1)),
+            Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: start.AddMinutes(2))
+        };
+
+        await deliverer.DeliverAsync(cards, start.AddMinutes(2));
+        var resolved = await deliverer.DeliverAsync([], start.AddMinutes(10));
+
+        Assert.Single(transport.Sent);
+        var edit = Assert.Single(transport.Edited);
+        Assert.Contains("~~[Systemic", edit.Content);
+        Assert.Empty(edit.Buttons);
+        Assert.Contains(resolved.Operations, operation =>
+            operation.Reason == "resolved" &&
+            operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(await store.ListSystemicStormsAsync());
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_unchanged_delivered_cards_do_not_create_pending_rollup")]
+    public async Task ControlPlaneDelivererUnchangedDeliveredCardsDoNotCreatePendingRollup()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 3, SystemicMergeThreshold: 99);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var now = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var cards = new[]
+        {
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: now.AddHours(-1)),
+            Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: now.AddHours(-1))
+        };
+
+        await deliverer.DeliverAsync(cards, now);
+        var unchanged = await deliverer.DeliverAsync(cards, now.AddMinutes(5));
+
+        Assert.Equal(2, transport.Sent.Count);
+        Assert.Empty(transport.Edited);
+        Assert.DoesNotContain(store.Marks, mark => mark.DedupKey == DiscordControlPlaneDeliverer.PendingRollupKey);
+        Assert.All(unchanged.Operations, operation => Assert.Equal("dedup", operation.Reason));
+    }
+
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_resolved_unseen_card_is_suppressed")]
     public async Task ControlPlaneDelivererResolvedUnseenCardIsSuppressed()
     {

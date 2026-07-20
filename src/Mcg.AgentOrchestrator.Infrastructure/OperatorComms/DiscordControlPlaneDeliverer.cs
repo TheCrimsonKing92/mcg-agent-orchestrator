@@ -92,9 +92,19 @@ public sealed class DiscordControlPlaneDeliverer
             now.AddHours(-24),
             cancellationToken);
         var remainingBudget = Math.Max(0, _policy.DailyDecisionBudget - decisionPushesToday);
-        var pendingRollupMark = await _store.TryGetAsync(PendingRollupKey, cancellationToken);
-        var nonBoardCount = candidates.Count(card => !card.IsBoardIntegrity && !card.IsResolved);
-        var reserveRollupSlot = nonBoardCount > remainingBudget && remainingBudget > 0;
+        var budgetedPushCount = 0;
+        foreach (var card in candidates)
+        {
+            if (!card.IsBoardIntegrity &&
+                !card.IsResolved &&
+                !_policy.IsQuietHours(now) &&
+                await WouldPushDecisionCardAsync(card, now, cancellationToken))
+            {
+                budgetedPushCount++;
+            }
+        }
+
+        var reserveRollupSlot = budgetedPushCount > remainingBudget && remainingBudget > 0;
         var remainingCardBudget = reserveRollupSlot ? remainingBudget - 1 : remainingBudget;
         var overBudget = new List<ControlPlaneDecisionCard>();
 
@@ -115,7 +125,9 @@ public sealed class DiscordControlPlaneDeliverer
                 continue;
             }
 
-            if (!card.IsBoardIntegrity && remainingCardBudget <= 0)
+            var wouldPush = card.IsBoardIntegrity ||
+                await WouldPushDecisionCardAsync(card, now, cancellationToken);
+            if (!card.IsBoardIntegrity && wouldPush && remainingCardBudget <= 0)
             {
                 overBudget.Add(card);
                 continue;
@@ -277,6 +289,24 @@ public sealed class DiscordControlPlaneDeliverer
         return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, "dedup", content);
     }
 
+    private async Task<bool> WouldPushDecisionCardAsync(
+        ControlPlaneDecisionCard card,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var mark = await _store.TryGetAsync(card.DedupKey, cancellationToken);
+        if (mark is null)
+            return !card.IsResolved;
+
+        if (card.IsResolved)
+            return !mark.Resolved;
+
+        var hash = Hash(RenderCard(card));
+        var reminderBaseline = mark.LastReminderAt ?? mark.FirstDeliveredAt;
+        return hash != mark.ContentHash ||
+            now - reminderBaseline >= _policy.EffectiveReminderCadence;
+    }
+
     private async Task<ControlPlaneDeliveryOperation> UpsertRollupAsync(
         IReadOnlyList<ControlPlaneDecisionCard> cards,
         DateTimeOffset now,
@@ -308,14 +338,17 @@ public sealed class DiscordControlPlaneDeliverer
         var source = cards
             .Where(card => card.Source is ControlPlaneCardSource.CollaborationDecision or ControlPlaneCardSource.OperatorInboxEscalation)
             .ToList();
-        var existingSystemicKinds = (await _store.ListSystemicStormsAsync(cancellationToken))
+        var existingSystemicStorms = await _store.ListSystemicStormsAsync(cancellationToken);
+        var existingSystemicKinds = existingSystemicStorms
             .Select(state => state.Kind)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sourceKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var collapsedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<ControlPlaneDecisionCard>();
 
         foreach (var group in source.GroupBy(card => card.Kind, StringComparer.OrdinalIgnoreCase))
         {
+            sourceKinds.Add(group.Key);
             var grouped = group.ToList();
             var unresolved = grouped.Where(card => !card.IsResolved).ToList();
             var inWindow = unresolved.Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow).ToList();
@@ -360,8 +393,31 @@ public sealed class DiscordControlPlaneDeliverer
                 IsBoardIntegrity: groupCards.Any(card => card.IsBoardIntegrity)));
         }
 
+        foreach (var state in existingSystemicStorms.Where(state => !sourceKinds.Contains(state.Kind)))
+            result.Add(ResolvedSystemicStormCard(state, now));
+
         result.AddRange(source.Where(card => !collapsedKeys.Contains(card.DedupKey)));
         return result;
+    }
+
+    private static ControlPlaneDecisionCard ResolvedSystemicStormCard(
+        SystemicStormDeliveryState state,
+        DateTimeOffset raisedAt)
+    {
+        var parts = state.DedupKey.Split(':');
+        var fingerprint = parts.Length == 4
+            ? parts[3]
+            : ControlPlaneDecisionCard.ComputeFingerprint(state.Kind);
+        return new ControlPlaneDecisionCard(
+            ControlPlaneCardSource.OperatorInboxEscalation,
+            "system",
+            $"Systemic{state.Kind}",
+            "storm-window",
+            fingerprint,
+            $"{state.Kind} escalation storm resolved",
+            "All underlying escalations for this systemic card are resolved.",
+            raisedAt,
+            IsResolved: true);
     }
 
     private static bool ConsumesDecisionBudget(
