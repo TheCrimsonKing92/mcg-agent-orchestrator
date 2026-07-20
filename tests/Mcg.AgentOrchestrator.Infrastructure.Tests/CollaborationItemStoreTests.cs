@@ -530,6 +530,7 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     private readonly Dictionary<string, DecisionRequest> _decisionRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DecisionReceipt> _decisionReceipts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EffectReceipt> _effectReceipts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NotificationDelivery> _notificationDeliveries = new(StringComparer.Ordinal);
 
     public IReadOnlyList<CollaborationItem> Items => _items;
 
@@ -742,7 +743,13 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     public Task<NotificationDelivery> RecordNotificationDeliveryAsync(
         NotificationDelivery delivery,
         CancellationToken cancellationToken = default) =>
-        Task.FromResult(delivery);
+        Task.FromResult(_notificationDeliveries.TryAdd(delivery.Id, delivery) ? delivery : _notificationDeliveries[delivery.Id]);
+
+    public Task<IReadOnlyList<NotificationDelivery>> ListNotificationDeliveriesAsync(
+        string requestId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<NotificationDelivery>>(
+            _notificationDeliveries.Values.Where(delivery => delivery.RequestId == requestId).ToList());
 
     public Task<DecisionReceipt> RecordDecisionAsync(
         string requestId,

@@ -94,6 +94,10 @@ public interface ICollaborationItemStore
         NotificationDelivery delivery,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<NotificationDelivery>> ListNotificationDeliveriesAsync(
+        string requestId,
+        CancellationToken cancellationToken = default);
+
     Task<DecisionReceipt> RecordDecisionAsync(
         string requestId,
         string actorId,
@@ -1015,6 +1019,29 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
         }, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<NotificationDelivery>> ListNotificationDeliveriesAsync(
+        string requestId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestId))
+            throw new ArgumentException("Notification delivery request id cannot be empty.", nameof(requestId));
+
+        await using var conn = OpenConnection();
+        var results = new List<NotificationDelivery>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, request_id, channel, target, content_hash, delivered_at
+            FROM collaboration_notification_deliveries
+            WHERE request_id = $request_id
+            ORDER BY delivered_at ASC, id ASC
+            """;
+        cmd.Parameters.AddWithValue("$request_id", requestId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(ReadNotificationDelivery(reader));
+        return results;
+    }
+
     public async Task<DecisionReceipt> RecordDecisionAsync(
         string requestId,
         string actorId,
@@ -1171,17 +1198,15 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                 var receipt = await TryReadDecisionReceiptAsync(conn, decisionReceiptId, null, cancellationToken)
                     ?? throw new InvalidOperationException($"Decision receipt '{decisionReceiptId}' was not found.");
                 var action = FindAllowedAction(request, actionRef);
-                var rejection = action is null
-                    ? "Unknown opaque action reference."
-                    : !string.Equals(receipt.Response.ActionRef.Value, actionRef.Value, StringComparison.Ordinal)
-                        ? "Action ref does not match the recorded decision."
-                        : !DecisionAuthorization.Meets(receipt.AuthenticationAssurance, action.RequiredTier)
-                            ? $"Authentication assurance '{receipt.AuthenticationAssurance}' does not satisfy required tier '{action.RequiredTier}'."
-                            : action.ExpectedGoalStateVersion is not null && currentGoalStateVersion != action.ExpectedGoalStateVersion
-                                ? "Stale goal state version."
-                                : appliedAt > action.ExpiresAt
-                                    ? "Action expired."
-                                    : null;
+                var expectedGoalStateVersion = receipt.ExpectedGoalStateVersion ?? action?.ExpectedGoalStateVersion;
+                var rejection = ValidateDecisionEffectApply(
+                    requestId,
+                    receipt,
+                    action,
+                    actionRef,
+                    expectedGoalStateVersion,
+                    currentGoalStateVersion,
+                    appliedAt);
 
                 var effect = new EffectReceipt(
                     Guid.NewGuid().ToString("n"),
@@ -1189,7 +1214,7 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                     decisionReceiptId,
                     actionRef,
                     rejection is null ? EffectReceiptStatus.Applied : EffectReceiptStatus.Rejected,
-                    action?.ExpectedGoalStateVersion,
+                    expectedGoalStateVersion,
                     currentGoalStateVersion,
                     rejection ?? result,
                     appliedAt);
@@ -1261,6 +1286,38 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
     private static DecisionAllowedAction? FindAllowedAction(DecisionRequest request, DecisionActionRef actionRef) =>
         request.AllowedActions.FirstOrDefault(action =>
             string.Equals(action.ActionRef.Value, actionRef.Value, StringComparison.Ordinal));
+
+    private static string? ValidateDecisionEffectApply(
+        string requestId,
+        DecisionReceipt receipt,
+        DecisionAllowedAction? action,
+        DecisionActionRef actionRef,
+        long? expectedGoalStateVersion,
+        long? currentGoalStateVersion,
+        DateTimeOffset appliedAt)
+    {
+        if (action is null)
+            return "Unknown opaque action reference.";
+        if (!string.Equals(receipt.RequestId, requestId, StringComparison.Ordinal))
+            return "Decision receipt does not belong to this request.";
+        if (!string.Equals(receipt.Response.ActionRef.Value, actionRef.Value, StringComparison.Ordinal))
+            return "Action ref does not match the recorded decision.";
+        if (!DecisionAuthorization.Meets(receipt.AuthenticationAssurance, action.RequiredTier))
+            return $"Authentication assurance '{receipt.AuthenticationAssurance}' does not satisfy required tier '{action.RequiredTier}'.";
+        if (receipt.ExpectedGoalStateVersion is not null &&
+            action.ExpectedGoalStateVersion is not null &&
+            receipt.ExpectedGoalStateVersion != action.ExpectedGoalStateVersion)
+        {
+            return "Receipt expected goal state version does not match the action binding.";
+        }
+
+        if (expectedGoalStateVersion is not null && currentGoalStateVersion != expectedGoalStateVersion)
+            return "Stale goal state version.";
+        if (appliedAt > action.ExpiresAt)
+            return "Action expired.";
+
+        return null;
+    }
 
     private static bool ActionMatchesDefaultDisposition(
         DecisionActionKind kind,
@@ -1532,13 +1589,22 @@ public sealed class CollaborationItemStore : ICollaborationItemStore
                    actual_goal_state_version, result, recorded_at
             FROM collaboration_effect_receipts
             WHERE request_id = $request_id
-            ORDER BY recorded_at DESC
+            ORDER BY CASE status WHEN 'Applied' THEN 0 ELSE 1 END, recorded_at DESC
             LIMIT 1
             """;
         cmd.Parameters.AddWithValue("$request_id", requestId);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadEffectReceipt(reader) : null;
     }
+
+    private static NotificationDelivery ReadNotificationDelivery(SqliteDataReader reader) =>
+        new(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            DateTimeOffset.Parse(reader.GetString(5)));
 
     private static async Task<EffectReceipt?> TryReadEffectReceiptAsync(
         SqliteConnection conn,

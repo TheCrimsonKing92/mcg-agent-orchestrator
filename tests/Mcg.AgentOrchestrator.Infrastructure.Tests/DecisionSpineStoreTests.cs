@@ -10,15 +10,18 @@ public sealed class DecisionSpineStoreTests
         var request = Request();
 
         await store.RaiseDecisionRequestAsync(request);
-        await store.RecordNotificationDeliveryAsync(new NotificationDelivery(
+        var delivery = await store.RecordNotificationDeliveryAsync(new NotificationDelivery(
             "delivery-1", request.Id, "discord", "operator-board", "sha256-card", request.CreatedAt));
 
         var listed = await store.ListDecisionRequestsAsync("goal-1");
+        var deliveries = await store.ListNotificationDeliveriesAsync(request.Id);
         var state = await store.GetDecisionStateAsync(request.Id);
 
         Assert.Single(listed);
+        Assert.Single(deliveries);
         Assert.NotNull(state);
         Assert.Equal(DecisionRequestPhase.Requested, state!.Phase);
+        Assert.Equal(delivery.ContentHash, deliveries[0].ContentHash);
         Assert.Equal(request.EvidenceManifest.ManifestHash, listed[0].EvidenceManifest.ManifestHash);
         Assert.Equal("act_retry", listed[0].AllowedActions[1].ActionRef.Value);
         Assert.DoesNotContain(
@@ -133,6 +136,103 @@ public sealed class DecisionSpineStoreTests
         Assert.False(stale.Applied);
         Assert.Equal("Stale goal state version.", stale.ErrorMessage);
         Assert.Equal(DecisionRequestPhase.DecisionRecorded, stillRecorded!.Phase);
+    }
+
+    [Fact(DisplayName = "DecisionSpine_rejects_cross_request_receipts_without_marking_effect_applied")]
+    public async Task RejectsCrossRequestReceiptsWithoutMarkingEffectApplied()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        var first = Request(id: "decision-first");
+        var second = Request(id: "decision-second");
+        await store.RaiseDecisionRequestAsync(first);
+        await store.RaiseDecisionRequestAsync(second);
+        var receipt = await store.RecordDecisionAsync(
+            first.Id,
+            "discord:miles",
+            "discord",
+            AuthorizationTier.Mutate,
+            7,
+            new DecisionResponse(new DecisionActionRef("act_retry"), "retry", DecisionReuseScope.ThisGoal, false),
+            Now.AddMinutes(1));
+
+        var result = await store.TryApplyDecisionEffectAsync(
+            second.Id, receipt.Id, new DecisionActionRef("act_retry"), 7, "retry queued", Now.AddMinutes(2));
+        var secondState = await store.GetDecisionStateAsync(second.Id);
+
+        Assert.False(result.Applied);
+        Assert.Equal("Decision receipt does not belong to this request.", result.ErrorMessage);
+        Assert.Equal(DecisionRequestPhase.Requested, secondState!.Phase);
+        Assert.Null(secondState.Receipt);
+    }
+
+    [Fact(DisplayName = "DecisionSpine_applied_state_survives_later_rejected_effect_attempt")]
+    public async Task AppliedStateSurvivesLaterRejectedEffectAttempt()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        var request = Request();
+        await store.RaiseDecisionRequestAsync(request);
+        var receipt = await store.RecordDecisionAsync(
+            request.Id,
+            "discord:miles",
+            "discord",
+            AuthorizationTier.Mutate,
+            7,
+            new DecisionResponse(new DecisionActionRef("act_retry"), "retry", DecisionReuseScope.ThisGoal, false),
+            Now.AddMinutes(1));
+
+        var applied = await store.TryApplyDecisionEffectAsync(
+            request.Id, receipt.Id, new DecisionActionRef("act_retry"), 7, "retry queued", Now.AddMinutes(2));
+        var rejected = await store.TryApplyDecisionEffectAsync(
+            request.Id, receipt.Id, new DecisionActionRef("act_deny"), 7, "deny queued", Now.AddMinutes(3));
+        var state = await store.GetDecisionStateAsync(request.Id);
+
+        Assert.True(applied.Applied);
+        Assert.False(rejected.Applied);
+        Assert.Equal(DecisionRequestPhase.EffectApplied, state!.Phase);
+        Assert.Equal(applied.Receipt.Id, state.Effect!.Id);
+    }
+
+    [Fact(DisplayName = "DecisionSpine_apply_enforces_receipt_expected_goal_state_version")]
+    public async Task ApplyEnforcesReceiptExpectedGoalStateVersion()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        var request = Request(actions:
+        [
+            new DecisionAllowedAction(new DecisionActionRef("act_retry"), "Retry", DecisionActionKind.Retry, AuthorizationTier.Mutate, Now.AddHours(1), null)
+        ]);
+        await store.RaiseDecisionRequestAsync(request);
+        var receipt = await store.RecordDecisionAsync(
+            request.Id,
+            "discord:miles",
+            "discord",
+            AuthorizationTier.Mutate,
+            9,
+            new DecisionResponse(new DecisionActionRef("act_retry"), "retry", DecisionReuseScope.ThisGoal, false),
+            Now.AddMinutes(1));
+
+        var stale = await store.TryApplyDecisionEffectAsync(
+            request.Id, receipt.Id, new DecisionActionRef("act_retry"), 8, "retry queued", Now.AddMinutes(2));
+
+        Assert.False(stale.Applied);
+        Assert.Equal("Stale goal state version.", stale.ErrorMessage);
+        Assert.Equal(9, stale.Receipt.ExpectedGoalStateVersion);
+
+        var mismatchedRequest = Request(id: "decision-version-mismatch");
+        await store.RaiseDecisionRequestAsync(mismatchedRequest);
+        var mismatchedReceipt = await store.RecordDecisionAsync(
+            mismatchedRequest.Id,
+            "discord:miles",
+            "discord",
+            AuthorizationTier.Mutate,
+            9,
+            new DecisionResponse(new DecisionActionRef("act_retry"), "retry", DecisionReuseScope.ThisGoal, false),
+            Now.AddMinutes(3));
+
+        var mismatched = await store.TryApplyDecisionEffectAsync(
+            mismatchedRequest.Id, mismatchedReceipt.Id, new DecisionActionRef("act_retry"), 7, "retry queued", Now.AddMinutes(4));
+
+        Assert.False(mismatched.Applied);
+        Assert.Equal("Receipt expected goal state version does not match the action binding.", mismatched.ErrorMessage);
     }
 
     [Fact(DisplayName = "DecisionSpine_records_reuse_scope_and_flags_permanent_policy_without_applying_it")]

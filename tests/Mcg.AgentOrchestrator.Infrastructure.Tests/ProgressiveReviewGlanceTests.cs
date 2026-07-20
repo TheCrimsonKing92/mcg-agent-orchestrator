@@ -805,6 +805,9 @@ public sealed class ProgressiveReviewGlanceTests
         public Task<NotificationDelivery> RecordNotificationDeliveryAsync(NotificationDelivery delivery, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<NotificationDelivery>> ListNotificationDeliveriesAsync(string requestId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<DecisionReceipt> RecordDecisionAsync(
             string requestId,
             string actorId,
