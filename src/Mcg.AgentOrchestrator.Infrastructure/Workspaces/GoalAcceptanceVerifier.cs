@@ -130,6 +130,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     ];
 
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
+    private readonly TimeProvider _timeProvider;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
     private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
@@ -149,17 +150,32 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         InfrastructureTestsProject
     ];
 
-    public GoalAcceptanceVerifier() : this(RunProcessAsync) { }
+    public GoalAcceptanceVerifier() : this(RunProcessAsync, TimeProvider.System) { }
 
     internal GoalAcceptanceVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
+        : this(runner, TimeProvider.System)
+    {
+    }
+
+    internal GoalAcceptanceVerifier(
+        Func<string[], string, CancellationToken, Task<CommandResult>> runner,
+        TimeProvider timeProvider)
         : this((arguments, workingDirectory, _, cancellationToken) =>
-            runner(arguments, workingDirectory, cancellationToken))
+            runner(arguments, workingDirectory, cancellationToken), timeProvider)
     {
     }
 
     internal GoalAcceptanceVerifier(Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner)
+        : this(runner, TimeProvider.System)
+    {
+    }
+
+    internal GoalAcceptanceVerifier(
+        Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
+        TimeProvider timeProvider)
     {
         _runner = runner;
+        _timeProvider = timeProvider;
     }
 
     public static IDisposable PushGateProgressSink(Action<AcceptanceGateProgress> sink)
@@ -2078,6 +2094,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cycleAttribution.Path,
                 TransientNoHolderBuildLockWaitWindow,
                 TransientNoHolderBuildLockPollInterval,
+                _timeProvider,
                 cancellationToken).ConfigureAwait(false);
             EmitTransientNoHolderBuildLockWaitReceipt(cycleAttribution, wait, cycle, maxRetryCycles);
             if (!wait.Released)
@@ -2169,36 +2186,37 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string path,
         TimeSpan waitWindow,
         TimeSpan pollInterval,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
-        var elapsed = Stopwatch.StartNew();
+        var startedAt = timeProvider.GetTimestamp();
         if (CanOpenBuildArtifactForWrite(path))
         {
-            elapsed.Stop();
-            return new TransientBuildLockWaitResult((long)elapsed.Elapsed.TotalMilliseconds, true);
+            return new TransientBuildLockWaitResult((long)timeProvider.GetElapsedTime(startedAt).TotalMilliseconds, true);
         }
 
         var effectivePollInterval = pollInterval <= TimeSpan.Zero
             ? TimeSpan.FromMilliseconds(1)
             : pollInterval;
-        while (elapsed.Elapsed < waitWindow)
+        while (timeProvider.GetElapsedTime(startedAt) < waitWindow)
         {
-            var remaining = waitWindow - elapsed.Elapsed;
+            var remaining = waitWindow - timeProvider.GetElapsedTime(startedAt);
             if (remaining > TimeSpan.Zero)
             {
-                await Task.Delay(remaining < effectivePollInterval ? remaining : effectivePollInterval, cancellationToken)
+                await Task.Delay(
+                        remaining < effectivePollInterval ? remaining : effectivePollInterval,
+                        timeProvider,
+                        cancellationToken)
                     .ConfigureAwait(false);
             }
 
             if (CanOpenBuildArtifactForWrite(path))
             {
-                elapsed.Stop();
-                return new TransientBuildLockWaitResult((long)elapsed.Elapsed.TotalMilliseconds, true);
+                return new TransientBuildLockWaitResult((long)timeProvider.GetElapsedTime(startedAt).TotalMilliseconds, true);
             }
         }
 
-        elapsed.Stop();
-        return new TransientBuildLockWaitResult((long)elapsed.Elapsed.TotalMilliseconds, false);
+        return new TransientBuildLockWaitResult((long)timeProvider.GetElapsedTime(startedAt).TotalMilliseconds, false);
     }
 
     private static bool CanOpenBuildArtifactForWrite(string path)
