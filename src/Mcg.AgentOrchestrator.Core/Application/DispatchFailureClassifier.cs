@@ -139,6 +139,9 @@ public static class DispatchFailureClassifier
     private static readonly Regex Http429StatusPattern = new(
         @"\b(?:429\s+Too\s+Many\s+Requests|HTTP(?:/\d(?:\.\d)?)?\s+429|(?:http(?:\s+status)?|status(?:\s+code)?|response(?:\s+status)?|error(?:\s+code)?)\s*[:=]?\s*429)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CommitShaPattern = new(
+        @"\b[0-9a-f]{7,64}\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsRecoverableSubscriptionLimitFailure(TaskVerificationRecord verification)
     {
@@ -166,8 +169,7 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        return verification.ProviderFailureKind == ProviderFailureKind.RateLimit ||
-            TryGetRecoverableSubscriptionLimitLine(verification, out _);
+        return TryGetRecoverableSubscriptionLimitLine(verification, out _);
     }
 
     public static bool HasRecoverableSubscriptionLimitEvidence(TaskVerificationRecord verification) =>
@@ -209,7 +211,8 @@ public static class DispatchFailureClassifier
 
         if (verification.ExitCode != 0)
         {
-            return string.IsNullOrWhiteSpace(verification.StandardOutput);
+            return string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+                !HasSubstantiveStandardError(verification.StandardError);
         }
 
         if (!string.IsNullOrWhiteSpace(verification.StandardOutput) ||
@@ -247,6 +250,24 @@ public static class DispatchFailureClassifier
 
         return new FileInfo(verification.StandardOutputPath).Length > 0;
     }
+
+    private static bool HasSubstantiveStandardError(string standardError)
+    {
+        if (string.IsNullOrWhiteSpace(standardError))
+        {
+            return false;
+        }
+
+        return standardError
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(line => !IsRunnerBookkeepingLine(line));
+    }
+
+    private static bool IsRunnerBookkeepingLine(string line) =>
+        line.StartsWith("RESOURCE ", StringComparison.Ordinal) ||
+        line.StartsWith("CLASSIFIER ", StringComparison.Ordinal) ||
+        line.StartsWith("Dispatch recovery policy action=", StringComparison.Ordinal) ||
+        line.StartsWith("Developer/Tester dispatch did not produce required relevant file-change evidence.", StringComparison.Ordinal);
 
     public static bool TryBuildDirtyDispatchRecovery(TaskSpec task, out DirtyDispatchRecovery recovery)
     {
@@ -330,6 +351,24 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.None,
                 BuildEvidenceSummary(verification)));
+        }
+
+        if (IsRetryRoundVerifiedNoNewCommit(task, verification, workerResultPresent, hasCommittedChanges))
+        {
+            return BuildOutcome(
+                "verified-no-new-commit",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.VerifiedSuccess,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.None,
+                BuildVerifiedNoNewCommitEvidenceSummary(task, verification)));
         }
 
         if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
@@ -578,6 +617,25 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
+        if (verification.ExitCode != 0 &&
+            HasPromptRetryRealFailureEvidence(verification))
+        {
+            return BuildOutcome(
+                "real-failure",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildRealFailureEvidenceSummary(verification)));
+        }
+
         return BuildOutcome(
             "unknown-failure",
             task,
@@ -603,7 +661,7 @@ public static class DispatchFailureClassifier
         DispatchOutcome outcome) =>
         outcome with
         {
-            ClassifierReceipt = AppendProviderEvidenceReceipt(
+            ClassifierReceipt = AppendEvidenceReceipt(
                 BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
                 outcome)
         };
@@ -611,29 +669,22 @@ public static class DispatchFailureClassifier
     private static DispatchOutcome WithClassifierReceipt(string rule, DispatchOutcome outcome, int exitCode) =>
         outcome with
         {
-            ClassifierReceipt = AppendProviderEvidenceReceipt(
+            ClassifierReceipt = AppendEvidenceReceipt(
                 $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
                 "stdout_bytes=unknown; stderr_bytes=unknown; heartbeat_stdout_bytes=unknown; " +
                 $"worker_result=absent; commit=none; verdict={outcome.Kind}",
                 outcome)
         };
 
-    private static string AppendProviderEvidenceReceipt(string receipt, DispatchOutcome outcome)
+    private static string AppendEvidenceReceipt(string receipt, DispatchOutcome outcome)
     {
-        if (!IsProviderFailureVerdict(outcome.Kind) ||
-            string.IsNullOrWhiteSpace(outcome.EvidenceSummary))
+        if (string.IsNullOrWhiteSpace(outcome.EvidenceSummary))
         {
             return receipt;
         }
 
-        return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary)}";
+        return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary, maxLength: 240)}";
     }
-
-    private static bool IsProviderFailureVerdict(DispatchOutcomeKind kind) =>
-        kind is DispatchOutcomeKind.RecoverableSubscriptionLimit or
-            DispatchOutcomeKind.ProviderAuthentication or
-            DispatchOutcomeKind.ProviderConnectivity or
-            DispatchOutcomeKind.ProviderModelRejection;
 
     private static string BuildClassifierReceipt(
         string rule,
@@ -818,7 +869,7 @@ public static class DispatchFailureClassifier
             value.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string SanitizeReceiptValue(string value)
+    private static string SanitizeReceiptValue(string value, int maxLength = 80)
     {
         var sanitized = value
             .Replace("\r", " ", StringComparison.Ordinal)
@@ -826,7 +877,7 @@ public static class DispatchFailureClassifier
             .Replace(";", ",", StringComparison.Ordinal)
             .Trim();
 
-        return sanitized.Length > 80 ? sanitized[..80] : sanitized;
+        return sanitized.Length > maxLength ? sanitized[..maxLength] : sanitized;
     }
 
     private static bool HasDispatchResultCommitEvidence(TaskSpec task)
@@ -892,6 +943,62 @@ public static class DispatchFailureClassifier
         TryGetRecoverableSubscriptionLimitLine(verification, out var line)
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
+
+    private static string BuildRealFailureEvidenceSummary(TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
+            .TakeLast(3)
+            .ToArray();
+
+        return substantiveLines.Length == 0
+            ? BuildEvidenceSummary(verification)
+            : $"real-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
+    }
+
+    private static bool HasPromptRetryRealFailureEvidence(TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification).ToArray();
+        return substantiveLines.Length >= 3 ||
+            substantiveLines.Any(IsScriptingOrEnvironmentFailureLine);
+    }
+
+    private static IEnumerable<string> GetSubstantiveStandardErrorLines(TaskVerificationRecord verification) =>
+        GetStandardErrorEvidenceLines(verification)
+            .Where(line => !IsRunnerBookkeepingLine(line));
+
+    private static IEnumerable<string> GetStandardErrorEvidenceLines(TaskVerificationRecord verification)
+    {
+        foreach (var line in SplitEvidenceLines(verification.StandardError))
+        {
+            yield return line;
+        }
+
+        foreach (var line in SplitEvidenceLines(ReadEvidenceFile(verification.StandardErrorPath)))
+        {
+            yield return line;
+        }
+    }
+
+    private static bool IsScriptingOrEnvironmentFailureLine(string line) =>
+        line.Contains("ParserError", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("powershell.exe", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("CommandNotFoundException", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("NativeCommandError", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("cannot access the file", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("is not recognized", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
+    {
+        var commitEvidence = TryGetKnownWorkerResultCommitSha(task, verification, out var commitSha)
+            ? $"commit {commitSha}"
+            : "known commit";
+        var testsEvidence = WorkerResultBlockers.TryFindTests(verification, out var tests)
+            ? $"; tests: {TruncateEvidence(tests)}"
+            : string.Empty;
+
+        return $"verified-no-new-commit: {commitEvidence}{testsEvidence}";
+    }
 
     private static string BuildProviderAuthenticationEvidenceSummary(TaskVerificationRecord verification) =>
         TryGetProviderAuthenticationLine(verification, out var line)
@@ -1094,6 +1201,69 @@ public static class DispatchFailureClassifier
         task.RequiredRole == AgentRole.Developer &&
         (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
         !HasWorkerResultDeferral(verification);
+
+    private static bool IsRetryRoundVerifiedNoNewCommit(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges) =>
+        verification.Succeeded &&
+        workerResultPresent &&
+        !hasCommittedChanges &&
+        task.RequiredRole == AgentRole.Developer &&
+        (task.CriterionRetryCount > 0 || task.CriterionRetryFeedback.Count > 0) &&
+        HasVerifiedNoNewCommitWorkerResult(task, verification);
+
+    private static bool HasVerifiedNoNewCommitWorkerResult(TaskSpec task, TaskVerificationRecord verification) =>
+        HasPopulatedStandardOutput(verification) &&
+        WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+        blockersStatus == WorkerResultBlockers.BlockersStatus.None &&
+        WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+        testsStatus == WorkerResultBlockers.TestsStatus.Pass &&
+        !WorkerResultBlockers.TryFindBlocker(verification, out _) &&
+        !HasStructuredFailingTests(verification) &&
+        TryGetKnownWorkerResultCommitSha(task, verification, out _);
+
+    private static bool TryGetKnownWorkerResultCommitSha(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        out string commitSha)
+    {
+        commitSha = string.Empty;
+        if (!TryGetWorkerResultFieldValue(verification, "commit", out var commitValue) ||
+            IsNoWorkerResultBlockersValue(commitValue))
+        {
+            return false;
+        }
+
+        var match = CommitShaPattern.Match(commitValue);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var candidate = match.Value;
+        if (MatchesKnownDispatchCommit(task.LastDispatch?.BaseCommit, candidate) ||
+            MatchesKnownDispatchCommit(task.LastDispatch?.ResultCommit, candidate))
+        {
+            commitSha = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesKnownDispatchCommit(string? knownCommit, string candidate)
+    {
+        if (string.IsNullOrWhiteSpace(knownCommit))
+        {
+            return false;
+        }
+
+        var known = knownCommit.Trim();
+        return known.StartsWith(candidate, StringComparison.OrdinalIgnoreCase) ||
+            candidate.StartsWith(known, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
         (WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
@@ -1620,7 +1790,8 @@ public static class DispatchFailureClassifier
                 // a raw line-start "ERROR:" diagnostic or an ISO timestamped "ERROR codex_*" line.
                 // Do not trim leading whitespace here; indented worker-echoed source must stay inert.
                 var providerLine = rawLine.TrimEnd();
-                if (IsProviderErrorLine(providerLine))
+                if (IsProviderErrorLine(providerLine) ||
+                    IsProviderLimitFooterLine(providerLine))
                 {
                     yield return providerLine;
                 }
@@ -1707,6 +1878,40 @@ public static class DispatchFailureClassifier
         return line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains(" : ERROR:", StringComparison.Ordinal) ||
             CodexCliDiagnosticPrefix.IsMatch(line);
+    }
+
+    private static bool IsProviderLimitFooterLine(string line)
+    {
+        if (line.Length == 0 ||
+            char.IsWhiteSpace(line[0]) ||
+            LooksLikeSourceLocationEcho(line) ||
+            !IsRecoverableSubscriptionLimitText(line))
+        {
+            return false;
+        }
+
+        return line.StartsWith("rate limit", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("you've hit your usage limit", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeSourceLocationEcho(string line)
+    {
+        var firstColon = line.IndexOf(':');
+        if (firstColon <= 0)
+        {
+            return false;
+        }
+
+        var prefix = line[..firstColon];
+        return prefix.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".vb", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
+            prefix.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)
