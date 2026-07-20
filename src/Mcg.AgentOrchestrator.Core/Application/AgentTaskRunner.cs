@@ -73,6 +73,7 @@ public sealed class AgentTaskRunner
         var provider = _providers.GetRequired(resolvedModel.ProviderName);
         var startMessage = BuildStartMessage(agent, resolvedModel);
         var workspaceDiff = _goalDiffProvider?.Invoke(goalId);
+        var matchedPractices = _kernel.MatchEngineeringPractices(goal, task, extraScopeText: workspaceDiff);
         var request = BuildRequest(
             goal,
             task,
@@ -80,7 +81,8 @@ public sealed class AgentTaskRunner
             resolvedModel,
             complexity,
             [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, startMessage, _clock.UtcNow)],
-            workspaceDiff);
+            workspaceDiff,
+            matchedPractices);
         _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
         ModelResponse response;
@@ -153,7 +155,8 @@ public sealed class AgentTaskRunner
             agent,
             resolvedModel,
             complexity,
-            [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, BuildStartMessage(agent, resolvedModel), DateTimeOffset.MaxValue)]);
+            [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, BuildStartMessage(agent, resolvedModel), DateTimeOffset.MaxValue)],
+            matchedPractices: EngineeringPracticeRegistryMatcher.Match(EngineeringPracticeDefaults.SeedEntries, goal, task));
         return new AgentTaskRunPreview(
             agent.Id,
             agent.Name,
@@ -185,7 +188,8 @@ public sealed class AgentTaskRunner
         ModelProfile resolvedModel,
         TaskComplexity complexity,
         IReadOnlyList<ProgressEvent>? pendingTimelineEvents = null,
-        string? workspaceDiff = null)
+        string? workspaceDiff = null,
+        IReadOnlyList<EngineeringPracticeMatch>? matchedPractices = null)
     {
         var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel);
 
@@ -221,6 +225,10 @@ public sealed class AgentTaskRunner
         var workspaceDiffSection = !string.IsNullOrWhiteSpace(workspaceDiff)
             ? $"{Environment.NewLine}{PromptContextFormatter.BuildWorkspaceDiffSection(workspaceDiff)}"
             : string.Empty;
+        var practiceSection = EngineeringPracticePromptRenderer.RenderPlainTextSection(agent.Role, matchedPractices ?? []);
+        var practicesPromptSection = string.IsNullOrWhiteSpace(practiceSection)
+            ? string.Empty
+            : $"{Environment.NewLine}{practiceSection}";
 
         var userPrompt =
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +
@@ -231,6 +239,7 @@ public sealed class AgentTaskRunner
             responseGuidance +
             modelFitGuidance +
             $"Role requirements:{Environment.NewLine}{SdlcRolePromptRequirements.BuildPlainText(agent.Role, complexity, SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal))}" +
+            practicesPromptSection +
             priorTaskEvidenceSection +
             workspaceDiffSection +
             timelineSection;

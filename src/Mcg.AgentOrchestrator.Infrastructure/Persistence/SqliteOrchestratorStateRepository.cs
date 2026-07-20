@@ -15,7 +15,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
     private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
-    private static readonly string[] SchemaTableNames =
+    private static readonly string[] CoreSchemaTableNames =
     [
         "meta",
         "goals",
@@ -189,9 +189,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         using var conn = new SqliteConnection(ConnectionString);
         conn.Open();
         RunNonQuery(conn, BusyTimeoutPragma());
-        if (SchemaTablesAlreadyExist(conn))
+        if (CoreSchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
+            if (!PracticeRegistrySchemaExists(conn))
+                PracticeRegistryStore.EnsureSchemaAndSeed(conn);
             BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
@@ -245,6 +247,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
+        PracticeRegistryStore.EnsureSchemaAndSeed(conn);
     }
 
     // Idempotent migration: adds metadata columns to existing schemas that pre-date them.
@@ -307,7 +310,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             RunNonQuery(conn, alterSql);
     }
 
-    private static bool SchemaTablesAlreadyExist(SqliteConnection conn)
+    private static bool CoreSchemaTablesAlreadyExist(SqliteConnection conn)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -320,7 +323,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$goals", "goals");
         cmd.Parameters.AddWithValue("$human_input_requests", "human_input_requests");
         cmd.Parameters.AddWithValue("$model_fit_history", "model_fit_history");
-        return Convert.ToInt32(cmd.ExecuteScalar()) == SchemaTableNames.Length;
+        return Convert.ToInt32(cmd.ExecuteScalar()) == CoreSchemaTableNames.Length;
+    }
+
+    private static bool PracticeRegistrySchemaExists(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'engineering_practices'";
+        return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
 
     private static bool IndexExists(SqliteConnection conn, string indexName)
@@ -743,8 +753,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             }
         }
 
-        return AgentOrchestratorKernel.FromSnapshot(
+        var kernel = AgentOrchestratorKernel.FromSnapshot(
             new OrchestratorSnapshot(goalSnapshots, humanInputSnapshots));
+        kernel.SetEngineeringPractices(PracticeRegistryStore.ListActive(conn));
+        return kernel;
     }
 
     private static bool TryReadGoalSnapshot(

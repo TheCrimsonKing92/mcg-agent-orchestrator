@@ -159,6 +159,14 @@ public sealed partial class AgentOrchestratorKernel
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
 
+        var practiceLines = EngineeringPracticePromptRenderer.RenderBriefSection(
+            task.RequiredRole,
+            MatchEngineeringPractices(goal, task, reviewerScopeChangedFiles));
+        if (practiceLines.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(practiceLines));
+        }
+
         var reviewerChangedFileScope = BuildReviewerChangedFileScopeBriefBlock(
             task,
             reviewerScopeChangedFiles,

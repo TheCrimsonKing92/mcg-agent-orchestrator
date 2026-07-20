@@ -52,7 +52,7 @@ public static class WorkerProcessJobs
                     continue;
                 }
 
-                if (TryKillOrFallback(entry.ProcessId))
+                if (TryKillOrFallback(entry.ProcessId, allowProtectedDescendant: false, markRegistryReleased: false, out _))
                 {
                     registry.MarkReleased(entry.ProcessId, $"spawn_registry: startup-reaped pid={entry.ProcessId} owner={entry.OwnerId}");
                     reaped++;
@@ -102,12 +102,12 @@ public static class WorkerProcessJobs
 
     public static bool TryKillOrFallback(int processId)
     {
-        return TryKillOrFallback(processId, allowProtectedDescendant: false, out _);
+        return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: true, out _);
     }
 
     public static bool TryKillOrFallback(int processId, out WorkerProcessJobAccounting? accounting)
     {
-        return TryKillOrFallback(processId, allowProtectedDescendant: false, out accounting);
+        return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: true, out accounting);
     }
 
     internal static bool TryKillRecordedOwnedChildAndWait(int processId, TimeSpan timeout)
@@ -115,7 +115,11 @@ public static class WorkerProcessJobs
         return TryKillOrFallbackAndWait(processId, timeout, allowProtectedDescendant: true);
     }
 
-    private static bool TryKillOrFallback(int processId, bool allowProtectedDescendant, out WorkerProcessJobAccounting? accounting)
+    private static bool TryKillOrFallback(
+        int processId,
+        bool allowProtectedDescendant,
+        bool markRegistryReleased,
+        out WorkerProcessJobAccounting? accounting)
     {
         accounting = null;
         if (!CanKillProcess(processId, allowProtectedDescendant))
@@ -127,13 +131,17 @@ public static class WorkerProcessJobs
         {
             if (ReadAccountingAndDispose(job, kill: true, captureAccounting: true, preferDuplicate: false, out accounting))
             {
-                Registry?.MarkReleased(processId, $"spawn_registry: killed pid={processId}");
+                if (markRegistryReleased)
+                {
+                    Registry?.MarkReleased(processId, $"spawn_registry: killed pid={processId}");
+                }
+
                 return true;
             }
         }
 
         var fallbackKilled = TryKillPidTree(processId);
-        if (fallbackKilled)
+        if (fallbackKilled && markRegistryReleased)
         {
             Registry?.MarkReleased(processId, $"spawn_registry: fallback-killed pid={processId}");
         }
@@ -148,7 +156,7 @@ public static class WorkerProcessJobs
 
     private static bool TryKillOrFallbackAndWait(int processId, TimeSpan timeout, bool allowProtectedDescendant)
     {
-        if (!TryKillOrFallback(processId, allowProtectedDescendant, out _))
+        if (!TryKillOrFallback(processId, allowProtectedDescendant, markRegistryReleased: true, out _))
         {
             return false;
         }
