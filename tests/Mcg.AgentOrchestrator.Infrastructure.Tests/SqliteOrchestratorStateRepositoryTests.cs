@@ -31,11 +31,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         conn.Open();
 
         Xunit.Assert.Equal(
-            ["goals", "human_input_requests", "meta", "model_fit_history"],
+            ["engineering_practices", "goals", "human_input_requests", "meta", "model_fit_history"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role"],
-            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND (name = 'ix_goals_status' OR name LIKE 'ix_model_fit_history_%') ORDER BY name"));
+            ["ix_engineering_practices_enabled_priority", "ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role"],
+            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND (name = 'ix_goals_status' OR name LIKE 'ix_model_fit_history_%' OR name = 'ix_engineering_practices_enabled_priority') ORDER BY name"));
         Xunit.Assert.Equal(
             ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
