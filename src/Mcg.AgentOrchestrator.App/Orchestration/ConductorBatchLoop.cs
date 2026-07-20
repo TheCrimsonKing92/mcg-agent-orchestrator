@@ -15,6 +15,7 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxBusyWriteAttempts = 6;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
+    internal const int DefaultUnscopedStallTickThreshold = 3;
 
     private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -79,6 +80,7 @@ internal sealed class ConductorBatchLoop
         Func<AgentOrchestratorKernel, IReadOnlyList<ConductorOperatorDispositionSnapshot>>? buildOperatorDispositions = null,
         bool quiet = false,
         TimeSpan? stallWarningThreshold = null,
+        int unscopedStallTickThreshold = DefaultUnscopedStallTickThreshold,
         Action<TimeSpan>? busyWriteDelay = null)
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
@@ -92,6 +94,7 @@ internal sealed class ConductorBatchLoop
         var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
         var retryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var lastGoalDisposition = new Dictionary<string, string>(StringComparer.Ordinal);
+        var unscopedDispatchableTicks = new Dictionary<string, int>(StringComparer.Ordinal);
         var goalProjectionCache = new GoalProjectionCache();
         var totalTicks = 0;
         var totalAdvanced = 0;
@@ -147,6 +150,19 @@ internal sealed class ConductorBatchLoop
             });
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, escalatedGoals, reapedGoals, goalProjectionCache);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
+            ReconcileUnscopedDispatchableGoals(
+                kernel,
+                driver,
+                onlyGoalId,
+                setAsideGoals,
+                excludedGoals,
+                escalatedGoals,
+                reapedGoals,
+                completedGoals,
+                unscopedDispatchableTicks,
+                goalProjectionCache,
+                unscopedStallTickThreshold,
+                nextTick);
             sweepClock.Stop();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "sweep", sweepClock.Elapsed,
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count}{FormatSweepCacheDetail(sweepResult)}"));
@@ -165,6 +181,7 @@ internal sealed class ConductorBatchLoop
             var eligible = preWalkCandidates
                 .Where(g => IsLoopEligibleGoal(g, driver, goalProjectionCache))
                 .ToArray();
+            ResetScopedGoalStallCounters(eligible, unscopedDispatchableTicks);
             preWalkClock.Stop();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "prewalk", preWalkClock.Elapsed,
                 $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}"));
@@ -1667,6 +1684,137 @@ internal sealed class ConductorBatchLoop
             kernel.RecordGoalPolicyDecision(
                 goal.Id,
                 $"Batch loop re-admitted escalated goal after state changed ({entry.Condition}).");
+        }
+    }
+
+    private static void ReconcileUnscopedDispatchableGoals(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        string? onlyGoalId,
+        Dictionary<string, BatchSetAsideEntry> setAsideGoals,
+        HashSet<string> excludedGoals,
+        HashSet<string> escalatedGoals,
+        HashSet<string> reapedGoals,
+        HashSet<string> completedGoals,
+        Dictionary<string, int> unscopedDispatchableTicks,
+        GoalProjectionCache goalProjectionCache,
+        int threshold,
+        int tick)
+    {
+        if (threshold <= 0)
+        {
+            threshold = DefaultUnscopedStallTickThreshold;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var goal in kernel.Goals)
+        {
+            var goalId = goal.Id.Value;
+            seen.Add(goalId);
+            if (!IsUnscopedDispatchableGoal(
+                    kernel,
+                    driver,
+                    goal,
+                    onlyGoalId,
+                    setAsideGoals,
+                    excludedGoals,
+                    escalatedGoals,
+                    completedGoals,
+                    goalProjectionCache))
+            {
+                unscopedDispatchableTicks.Remove(goalId);
+                continue;
+            }
+
+            var count = unscopedDispatchableTicks.TryGetValue(goalId, out var existing)
+                ? existing + 1
+                : 1;
+            unscopedDispatchableTicks[goalId] = count;
+            if (count < threshold)
+            {
+                continue;
+            }
+
+            var wasSetAside = setAsideGoals.Remove(goalId);
+            var wasExcluded = excludedGoals.Remove(goalId);
+            escalatedGoals.Remove(goalId);
+            reapedGoals.Remove(goalId);
+            goalProjectionCache.Invalidate(goal.Id);
+            unscopedDispatchableTicks.Remove(goalId);
+            var source = wasSetAside
+                ? "set-aside"
+                : wasExcluded ? "excluded" : "unscoped";
+            kernel.RecordGoalPolicyDecision(
+                goal.Id,
+                $"Batch loop stall reconciliation tick {tick}: re-scoped dispatchable goal after {count} unscoped tick(s) ({source}).");
+            EmitProgress($"STALL_RESCOPED tick={tick} goal={goalId[..8]} count={count} source={source}");
+        }
+
+        foreach (var staleGoalId in unscopedDispatchableTicks.Keys.Where(goalId => !seen.Contains(goalId)).ToArray())
+        {
+            unscopedDispatchableTicks.Remove(staleGoalId);
+        }
+    }
+
+    private static bool IsUnscopedDispatchableGoal(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        Goal goal,
+        string? onlyGoalId,
+        Dictionary<string, BatchSetAsideEntry> setAsideGoals,
+        HashSet<string> excludedGoals,
+        HashSet<string> escalatedGoals,
+        HashSet<string> completedGoals,
+        GoalProjectionCache goalProjectionCache)
+    {
+        if (onlyGoalId is not null && goal.Id.Value != onlyGoalId)
+        {
+            return false;
+        }
+
+        if (!setAsideGoals.ContainsKey(goal.Id.Value) && !excludedGoals.Contains(goal.Id.Value))
+        {
+            return false;
+        }
+
+        if (goal.Status != GoalStatus.Active || IsPreWalkExcludedGoal(goal))
+        {
+            return false;
+        }
+
+        if (!goal.Tasks.Any(task => task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned))
+        {
+            return false;
+        }
+
+        if (kernel.GetPendingHumanInput(goal.Id).Count > 0)
+        {
+            return false;
+        }
+
+        if (GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is not null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var state = goalProjectionCache.ResolveState(goal, driver);
+            return state is GoalLifecycleState.Created or GoalLifecycleState.WorkspaceReady;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void ResetScopedGoalStallCounters(
+        IReadOnlyCollection<Goal> scopedGoals,
+        Dictionary<string, int> unscopedDispatchableTicks)
+    {
+        foreach (var goal in scopedGoals)
+        {
+            unscopedDispatchableTicks.Remove(goal.Id.Value);
         }
     }
 
