@@ -118,13 +118,23 @@ public sealed class ProgressiveReviewGlanceTests
 
         var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
         var (kernel, goal, task) = RunningDeveloperRound(now, description: "Do work\n\nACCEPTANCE\n- Include correction overlay");
-        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, [
-            "Correct criterion B before retry.",
-            new string('x', 5000),
-            "Extra correction 01",
-            "Extra correction 02",
-            "Extra correction 03"
-        ]);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["retry feedback is not the criteria correction overlay"]);
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CRITERIA CORRECTION: supersedes=\"criterion B\"; correction=\"Correct criterion B before retry.\"");
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            $"CRITERIA CORRECTION: supersedes=\"oversized criterion\"; correction=\"{new string('x', 5000)}\"");
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CRITERIA CORRECTION: supersedes=\"extra 01\"; correction=\"Extra correction 01\"");
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CRITERIA CORRECTION: supersedes=\"extra 02\"; correction=\"Extra correction 02\"");
         var allFiles = Enumerable.Range(1, 100).Select(index => $"src/File{index:D2}.cs").ToArray();
         var displayFiles = allFiles.Take(40).ToArray();
         var runner = new ControlledGlanceRunner();
@@ -134,7 +144,7 @@ public sealed class ProgressiveReviewGlanceTests
             new RecordingGlanceEvents(),
             utcNow: () => now,
             options: new ProgressiveReviewGlanceOptions(
-                CriteriaCorrectionOverlayCharacterLimit: 80,
+                CriteriaCorrectionOverlayCharacterLimit: 320,
                 CriteriaCorrectionOverlayItemLimit: 3,
                 ChangedFilePromptLimit: 5,
                 ChangedFileListCharacterLimit: 80,
@@ -149,6 +159,8 @@ public sealed class ProgressiveReviewGlanceTests
         var inputs = runner.Calls.Single();
         Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("supersedes=\"criterion B\"", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("retry feedback", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("xxxxxxxxxx", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("more criteria correction", StringComparison.Ordinal));
         Xunit.Assert.Contains("src/File01.cs", inputs.ChangedFiles);
@@ -170,6 +182,8 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("supersedes=\"criterion B\"", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("retry feedback", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("xxxxxxxxxx", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("src/File01.cs", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("src/File06.cs", delivery.StandardInput!, StringComparison.Ordinal);

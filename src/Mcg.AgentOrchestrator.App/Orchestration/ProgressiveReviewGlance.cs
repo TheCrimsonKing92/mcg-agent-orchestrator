@@ -307,7 +307,7 @@ Transcript tail:
             BoundBlock(goal.Objective, _options.ObjectiveCharacterLimit),
             ExtractAcceptanceSection(task.Description, _options.AcceptanceCharacterLimit),
             BoundList(
-                task.CriterionRetryFeedback,
+                FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections),
                 _options.CriteriaCorrectionOverlayItemLimit,
                 _options.CriteriaCorrectionOverlayCharacterLimit,
                 CriteriaCorrectionLabel),
@@ -676,6 +676,20 @@ Note: {result.Note}
             _options.ChangedFileListCharacterLimit,
             ChangedFileLabel,
             snapshot.RemainingFileCount);
+
+    private static IReadOnlyList<string> FormatCriteriaCorrectionOverlay(
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> corrections)
+    {
+        return corrections
+            .Select(correction =>
+            {
+                var source = correction.SourceTaskId is null
+                    ? correction.SourceKind.ToString()
+                    : $"{correction.SourceKind} task={correction.SourceTaskId.Value}";
+                return $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
+            })
+            .ToArray();
+    }
 
     private static string ExtractAcceptanceSection(string description, int limit)
     {
