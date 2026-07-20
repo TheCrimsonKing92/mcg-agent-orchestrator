@@ -37,4 +37,16 @@ public sealed class WorkerShellTests
         Assert.True(startInfo.RedirectStandardInput);
         Assert.Empty(startInfo.StandardInputEncoding?.GetPreamble() ?? []);
     }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessRunner_omits_stdin_encoding_when_stdin_is_not_redirected")]
+    public void WorkerProcessRunnerOmitsStdinEncodingWhenStdinIsNotRedirected()
+    {
+        var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(
+            "Write-Output ok",
+            Directory.GetCurrentDirectory(),
+            redirectStandardInput: false);
+
+        Assert.False(startInfo.RedirectStandardInput);
+        Assert.Null(startInfo.StandardInputEncoding);
+    }
 }
