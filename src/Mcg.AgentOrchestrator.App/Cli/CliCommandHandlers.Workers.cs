@@ -189,6 +189,28 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             Console.WriteLine($"Subscription dispatches created: {subscriptionDispatches.Dispatches.Count}");
             return subscriptionDispatches.Dispatches.Count > 0;
 
+        case "inquiry":
+            {
+                const string usage = "inquiry <goal-prefix> <task-number> --text-file <question>";
+                CliArgumentParser.RequirePartCount(parts, 5, usage);
+                var inquiryGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, parts[1]);
+                var inquiryTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(inquiryGoal, parts[2]);
+                var question = ResolveTextArgument(parts, inlineIndex: 3, usage, "--text-file");
+                var dispatcher = new InquiryDispatcher();
+                var result = dispatcher.DispatchAsync(new InquiryDispatchRequest(
+                    inquiryGoal,
+                    inquiryTask,
+                    question,
+                    context.Workspace.PromptDirectory,
+                    context.Workspace.InquiryReceiptDirectory,
+                    context.Workspace.GoalLifecycleEventsDirectory)).GetAwaiter().GetResult();
+                Console.WriteLine($"Inquiry receipt: {result.ReceiptPath}");
+                Console.WriteLine($"Transcript: {result.Receipt.AnswerTranscriptPath}");
+                Console.WriteLine($"Claims: {result.Receipt.ClaimsLabel}");
+                Console.WriteLine($"Admission: {result.Receipt.AdmissionGate.Outcome}");
+                return false;
+            }
+
         case "cross-goal-start-plan":
             ConsoleViews.PrintCrossGoalSubscriptionStartPlan(CrossGoalSubscriptionStartPlanner.Build(
                 context.Kernel,

@@ -168,6 +168,10 @@ internal sealed record OrchestratorWorkspace(
     // etc.) — separate from the worker agent catalog so internal model uses never touch task routing.
     public string ModelFunctionCatalogPath => Path.Combine(OrchestratorDirectory, "model-functions.json");
 
+    // Post-hoc worker inquiry receipts live outside goal state. They are advisory evidence only and
+    // must not dirty task verification, dispatch, process, or acceptance records.
+    public string InquiryReceiptDirectory => Path.Combine(OrchestratorDirectory, "inquiries");
+
     // Answered spec-clarification forks recorded as precedents so a second goal with the same
     // forkKind reuses the recorded choice rather than re-asking.
     public string SpecRefinerPrecedentsPath => Path.Combine(OrchestratorDirectory, "spec-refiner-precedents.json");
