@@ -234,7 +234,7 @@ public sealed class InquiryDispatcher
         var model = string.IsNullOrWhiteSpace(dispatch.ModelName) ? string.Empty : $" --model {Quote(dispatch.ModelName)}";
         var reasoning = string.IsNullOrWhiteSpace(dispatch.ReasoningEffort) ? string.Empty : $" -c model_reasoning_effort={Quote(dispatch.ReasoningEffort)}";
         return executionMode == InquiryExecutionMode.Resume
-            ? $"codex exec resume {Quote(sessionId ?? throw new InvalidOperationException("Resume inquiry requires parent session id."))}{model}{reasoning} --sandbox read-only --cd {Quote(worktree)}"
+            ? $"codex exec --skip-git-repo-check{model}{reasoning} --sandbox read-only --cd {Quote(worktree)} resume {Quote(sessionId ?? throw new InvalidOperationException("Resume inquiry requires parent session id."))} -"
             : $"codex exec --skip-git-repo-check{model}{reasoning} --sandbox read-only --cd {Quote(worktree)}";
     }
 

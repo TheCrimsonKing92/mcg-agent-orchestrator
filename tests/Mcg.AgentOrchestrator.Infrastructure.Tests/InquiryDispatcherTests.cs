@@ -19,8 +19,15 @@ public sealed class InquiryDispatcherTests
 
         Xunit.Assert.Equal(InquiryExecutionMode.Resume, plan.ExecutionMode);
         Xunit.Assert.StartsWith(InquiryDispatcher.FreshnessEnvelopeHeader, plan.PromptContent, StringComparison.Ordinal);
-        Xunit.Assert.Contains("codex exec resume", plan.Command, StringComparison.Ordinal);
+        Xunit.Assert.Contains("codex exec --skip-git-repo-check", plan.Command, StringComparison.Ordinal);
+        Xunit.Assert.Contains(" resume 'parent-session-1234' -", plan.Command, StringComparison.Ordinal);
         Xunit.Assert.Contains("--sandbox read-only", plan.Command, StringComparison.Ordinal);
+        Xunit.Assert.True(
+            plan.Command.IndexOf("--sandbox read-only", StringComparison.Ordinal) <
+            plan.Command.IndexOf(" resume ", StringComparison.Ordinal));
+        Xunit.Assert.True(
+            plan.Command.IndexOf("--cd ", StringComparison.Ordinal) <
+            plan.Command.IndexOf(" resume ", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain("--last", plan.Command, StringComparison.Ordinal);
         Xunit.Assert.True(plan.Admission.AllowsResume);
     }
