@@ -752,7 +752,7 @@ internal sealed class ConductorDriver
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
-            if (TryBuildReviewerNeedsWorkAutoRetry(goal, policy, out var autoRetry))
+            if (TryBuildVerifyingFindingAutoRetry(goal, policy, out var autoRetry))
             {
                 if (autoRetry.ShouldEscalate)
                 {
@@ -809,132 +809,168 @@ internal sealed class ConductorDriver
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
-    private bool TryBuildReviewerNeedsWorkAutoRetry(
+    private bool TryBuildVerifyingFindingAutoRetry(
         Goal goal,
         ConductorAutonomyPolicy policy,
-        out ReviewNeedsWorkAutoRetryDecision decision)
+        out VerifyingFindingAutoRetryDecision decision)
     {
-        decision = ReviewNeedsWorkAutoRetryDecision.None;
-        var reviewerTask = goal.Tasks.FirstOrDefault(t =>
-            t.Status == WorkTaskStatus.Failed &&
-            t.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
-                t.LastVerification,
-                goal.EffectiveAcceptanceCriteriaCorrections,
-                out _,
-                out _));
-        if (reviewerTask is null ||
-            !WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
-                reviewerTask.LastVerification,
-                goal.EffectiveAcceptanceCriteriaCorrections,
-                out var blocker,
-                out var suppressedFindings))
+        decision = VerifyingFindingAutoRetryDecision.None;
+        var trigger = goal.Tasks
+            .Select(task => BuildVerifyingFindingTrigger(goal, task))
+            .FirstOrDefault(candidate => candidate is not null);
+        if (trigger is null)
         {
             return false;
         }
 
-        var reviewArtifact = FormatReviewerOutputArtifact(reviewerTask);
-        RecordSuppressedAutoReviewRetryFindings(goal, reviewerTask, suppressedFindings);
-        if (WorkerResultBlockers.TryFindEvidenceRequest(reviewerTask.LastVerification, out var evidenceRequest))
+        var triggeringTask = trigger.TriggeringTask;
+        var outputArtifact = FormatVerifyingRoleOutputArtifact(triggeringTask);
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer)
         {
-            var hadPriorEvidenceRequest = HasPriorReviewerEvidenceRequestInCurrentRound(goal, reviewerTask);
+            RecordSuppressedAutoReviewRetryFindings(goal, triggeringTask, trigger.SuppressedFindings);
+        }
+
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            WorkerResultBlockers.TryFindEvidenceRequest(triggeringTask.LastVerification, out var evidenceRequest))
+        {
+            var hadPriorEvidenceRequest = HasPriorReviewerEvidenceRequestInCurrentRound(goal, triggeringTask);
             _recordReviewerEvidenceRequestReceived(
                 goal.Id,
-                reviewerTask.Id,
-                $"Reviewer evidence request received: {evidenceRequest}. Full reviewer output: {reviewArtifact}");
+                triggeringTask.Id,
+                $"Reviewer evidence request received: {evidenceRequest}. Full reviewer output: {outputArtifact}");
 
             if (hadPriorEvidenceRequest)
             {
-                decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
-                    $"Reviewer evidence request repeated in the same review round for task {reviewerTask.Id.Value[..8]}; " +
-                    $"normal escalation required. Request: {TrimForConductorMessage(evidenceRequest)}. Full reviewer output: {reviewArtifact}");
+                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                    $"Reviewer evidence request repeated in the same review round for task {triggeringTask.Id.Value[..8]}; " +
+                    $"normal escalation required. Request: {TrimForConductorMessage(evidenceRequest)}. Full reviewer output: {outputArtifact}");
                 return true;
             }
 
             var evidence = _runFocusedEvidence(goal, evidenceRequest);
             var evidenceMessage = FormatFocusedEvidenceResult(evidence);
-            _recordReviewerEvidenceRunRecorded(goal.Id, reviewerTask.Id, evidenceMessage);
+            _recordReviewerEvidenceRunRecorded(goal.Id, triggeringTask.Id, evidenceMessage);
 
             if (!evidence.Accepted)
             {
-                decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
-                    $"Reviewer evidence request rejected for task {reviewerTask.Id.Value[..8]}; normal escalation required. " +
-                    $"{evidenceMessage}. Full reviewer output: {reviewArtifact}");
+                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                    $"Reviewer evidence request rejected for task {triggeringTask.Id.Value[..8]}; normal escalation required. " +
+                    $"{evidenceMessage}. Full reviewer output: {outputArtifact}");
                 return true;
             }
 
             if (!evidence.Passed)
             {
-                decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
-                    $"Reviewer requested focused evidence failed for task {reviewerTask.Id.Value[..8]}; normal escalation required. " +
-                    $"{evidenceMessage}. Full reviewer output: {reviewArtifact}");
+                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                    $"Reviewer requested focused evidence failed for task {triggeringTask.Id.Value[..8]}; normal escalation required. " +
+                    $"{evidenceMessage}. Full reviewer output: {outputArtifact}");
                 return true;
             }
 
             var evidenceRetryMessage =
-                $"reviewer evidence-on-demand: Reviewer task {reviewerTask.Id.Value[..8]} requested focused test evidence; " +
+                $"reviewer evidence-on-demand: Reviewer task {triggeringTask.Id.Value[..8]} requested focused test evidence; " +
                 $"conductor ran it without reopening upstream Developer/Tester work. {evidenceMessage}. " +
                 $"Re-review the same round using these receipts.";
-            decision = ReviewNeedsWorkAutoRetryDecision.Retry(
-                reviewerTask,
+            decision = VerifyingFindingAutoRetryDecision.Retry(
+                triggeringTask,
                 evidenceRetryMessage,
                 null,
                 RetryRoundKind.Mechanical);
             return true;
         }
 
-        if (IsOperatorOwnedReviewBlocker(blocker))
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            IsOperatorOwnedReviewBlocker(trigger.Finding))
         {
-            decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
-                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {reviewerTask.Id.Value[..8]}. " +
-                $"Findings: {TrimForConductorMessage(blocker)}. Full reviewer output: {reviewArtifact}");
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
+                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
             return true;
         }
 
-        var targetRole = InferReviewRetryTargetRole(blocker);
-        var targetTask = goal.Tasks
-            .TakeWhile(t => t.Id != reviewerTask.Id)
+        var targetRole = triggeringTask.RequiredRole == AgentRole.Tester
+            ? AgentRole.Developer
+            : InferReviewRetryTargetRole(trigger.Finding);
+        var targetTask = trigger.TargetTask ?? goal.Tasks
+            .TakeWhile(t => t.Id != triggeringTask.Id)
             .LastOrDefault(t => t.RequiredRole == targetRole);
-        if (targetTask is null && targetRole != AgentRole.Developer)
+        if (targetTask is null && triggeringTask.RequiredRole == AgentRole.Reviewer && targetRole != AgentRole.Developer)
         {
             targetRole = AgentRole.Developer;
             targetTask = goal.Tasks
-                .TakeWhile(t => t.Id != reviewerTask.Id)
+                .TakeWhile(t => t.Id != triggeringTask.Id)
                 .LastOrDefault(t => t.RequiredRole == AgentRole.Developer);
         }
 
         if (targetTask is null)
         {
-            decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
-                $"Reviewer needs-work blocker could not be routed to an upstream {targetRole} task; operator action required. " +
-                $"Findings: {TrimForConductorMessage(blocker)}. Full reviewer output: {reviewArtifact}");
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {targetRole} task; operator action required. " +
+                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
             return true;
         }
 
-        var round = CountPriorAutoReviewRetries(goal, targetTask.Id) + 1;
+        var round = CountPriorAutoReviewRetries(goal) + 1;
         if (round >= policy.ReviewAutoRetryStopRound)
         {
-            decision = ReviewNeedsWorkAutoRetryDecision.Escalate(
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
                 $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
-                $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(blocker)}. " +
-                $"Full reviewer output: {reviewArtifact}");
+                $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
+                $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
             return true;
         }
 
+        var triggerLabel = triggeringTask.RequiredRole == AgentRole.Reviewer
+            ? "verdict=needs-work"
+            : "WORKER_RESULT blocker";
         var message =
-            $"auto-review-retry round {round}: Reviewer task {reviewerTask.Id.Value[..8]} verdict=needs-work; " +
-            $"retry upstream {targetRole} task with findings: {TrimForConductorMessage(blocker)}. " +
-            $"Full reviewer output: {reviewArtifact}";
+            $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} {triggerLabel}; " +
+            $"retry upstream {targetRole} task with findings: {TrimForConductorMessage(trigger.Finding)}. " +
+            $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}";
         var warning = round >= policy.ReviewAutoRetryWarningRound
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
             : null;
-        decision = ReviewNeedsWorkAutoRetryDecision.Retry(
+        decision = VerifyingFindingAutoRetryDecision.Retry(
             targetTask,
             message,
             warning,
             null);
         return true;
+    }
+
+    private VerifyingFindingTrigger? BuildVerifyingFindingTrigger(Goal goal, TaskSpec task)
+    {
+        if (task.Status != WorkTaskStatus.Failed)
+        {
+            return null;
+        }
+
+        if (task.RequiredRole == AgentRole.Reviewer &&
+            WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
+                task.LastVerification,
+                goal.EffectiveAcceptanceCriteriaCorrections,
+                out var blocker,
+                out var suppressedFindings))
+        {
+            return new VerifyingFindingTrigger(task, blocker, suppressedFindings, null);
+        }
+
+        if (task.RequiredRole != AgentRole.Tester ||
+            !WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out blocker))
+        {
+            return null;
+        }
+
+        var upstreamDeveloper = goal.Tasks
+            .TakeWhile(t => t.Id != task.Id)
+            .LastOrDefault(t => t.RequiredRole == AgentRole.Developer && HasCommittedOutput(t));
+        if (upstreamDeveloper is null)
+        {
+            return null;
+        }
+
+        return new VerifyingFindingTrigger(task, blocker, [], upstreamDeveloper);
     }
 
     private void RecordSuppressedAutoReviewRetryFindings(
@@ -977,9 +1013,25 @@ internal sealed class ConductorDriver
             text.Contains("human input", StringComparison.Ordinal);
     }
 
-    private static int CountPriorAutoReviewRetries(Goal goal, TaskId taskId) =>
+    private static bool HasCommittedOutput(TaskSpec task)
+    {
+        if (task.LastVerification?.HasCommittedChanges is true)
+        {
+            return true;
+        }
+
+        var dispatch = task.LastDispatch;
+        if (dispatch is null || string.IsNullOrWhiteSpace(dispatch.ResultCommit))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+            !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int CountPriorAutoReviewRetries(Goal goal) =>
         goal.Timeline.Count(evt =>
-            evt.TaskId == taskId &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
 
@@ -1020,15 +1072,15 @@ internal sealed class ConductorDriver
         return $"{check.Name} passed={check.Passed} exit={check.ExitCode} {receipt}{summary}";
     }
 
-    private static string FormatReviewerOutputArtifact(TaskSpec reviewerTask)
+    private static string FormatVerifyingRoleOutputArtifact(TaskSpec task)
     {
-        var verification = reviewerTask.LastVerification;
+        var verification = task.LastVerification;
         if (!string.IsNullOrWhiteSpace(verification?.StandardOutputPath))
         {
             return verification.StandardOutputPath!;
         }
 
-        return $"reviewer task {reviewerTask.Id.Value[..8]} verification output";
+        return $"{task.RequiredRole.ToString().ToLowerInvariant()} task {task.Id.Value[..8]} verification output";
     }
 
     private static string TrimForConductorMessage(string value)
@@ -1040,23 +1092,29 @@ internal sealed class ConductorDriver
             : normalized[..maxLength] + "...";
     }
 
-    private sealed record ReviewNeedsWorkAutoRetryDecision(
+    private sealed record VerifyingFindingTrigger(
+        TaskSpec TriggeringTask,
+        string Finding,
+        IReadOnlyList<string> SuppressedFindings,
+        TaskSpec? TargetTask);
+
+    private sealed record VerifyingFindingAutoRetryDecision(
         bool ShouldEscalate,
         TaskSpec? TargetTask,
         string Message,
         string? WarningMessage,
         RetryRoundKind? RoundKind)
     {
-        public static ReviewNeedsWorkAutoRetryDecision None { get; } = new(false, null, string.Empty, null, null);
+        public static VerifyingFindingAutoRetryDecision None { get; } = new(false, null, string.Empty, null, null);
 
-        public static ReviewNeedsWorkAutoRetryDecision Retry(
+        public static VerifyingFindingAutoRetryDecision Retry(
             TaskSpec targetTask,
             string message,
             string? warningMessage,
             RetryRoundKind? roundKind = null) =>
             new(false, targetTask, message, warningMessage, roundKind);
 
-        public static ReviewNeedsWorkAutoRetryDecision Escalate(string message) =>
+        public static VerifyingFindingAutoRetryDecision Escalate(string message) =>
             new(true, null, message, null, null);
     }
 
