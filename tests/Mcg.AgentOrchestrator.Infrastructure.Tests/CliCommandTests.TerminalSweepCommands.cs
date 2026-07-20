@@ -957,8 +957,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             CommitGoalWork(root, goal.Id, "src/transient-merged.txt", "goal work");
             var expectedMergeSha = RunGitOutput(root, "log", "--format=%H", "-n", "1", GoalWorktrees.BranchName(goal.Id)).Trim();
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            var cache = new TerminalGoalSweepCache();
 
-            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var first = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
 
             var firstRepair = Assert.Single(first.Goals.Single().Repairs);
             Assert.Equal("landing-intent-auto-repair", firstRepair.Kind);
@@ -966,18 +967,20 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Contains($"mergeCommitSha={expectedMergeSha}", firstRepair.Evidence, StringComparison.Ordinal);
             Assert.Contains("source=auto-repair", firstRepair.Evidence, StringComparison.Ordinal);
             Assert.Empty(first.Goals.Single().Blockers);
+            Assert.Equal(0, first.CacheHitCount);
             Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
 
-            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var second = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
             var secondRepairs = second.Goals.Single().Repairs;
             Assert.Contains(secondRepairs, repair => repair.Kind == "landing-intent-auto-repair-noop");
             Assert.Contains(secondRepairs, repair => repair.Kind == "merged-branch-cleanup");
             Assert.Empty(second.Goals.Single().Blockers);
+            Assert.Equal(0, second.CacheHitCount);
             Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
             Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
 
-            var third = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var third = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
             Assert.Empty(third.Goals);
 
             var journal = GoalOperationJournal.Read(root, goal.Id);
@@ -988,6 +991,48 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Contains($"\"mergeCommitSha\":\"{expectedMergeSha}\"", intent.Detail, StringComparison.Ordinal);
             Assert.DoesNotContain(journal.Entries, entry =>
                 entry.AcceptanceOutcome == "merged-branch-without-landing-intent");
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_auto_repair_recovers_merge_sha_from_main_when_sweeping_off_main")]
+    public void TerminalGoalSweepAutoRepairRecoversMergeShaFromMainWhenSweepingOffMain()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Merged without durable landing from off-main checkout", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/off-main-merged.txt", "goal work");
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+
+            RunGit(root, "checkout", "-b", "side");
+            RunGit(root, "merge", "--no-ff", goalBranch, "-m", "Side merge");
+            var sideMergeSha = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+            RunGit(root, "checkout", "main");
+            RunGit(root, "merge", "--no-ff", goalBranch, "-m", "Main merge");
+            var mainMergeSha = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+            RunGit(root, "checkout", "side");
+
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            var repair = Assert.Single(result.Goals.Single().Repairs);
+            Assert.Equal("landing-intent-auto-repair", repair.Kind);
+            Assert.Contains($"mergeCommitSha={mainMergeSha}", repair.Evidence, StringComparison.Ordinal);
+            Assert.DoesNotContain($"mergeCommitSha={sideMergeSha}", repair.Evidence, StringComparison.Ordinal);
+            var intent = Assert.Single(GoalOperationJournal.Read(root, goal.Id).Entries.Where(entry =>
+                entry.Operation == GoalOperationJournal.LandingIntentOperation &&
+                entry.Status == GoalOperationStatus.Completed));
+            Assert.Contains($"\"mergeCommitSha\":\"{mainMergeSha}\"", intent.Detail, StringComparison.Ordinal);
         }
         finally
         {

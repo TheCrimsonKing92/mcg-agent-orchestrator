@@ -167,6 +167,7 @@ internal sealed class TerminalGoalSweepCache
         TerminalGoalSweep.IsTerminalSweepStatus(goal.Status) &&
         goal.Tasks.All(task => !TerminalGoalSweep.IsStaleTerminalAssignedTaskStatus(task.Status)) &&
         goal.Tasks.All(task => task.LastProcess is not { IsRunning: true }) &&
+        !HasPendingGoalArtifactCleanup(executionDirectory, goal.Id) &&
         !HasPendingCleanupBackoff(executionDirectory, goal.Id);
 
     private static bool IsCleanupBlocker(TerminalGoalSweepBlocker blocker) =>
@@ -176,6 +177,12 @@ internal sealed class TerminalGoalSweepCache
     private static bool HasPendingCleanupBackoff(string executionDirectory, GoalId goalId) =>
         EnumerateGoalCleanupPaths(executionDirectory, goalId)
             .Any(path => GoalWorktrees.TryGetCleanupBackoff(path) is not null);
+
+    private static bool HasPendingGoalArtifactCleanup(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.TryResolve(executionDirectory, goalId) is not null ||
+        GoalGitFactIndex.GitRunner(
+            executionDirectory,
+            ["rev-parse", "--verify", "--quiet", $"refs/heads/{GoalWorktrees.BranchName(goalId)}"]).ExitCode == 0;
 
     private static IEnumerable<string> EnumerateGoalCleanupPaths(string executionDirectory, GoalId goalId)
     {
@@ -682,7 +689,7 @@ internal static class TerminalGoalSweep
             return false;
         }
 
-        var ancestry = RunGit(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..HEAD");
+        var ancestry = RunGit(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..main");
         var mergeCommitSha = ancestry.ExitCode == 0
             ? ancestry.Output
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
