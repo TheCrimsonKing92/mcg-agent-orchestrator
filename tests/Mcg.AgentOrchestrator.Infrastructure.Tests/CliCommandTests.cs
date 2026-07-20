@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 public abstract class CliCommandTestBase
 {
@@ -99,6 +100,43 @@ public abstract class CliCommandTestBase
             .Select(path => Path.GetRelativePath(root, path))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
+
+    private protected static string NormalizeVolatileTimes(GoalSnapshot snapshot)
+    {
+        var node = JsonSerializer.SerializeToNode(snapshot)!;
+        NormalizeVolatileTimes(node);
+        return node.ToJsonString();
+    }
+
+    private static void NormalizeVolatileTimes(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var property in obj.ToArray())
+                {
+                    if (property.Value is null)
+                        continue;
+
+                    if (property.Key is "OccurredAt" or "CompletedAt" or "LatestRetryAt" or "RecordedAt")
+                    {
+                        obj[property.Key] = "<time>";
+                    }
+                    else
+                    {
+                        NormalizeVolatileTimes(property.Value);
+                    }
+                }
+                break;
+
+            case JsonArray array:
+                foreach (var item in array)
+                {
+                    NormalizeVolatileTimes(item);
+                }
+                break;
+        }
+    }
 
     private protected static CliProcessResult RunAppCommand(string workingDirectory, params string[] arguments)
     {
@@ -517,6 +555,10 @@ public abstract class CliCommandTestBase
 
         public int SaveGoalSnapshotsCount { get; private set; }
 
+        public int LoadWhileInTransactionCount { get; private set; }
+
+        public int TransactGoalDelegateCalls { get; private set; }
+
         public List<string> LoadedGoalIds { get; } = [];
 
         public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
@@ -527,7 +569,11 @@ public abstract class CliCommandTestBase
 
         public Action<CancellationToken>? BeforeSaveCommit { get; set; }
 
+        public Action<AgentOrchestratorKernel>? BeforeGoalCasRetry { get; set; }
+
         public bool ThrowOnLoadAsync { get; set; }
+
+        public bool ThrowOnLoadWhileInTransaction { get; set; }
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -536,6 +582,7 @@ public abstract class CliCommandTestBase
                 throw new InvalidOperationException("LoadAsync is not allowed for this test.");
             }
 
+            RecordLoadBoundary();
             LoadCount++;
             return Task.FromResult(Clone(_kernel));
         }
@@ -544,6 +591,7 @@ public abstract class CliCommandTestBase
             IReadOnlyCollection<GoalId> goalIds,
             CancellationToken cancellationToken = default)
         {
+            RecordLoadBoundary();
             LoadGoalsCount++;
             LoadGoalBatches.Add(goalIds.Select(id => id.Value).OrderBy(id => id, StringComparer.Ordinal).ToArray());
             var snapshot = _kernel.ExportSnapshot();
@@ -666,6 +714,7 @@ public abstract class CliCommandTestBase
 
         public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
         {
+            RecordLoadBoundary();
             LoadGoalCount++;
             LoadedGoalIds.Add(goalId.Value);
             var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
@@ -689,7 +738,17 @@ public abstract class CliCommandTestBase
             IsInTransaction = true;
             try
             {
+                TransactGoalDelegateCalls++;
                 var (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
+                if (shouldSave && newSnapshot is not null && BeforeGoalCasRetry is { } beforeRetry)
+                {
+                    BeforeGoalCasRetry = null;
+                    beforeRetry(_kernel);
+                    snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
+                    TransactGoalDelegateCalls++;
+                    (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
+                }
+
                 if (shouldSave && newSnapshot is not null)
                 {
                     await SaveGoalSnapshotsAsync([newSnapshot], cancellationToken);
@@ -705,6 +764,18 @@ public abstract class CliCommandTestBase
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+
+        private void RecordLoadBoundary()
+        {
+            if (!IsInTransaction)
+                return;
+
+            LoadWhileInTransactionCount++;
+            if (ThrowOnLoadWhileInTransaction)
+            {
+                throw new InvalidOperationException("Loading state while a transaction is active is not allowed for this test.");
+            }
+        }
     }
 
     private protected sealed class ProbeAcceptanceVerifier : IGoalAcceptanceVerifier

@@ -902,6 +902,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
         // Delegate was called at least twice: once with stale version, once after retry.
         Assert.True(delegateCalls >= 2, $"Expected retry on version mismatch, got {delegateCalls} delegate calls");
+        var restored = await repo.LoadAsync();
+        Assert.Equal("CAS retry goal concurrent update", restored.GetGoal(goal.Id).Objective);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_mid_tick_retry_and_tick_task_state")]

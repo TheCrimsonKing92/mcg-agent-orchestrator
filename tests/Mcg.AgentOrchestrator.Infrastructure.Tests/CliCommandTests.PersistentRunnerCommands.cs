@@ -271,7 +271,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             testCase.Arrange(kernel, goal, task);
             var repository = new InMemoryTransactionalStateRepository(kernel)
             {
-                ThrowOnLoadAsync = true
+                ThrowOnLoadAsync = true,
+                ThrowOnLoadWhileInTransaction = true
             };
 
             CaptureConsole(() =>
@@ -293,8 +294,106 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             var storedTask = storedGoal.Tasks.Single();
             Xunit.Assert.Equal(0, repository.TransactAsyncCount);
             Xunit.Assert.Equal(1, repository.TransactGoalCount);
+            Xunit.Assert.Equal(1, repository.TransactGoalDelegateCalls);
             Xunit.Assert.Equal(0, repository.LoadCount);
+            Xunit.Assert.Equal(0, repository.LoadWhileInTransactionCount);
             testCase.AssertState(storedGoal, storedTask);
+        }
+    }
+
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_task_mutations_match_full_kernel_baseline")]
+    public async Task PersistentRunnerGoalScopedTaskMutationsMatchFullKernelBaseline()
+    {
+        var cases = new (string Name, IReadOnlyList<string> Args, Action<AgentOrchestratorKernel, Goal, TaskSpec> Arrange)[]
+        {
+            (
+                "progress",
+                ["progress", "--goal", "{goal}", "1", "running", "worker started"],
+                (_, _, _) => { }),
+            (
+                "verify-manual",
+                ["verify-manual", "--goal", "{goal}", "1", "passed", "manual pass"],
+                (_, _, _) => { }),
+            (
+                "retry",
+                ["retry", "--goal", "{goal}", "1", "retry with evidence"],
+                (kernel, goal, task) => kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed first")),
+            (
+                "verification-plan",
+                ["verification-plan", "--goal", "{goal}", "1", "dotnet test --filter scoped"],
+                (_, _, _) => { }),
+            (
+                "note",
+                ["note", "--goal", "{goal}", "1", "operator note"],
+                (_, _, _) => { })
+        };
+
+        foreach (var testCase in cases)
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            var initialKernel = new AgentOrchestratorKernel();
+            var goal = initialKernel.CreateGoal(
+                $"Baseline {testCase.Name}",
+                [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            var agents = AgentCatalog.Default().Agents;
+            initialKernel.ActivateGoal(goal.Id, agents);
+            var task = goal.Tasks.Single();
+            testCase.Arrange(initialKernel, goal, task);
+            var initialSnapshot = initialKernel.ExportSnapshot();
+            var args = testCase.Args
+                .Select(arg => arg == "{goal}" ? goal.Id.Value[..8] : arg)
+                .ToArray();
+
+            var fullKernel = AgentOrchestratorKernel.FromSnapshot(initialSnapshot);
+            IReadOnlyList<AgentDefinition> fullAgents = AgentCatalog.Default().Agents;
+            var fullProviders = new InMemoryModelProviderRegistry([]);
+            var fullProfiles = WorkerProfileCatalog.Default();
+            Goal? fullCurrentGoal = fullKernel.GetGoal(goal.Id);
+            CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    fullKernel,
+                    workspace,
+                    ref fullAgents,
+                    fullProviders,
+                    ref fullProfiles,
+                    ref fullCurrentGoal,
+                    reloadKernel: () => AgentOrchestratorKernel.FromSnapshot(fullKernel.ExportSnapshot()));
+                Xunit.Assert.True(changed);
+            });
+
+            var scopedRepository = new InMemoryTransactionalStateRepository(AgentOrchestratorKernel.FromSnapshot(initialSnapshot))
+            {
+                ThrowOnLoadAsync = true,
+                ThrowOnLoadWhileInTransaction = true
+            };
+            IReadOnlyList<AgentDefinition> scopedAgents = AgentCatalog.Default().Agents;
+            var scopedProviders = new InMemoryModelProviderRegistry([]);
+            var scopedProfiles = WorkerProfileCatalog.Default();
+            Goal? scopedCurrentGoal = goal;
+            CaptureConsole(() =>
+            {
+                var changed = CliPersistentStateRunner.ExecuteCommand(
+                    args,
+                    scopedRepository,
+                    workspace,
+                    ref scopedAgents,
+                    scopedProviders,
+                    ref scopedProfiles,
+                    ref scopedCurrentGoal);
+                Xunit.Assert.True(changed);
+            });
+
+            var fullSnapshot = fullKernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+            var scopedSnapshot = await scopedRepository.LoadGoalAsync(goal.Id);
+            Xunit.Assert.Equal(NormalizeVolatileTimes(fullSnapshot), NormalizeVolatileTimes(scopedSnapshot!));
+            Xunit.Assert.Equal(0, scopedRepository.TransactAsyncCount);
+            Xunit.Assert.Equal(1, scopedRepository.TransactGoalCount);
+            Xunit.Assert.Equal(0, scopedRepository.LoadCount);
+            Xunit.Assert.Equal(0, scopedRepository.LoadWhileInTransactionCount);
         }
     }
 
@@ -331,6 +430,58 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(0, repository.TransactAsyncCount);
         Xunit.Assert.Equal(1, repository.TransactGoalCount);
         Xunit.Assert.Equal(0, repository.LoadCount);
+    }
+
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_progress_retries_stale_CAS_against_fresh_goal")]
+    public async Task PersistentRunnerGoalScopedProgressRetriesStaleCasAgainstFreshGoal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Retry stale goal CAS", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            ThrowOnLoadAsync = true,
+            ThrowOnLoadWhileInTransaction = true,
+            BeforeGoalCasRetry = stored =>
+                stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "concurrent writer failed the task before CAS")
+        };
+
+        CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["progress", "1", "running", "operator restarted after stale CAS"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        var storedSnapshot = await repository.LoadGoalAsync(goal.Id);
+        var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([storedSnapshot!], []));
+        var storedGoal = storedKernel.GetGoal(goal.Id);
+        var storedTask = storedGoal.Tasks.Single();
+        Xunit.Assert.Equal(2, repository.TransactGoalDelegateCalls);
+        Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+        Xunit.Assert.Equal(1, repository.TransactGoalCount);
+        Xunit.Assert.Equal(0, repository.LoadWhileInTransactionCount);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, storedTask.Status);
+        Xunit.Assert.Contains(storedGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message == "concurrent writer failed the task before CAS");
+        Xunit.Assert.Contains(storedGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskStarted &&
+            evt.Message == "operator restarted after stale CAS");
     }
 
 
