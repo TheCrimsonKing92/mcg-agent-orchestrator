@@ -132,29 +132,41 @@ public sealed class LandingExecutorTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_raises_one_hold_for_writing_task")]
-    public void LandingExecutorGreenGateApprovalDiffRaisesOneHoldForWritingTask()
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_holds_only_writing_task_touching_approval_path")]
+    public void LandingExecutorGreenGateApprovalDiffHoldsOnlyWritingTaskTouchingApprovalPath()
     {
         var repo = CreateGitRepository();
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var (kernel, goal) = CreateGoal(AgentRole.Developer, AgentRole.Reviewer);
+            var (kernel, goal) = CreateGoal(AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer);
             var developer = goal.Tasks[0];
-            var reviewer = goal.Tasks[1];
+            var tester = goal.Tasks[1];
+            var reviewer = goal.Tasks[2];
             var baseCommit = ReadGit(repo, "rev-parse", "main");
             Dispatch(kernel, goal, developer, "developer");
+            Dispatch(kernel, goal, tester, "tester");
             Dispatch(kernel, goal, reviewer, "reviewer");
             kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, baseCommit);
-            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, baseCommit);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
-            AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", "namespace TestInfra; internal sealed class OwnershipTouched;");
-            var resultCommit = ReadGit(repo, "rev-parse", goalBranch);
-            kernel.RecordDispatchResultCommit(goal.Id, developer.Id, resultCommit);
-            kernel.RecordDispatchResultCommit(goal.Id, reviewer.Id, resultCommit);
+            RunGit(repo, "checkout", "-b", goalBranch);
+            AppendCommit(repo, "src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", "namespace TestInfra; internal sealed class OwnershipTouched;");
+            var developerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
+            AppendCommit(repo, "src/Mcg.AgentOrchestrator.App/NonApprovalTouched.cs", "namespace TestApp; internal sealed class NonApprovalTouched;");
+            var testerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
+            RunGit(repo, "checkout", "main");
+            kernel.RecordDispatchResultCommit(goal.Id, developer.Id, developerResultCommit);
+            kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, developerResultCommit);
+            kernel.RecordDispatchResultCommit(goal.Id, tester.Id, testerResultCommit);
+            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, baseCommit);
+            kernel.RecordDispatchResultCommit(goal.Id, reviewer.Id, testerResultCommit);
             kernel.RecordTaskVerification(
                 goal.Id,
                 developer.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            kernel.RecordTaskVerification(
+                goal.Id,
+                tester.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
             kernel.RecordTaskVerification(
                 goal.Id,
@@ -171,10 +183,46 @@ public sealed class LandingExecutorTests
             var hold = Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.OwnershipHold));
             Assert.Equal(developer.Id.Value, hold.TaskId);
             Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", hold.Evidence);
+            Assert.DoesNotContain("src/Mcg.AgentOrchestrator.App/NonApprovalTouched.cs", hold.Evidence);
             Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
         }
         finally
         {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_git_diff_drain_timeout_fails_closed_even_with_empty_stdout")]
+    public void LandingExecutorGitDiffDrainTimeoutFailsClosedEvenWithEmptyStdout()
+    {
+        var repo = CreateGitRepository();
+        var previousGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.App/TimeoutTouched.cs", "namespace TestApp; internal sealed class TimeoutTouched;");
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+                args.Length == 3 &&
+                args[0].Equals("diff", StringComparison.Ordinal) &&
+                args[1].Equals("--name-only", StringComparison.Ordinal)
+                    ? new GitCli.GitResult(0, string.Empty, string.Empty, DrainTimedOut: true)
+                    : GitCli.Run(workingDirectory, args);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Contains("diff scope unknown", escalation.Reason);
+            Assert.Contains("drain timed out", escalation.Reason);
+            var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            var item = Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.LandingEscalation));
+            Assert.Contains("diff scope unknown", item.Message);
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = previousGitRunner;
             TryDeleteDirectory(repo);
         }
     }
@@ -779,12 +827,17 @@ public sealed class LandingExecutorTests
     private static void AddGoalBranchCommit(string repo, string goalBranch, string fileName, string content)
     {
         RunGit(repo, "checkout", "-b", goalBranch);
+        AppendCommit(repo, fileName, content);
+        RunGit(repo, "checkout", "main");
+    }
+
+    private static void AppendCommit(string repo, string fileName, string content)
+    {
         var path = Path.Combine(repo, fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content + Environment.NewLine);
         RunGit(repo, "add", fileName);
         RunGit(repo, "commit", "-m", $"Add {fileName}");
-        RunGit(repo, "checkout", "main");
     }
 
     private static string ReadGit(string workingDirectory, params string[] arguments)

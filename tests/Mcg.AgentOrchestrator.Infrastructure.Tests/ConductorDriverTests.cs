@@ -981,8 +981,8 @@ public sealed class ConductorDriverTests
         Xunit.Assert.Equal(new[] { "land", "semantic", "close" }, order);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_policy_escalation_skips_semantic_receipt")]
-    public void ConductorDriverVerifiedPolicyEscalationSkipsSemanticReceipt()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_ownership_hold_skips_semantic_receipt")]
+    public void ConductorDriverVerifiedOwnershipHoldSkipsSemanticReceipt()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -993,18 +993,23 @@ public sealed class ConductorDriverTests
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             runAdvisorySemanticAcceptance: (_, _) => { semanticCalled = true; },
-            classifyRisk: _ => ChangeRiskTier.Broad,
             land: g =>
             {
                 landCalled = true;
-                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+                return new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Escalate("ownership-denylist hold: task touched protected path"),
+                    "integration",
+                    false,
+                    "Held");
             });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
         Assert.False(semanticCalled);
-        Assert.False(landCalled);
+        Assert.True(landCalled);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_landing_writes_semantic_receipt_and_closes_backlog_item")]
@@ -1119,24 +1124,30 @@ public sealed class ConductorDriverTests
         Assert.Contains("focused command failed", escalationReason!, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_policy_risk_gate_escalates_Security_risk")]
-    public void ConductorDriverVerifiedPolicyRiskGateEscalatesSecurityRisk()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_security_risk_delegates_to_landing_engine")]
+    public void ConductorDriverVerifiedSecurityRiskDelegatesToLandingEngine()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
         var escalated = false;
+        var landCalled = false;
 
-        // Conservative: AutoPromoteRiskThreshold = DocsOnly → Security risk → Escalate
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptance: _ => true,
             classifyRisk: _ => ChangeRiskTier.Security,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
             writeEscalation: (_, _, _) => { escalated = true; });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.True(escalated);
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.True(landCalled);
+        Assert.False(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_landing_engine_escalation_escalates")]
@@ -1967,15 +1978,14 @@ public sealed class ConductorDriverTests
 
     // ── Policy-over-engine promotion gate ────────────────────────────────
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Conservative_policy_blocks_Behavior_risk_before_calling_land")]
-    public void ConductorDriverConservativePolicyBlocksBehaviorRiskBeforeCallingLand()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Conservative_policy_delegates_Behavior_risk_to_landing_engine")]
+    public void ConductorDriverConservativePolicyDelegatesBehaviorRiskToLandingEngine()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
         var escalated = false;
         var landCalled = false;
 
-        // Conservative: threshold DocsOnly → Behavior risk → Escalate (even if engine would Promote)
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             runAcceptance: _ => true,
@@ -1985,9 +1995,9 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.True(escalated);
-        Assert.False(landCalled);
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.False(escalated);
+        Assert.True(landCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
     // ── Dispatch-start retry on transient spawn failure ───────────────────

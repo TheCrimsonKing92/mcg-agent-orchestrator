@@ -51,7 +51,8 @@ public static class OperatorEscalationProjection
 
         var requiresConfirm = IsPromoteToMain(item.Kind, command);
         var requiresInput = command.Contains("<answer>", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("<command>", StringComparison.OrdinalIgnoreCase);
+            || command.Contains("<command>", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("<note>", StringComparison.OrdinalIgnoreCase);
 
         var label = BuildActionLabel(item.Kind, item.TaskNumber);
 
@@ -89,8 +90,8 @@ public static class OperatorEscalationProjection
             OperatorInboxKind.MissingVerification => "Run Verification",
             OperatorInboxKind.AcceptanceGate => "Accept Goal",
             OperatorInboxKind.OwnershipHold => "Accept Goal",
-            OperatorInboxKind.HoldPersistenceFailure => "Inspect Inbox",
-            OperatorInboxKind.HoldClearanceFailure => "Inspect Inbox",
+            OperatorInboxKind.HoldPersistenceFailure => "Recover Goal",
+            OperatorInboxKind.HoldClearanceFailure => "Recover Goal",
             OperatorInboxKind.LandingEscalation => "Promote to Main",
             OperatorInboxKind.ReadinessPreflight => "View Readiness",
             _ => "Take Action"

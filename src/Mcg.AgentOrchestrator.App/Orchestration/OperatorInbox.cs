@@ -83,6 +83,7 @@ internal static class OperatorInbox
     private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
     internal static Action<TimeSpan> HoldWriteBackoff { get; set; } = Thread.Sleep;
+    internal static Action<string, string> HoldStoreWriteAllText { get; set; } = File.WriteAllText;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -768,8 +769,8 @@ internal static class OperatorInbox
             record.Title,
             record.Message,
             record.Evidence,
-            "Inspect the operator inbox persistence failure and resolve the dangling hold manually.",
-            $"operator-inbox {goal.Id.Value[..8]}",
+            "Resolve the hold bookkeeping failure, then recover the goal with an operator note.",
+            $"recover {goal.Id.Value[..8]} <note>",
             record.Key,
             record.RaisedAt,
             acknowledgement is not null,
@@ -960,7 +961,7 @@ internal static class OperatorInbox
         ExecuteWithHoldWriteRetry(() =>
         {
             Directory.CreateDirectory(workspace.OrchestratorDirectory);
-            File.WriteAllText(
+            HoldStoreWriteAllText(
                 Path.Combine(workspace.OrchestratorDirectory, OwnershipHoldFileName),
                 JsonSerializer.Serialize(new OwnershipHoldStore(items), JsonOptions));
         });
@@ -971,7 +972,7 @@ internal static class OperatorInbox
         ExecuteWithHoldWriteRetry(() =>
         {
             Directory.CreateDirectory(workspace.OrchestratorDirectory);
-            File.WriteAllText(
+            HoldStoreWriteAllText(
                 Path.Combine(workspace.OrchestratorDirectory, HoldFailureFileName),
                 JsonSerializer.Serialize(new HoldFailureStore(items), JsonOptions));
         });

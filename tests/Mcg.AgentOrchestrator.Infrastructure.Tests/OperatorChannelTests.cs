@@ -174,6 +174,38 @@ public sealed class OperatorChannelTests
         Assert.DoesNotContain(actions, candidate => candidate.Command.StartsWith("operator-inbox-ack", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact(DisplayName = "Projection_all_blocking_inbox_kinds_have_primary_non_ack_action")]
+    public void ProjectionAllBlockingInboxKindsHavePrimaryNonAckAction()
+    {
+        foreach (var kind in Enum.GetValues<OperatorInboxKind>())
+        {
+            var item = BuildInboxItem(kind, OperatorInboxSeverity.Blocker, suggestedCommand: SuggestedCommandFor(kind));
+
+            var actions = OperatorEscalationProjection.DeriveActions(item);
+
+            var primary = Assert.Single(actions);
+            Assert.False(primary.Command.StartsWith("operator-inbox-ack", StringComparison.OrdinalIgnoreCase), kind.ToString());
+            if (kind == OperatorInboxKind.OwnershipHold)
+            {
+                Assert.Equal("acceptance abc123def --autonomy supervised-auto", primary.Command);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Projection_ack_action_only_secondary_for_non_blocking_informational_item")]
+    public void ProjectionAckActionOnlySecondaryForNonBlockingInformationalItem()
+    {
+        var item = BuildInboxItem(
+            OperatorInboxKind.AcceptanceGate,
+            OperatorInboxSeverity.Info,
+            suggestedCommand: "acceptance abc123def --autonomy supervised-auto");
+
+        var actions = OperatorEscalationProjection.DeriveActions(item);
+
+        Assert.Equal("acceptance abc123def --autonomy supervised-auto", actions[0].Command);
+        Assert.Contains(actions.Skip(1), action => action.Command == $"operator-inbox-ack {item.Id}");
+    }
+
     [Xunit.Fact(DisplayName = "Projection_next_command_does_not_require_confirm")]
     public void ProjectionNextCommandDoesNotRequireConfirm()
     {
@@ -822,6 +854,183 @@ public sealed class OperatorChannelTests
         Assert.True(File.Exists(escapedPath));
     }
 
+    [Xunit.Fact(DisplayName = "RecordOwnershipHolds_dedupes_open_hold_refreshes_then_allows_new_after_clear")]
+    public void RecordOwnershipHoldsDedupesOpenHoldRefreshesThenAllowsNewAfterClear()
+    {
+        var workspace = BuildTestWorkspace();
+        var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
+        var first = BuildHoldRequest(task, ["src/Mcg.AgentOrchestrator.Infrastructure/First.cs"], "first");
+        var second = BuildHoldRequest(task, ["src/Mcg.AgentOrchestrator.Infrastructure/Second.cs"], "second");
+
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [first]);
+        var firstOpen = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
+            .Items
+            .Single(item => item.Kind == OperatorInboxKind.OwnershipHold);
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [second]);
+
+        var refreshed = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
+            .Items
+            .Single(item => item.Kind == OperatorInboxKind.OwnershipHold);
+        Assert.Equal(firstOpen.Id, refreshed.Id);
+        Assert.Contains("Second.cs", refreshed.Evidence);
+        Assert.DoesNotContain("First.cs", refreshed.Evidence);
+
+        OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto");
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [first]);
+
+        var raisedAgain = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
+            .Items
+            .Single(item => item.Kind == OperatorInboxKind.OwnershipHold);
+        Assert.Contains("First.cs", raisedAgain.Evidence);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordOwnershipHolds_retries_bounded_write_and_persists_after_transient_failures")]
+    public void RecordOwnershipHoldsRetriesBoundedWriteAndPersistsAfterTransientFailures()
+    {
+        var workspace = BuildTestWorkspace();
+        var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
+        var previousWriter = OperatorInbox.HoldStoreWriteAllText;
+        var previousBackoff = OperatorInbox.HoldWriteBackoff;
+        var writeAttempts = 0;
+        var backoffs = new List<TimeSpan>();
+        try
+        {
+            OperatorInbox.HoldWriteBackoff = backoffs.Add;
+            OperatorInbox.HoldStoreWriteAllText = (path, contents) =>
+            {
+                if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase) &&
+                    Interlocked.Increment(ref writeAttempts) <= 2)
+                {
+                    throw new IOException("transient hold write failure");
+                }
+
+                File.WriteAllText(path, contents);
+            };
+
+            OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+
+            Assert.Equal(3, writeAttempts);
+            Assert.Equal([TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200)], backoffs);
+            var hold = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
+                .Items
+                .Single(item => item.Kind == OperatorInboxKind.OwnershipHold);
+            Assert.Equal(task.Id.Value, hold.TaskId);
+        }
+        finally
+        {
+            OperatorInbox.HoldStoreWriteAllText = previousWriter;
+            OperatorInbox.HoldWriteBackoff = previousBackoff;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "RecordOwnershipHolds_all_retries_failed_raises_distinct_persistence_failure")]
+    public void RecordOwnershipHoldsAllRetriesFailedRaisesDistinctPersistenceFailure()
+    {
+        var workspace = BuildTestWorkspace();
+        var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
+        var previousWriter = OperatorInbox.HoldStoreWriteAllText;
+        var previousBackoff = OperatorInbox.HoldWriteBackoff;
+        var writeAttempts = 0;
+        try
+        {
+            OperatorInbox.HoldWriteBackoff = _ => { };
+            OperatorInbox.HoldStoreWriteAllText = (path, contents) =>
+            {
+                if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    Interlocked.Increment(ref writeAttempts);
+                    throw new IOException("persistent hold write failure");
+                }
+
+                File.WriteAllText(path, contents);
+            };
+
+            OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+
+            Assert.Equal(OperatorInbox.MaxHoldWriteRetries, writeAttempts);
+            var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            Assert.DoesNotContain(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+            var failure = Assert.Single(report.Items.Where(item => item.Kind == OperatorInboxKind.HoldPersistenceFailure));
+            Assert.Equal(OperatorInboxSeverity.Blocker, failure.Severity);
+            Assert.Equal(task.Id.Value, failure.TaskId);
+            Assert.Contains("persistent hold write failure", failure.Evidence);
+            var action = Assert.Single(OperatorEscalationProjection.DeriveActions(failure));
+            Assert.Equal($"recover {goal.Id.Value[..8]} <note>", action.Command);
+            Assert.True(action.RequiresInput);
+            Assert.Contains("HOLD_PERSISTENCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
+        }
+        finally
+        {
+            OperatorInbox.HoldStoreWriteAllText = previousWriter;
+            OperatorInbox.HoldWriteBackoff = previousBackoff;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ClearOwnershipHoldsAfterLanding_resolves_open_holds_and_emits_receipt")]
+    public void ClearOwnershipHoldsAfterLandingResolvesOpenHoldsAndEmitsReceipt()
+    {
+        var workspace = BuildTestWorkspace();
+        var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
+        var command = $"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto";
+        OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+
+        var receipt = OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, command);
+
+        Assert.Equal(goal.Id.Value, receipt.GoalId);
+        var holdId = Assert.Single(receipt.ClearedHoldIds);
+        Assert.StartsWith("inbox-", holdId, StringComparison.Ordinal);
+        Assert.Equal(command, receipt.TriggeringCommand);
+        var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+        Assert.DoesNotContain(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+        var eventText = File.ReadAllText(workspace.ConductEventsLogPath);
+        Assert.Contains("OWNERSHIP_HOLD_CLEARED", eventText);
+        Assert.Contains(holdId, eventText);
+        Assert.Contains(command, eventText);
+    }
+
+    [Xunit.Fact(DisplayName = "ClearOwnershipHoldsAfterLanding_failure_keeps_landing_visible_with_clearance_failure")]
+    public void ClearOwnershipHoldsAfterLandingFailureKeepsLandingVisibleWithClearanceFailure()
+    {
+        var workspace = BuildTestWorkspace();
+        var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
+        var previousWriter = OperatorInbox.HoldStoreWriteAllText;
+        var previousBackoff = OperatorInbox.HoldWriteBackoff;
+        var command = $"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto";
+        try
+        {
+            OperatorInbox.RecordOwnershipHolds(workspace, goal, [BuildHoldRequest(task)]);
+            OperatorInbox.HoldWriteBackoff = _ => { };
+            OperatorInbox.HoldStoreWriteAllText = (path, contents) =>
+            {
+                if (path.EndsWith("ownership-holds.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException("clearance write failure");
+                }
+
+                File.WriteAllText(path, contents);
+            };
+
+            var receipt = OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, command);
+
+            Assert.Empty(receipt.ClearedHoldIds);
+            var report = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            Assert.Contains(report.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+            var failure = Assert.Single(report.Items.Where(item => item.Kind == OperatorInboxKind.HoldClearanceFailure));
+            Assert.Equal(OperatorInboxSeverity.Blocker, failure.Severity);
+            Assert.Contains(goal.Id.Value, failure.GoalId);
+            Assert.Contains("clearance write failure", failure.Evidence);
+            var action = Assert.Single(OperatorEscalationProjection.DeriveActions(failure));
+            Assert.Equal($"recover {goal.Id.Value[..8]} <note>", action.Command);
+            Assert.True(action.RequiresInput);
+            Assert.Contains("HOLD_CLEARANCE_FAILED", File.ReadAllText(workspace.ConductEventsLogPath));
+        }
+        finally
+        {
+            OperatorInbox.HoldStoreWriteAllText = previousWriter;
+            OperatorInbox.HoldWriteBackoff = previousBackoff;
+        }
+    }
+
     // ---- Deep link rendered in message content ----
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_renders_deep_link_in_content")]
@@ -856,6 +1065,45 @@ public sealed class OperatorChannelTests
             Mcg.AgentOrchestrator.Core.AgentRole.Developer);
         return new Mcg.AgentOrchestrator.Core.Goal(id, "Test objective", [task]);
     }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) BuildKernelWithSingleTaskGoal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Test task", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Test objective", [task]);
+        return (kernel, goal, task);
+    }
+
+    private static OwnershipHoldRequest BuildHoldRequest(
+        TaskSpec task,
+        IReadOnlyList<string>? paths = null,
+        string reason = "test hold") =>
+        new(
+            task.Id,
+            1,
+            task.RequiredRole,
+            paths ?? ["src/Mcg.AgentOrchestrator.Infrastructure/Protected.cs"],
+            reason);
+
+    private static string SuggestedCommandFor(OperatorInboxKind kind) =>
+        kind switch
+        {
+            OperatorInboxKind.HumanInput => "answer abc123def <answer>",
+            OperatorInboxKind.FailedTask => "next abc123def",
+            OperatorInboxKind.FailedVerification => "verify-needed abc123def",
+            OperatorInboxKind.RunningWorker => "refresh-dispatch abc123def 1",
+            OperatorInboxKind.MissingVerification => "verify-needed abc123def",
+            OperatorInboxKind.AcceptanceGate => "acceptance abc123def --autonomy supervised-auto",
+            OperatorInboxKind.SupervisorProposal => "supervisor abc123def",
+            OperatorInboxKind.SubscriptionRouteWarning => "subscription-plan abc123def",
+            OperatorInboxKind.ReadinessPreflight => "readiness abc123def",
+            OperatorInboxKind.BudgetWarning => "subscription-plan abc123def",
+            OperatorInboxKind.LandingEscalation => "land abc123def",
+            OperatorInboxKind.OwnershipHold => "acceptance abc123def --autonomy supervised-auto",
+            OperatorInboxKind.HoldPersistenceFailure => "recover abc123def <note>",
+            OperatorInboxKind.HoldClearanceFailure => "recover abc123def <note>",
+            _ => "next abc123def"
+        };
 
     private sealed class ThrowingFakeChannel : IOperatorChannel
     {
