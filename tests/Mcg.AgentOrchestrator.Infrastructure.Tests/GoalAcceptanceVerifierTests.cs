@@ -1358,6 +1358,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var first = await verifier.RunAsync(root, goalId);
             Assert.False(first.Passed);
             Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
+            Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "acceptance-partition-verdicts.json")));
 
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
@@ -1472,6 +1473,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var root = CreateCheckedInManifestShapeWorkspace();
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
+        var failFirstPartitionOnForcedRerun = false;
         var previousBackstop = GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN;
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
         GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN = 2;
@@ -1480,6 +1482,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
+                if (failFirstPartitionOnForcedRerun &&
+                    IsInfrastructurePartitionTestCall(args) &&
+                    args.Any(arg => arg.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal)))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                }
+
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     0,
                     args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
@@ -1495,12 +1506,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
             Assert.Contains("reroll_attempt_count=1", second.Checks!.Single(check => check.Name == "infrastructure partition verdict cache").ResultSummary, StringComparison.Ordinal);
 
+            failFirstPartitionOnForcedRerun = true;
             var third = await verifier.RunAsync(root, goalId);
-            Assert.True(third.Passed);
+            Assert.False(third.Passed);
             Assert.Equal(36, CountInfrastructurePartitionTestCalls(calls));
             var thirdReceipt = Assert.Single(third.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("forced_full_rerun=true", thirdReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("reroll_attempt_count=0", thirdReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("{partition_id=cli,verdict=RED}", thirdReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("aggregate_verdict=RED", thirdReceipt.ResultSummary, StringComparison.Ordinal);
         }
         finally
         {
@@ -3096,17 +3110,35 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static void CorruptPartitionCacheKey(string root, string partitionId)
     {
-        var path = Path.Combine(root, ".orchestrator", "acceptance-partition-verdicts.json");
-        var document = JsonNode.Parse(File.ReadAllText(path))?.AsObject()
-            ?? throw new InvalidOperationException("Expected partition verdict cache document.");
-        var records = document["records"]?.AsArray()
-            ?? throw new InvalidOperationException("Expected partition verdict cache records.");
-        var record = records
-            .OfType<JsonObject>()
-            .First(item => string.Equals(item["partitionId"]?.GetValue<string>(), partitionId, StringComparison.OrdinalIgnoreCase));
-        record["partitionFilterHash"] = "stale";
-        record["cacheKey"] = record["cacheKey"]?.GetValue<string>() + "-stale";
-        File.WriteAllText(path, document.ToJsonString());
+        var path = Path.Combine(
+            root,
+            ".orchestrator",
+            "goal-operations",
+            "12345678123456781234567812345678.jsonl");
+        var lines = File.ReadAllLines(path);
+        var updated = false;
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var record = JsonNode.Parse(lines[index])?.AsObject()
+                ?? throw new InvalidOperationException("Expected partition verdict journal entry.");
+            if (!string.Equals(record["partitionId"]?.GetValue<string>(), partitionId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            record["partitionFilterHash"] = "stale";
+            record["partitionVerdictCacheKey"] = record["partitionVerdictCacheKey"]?.GetValue<string>() + "-stale";
+            lines[index] = record.ToJsonString();
+            updated = true;
+            break;
+        }
+
+        if (!updated)
+        {
+            throw new InvalidOperationException("Expected partition verdict journal record.");
+        }
+
+        File.WriteAllLines(path, lines);
     }
 
     private static void AssertIsolatedTestCommand(string[] args)

@@ -88,6 +88,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+    private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
+    private const string PartitionVerdictCacheJournalOperation = "acceptance:partition-verdict-cache";
     private const int MaxFocusedEvidenceTargets = 4;
     private const int DefaultPartitionVerdictFullRerunEveryN = 5;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
@@ -137,11 +139,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
     private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
-    private static readonly JsonSerializerOptions PartitionVerdictJsonOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions PartitionVerdictJournalJsonOptions = new(JsonSerializerDefaults.Web)
     {
-        WriteIndented = true
+        WriteIndented = false
     };
-    private static readonly object PartitionVerdictStoreGate = new();
+    private static readonly object PartitionVerdictJournalGate = new();
     internal static TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(5);
     internal static TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(30);
     internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
@@ -262,7 +264,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
-                if (!checkResult.Result.Passed)
+                if (!checkResult.Result.Passed &&
+                    ShouldStopAfterFailedCheck(partitionVerdictCache, check))
                 {
                     break;
                 }
@@ -277,7 +280,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                     retried |= checkResult.Retried;
                     checks.Add(checkResult.Result);
-                    if (!checkResult.Result.Passed)
+                    if (!checkResult.Result.Passed &&
+                        ShouldStopAfterFailedCheck(partitionVerdictCache, check))
                     {
                         break;
                     }
@@ -295,7 +299,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
-                if (!checkResult.Result.Passed)
+                if (!checkResult.Result.Passed &&
+                    ShouldStopAfterFailedCheck(partitionVerdictCache, check))
                 {
                     nonDotnetPassed = false;
                     break;
@@ -333,7 +338,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                         retried |= checkResult.Retried;
                         checks.Add(checkResult.Result);
-                        if (!checkResult.Result.Passed)
+                        if (!checkResult.Result.Passed &&
+                            ShouldStopAfterFailedCheck(partitionVerdictCache, check))
                         {
                             break;
                         }
@@ -348,7 +354,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
                 retried |= checkResult.Retried;
                 checks.Add(checkResult.Result);
-                if (!checkResult.Result.Passed)
+                if (!checkResult.Result.Passed &&
+                    ShouldStopAfterFailedCheck(partitionVerdictCache, check))
                 {
                     break;
                 }
@@ -464,6 +471,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Summary: summary,
             Checks: checks);
     }
+
+    private static bool ShouldStopAfterFailedCheck(
+        PartitionVerdictCacheContext? cacheContext,
+        AcceptanceManifestCheck check) =>
+        cacheContext is null ||
+        !cacheContext.ForceFullRerun ||
+        !TryGetInfrastructurePartitionId(check, out _, out _);
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithPartitionVerdictCacheAsync(
         AcceptanceManifestCheck check,
@@ -1325,11 +1339,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var storePath = PartitionVerdictStorePath(worktreePath);
-        var store = ReadPartitionVerdictStore(storePath);
-        var pairKey = $"{goalId.Value}:{NormalizeShaToken(candidateTreeSha)}:{NormalizeShaToken(mainSha)}";
-        store.ReuseAttemptCounts ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        store.ReuseAttemptCounts.TryGetValue(pairKey, out var priorReuseAttemptCount);
+        var journalPath = PartitionVerdictJournalPath(worktreePath, goalId.Value);
+        var journal = ReadPartitionVerdictJournal(journalPath);
+        var pairKey = PartitionVerdictPairKey(goalId.Value, candidateTreeSha, mainSha);
+        var priorReuseAttemptCount = LatestPartitionReuseAttemptCount(journal, pairKey);
         var reusableGreenExists = effectiveChecks.Any(check =>
             TryBuildPartitionCacheKey(
                 goalId.Value,
@@ -1339,7 +1352,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 out _,
                 out _,
                 out var cacheKey) &&
-            LatestGreenPartitionVerdict(store, goalId.Value, cacheKey) is not null);
+            LatestGreenPartitionVerdict(journal, goalId.Value, cacheKey) is not null);
         var backstopEveryN = Math.Max(1, PartitionVerdictFullRerunEveryN);
         var forceFullRerun = reusableGreenExists && priorReuseAttemptCount + 1 >= backstopEveryN;
 
@@ -1350,8 +1363,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             NormalizeShaToken(verifyingCommitSha),
             CurrentAcceptanceAttemptId(),
             pairKey,
-            storePath,
-            store,
+            journalPath,
+            journal,
             partitionCount,
             priorReuseAttemptCount,
             forceFullRerun);
@@ -1368,26 +1381,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var aggregateVerdict = checks.Any(check => !check.Advisory && !check.Passed) ? "RED" : "GREEN";
-        var freshStore = ReadPartitionVerdictStore(cacheContext.StorePath);
-        freshStore.Records ??= [];
-        freshStore.ReuseAttemptCounts ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        freshStore.Records.AddRange(cacheContext.FreshRecords);
-
+        var attemptCount = 0;
         if (cacheContext.ForceFullRerun ||
             (cacheContext.Reused.Count == 0 && cacheContext.Executed.Count >= cacheContext.PartitionCount))
         {
-            freshStore.ReuseAttemptCounts[cacheContext.PairKey] = 0;
+            attemptCount = 0;
         }
         else if (cacheContext.Reused.Count > 0)
         {
-            freshStore.ReuseAttemptCounts[cacheContext.PairKey] = cacheContext.PriorReuseAttemptCount + 1;
+            attemptCount = cacheContext.PriorReuseAttemptCount + 1;
         }
-
-        WritePartitionVerdictStore(cacheContext.StorePath, freshStore);
-
-        var attemptCount = freshStore.ReuseAttemptCounts.TryGetValue(cacheContext.PairKey, out var count)
-            ? count
-            : 0;
+        var summaryRecordedAt = DateTimeOffset.UtcNow;
         var receipt =
             $"partition-verdict-cache reused_partitions={FormatPartitionReuseReceipt(cacheContext.Reused)} " +
             $"executed_partitions={FormatPartitionExecutionReceipt(cacheContext.Executed)} " +
@@ -1395,6 +1399,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"reroll_attempt_count={attemptCount.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"forced_full_rerun={cacheContext.ForceFullRerun.ToString().ToLowerInvariant()} " +
             "before_reroll_wall_time=20-25m after_reroll_wall_time=2-7m";
+        AppendPartitionVerdictJournalEntries(
+            cacheContext.JournalPath,
+            BuildPartitionVerdictJournalEntries(cacheContext, receipt, aggregateVerdict, attemptCount, summaryRecordedAt));
         Console.WriteLine($"PARTITION_VERDICT_CACHE {receipt}");
         Console.Out.Flush();
         return new AcceptanceCheckResult(
@@ -1407,16 +1414,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static PartitionVerdictRecord? LatestGreenPartitionVerdict(
-        PartitionVerdictStore store,
+        PartitionVerdictJournalSnapshot journal,
         string goalId,
-        string cacheKey) =>
-        (store.Records ?? [])
+        string cacheKey)
+    {
+        var latest = journal.Records
             .Where(record =>
                 record.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase) &&
-                record.CacheKey.Equals(cacheKey, StringComparison.OrdinalIgnoreCase) &&
-                record.Passed)
+                record.CacheKey.Equals(cacheKey, StringComparison.OrdinalIgnoreCase))
             .OrderBy(record => record.RecordedAt)
             .LastOrDefault();
+        return latest?.Passed == true ? latest : null;
+    }
 
     private static bool TryBuildPartitionCacheKey(
         PartitionVerdictCacheContext cacheContext,
@@ -1507,35 +1516,99 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : "[" + string.Join("|", executed.Select(receipt =>
                 $"{{partition_id={receipt.PartitionId},verdict={receipt.Verdict}}}")) + "]";
 
-    private static string PartitionVerdictStorePath(string worktreePath) =>
+    private static string PartitionVerdictJournalPath(string worktreePath, string goalId) =>
         Path.Combine(
-            Path.GetFullPath(worktreePath),
+            ResolvePartitionVerdictJournalRoot(worktreePath),
             ".orchestrator",
-            "acceptance-partition-verdicts.json");
+            "goal-operations",
+            $"{goalId}.jsonl");
 
-    private static PartitionVerdictStore ReadPartitionVerdictStore(string path)
+    private static string ResolvePartitionVerdictJournalRoot(string worktreePath)
     {
-        lock (PartitionVerdictStoreGate)
+        var fullPath = Path.GetFullPath(worktreePath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var directory = new DirectoryInfo(fullPath);
+        if (directory.Parent?.Name.Equals(GoalWorktrees.DirectoryName, StringComparison.OrdinalIgnoreCase) == true &&
+            directory.Parent.Parent is not null)
+        {
+            return directory.Parent.Parent.FullName;
+        }
+
+        return fullPath;
+    }
+
+    private static PartitionVerdictJournalSnapshot ReadPartitionVerdictJournal(string path)
+    {
+        lock (PartitionVerdictJournalGate)
         {
             if (!File.Exists(path))
-                return new PartitionVerdictStore();
+                return new PartitionVerdictJournalSnapshot([], []);
 
-            try
+            var records = new List<PartitionVerdictRecord>();
+            var summaries = new List<PartitionVerdictJournalSummary>();
+            foreach (var line in File.ReadLines(path))
             {
-                return JsonSerializer.Deserialize<PartitionVerdictStore>(
-                    File.ReadAllText(path),
-                    PartitionVerdictJsonOptions) ?? new PartitionVerdictStore();
+                if (TryDeserializePartitionVerdictJournalEntry(line) is not { } entry)
+                    continue;
+
+                if (entry.Operation.Equals(PartitionVerdictJournalOperation, StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(entry.PartitionVerdictCacheKey) &&
+                    !string.IsNullOrWhiteSpace(entry.PartitionId) &&
+                    !string.IsNullOrWhiteSpace(entry.PartitionFilterHash) &&
+                    !string.IsNullOrWhiteSpace(entry.PartitionVerdict) &&
+                    !string.IsNullOrWhiteSpace(entry.PartitionAttemptId) &&
+                    !string.IsNullOrWhiteSpace(entry.BranchHeadSha) &&
+                    !string.IsNullOrWhiteSpace(entry.MainHeadSha))
+                {
+                    records.Add(new PartitionVerdictRecord(
+                        entry.GoalId,
+                        entry.PartitionAttemptId,
+                        NormalizeShaToken(entry.BranchHeadSha),
+                        NormalizeShaToken(entry.MainHeadSha),
+                        entry.PartitionFilterHash,
+                        entry.PartitionId,
+                        entry.PartitionVerdictCacheKey,
+                        entry.PartitionVerdict.Equals("GREEN", StringComparison.OrdinalIgnoreCase),
+                        entry.PartitionVerdict,
+                        entry.PartitionTestResultPaths ?? [],
+                        entry.At));
+                }
+                else if (entry.Operation.Equals(PartitionVerdictCacheJournalOperation, StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(entry.PartitionPairKey) &&
+                    entry.PartitionReuseAttemptCount is { } reuseAttemptCount)
+                {
+                    summaries.Add(new PartitionVerdictJournalSummary(
+                        entry.PartitionPairKey,
+                        reuseAttemptCount,
+                        entry.PartitionForcedFullRerun ?? false,
+                        entry.At));
+                }
             }
-            catch (JsonException)
-            {
-                return new PartitionVerdictStore();
-            }
+
+            return new PartitionVerdictJournalSnapshot(records, summaries);
         }
     }
 
-    private static void WritePartitionVerdictStore(string path, PartitionVerdictStore store)
+    private static PartitionVerdictJournalEntry? TryDeserializePartitionVerdictJournalEntry(string line)
     {
-        lock (PartitionVerdictStoreGate)
+        try
+        {
+            return JsonSerializer.Deserialize<PartitionVerdictJournalEntry>(line, PartitionVerdictJournalJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static void AppendPartitionVerdictJournalEntries(
+        string path,
+        IReadOnlyList<PartitionVerdictJournalEntry> entries)
+    {
+        if (entries.Count == 0)
+            return;
+
+        lock (PartitionVerdictJournalGate)
         {
             var directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory))
@@ -1543,9 +1616,68 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(path, JsonSerializer.Serialize(store, PartitionVerdictJsonOptions));
+            File.AppendAllLines(
+                path,
+                entries.Select(entry => JsonSerializer.Serialize(entry, PartitionVerdictJournalJsonOptions)));
         }
     }
+
+    private static IReadOnlyList<PartitionVerdictJournalEntry> BuildPartitionVerdictJournalEntries(
+        PartitionVerdictCacheContext cacheContext,
+        string receipt,
+        string aggregateVerdict,
+        int attemptCount,
+        DateTimeOffset summaryRecordedAt)
+    {
+        var entries = cacheContext.FreshRecords
+            .Select(record => new PartitionVerdictJournalEntry(
+                $"{record.CacheKey}:partition-verdict",
+                record.GoalId,
+                PartitionVerdictJournalOperation,
+                record.Passed ? "Completed" : "Failed",
+                record.RecordedAt,
+                $"partition {record.PartitionId} verdict {record.Verdict}",
+                record.CandidateTreeSha,
+                record.MainSha,
+                PartitionVerdictCacheKey: record.CacheKey,
+                PartitionPairKey: cacheContext.PairKey,
+                PartitionId: record.PartitionId,
+                PartitionFilterHash: record.PartitionFilterHash,
+                PartitionVerdict: record.Verdict,
+                PartitionAttemptId: record.AttemptId,
+                PartitionTestResultPaths: record.TestResultPaths))
+            .ToList();
+        entries.Add(new PartitionVerdictJournalEntry(
+            $"{cacheContext.PairKey}:partition-cache:{cacheContext.AttemptId}",
+            cacheContext.GoalId,
+            PartitionVerdictCacheJournalOperation,
+            aggregateVerdict.Equals("GREEN", StringComparison.OrdinalIgnoreCase) ? "Completed" : "Failed",
+            summaryRecordedAt,
+            receipt,
+            cacheContext.CandidateTreeSha,
+            cacheContext.MainSha,
+            PartitionPairKey: cacheContext.PairKey,
+            PartitionVerdict: aggregateVerdict,
+            PartitionAttemptId: cacheContext.AttemptId,
+            PartitionReuseAttemptCount: attemptCount,
+            PartitionForcedFullRerun: cacheContext.ForceFullRerun));
+        return entries;
+    }
+
+    private static int LatestPartitionReuseAttemptCount(
+        PartitionVerdictJournalSnapshot journal,
+        string pairKey) =>
+        journal.Summaries
+            .Where(summary => summary.PairKey.Equals(pairKey, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(summary => summary.RecordedAt)
+            .LastOrDefault()
+            ?.ReuseAttemptCount ?? 0;
+
+    private static string PartitionVerdictPairKey(
+        string goalId,
+        string candidateTreeSha,
+        string mainSha) =>
+        $"{goalId}:acceptance:{NormalizeShaToken(candidateTreeSha)}:{NormalizeShaToken(mainSha)}".ToLowerInvariant();
 
     private static string CurrentAcceptanceAttemptId()
     {
@@ -4167,12 +4299,35 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> RestoreProjects,
         IReadOnlyList<string> BuildProjects);
 
-    private sealed class PartitionVerdictStore
-    {
-        public int Version { get; set; } = 1;
-        public List<PartitionVerdictRecord>? Records { get; set; } = [];
-        public Dictionary<string, int>? ReuseAttemptCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    }
+    private sealed record PartitionVerdictJournalSnapshot(
+        IReadOnlyList<PartitionVerdictRecord> Records,
+        IReadOnlyList<PartitionVerdictJournalSummary> Summaries);
+
+    private sealed record PartitionVerdictJournalSummary(
+        string PairKey,
+        int ReuseAttemptCount,
+        bool ForcedFullRerun,
+        DateTimeOffset RecordedAt);
+
+    private sealed record PartitionVerdictJournalEntry(
+        string IdempotencyKey,
+        string GoalId,
+        string Operation,
+        string Status,
+        DateTimeOffset At,
+        string? Detail = null,
+        string? BranchHeadSha = null,
+        string? MainHeadSha = null,
+        string? AcceptanceOutcome = null,
+        string? PartitionVerdictCacheKey = null,
+        string? PartitionPairKey = null,
+        string? PartitionId = null,
+        string? PartitionFilterHash = null,
+        string? PartitionVerdict = null,
+        string? PartitionAttemptId = null,
+        IReadOnlyList<string>? PartitionTestResultPaths = null,
+        int? PartitionReuseAttemptCount = null,
+        bool? PartitionForcedFullRerun = null);
 
     private sealed record PartitionVerdictRecord(
         string GoalId,
@@ -4203,8 +4358,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string verifyingCommitSha,
         string attemptId,
         string pairKey,
-        string storePath,
-        PartitionVerdictStore store,
+        string journalPath,
+        PartitionVerdictJournalSnapshot journal,
         int partitionCount,
         int priorReuseAttemptCount,
         bool forceFullRerun)
@@ -4215,7 +4370,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string VerifyingCommitSha { get; } = verifyingCommitSha;
         public string AttemptId { get; } = attemptId;
         public string PairKey { get; } = pairKey;
-        public string StorePath { get; } = storePath;
+        public string JournalPath { get; } = journalPath;
         public int PartitionCount { get; } = partitionCount;
         public int PriorReuseAttemptCount { get; } = priorReuseAttemptCount;
         public bool ForceFullRerun { get; } = forceFullRerun;
@@ -4224,7 +4379,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public List<PartitionVerdictRecord> FreshRecords { get; } = [];
 
         public PartitionVerdictRecord? TryGetGreen(string cacheKey) =>
-            LatestGreenPartitionVerdict(store, GoalId, cacheKey);
+            LatestGreenPartitionVerdict(journal, GoalId, cacheKey);
     }
 
     private sealed class DotnetTestBuildPhase(string[] buildArguments, DotnetBaseBuildCachePlan? cachePlan)
