@@ -211,8 +211,9 @@ public sealed class DiscordControlPlaneDeliverer
             return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, "resolved", content);
         }
 
+        var reminderBaseline = mark.LastReminderAt ?? mark.FirstDeliveredAt;
         var reminderDue = !card.IsResolved &&
-            (mark.LastReminderAt is null || now - mark.LastReminderAt.Value >= _policy.EffectiveReminderCadence);
+            now - reminderBaseline >= _policy.EffectiveReminderCadence;
         if (hash != mark.ContentHash || reminderDue)
         {
             await _transport.EditAsync(ControlPlaneDeliveryChannel.Decisions, mark.MessageId, content, buttons, cancellationToken);

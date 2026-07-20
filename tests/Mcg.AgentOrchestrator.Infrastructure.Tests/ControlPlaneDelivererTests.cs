@@ -162,10 +162,12 @@ public sealed class ControlPlaneDelivererTests
             Card("goal-b", "BoardWedge", "gate", "cause-2", "Wedge", "body", isBoardIntegrity: true, raisedAt: quiet)
         ], quiet);
         await deliverer.DeliverAsync([card], daytime);
-        await deliverer.DeliverAsync([card], daytime.AddHours(23));
-        await deliverer.DeliverAsync([card], daytime.AddHours(24));
+        var earlyReminder = await deliverer.DeliverAsync([card], daytime.AddHours(23));
+        var dueReminder = await deliverer.DeliverAsync([card], daytime.AddHours(24));
 
         Assert.Contains(quietResult.Operations, operation => operation.Reason == "quiet-hours");
+        Assert.Equal("dedup", Assert.Single(earlyReminder.Operations).Reason);
+        Assert.Equal("reminder", Assert.Single(dueReminder.Operations).Reason);
         Assert.Equal(2, transport.Sent.Count);
         Assert.Single(transport.Edited);
         Assert.Equal("reminder", transport.Edited.Count == 1
@@ -203,6 +205,12 @@ public sealed class ControlPlaneDelivererTests
                 Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: from.AddHours(11))
             ], from, to);
 
+        var decisionPushes = report.Operations
+            .Where(operation => operation.Channel == ControlPlaneDeliveryChannel.Decisions)
+            .Where(operation => operation.Kind is ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit)
+            .Select(operation => operation.Reason)
+            .ToList();
+        Assert.Equal(["new-card", "new-card"], decisionPushes);
         Assert.Equal(2, report.Decisions);
         Assert.Equal(1, report.Board);
         Assert.Equal(1, report.Digest);
