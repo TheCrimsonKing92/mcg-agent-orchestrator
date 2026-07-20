@@ -530,6 +530,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             AutoVerifyFromGitEvidence(context, context.CurrentGoal);
             if (RunAcceptanceWorkspaceMerge(context, skipVerify))
             {
+                if (acceptancePolicy.Kind == AutonomyPolicyKind.SupervisedAuto)
+                {
+                    var receipt = OperatorInbox.ClearOwnershipHoldsAfterLanding(
+                        context.Workspace,
+                        context.CurrentGoal,
+                        $"acceptance {context.CurrentGoal.Id.Value[..8]} --autonomy supervised-auto");
+                    if (receipt.ClearedHoldIds.Count > 0)
+                    {
+                        Console.WriteLine(
+                            $"Ownership holds cleared: goal={context.CurrentGoal.Id.Value[..8]} holds={string.Join(",", receipt.ClearedHoldIds)} command=\"{receipt.TriggeringCommand}\"");
+                    }
+                }
+
                 if (!noRecord)
                 {
                     AutoRecordDogfoodEntry(context);

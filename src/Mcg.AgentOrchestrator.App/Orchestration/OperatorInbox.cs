@@ -27,8 +27,24 @@ public enum OperatorInboxKind
     SubscriptionRouteWarning,
     ReadinessPreflight,
     BudgetWarning,
-    LandingEscalation
+    LandingEscalation,
+    OwnershipHold,
+    HoldPersistenceFailure,
+    HoldClearanceFailure
 }
+
+public sealed record OwnershipHoldRequest(
+    TaskId TaskId,
+    int TaskNumber,
+    AgentRole Role,
+    IReadOnlyList<string> ApprovalPaths,
+    string Reason);
+
+public sealed record OwnershipHoldClearanceReceipt(
+    string GoalId,
+    IReadOnlyList<string> ClearedHoldIds,
+    string TriggeringCommand,
+    DateTimeOffset ClearedAt);
 
 public sealed record OperatorInboxReport(
     string? GoalPrefix,
@@ -61,6 +77,12 @@ internal static class OperatorInbox
 {
     private const string StoreFileName = "operator-inbox-acks.json";
     private const string LandingEscalationFileName = "landing-escalations.json";
+    private const string OwnershipHoldFileName = "ownership-holds.json";
+    private const string HoldFailureFileName = "ownership-hold-failures.json";
+    internal const int MaxHoldWriteRetries = 5;
+    private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
+    internal static Action<TimeSpan> HoldWriteBackoff { get; set; } = Thread.Sleep;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -89,6 +111,8 @@ internal static class OperatorInbox
             AddSubscriptionRouteItems(items, goal, agents, workerProfiles, acknowledgements);
             AddBudgetItems(items, goal, agents, workerProfiles, acknowledgements);
             AddLandingEscalationItems(items, goal, workspace, acknowledgements);
+            AddOwnershipHoldItems(items, goal, workspace, acknowledgements);
+            AddHoldFailureItems(items, goal, workspace, acknowledgements);
         }
 
         var ordered = items.Values
@@ -493,6 +517,129 @@ internal static class OperatorInbox
         }
     }
 
+    public static IReadOnlyList<OperatorInboxItem> RecordOwnershipHolds(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        IReadOnlyList<OwnershipHoldRequest> holdRequests,
+        IOperatorChannel? channel = null)
+    {
+        if (holdRequests.Count == 0)
+        {
+            return [];
+        }
+
+        try
+        {
+            var records = LoadOwnershipHolds(workspace).ToList();
+            var now = DateTimeOffset.UtcNow;
+            var raised = new List<OperatorInboxItem>();
+            foreach (var request in holdRequests)
+            {
+                var key = OwnershipHoldKey(goal.Id.Value, request.TaskId.Value);
+                var existingIndex = records.FindIndex(record =>
+                    record.Kind == OperatorInboxKind.OwnershipHold &&
+                    record.ResolvedAt is null &&
+                    record.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+                var message = $"Task {request.TaskNumber} touched operator-approval path(s): {string.Join(", ", request.ApprovalPaths)}.";
+                var evidence = $"role={request.Role}; paths={string.Join(", ", request.ApprovalPaths)}; reason={request.Reason}";
+                OwnershipHoldRecord record;
+                if (existingIndex >= 0)
+                {
+                    record = records[existingIndex] with
+                    {
+                        Message = message,
+                        Evidence = evidence,
+                        ApprovalPaths = request.ApprovalPaths,
+                        RaisedAt = now
+                    };
+                    records[existingIndex] = record;
+                }
+                else
+                {
+                    record = new OwnershipHoldRecord(
+                        BuildStoredId(goal.Id, OperatorInboxKind.OwnershipHold, key, now),
+                        OperatorInboxKind.OwnershipHold,
+                        key,
+                        goal.Id.Value,
+                        request.TaskId.Value,
+                        request.TaskNumber,
+                        request.Role,
+                        request.ApprovalPaths,
+                        $"Ownership approval required for task {request.TaskNumber}",
+                        message,
+                        evidence,
+                        now,
+                        null,
+                        null);
+                    records.Add(record);
+                }
+
+                var acknowledgements = LoadAcknowledgements(workspace)
+                    .ToDictionary(item => item.ItemId, StringComparer.OrdinalIgnoreCase);
+                raised.Add(BuildOwnershipHoldItem(goal, record, acknowledgements));
+            }
+
+            SaveOwnershipHoldsWithRetry(workspace, records);
+            SendEscalations(channel, raised);
+            return raised;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            RecordHoldPersistenceFailure(workspace, goal, holdRequests, ex);
+            return [];
+        }
+    }
+
+    public static OwnershipHoldClearanceReceipt ClearOwnershipHoldsAfterLanding(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        string triggeringCommand)
+    {
+        var records = LoadOwnershipHolds(workspace).ToList();
+        var now = DateTimeOffset.UtcNow;
+        var open = records
+            .Where(record =>
+                record.Kind == OperatorInboxKind.OwnershipHold &&
+                record.ResolvedAt is null &&
+                record.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (open.Length == 0)
+        {
+            return new OwnershipHoldClearanceReceipt(goal.Id.Value, [], triggeringCommand, now);
+        }
+
+        var openIds = open.Select(record => record.Id).ToArray();
+        for (var index = 0; index < records.Count; index++)
+        {
+            if (openIds.Contains(records[index].Id, StringComparer.OrdinalIgnoreCase))
+            {
+                records[index] = records[index] with
+                {
+                    ResolvedAt = now,
+                    ClearanceTriggeringCommand = triggeringCommand
+                };
+            }
+        }
+
+        try
+        {
+            SaveOwnershipHoldsWithRetry(workspace, records);
+            var receipt = new OwnershipHoldClearanceReceipt(goal.Id.Value, openIds, triggeringCommand, now);
+            AppendConductEvent(workspace, "ownership-hold-cleared", goal.Id.Value[..8],
+                $"OWNERSHIP_HOLD_CLEARED goal={goal.Id.Value[..8]} holds={string.Join(",", openIds)} command=\"{triggeringCommand}\"");
+            return receipt;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            foreach (var record in open)
+            {
+                RecordHoldClearanceFailure(workspace, goal, record, triggeringCommand, ex);
+            }
+
+            return new OwnershipHoldClearanceReceipt(goal.Id.Value, [], triggeringCommand, now);
+        }
+    }
+
     private static void AddLandingEscalationItems(
         Dictionary<string, OperatorInboxItem> items,
         Goal goal,
@@ -522,6 +669,34 @@ internal static class OperatorInbox
         }
     }
 
+    private static void AddOwnershipHoldItems(
+        Dictionary<string, OperatorInboxItem> items,
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
+    {
+        foreach (var record in LoadOwnershipHolds(workspace).Where(record =>
+            record.ResolvedAt is null &&
+            record.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase)))
+        {
+            Add(items, BuildOwnershipHoldItem(goal, record, acknowledgements));
+        }
+    }
+
+    private static void AddHoldFailureItems(
+        Dictionary<string, OperatorInboxItem> items,
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
+    {
+        foreach (var record in LoadHoldFailures(workspace).Where(record =>
+            record.ResolvedAt is null &&
+            record.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase)))
+        {
+            Add(items, BuildFailureItem(goal, record, acknowledgements));
+        }
+    }
+
     private static IReadOnlyList<LandingEscalationRecord> LoadLandingEscalations(OrchestratorWorkspace workspace)
     {
         var path = Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName);
@@ -546,6 +721,60 @@ internal static class OperatorInbox
         File.WriteAllText(
             Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName),
             JsonSerializer.Serialize(new LandingEscalationStore(items), JsonOptions));
+    }
+
+    private static OperatorInboxItem BuildOwnershipHoldItem(
+        Goal goal,
+        OwnershipHoldRecord record,
+        IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
+    {
+        acknowledgements.TryGetValue(record.Id, out var acknowledgement);
+        return new OperatorInboxItem(
+            record.Id,
+            record.Kind,
+            OperatorInboxSeverity.Blocker,
+            record.GoalId,
+            goal.Id.Value[..8],
+            goal.Objective,
+            record.TaskId,
+            record.TaskNumber,
+            record.Title,
+            record.Message,
+            record.Evidence,
+            "Review the operator-owned diff and run supervised acceptance to resolve this hold.",
+            $"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto",
+            record.Key,
+            record.RaisedAt,
+            acknowledgement is not null,
+            acknowledgement?.AcknowledgedAt,
+            acknowledgement?.Note);
+    }
+
+    private static OperatorInboxItem BuildFailureItem(
+        Goal goal,
+        HoldFailureRecord record,
+        IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
+    {
+        acknowledgements.TryGetValue(record.Id, out var acknowledgement);
+        return new OperatorInboxItem(
+            record.Id,
+            record.Kind,
+            OperatorInboxSeverity.Blocker,
+            record.GoalId,
+            goal.Id.Value[..8],
+            goal.Objective,
+            record.TaskId,
+            record.TaskNumber,
+            record.Title,
+            record.Message,
+            record.Evidence,
+            "Inspect the operator inbox persistence failure and resolve the dangling hold manually.",
+            $"operator-inbox {goal.Id.Value[..8]}",
+            record.Key,
+            record.RaisedAt,
+            acknowledgement is not null,
+            acknowledgement?.AcknowledgedAt,
+            acknowledgement?.Note);
     }
 
     private static OperatorInboxItem BuildItem(
@@ -599,6 +828,32 @@ internal static class OperatorInbox
     private static void Add(Dictionary<string, OperatorInboxItem> items, OperatorInboxItem item)
     {
         items.TryAdd(item.Id, item);
+    }
+
+    private static void SendEscalations(IOperatorChannel? channel, IReadOnlyList<OperatorInboxItem> items)
+    {
+        if (channel is null or NullOperatorChannel)
+        {
+            return;
+        }
+
+        foreach (var item in items)
+        {
+            var escalation = OperatorEscalationProjection.Project(item);
+            if (escalation is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                channel.SendEscalationAsync(escalation).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // The persisted inbox item is authoritative; channel delivery is best-effort.
+            }
+        }
     }
 
     private static List<Goal> ResolveGoals(AgentOrchestratorKernel kernel, string? goalPrefix)
@@ -661,6 +916,162 @@ internal static class OperatorInbox
         };
     }
 
+    private static string OwnershipHoldKey(string goalId, string taskId) =>
+        $"ownership-hold:{goalId}:{taskId}:OwnershipHold";
+
+    private static IReadOnlyList<OwnershipHoldRecord> LoadOwnershipHolds(OrchestratorWorkspace workspace)
+    {
+        var path = Path.Combine(workspace.OrchestratorDirectory, OwnershipHoldFileName);
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<OwnershipHoldStore>(File.ReadAllText(path), JsonOptions)?.Items ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<HoldFailureRecord> LoadHoldFailures(OrchestratorWorkspace workspace)
+    {
+        var path = Path.Combine(workspace.OrchestratorDirectory, HoldFailureFileName);
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<HoldFailureStore>(File.ReadAllText(path), JsonOptions)?.Items ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static void SaveOwnershipHoldsWithRetry(OrchestratorWorkspace workspace, IReadOnlyList<OwnershipHoldRecord> items)
+    {
+        ExecuteWithHoldWriteRetry(() =>
+        {
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace.OrchestratorDirectory, OwnershipHoldFileName),
+                JsonSerializer.Serialize(new OwnershipHoldStore(items), JsonOptions));
+        });
+    }
+
+    private static void SaveHoldFailuresWithRetry(OrchestratorWorkspace workspace, IReadOnlyList<HoldFailureRecord> items)
+    {
+        ExecuteWithHoldWriteRetry(() =>
+        {
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            File.WriteAllText(
+                Path.Combine(workspace.OrchestratorDirectory, HoldFailureFileName),
+                JsonSerializer.Serialize(new HoldFailureStore(items), JsonOptions));
+        });
+    }
+
+    private static void ExecuteWithHoldWriteRetry(Action write)
+    {
+        var delay = InitialHoldWriteBackoff;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                write();
+                return;
+            }
+            catch (Exception ex) when (
+                attempt < MaxHoldWriteRetries &&
+                ex is IOException or UnauthorizedAccessException)
+            {
+                HoldWriteBackoff(delay);
+                var doubled = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * 2);
+                delay = doubled > MaxHoldWriteBackoff ? MaxHoldWriteBackoff : doubled;
+            }
+        }
+    }
+
+    private static void RecordHoldPersistenceFailure(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        IReadOnlyList<OwnershipHoldRequest> requests,
+        Exception exception)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var failures = LoadHoldFailures(workspace).ToList();
+        foreach (var request in requests)
+        {
+            var key = $"hold-persistence-failure:{goal.Id.Value}:{request.TaskId.Value}";
+            failures.RemoveAll(record =>
+                record.ResolvedAt is null &&
+                record.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+            failures.Add(new HoldFailureRecord(
+                BuildStoredId(goal.Id, OperatorInboxKind.HoldPersistenceFailure, key, now),
+                OperatorInboxKind.HoldPersistenceFailure,
+                key,
+                goal.Id.Value,
+                request.TaskId.Value,
+                request.TaskNumber,
+                "Ownership hold persistence failed",
+                $"The system could not persist an ownership hold for task {request.TaskNumber}.",
+                $"paths={string.Join(", ", request.ApprovalPaths)}; error={exception.GetType().Name}: {exception.Message}",
+                now,
+                null));
+        }
+
+        SaveHoldFailuresWithRetry(workspace, failures);
+        AppendConductEvent(workspace, "HOLD_PERSISTENCE_FAILED", goal.Id.Value[..8],
+            $"HOLD_PERSISTENCE_FAILED goal={goal.Id.Value[..8]} tasks={string.Join(",", requests.Select(r => r.TaskNumber))} error={exception.GetType().Name}");
+    }
+
+    private static void RecordHoldClearanceFailure(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        OwnershipHoldRecord hold,
+        string triggeringCommand,
+        Exception exception)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var key = $"hold-clearance-failure:{goal.Id.Value}:{hold.Id}";
+        var failures = LoadHoldFailures(workspace)
+            .Where(record => !record.Key.Equals(key, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        failures.Add(new HoldFailureRecord(
+            BuildStoredId(goal.Id, OperatorInboxKind.HoldClearanceFailure, key, now),
+            OperatorInboxKind.HoldClearanceFailure,
+            key,
+            goal.Id.Value,
+            hold.TaskId,
+            hold.TaskNumber,
+            "Ownership hold clearance failed",
+            $"Landing proceeded, but ownership hold {hold.Id} could not be cleared.",
+            $"trigger={triggeringCommand}; error={exception.GetType().Name}: {exception.Message}",
+            now,
+            null));
+        SaveHoldFailuresWithRetry(workspace, failures);
+        AppendConductEvent(workspace, "HOLD_CLEARANCE_FAILED", goal.Id.Value[..8],
+            $"HOLD_CLEARANCE_FAILED goal={goal.Id.Value[..8]} hold={hold.Id} command=\"{triggeringCommand}\" error={exception.GetType().Name}");
+    }
+
+    private static void AppendConductEvent(OrchestratorWorkspace workspace, string eventKind, string goalId, string detail)
+    {
+        try
+        {
+            new ConductEventLogWriter(workspace.ConductEventsLogPath).Append(eventKind, goalId, detail);
+        }
+        catch
+        {
+            // The inbox item is the primary loud signal.
+        }
+    }
+
     private static string BuildEscalationSuggestedAction(string integrationBranch)
     {
         if (!integrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase))
@@ -720,6 +1131,9 @@ internal static class OperatorInbox
 
     private static string StorePath(OrchestratorWorkspace workspace) => Path.Combine(workspace.OrchestratorDirectory, StoreFileName);
 
+    private static string BuildStoredId(GoalId goalId, OperatorInboxKind kind, string sourceKey, DateTimeOffset raisedAt) =>
+        BuildId(goalId, kind, $"{sourceKey}:{raisedAt.UtcTicks}");
+
     private sealed record OperatorInboxAcknowledgement(string ItemId, DateTimeOffset AcknowledgedAt, string? Note);
 
     private sealed record OperatorInboxAcknowledgementStore(IReadOnlyList<OperatorInboxAcknowledgement> Items);
@@ -731,4 +1145,37 @@ internal static class OperatorInbox
         DateTimeOffset EscalatedAt);
 
     private sealed record LandingEscalationStore(IReadOnlyList<LandingEscalationRecord> Items);
+
+    private sealed record OwnershipHoldRecord(
+        string Id,
+        OperatorInboxKind Kind,
+        string Key,
+        string GoalId,
+        string TaskId,
+        int TaskNumber,
+        AgentRole Role,
+        IReadOnlyList<string> ApprovalPaths,
+        string Title,
+        string Message,
+        string Evidence,
+        DateTimeOffset RaisedAt,
+        DateTimeOffset? ResolvedAt,
+        string? ClearanceTriggeringCommand);
+
+    private sealed record OwnershipHoldStore(IReadOnlyList<OwnershipHoldRecord> Items);
+
+    private sealed record HoldFailureRecord(
+        string Id,
+        OperatorInboxKind Kind,
+        string Key,
+        string GoalId,
+        string? TaskId,
+        int? TaskNumber,
+        string Title,
+        string Message,
+        string Evidence,
+        DateTimeOffset RaisedAt,
+        DateTimeOffset? ResolvedAt);
+
+    private sealed record HoldFailureStore(IReadOnlyList<HoldFailureRecord> Items);
 }

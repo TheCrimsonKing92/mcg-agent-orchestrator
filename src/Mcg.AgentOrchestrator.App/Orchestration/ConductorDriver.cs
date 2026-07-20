@@ -1778,22 +1778,16 @@ internal sealed class ConductorDriver
             _clearCriterionRetryFeedback(goal.Id, task.Id);
         }
 
-        // Gate 3: Apply policy AutoPromoteRiskThreshold OVER the engine default — policy can only be stricter.
-        var changeRisk = _classifyChangeRisk(goal);
-        if (changeRisk.HasValue)
-        {
-            var policyAtMerged = policy.GetTransitionDecision(GoalLifecycleState.Merged, changeRisk.Value);
-            if (policyAtMerged == ConductorTransitionDecision.Escalate)
-            {
-                return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                    $"Policy '{policy.Name}' restricts auto-promotion for {changeRisk.Value} risk; use 'land' after review");
-            }
-        }
-
-        // Gate 4: land via integration branch (the branch is already rebased onto main by Gate 1).
+        // Gate 3: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
+            if (LandingExecutor.IsOwnershipHoldEscalation(escalate.Reason))
+            {
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, escalate.Reason));
+            }
+
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, escalate.Reason);
         }
 
@@ -1801,7 +1795,7 @@ internal sealed class ConductorDriver
 
         if (landResult.MainAdvanced)
         {
-            // Gate 5: advisory semantic acceptance runs only after deterministic acceptance and
+            // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
             // successful landing. It records judge receipts for observability but never gates landing.
             _runAdvisorySemanticAcceptance(goal, acceptance);
             _afterSuccessfulLanding(goal, landResult);

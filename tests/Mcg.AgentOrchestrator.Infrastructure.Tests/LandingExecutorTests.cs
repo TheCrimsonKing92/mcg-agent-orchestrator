@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
@@ -101,6 +102,76 @@ public sealed class LandingExecutorTests
             Assert.False(reapplied[0].Applied);
             var afterReapply = new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult();
             Assert.Single(afterReapply);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_non_approval_diff_auto_promotes_without_ownership_hold")]
+    public void LandingExecutorGreenGateNonApprovalDiffAutoPromotesWithoutOwnershipHold()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.App/Feature.cs", "namespace TestApp; internal sealed class Feature;");
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced);
+            var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_raises_one_hold_for_writing_task")]
+    public void LandingExecutorGreenGateApprovalDiffRaisesOneHoldForWritingTask()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateGoal(AgentRole.Developer, AgentRole.Reviewer);
+            var developer = goal.Tasks[0];
+            var reviewer = goal.Tasks[1];
+            var baseCommit = ReadGit(repo, "rev-parse", "main");
+            Dispatch(kernel, goal, developer, "developer");
+            Dispatch(kernel, goal, reviewer, "reviewer");
+            kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, baseCommit);
+            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, baseCommit);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", "namespace TestInfra; internal sealed class OwnershipTouched;");
+            var resultCommit = ReadGit(repo, "rev-parse", goalBranch);
+            kernel.RecordDispatchResultCommit(goal.Id, developer.Id, resultCommit);
+            kernel.RecordDispatchResultCommit(goal.Id, reviewer.Id, resultCommit);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                developer.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            kernel.RecordTaskVerification(
+                goal.Id,
+                reviewer.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace, policy: ConductorAutonomyPolicy.Permissive);
+
+            Assert.False(result.MainAdvanced);
+            Assert.True(result.Decision is LandingDecision.Escalate escalation &&
+                LandingExecutor.IsOwnershipHoldEscalation(escalation.Reason));
+            var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            var hold = Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.OwnershipHold));
+            Assert.Equal(developer.Id.Value, hold.TaskId);
+            Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", hold.Evidence);
+            Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
         }
         finally
         {
@@ -708,10 +779,23 @@ public sealed class LandingExecutorTests
     private static void AddGoalBranchCommit(string repo, string goalBranch, string fileName, string content)
     {
         RunGit(repo, "checkout", "-b", goalBranch);
-        File.WriteAllText(Path.Combine(repo, fileName), content + Environment.NewLine);
+        var path = Path.Combine(repo, fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content + Environment.NewLine);
         RunGit(repo, "add", fileName);
         RunGit(repo, "commit", "-m", $"Add {fileName}");
         RunGit(repo, "checkout", "main");
+    }
+
+    private static string ReadGit(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {result.Error}");
+        }
+
+        return result.Output.Trim();
     }
 
     private static void WriteMirrorConfig(string repo, params string[] remotes) =>

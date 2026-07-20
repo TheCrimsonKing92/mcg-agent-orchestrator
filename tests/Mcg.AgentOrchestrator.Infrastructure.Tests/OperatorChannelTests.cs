@@ -156,7 +156,22 @@ public sealed class OperatorChannelTests
         var actions = OperatorEscalationProjection.DeriveActions(item);
 
         Assert.True(actions[0].RequiresConfirm);
-        Assert.Contains(actions, action => action.Command == $"operator-inbox-ack {item.Id}");
+        Assert.DoesNotContain(actions, action => action.Command == $"operator-inbox-ack {item.Id}");
+    }
+
+    [Xunit.Fact(DisplayName = "Projection_ownership_hold_primary_action_resolves_with_supervised_acceptance")]
+    public void ProjectionOwnershipHoldPrimaryActionResolvesWithSupervisedAcceptance()
+    {
+        var item = BuildInboxItem(OperatorInboxKind.OwnershipHold, OperatorInboxSeverity.Blocker,
+            suggestedCommand: "acceptance abc123def --autonomy supervised-auto");
+
+        var actions = OperatorEscalationProjection.DeriveActions(item);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("Accept Goal", action.Label);
+        Assert.Equal("acceptance abc123def --autonomy supervised-auto", action.Command);
+        Assert.True(action.RequiresConfirm);
+        Assert.DoesNotContain(actions, candidate => candidate.Command.StartsWith("operator-inbox-ack", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "Projection_next_command_does_not_require_confirm")]

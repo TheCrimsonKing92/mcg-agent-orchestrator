@@ -23,7 +23,7 @@ internal static class GitCli
         "-c", "maintenance.auto=false",
     ];
 
-    public readonly record struct GitResult(int ExitCode, string Output, string Error)
+    public readonly record struct GitResult(int ExitCode, string Output, string Error, bool DrainTimedOut = false)
     {
         public bool Succeeded => ExitCode == 0;
     }
@@ -71,7 +71,12 @@ internal static class GitCli
             // git has exited; bound the drain so a detached grandchild holding the pipe can't keep us
             // here. With the hardening config above this should complete immediately.
             if (!Task.WaitAll([outputTask, errorTask], DrainTimeoutMilliseconds))
+            {
                 TryKillTree(process);
+                var timedOutOutput = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
+                var timedOutError = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
+                return new GitResult(process.ExitCode, timedOutOutput, timedOutError, DrainTimedOut: true);
+            }
 
             var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
             var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
