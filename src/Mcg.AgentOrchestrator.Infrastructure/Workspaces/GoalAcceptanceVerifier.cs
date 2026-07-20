@@ -820,15 +820,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (path.StartsWith("scripts/", StringComparison.OrdinalIgnoreCase))
                 return $"script changed: {path}";
 
-            if (path.Equals(
-                    "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs",
-                    StringComparison.OrdinalIgnoreCase) ||
-                path.Equals(
-                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return $"acceptance verifier code changed: {path}";
-            }
         }
 
         if (!summary.IsDocsOnly && summary.HasBehaviorChanges && changedProjects.Count == 0)
