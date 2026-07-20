@@ -523,12 +523,16 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         var task = goal.Tasks.Single();
+        HumanInputRequestId? concurrentRequestId = null;
         var repository = new InMemoryTransactionalStateRepository(kernel)
         {
             ThrowOnLoadAsync = true,
             ThrowOnLoadWhileInTransaction = true,
             BeforeGoalCasRetry = stored =>
-                stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "concurrent writer failed the task before CAS")
+            {
+                stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "concurrent writer failed the task before CAS");
+                concurrentRequestId = stored.RequestHumanInput(goal.Id, task.Id, "concurrent operator question").Id;
+            }
         };
 
         var output = CaptureConsole(() =>
@@ -544,19 +548,30 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             Xunit.Assert.True(changed);
         });
 
+        var loadGoalsCountBeforeAssertion = repository.LoadGoalsCount;
         var storedSnapshot = await repository.LoadGoalAsync(goal.Id);
-        var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([storedSnapshot!], []));
+        var storedHumanInput = await repository.LoadGoalsAsync([goal.Id]);
+        var storedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [storedSnapshot!],
+            storedHumanInput.ExportSnapshot().HumanInputRequests));
         var storedGoal = storedKernel.GetGoal(goal.Id);
         var storedTask = storedGoal.Tasks.Single();
         Xunit.Assert.Equal(2, repository.TransactGoalDelegateCalls);
         Xunit.Assert.Equal(0, repository.TransactAsyncCount);
         Xunit.Assert.Equal(1, repository.TransactGoalCount);
+        Xunit.Assert.Equal(2, loadGoalsCountBeforeAssertion);
         Xunit.Assert.Equal(0, repository.LoadWhileInTransactionCount);
         Xunit.Assert.Equal(1, CountOccurrences(output, "Objective: Retry stale goal CAS"));
+        Xunit.Assert.NotNull(concurrentRequestId);
+        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, storedGoal.Status);
         Xunit.Assert.Equal(WorkTaskStatus.Running, storedTask.Status);
+        Xunit.Assert.Contains(storedKernel.HumanInputRequests, item => item.Id == concurrentRequestId && !item.IsCompleted);
         Xunit.Assert.Contains(storedGoal.Timeline, evt =>
             evt.Kind == ProgressKind.TaskFailed &&
             evt.Message == "concurrent writer failed the task before CAS");
+        Xunit.Assert.Contains(storedGoal.Timeline, evt =>
+            evt.Kind == ProgressKind.HumanInputRequested &&
+            evt.Message == "concurrent operator question");
         Xunit.Assert.Contains(storedGoal.Timeline, evt =>
             evt.Kind == ProgressKind.TaskStarted &&
             evt.Message == "operator restarted after stale CAS");

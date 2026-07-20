@@ -864,18 +864,18 @@ internal static class CliPersistentStateRunner
         var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
         var commandAgents = agents;
         var commandProfiles = workerProfiles;
-        var humanInputRequests = LoadGoalHumanInputSnapshots(stateRepository, goalId);
 
         var result = stateRepository.TransactGoalAsync(
                 $"cli:{args[0].ToLowerInvariant()}",
                 goalId,
-                (snapshot, _) =>
+                (snapshot, cancellationToken) =>
                 {
                     if (snapshot is null)
                     {
                         throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
                     }
 
+                    var humanInputRequests = LoadGoalHumanInputSnapshots(stateRepository, goalId, cancellationToken);
                     var kernel = KernelFromGoalSnapshot(snapshot, humanInputRequests);
                     var transactionAgents = commandAgents;
                     var transactionProfiles = commandProfiles;

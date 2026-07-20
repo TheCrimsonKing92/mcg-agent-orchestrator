@@ -742,31 +742,23 @@ public abstract class CliCommandTestBase
             }
 
             var snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
-            IsInTransaction = true;
-            try
+            TransactGoalDelegateCalls++;
+            var (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
+            if (shouldSave && newSnapshot is not null && BeforeGoalCasRetry is { } beforeRetry)
             {
+                BeforeGoalCasRetry = null;
+                beforeRetry(_kernel);
+                snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
                 TransactGoalDelegateCalls++;
-                var (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
-                if (shouldSave && newSnapshot is not null && BeforeGoalCasRetry is { } beforeRetry)
-                {
-                    BeforeGoalCasRetry = null;
-                    beforeRetry(_kernel);
-                    snap = _kernel.ExportSnapshot().Goals.FirstOrDefault(g => g.Id == goalId.Value);
-                    TransactGoalDelegateCalls++;
-                    (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
-                }
-
-                if (shouldSave && newSnapshot is not null)
-                {
-                    await SaveGoalSnapshotsAsync([newSnapshot], cancellationToken);
-                }
-
-                return result;
+                (shouldSave, newSnapshot, result) = await transaction(snap, cancellationToken);
             }
-            finally
+
+            if (shouldSave && newSnapshot is not null)
             {
-                IsInTransaction = false;
+                await SaveGoalSnapshotsAsync([newSnapshot], cancellationToken);
             }
+
+            return result;
         }
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
