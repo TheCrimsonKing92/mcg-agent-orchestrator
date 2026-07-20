@@ -25,6 +25,7 @@ public sealed class ProgressiveReviewSteeringTests
                 var current = k.GetTask(goalId, taskId).LastProcess!;
                 var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
                 k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                WriteExitAndHeartbeat(cancelled, now.AddSeconds(1), childPid: null, ownedPids: [6001], state: "exited");
                 return cancelled;
             },
             startProcess: (k, goalId, taskId) =>
@@ -37,12 +38,24 @@ public sealed class ProgressiveReviewSteeringTests
                 var started = new TaskProcessRecord(7001, dispatch.Command, dispatch.WorkingDirectory, "out2.log", "err2.log", "exit2.txt", now.AddSeconds(2), null, null);
                 k.RecordTaskProcessStarted(goalId, taskId, started);
                 return started;
+            },
+            isProcessRunning: pid =>
+            {
+                order.Add($"probe:{pid}");
+                return false;
+            },
+            getLineageDescendants: process =>
+            {
+                order.Add($"lineage:{process.ProcessId}");
+                return [];
             });
 
         var result = coordinator.ExecutePending(kernel, goal);
 
         Assert.True(result.MutatedTaskState);
-        Assert.Equal(["cancel", "start"], order);
+        Assert.True(order.IndexOf("cancel") >= 0);
+        Assert.True(order.IndexOf("probe:6001") > order.IndexOf("cancel"));
+        Assert.True(order.IndexOf("start") > order.IndexOf("probe:6001"));
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
@@ -69,6 +82,7 @@ public sealed class ProgressiveReviewSteeringTests
                 var current = k.GetTask(goalId, taskId).LastProcess!;
                 var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
                 k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                WriteExitAndHeartbeat(cancelled, now.AddSeconds(1), childPid: null, ownedPids: [6001], state: "exited");
                 return cancelled;
             },
             startProcess: (k, goalId, taskId) =>
@@ -184,11 +198,93 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_live_lineage_descendant_survives_cancel")]
+    public void BlocksResumeWhenLiveLineageDescendantSurvivesCancel()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-lineage-child");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while lineage child is alive")).GetAwaiter().GetResult();
+        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var started = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            isProcessRunning: pid => pid == 6102,
+            getLineageDescendants: _ => [6102],
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                WriteExitAndHeartbeat(cancelled, now.AddSeconds(1), childPid: null, ownedPids: [6001], state: "exited");
+                return cancelled;
+            },
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run over a live lineage descendant");
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(started);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("owned pid(s) still alive: 6102", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_terminal_cancel_proof_is_absent")]
+    public void BlocksResumeWhenTerminalCancelProofIsAbsent()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-missing-proof");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "do not start without terminal proof")).GetAwaiter().GetResult();
+        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var started = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                return cancelled;
+            },
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run without terminal proof");
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(started);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("exit artifact missing", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
     private static ProgressiveReviewSteeringCoordinator NewCoordinator(
         string root,
         InMemoryProgressiveReviewSteeringStore store,
         ICollaborationItemStore? attentionStore = null,
         Func<int, bool>? isProcessRunning = null,
+        Func<TaskProcessRecord, IReadOnlyList<int>>? getLineageDescendants = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelProcess = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null)
@@ -203,6 +299,7 @@ public sealed class ProgressiveReviewSteeringTests
             attentionStore,
             utcNow: () => new DateTimeOffset(2026, 7, 20, 12, 0, 10, TimeSpan.Zero),
             isProcessRunning: isProcessRunning ?? (_ => false),
+            getLineageDescendants: getLineageDescendants,
             cancelProcess: cancelProcess,
             startProcess: startProcess,
             prepareFreshDispatch: prepareFreshDispatch);
@@ -292,5 +389,17 @@ public sealed class ProgressiveReviewSteeringTests
             $$"""
             {"pid":{{process.ProcessId}},"childPid":{{childPidJson}},"ownedPids":[{{string.Join(",", ownedPids)}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":0,"stderrBytes":0,"ownedCpuMs":0}
             """);
+    }
+
+    private static void WriteExitAndHeartbeat(
+        TaskProcessRecord process,
+        DateTimeOffset observedAt,
+        int? childPid,
+        IReadOnlyList<int> ownedPids,
+        string state)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(process.ExitCodePath)!);
+        File.WriteAllText(process.ExitCodePath, "1");
+        WriteHeartbeat(process, observedAt, childPid, ownedPids, state);
     }
 }

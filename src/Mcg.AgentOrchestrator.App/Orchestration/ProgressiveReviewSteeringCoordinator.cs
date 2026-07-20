@@ -32,6 +32,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
     private readonly ProgressiveReviewSteeringOptions _options;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, bool> _isProcessRunning;
+    private readonly Func<TaskProcessRecord, IReadOnlyList<int>> _getLineageDescendants;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _cancelProcess;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _startProcess;
     private readonly Action<AgentOrchestratorKernel, Goal, TaskSpec, string> _prepareFreshDispatch;
@@ -46,6 +47,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         ProgressiveReviewSteeringOptions? options = null,
         Func<DateTimeOffset>? utcNow = null,
         Func<int, bool>? isProcessRunning = null,
+        Func<TaskProcessRecord, IReadOnlyList<int>>? getLineageDescendants = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelProcess = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null)
@@ -59,6 +61,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _options = options ?? new ProgressiveReviewSteeringOptions();
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _isProcessRunning = isProcessRunning ?? IsProcessRunning;
+        _getLineageDescendants = getLineageDescendants ?? GetLiveLineageDescendants;
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
         _prepareFreshDispatch = prepareFreshDispatch ?? PrepareFreshSubscriptionDispatch;
@@ -117,9 +120,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
 
         var originalDispatch = task.LastDispatch;
         var originalProcess = task.LastProcess;
-        var ownedProcessSnapshot = CaptureOwnedProcessSnapshot(originalProcess);
+        var cancelTimeOwnedProcessSet = CaptureCancelTimeOwnedProcessSet(originalProcess);
         var cancelled = _cancelProcess(kernel, goal.Id, taskId);
-        var cancelConfirmation = ConfirmTreeDead(cancelled, ownedProcessSnapshot);
+        var cancelConfirmation = ConfirmTreeDead(cancelled, cancelTimeOwnedProcessSet);
         if (!cancelConfirmation.Confirmed)
         {
             AppendFailSafeReceipt(intent, cancelConfirmation.Proof, "operator-attention", now);
@@ -296,7 +299,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             now)).GetAwaiter().GetResult();
     }
 
-    private static IReadOnlyList<int> CaptureOwnedProcessSnapshot(TaskProcessRecord process)
+    private IReadOnlyList<int> CaptureCancelTimeOwnedProcessSet(TaskProcessRecord process)
     {
         var processIds = new HashSet<int>();
         AddProcessId(processIds, process.ProcessId);
@@ -314,6 +317,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                 AddProcessId(processIds, processId);
         }
 
+        foreach (var processId in _getLineageDescendants(process))
+            AddProcessId(processIds, processId);
+
         return processIds.OrderBy(processId => processId).ToArray();
     }
 
@@ -323,17 +329,54 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             processIds.Add(processId);
     }
 
-    private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> ownedProcessSnapshot)
+    private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> cancelTimeOwnedProcessSet)
     {
         if (!cancelled.WasCancelled || cancelled.CompletedAt is null)
             return new TreeDeathConfirmation(false, "cancelled process record missing terminal cancellation fields");
 
-        var live = ownedProcessSnapshot.Where(_isProcessRunning).Distinct().OrderBy(processId => processId).ToArray();
+        var processIds = new HashSet<int>(cancelTimeOwnedProcessSet);
+        var heartbeat = ProcessLogReader.ReadHeartbeat(cancelled, _utcNow());
+        if (heartbeat.IsAvailable)
+        {
+            AddProcessId(processIds, heartbeat.ProcessId);
+            if (heartbeat.ChildProcessId is { } childProcessId)
+                AddProcessId(processIds, childProcessId);
+
+            foreach (var processId in heartbeat.OwnedProcessIds)
+                AddProcessId(processIds, processId);
+        }
+
+        foreach (var processId in _getLineageDescendants(cancelled))
+            AddProcessId(processIds, processId);
+
+        var observedPids = processIds.OrderBy(processId => processId).ToArray();
+        var live = observedPids.Where(_isProcessRunning).Distinct().OrderBy(processId => processId).ToArray();
         if (live.Length > 0)
             return new TreeDeathConfirmation(false, $"owned pid(s) still alive: {string.Join(",", live)}");
 
-        return new TreeDeathConfirmation(true, $"tree-dead pids=[{string.Join(",", ownedProcessSnapshot)}] cancelled_at={cancelled.CompletedAt:u}; partial dispatch receipt consumed");
+        if (!File.Exists(cancelled.ExitCodePath))
+            return new TreeDeathConfirmation(false, $"exit artifact missing: {cancelled.ExitCodePath}");
+
+        if (!heartbeat.IsAvailable)
+            return new TreeDeathConfirmation(false, $"terminal heartbeat unavailable: {heartbeat.UnavailableReason ?? "unknown"} at {heartbeat.Path}");
+
+        if (!IsTerminalHeartbeat(heartbeat))
+            return new TreeDeathConfirmation(false, $"heartbeat not terminal: state={heartbeat.State} child_pid={heartbeat.ChildProcessId?.ToString() ?? "unknown"}");
+
+        return new TreeDeathConfirmation(
+            true,
+            $"tree-dead pids=[{string.Join(",", observedPids)}] heartbeat_state={heartbeat.State} child_pid=null exit_artifact={cancelled.ExitCodePath} cancelled_at={cancelled.CompletedAt:u}; partial dispatch receipt consumed");
     }
+
+    private static bool IsTerminalHeartbeat(DispatchHeartbeatStatus heartbeat) =>
+        heartbeat.ChildProcessId is null &&
+        (heartbeat.State.Equals("exited", StringComparison.OrdinalIgnoreCase) ||
+         heartbeat.State.Equals("exiting", StringComparison.OrdinalIgnoreCase) ||
+         heartbeat.State.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+         heartbeat.State.Equals("cancelled", StringComparison.OrdinalIgnoreCase));
+
+    private static IReadOnlyList<int> GetLiveLineageDescendants(TaskProcessRecord process) =>
+        process.ProcessId > 0 ? WorkerProcessJobs.ListLiveDescendantProcessIds(process.ProcessId) : [];
 
     private void RaiseAttention(ProgressiveReviewSteerIntent intent, string reason)
     {
