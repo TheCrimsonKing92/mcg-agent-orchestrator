@@ -336,7 +336,9 @@ public sealed class DiscordControlPlaneDeliverer
         CancellationToken cancellationToken)
     {
         var source = cards
-            .Where(card => card.Source is ControlPlaneCardSource.CollaborationDecision or ControlPlaneCardSource.OperatorInboxEscalation)
+            .Where(card => card.Source is ControlPlaneCardSource.CollaborationDecision or
+                ControlPlaneCardSource.OperatorInboxEscalation or
+                ControlPlaneCardSource.StewardTriage)
             .ToList();
         var existingSystemicStorms = await _store.ListSystemicStormsAsync(cancellationToken);
         var existingSystemicKinds = existingSystemicStorms

@@ -372,7 +372,8 @@ public sealed class StewardBypassPolicy
 
     public StewardBypassPolicy(IEnumerable<StewardEscalationCategory>? categories = null)
     {
-        _categories = (categories ?? DefaultCategories)
+        _categories = DefaultCategories
+            .Concat(categories ?? [])
             .ToHashSet();
     }
 

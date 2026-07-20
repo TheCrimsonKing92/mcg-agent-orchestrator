@@ -160,6 +160,18 @@ public sealed class StewardTests
         Assert.All(store.Receipts, receipt => Assert.Equal(StewardOutputKind.RawBypassEscalation, receipt.OutputKind));
     }
 
+    [Xunit.Fact(DisplayName = "StewardBypassPolicy_custom_categories_cannot_remove_mandatory_defaults")]
+    public void StewardBypassPolicyCustomCategoriesCannotRemoveMandatoryDefaults()
+    {
+        var policy = new StewardBypassPolicy([StewardEscalationCategory.Normal]);
+
+        Assert.True(policy.ShouldBypass(Escalation("board-1", StewardEscalationCategory.BoardWedge, "BoardWedge")));
+        Assert.True(policy.ShouldBypass(Escalation("steward-1", StewardEscalationCategory.StewardFailure, "StewardFailure")));
+        Assert.True(policy.ShouldBypass(Escalation("deny-1", StewardEscalationCategory.DenylistHitLanding, "DenylistHitLanding")));
+        Assert.True(policy.ShouldBypass(Escalation("sec-1", StewardEscalationCategory.SecurityOwnership, "SecurityOwnership")));
+        Assert.True(policy.ShouldBypass(Escalation("normal-1", StewardEscalationCategory.Normal, "Normal")));
+    }
+
     [Xunit.Fact(DisplayName = "Steward_has_no_task_verification_acceptance_or_landing_mutation_dependency")]
     public void StewardHasNoTaskVerificationAcceptanceOrLandingMutationDependency()
     {
