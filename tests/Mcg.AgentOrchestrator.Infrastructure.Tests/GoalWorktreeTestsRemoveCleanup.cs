@@ -480,6 +480,68 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_persists_provider_session_retirement")]
+    public async Task CliWorkspaceRemovePersistsProviderSessionRetirement()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Workspace remove session retirement", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "session-retirement.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Session retirement goal");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                worktreePath,
+                DateTimeOffset.UtcNow.AddMinutes(-5),
+                ProviderSessionId: "workspace-session",
+                WorktreeHeadSha: "abc123",
+                DirtyStateHash: "dirty-hash"));
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
+
+            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var changed = false;
+            CaptureConsole(() =>
+            {
+                changed = CliPersistentStateRunner.ExecuteCommand(
+                    ["workspace", "remove", goal.Id.Value[..8]],
+                    stateRepository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            });
+
+            Assert.True(changed);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            var reloadedTask = (await stateRepository.LoadAsync()).GetTask(goal.Id, task.Id);
+            Assert.Equal("workspace-session", reloadedTask.LastDispatch!.ProviderSessionId);
+            Assert.NotNull(reloadedTask.LastDispatch.ProviderSessionRetiredAt);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_keeps_stale_acceptance_failure_without_landing_evidence")]
     public void CliWorkspaceRemoveKeepsStaleAcceptanceFailureWithoutLandingEvidence()
     {

@@ -34,7 +34,10 @@ public sealed record DispatchHeartbeatStatus(
     TimeSpan? IdleDuration,
     long StandardOutputBytes,
     long StandardErrorBytes,
-    long OwnedCpuMs = 0L);
+    long OwnedCpuMs = 0L,
+    string? ProviderSessionId = null,
+    string? WorktreeHeadSha = null,
+    string? DirtyStateHash = null);
 
 public static class ProcessLogReader
 {
@@ -84,7 +87,10 @@ public static class ProcessLogReader
                 observedAt - lastProgressAt,
                 GetInt64(root, "stdoutBytes"),
                 GetInt64(root, "stderrBytes"),
-                GetInt64(root, "ownedCpuMs"));
+                GetInt64(root, "ownedCpuMs"),
+                GetNullableString(root, "providerSessionId"),
+                GetNullableString(root, "worktreeHeadSha"),
+                GetNullableString(root, "dirtyStateHash"));
         }
         catch (IOException)
         {
@@ -123,6 +129,15 @@ public static class ProcessLogReader
         return root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString() ?? "unknown"
             : "unknown";
+    }
+
+    private static string? GetNullableString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(property.GetString())
+            ? property.GetString()
+            : null;
     }
 
     private static int GetInt32(JsonElement root, string propertyName)

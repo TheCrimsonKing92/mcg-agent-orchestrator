@@ -75,7 +75,69 @@ public sealed record TaskDispatchRecord(
     ProviderKind WorkerProviderKind = ProviderKind.Unknown,
     string? ReasoningEffortReason = null,
     string? DispatchLane = null,
-    string? ModelSelectionReason = null);
+    string? ModelSelectionReason = null,
+    string? ProviderSessionId = null,
+    string? WorktreeHeadSha = null,
+    string? DirtyStateHash = null,
+    DateTimeOffset? ProviderSessionRetiredAt = null);
+
+public enum DispatchResumeAdmissionKind
+{
+    WarmResume,
+    FreshDispatchOnly,
+    Retired
+}
+
+public sealed record DispatchResumeAdmissionDecision(
+    DispatchResumeAdmissionKind Kind,
+    string Reason)
+{
+    public bool AllowsWarmResume => Kind == DispatchResumeAdmissionKind.WarmResume;
+}
+
+public static class DispatchResumeAdmission
+{
+    public static DispatchResumeAdmissionDecision Evaluate(
+        TaskDispatchRecord dispatch,
+        string? currentWorktreeHeadSha,
+        string? currentDirtyStateHash,
+        bool goalCleanedUp = false)
+    {
+        if (goalCleanedUp || dispatch.ProviderSessionRetiredAt is not null)
+        {
+            return new DispatchResumeAdmissionDecision(
+                DispatchResumeAdmissionKind.Retired,
+                "provider session retired with goal cleanup");
+        }
+
+        if (string.IsNullOrWhiteSpace(dispatch.ProviderSessionId))
+        {
+            return new DispatchResumeAdmissionDecision(
+                DispatchResumeAdmissionKind.FreshDispatchOnly,
+                "missing provider session id");
+        }
+
+        if (string.IsNullOrWhiteSpace(dispatch.WorktreeHeadSha) ||
+            string.IsNullOrWhiteSpace(dispatch.DirtyStateHash))
+        {
+            return new DispatchResumeAdmissionDecision(
+                DispatchResumeAdmissionKind.FreshDispatchOnly,
+                "missing spawn generation tuple");
+        }
+
+        if (!string.Equals(dispatch.WorktreeHeadSha.Trim(), currentWorktreeHeadSha?.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(dispatch.DirtyStateHash.Trim(), currentDirtyStateHash?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return new DispatchResumeAdmissionDecision(
+                DispatchResumeAdmissionKind.FreshDispatchOnly,
+                "spawn generation tuple mismatch");
+        }
+
+        return new DispatchResumeAdmissionDecision(
+            DispatchResumeAdmissionKind.WarmResume,
+            "provider session id and spawn generation tuple match");
+    }
+}
 
 public sealed record TaskProcessRecord(
     int ProcessId,

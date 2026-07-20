@@ -24,6 +24,60 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("implement feature", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DispatchResumeAdmission_requires_session_id_and_matching_generation_tuple")]
+    public void DispatchResumeAdmissionRequiresSessionIdAndMatchingGenerationTuple()
+{
+    var dispatch = new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        DateTimeOffset.Parse("2026-07-19T12:00:00Z"),
+        ProviderSessionId: "codex-session-123",
+        WorktreeHeadSha: "abc123",
+        DirtyStateHash: "dirty-hash");
+
+    var warm = DispatchResumeAdmission.Evaluate(dispatch, "abc123", "dirty-hash");
+    var missingSession = DispatchResumeAdmission.Evaluate(dispatch with { ProviderSessionId = null }, "abc123", "dirty-hash");
+    var mismatch = DispatchResumeAdmission.Evaluate(dispatch, "def456", "dirty-hash");
+    var retired = DispatchResumeAdmission.Evaluate(
+        dispatch with { ProviderSessionRetiredAt = DateTimeOffset.Parse("2026-07-20T12:00:00Z") },
+        "abc123",
+        "dirty-hash");
+    var cleanedUp = DispatchResumeAdmission.Evaluate(dispatch, "abc123", "dirty-hash", goalCleanedUp: true);
+
+    Assert.Equal(DispatchResumeAdmissionKind.WarmResume, warm.Kind);
+    Assert.Equal(DispatchResumeAdmissionKind.FreshDispatchOnly, missingSession.Kind);
+    Assert.Contains("missing provider session id", missingSession.Reason, StringComparison.Ordinal);
+    Assert.Equal(DispatchResumeAdmissionKind.FreshDispatchOnly, mismatch.Kind);
+    Assert.Equal(DispatchResumeAdmissionKind.Retired, retired.Kind);
+    Assert.Equal(DispatchResumeAdmissionKind.Retired, cleanedUp.Kind);
+}
+
+    [Xunit.Fact(DisplayName = "RetireDispatchProviderSession_marks_session_reference_retired")]
+    public void RetireDispatchProviderSessionMarksSessionReferenceRetired()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retire dispatch session reference");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        clock.UtcNow,
+        ProviderSessionId: "codex-session-123",
+        WorktreeHeadSha: "abc123",
+        DirtyStateHash: "dirty-hash"));
+
+    var retiredAt = DateTimeOffset.Parse("2026-07-20T12:00:00Z");
+    kernel.RetireDispatchProviderSession(goal.Id, task.Id, retiredAt);
+
+    Assert.Equal(retiredAt, task.LastDispatch!.ProviderSessionRetiredAt);
+    var admission = DispatchResumeAdmission.Evaluate(task.LastDispatch, "abc123", "dirty-hash");
+    Assert.Equal(DispatchResumeAdmissionKind.Retired, admission.Kind);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_records_classifier_receipt")]
     public void RecordDispatchExecutionResultRecordsClassifierReceipt()
 {

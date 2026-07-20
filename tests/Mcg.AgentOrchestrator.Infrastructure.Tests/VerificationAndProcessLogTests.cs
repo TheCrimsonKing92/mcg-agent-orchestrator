@@ -62,7 +62,7 @@ public sealed class VerificationAndProcessLogTests
     var process = CreateProcessRecord(root, exit);
     var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
     File.WriteAllText(heartbeatPath, """
-{"pid":123,"childPid":456,"ownedPids":[123,789],"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7}
+{"pid":123,"childPid":456,"ownedPids":[123,789],"state":"running","lastObservedAt":"2026-06-12T20:00:10Z","lastProgressAt":"2026-06-12T20:00:00Z","stdoutBytes":42,"stderrBytes":7,"providerSessionId":"codex-session-123","worktreeHeadSha":"abc123","dirtyStateHash":"dirty-hash"}
 """);
 
     var heartbeat = ProcessLogReader.ReadHeartbeat(process, DateTimeOffset.Parse("2026-06-12T20:00:30Z"));
@@ -78,6 +78,9 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(TimeSpan.FromSeconds(30), heartbeat.IdleDuration);
     Assert.Equal(42, heartbeat.StandardOutputBytes);
     Assert.Equal(7, heartbeat.StandardErrorBytes);
+    Assert.Equal("codex-session-123", heartbeat.ProviderSessionId);
+    Assert.Equal("abc123", heartbeat.WorktreeHeadSha);
+    Assert.Equal("dirty-hash", heartbeat.DirtyStateHash);
 }
 
     [Xunit.Fact(DisplayName = "ProcessLogReader_degrades_missing_or_invalid_heartbeat_to_unavailable")]

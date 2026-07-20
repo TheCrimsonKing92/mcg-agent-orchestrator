@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -55,7 +56,10 @@ public static class DispatchProcessHost
         bool SandboxLowIntegrity = false,
         WorkerSandboxProvider Provider = WorkerSandboxProvider.Unknown,
         string? PromptPath = null,
-        bool SandboxWorktreeWritable = true);
+        bool SandboxWorktreeWritable = true,
+        string? ProviderSessionId = null,
+        string? WorktreeHeadSha = null,
+        string? DirtyStateHash = null);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
@@ -786,6 +790,7 @@ public static void DropToLow() {
         long lastStderrBytes = -1;
         long lastCpuMs = 0L;
         var exitCode = 1;
+        var providerSessionId = NormalizeProviderSessionId(parameters.ProviderSessionId);
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
 
@@ -799,6 +804,7 @@ public static void DropToLow() {
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedCpuMs = SumOwnedCpuMs(workerGroup?.ProcessIds ?? []);
+            providerSessionId ??= TryCaptureProviderSessionId(parameters.Provider, parameters.StdoutPath, parameters.StderrPath);
 
             if (HasProgressed(lastStdoutBytes + lastStderrBytes, stdoutBytes + stderrBytes, lastCpuMs, ownedCpuMs, CpuProgressEpsilonMs))
             {
@@ -825,6 +831,9 @@ public static void DropToLow() {
                 stdoutBytes,
                 stderrBytes,
                 ownedCpuMs,
+                providerSessionId,
+                worktreeHeadSha = parameters.WorktreeHeadSha,
+                dirtyStateHash = parameters.DirtyStateHash,
                 exitFileExists = File.Exists(parameters.ExitCodePath)
             };
 
@@ -969,6 +978,107 @@ public static void DropToLow() {
             return 0L;
         }
     }
+
+    private static string? TryCaptureProviderSessionId(WorkerSandboxProvider provider, string stdoutPath, string stderrPath)
+    {
+        if (provider != WorkerSandboxProvider.Codex)
+        {
+            return null;
+        }
+
+        return TryCaptureProviderSessionIdFromLog(stdoutPath) ??
+            TryCaptureProviderSessionIdFromLog(stderrPath);
+    }
+
+    private static string? TryCaptureProviderSessionIdFromLog(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (TryCaptureProviderSessionIdFromLine(line, out var sessionId))
+                {
+                    return sessionId;
+                }
+            }
+        }
+        catch
+        {
+            // Session capture is best-effort; a missing id simply forces future resume attempts fresh.
+        }
+
+        return null;
+    }
+
+    internal static bool TryCaptureProviderSessionIdFromLine(string line, out string sessionId)
+    {
+        sessionId = string.Empty;
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return false;
+        }
+
+        var jsonSessionId = TryCaptureJsonProviderSessionId(line);
+        if (!string.IsNullOrWhiteSpace(jsonSessionId))
+        {
+            sessionId = jsonSessionId;
+            return true;
+        }
+
+        var match = Regex.Match(
+            line,
+            @"\b(?:session(?:\s+id)?|session_id|sessionId)\b\s*[:=]\s*[""']?(?<id>[A-Za-z0-9][A-Za-z0-9._:-]{7,})[""']?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        sessionId = match.Groups["id"].Value;
+        return true;
+    }
+
+    private static string? TryCaptureJsonProviderSessionId(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return TryGetJsonString(root, "session_id") ??
+                TryGetJsonString(root, "sessionId") ??
+                (JsonMentionsSession(root) ? TryGetJsonString(root, "id") : null);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetJsonString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(property.GetString())
+            ? property.GetString()
+            : null;
+    }
+
+    private static bool JsonMentionsSession(JsonElement root)
+    {
+        return (TryGetJsonString(root, "type")?.Contains("session", StringComparison.OrdinalIgnoreCase) == true) ||
+            (TryGetJsonString(root, "event")?.Contains("session", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    private static string? NormalizeProviderSessionId(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static void TryKillWorkerTree(Process worker, OwnedProcessGroup? workerGroup)
     {

@@ -910,6 +910,14 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var goal = kernel.CreateGoal("Completed and merged", [task]);
             cleanupGoalId = goal.Id;
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                root,
+                DateTimeOffset.UtcNow.AddMinutes(-5),
+                ProviderSessionId: "terminal-sweep-session",
+                WorktreeHeadSha: "abc123",
+                DirtyStateHash: "dirty-hash"));
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             CommitGoalWork(root, goal.Id, "src/merged.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
@@ -922,6 +930,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "merged-branch-cleanup");
             Xunit.Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+            Xunit.Assert.Equal("terminal-sweep-session", kernel.GetTask(goal.Id, task.Id).LastDispatch!.ProviderSessionId);
+            Xunit.Assert.NotNull(kernel.GetTask(goal.Id, task.Id).LastDispatch!.ProviderSessionRetiredAt);
             Xunit.Assert.Empty(second.Goals);
         }
         finally

@@ -112,7 +112,11 @@ public sealed record TaskDispatchSnapshot(
     ProviderKind WorkerProviderKind = ProviderKind.Unknown,
     string? ReasoningEffortReason = null,
     string? DispatchLane = null,
-    string? ModelSelectionReason = null);
+    string? ModelSelectionReason = null,
+    string? ProviderSessionId = null,
+    string? WorktreeHeadSha = null,
+    string? DirtyStateHash = null,
+    DateTimeOffset? ProviderSessionRetiredAt = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

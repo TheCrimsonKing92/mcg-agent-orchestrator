@@ -49,6 +49,22 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_captures_provider_session_id_from_codex_output_lines")]
+    public void DispatchProcessHostCapturesProviderSessionIdFromCodexOutputLines()
+    {
+        Assert.True(DispatchProcessHost.TryCaptureProviderSessionIdFromLine(
+            """{"type":"session.started","id":"codex-json-session-123"}""",
+            out var jsonSessionId));
+        Assert.Equal("codex-json-session-123", jsonSessionId);
+
+        Assert.True(DispatchProcessHost.TryCaptureProviderSessionIdFromLine(
+            "Session ID: codex-text-session-456",
+            out var textSessionId));
+        Assert.Equal("codex-text-session-456", textSessionId);
+
+        Assert.False(DispatchProcessHost.TryCaptureProviderSessionIdFromLine("tokens used: 1", out _));
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_large_non_ascii_prompt_to_stdin_as_utf8_without_bom")]
     public void DispatchProcessHostWritesPromptToStdinAsUtf8()
     {

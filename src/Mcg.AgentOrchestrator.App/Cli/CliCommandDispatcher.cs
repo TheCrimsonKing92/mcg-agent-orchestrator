@@ -25,7 +25,7 @@ public static bool ExecuteCommand(
     Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
     Action? releaseConductLoopLease = null)
 {
-    var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+    var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
     var context = new CliExecutionContext(
         kernel,

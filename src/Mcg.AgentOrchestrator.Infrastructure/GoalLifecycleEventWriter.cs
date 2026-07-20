@@ -1,22 +1,52 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public sealed record DispatchProviderSessionRetentionOptions(TimeSpan RetentionPeriod)
+{
+    public const string RetentionDaysEnvironmentVariable = "MCG_DISPATCH_PROVIDER_SESSION_RETENTION_DAYS";
+
+    public static DispatchProviderSessionRetentionOptions Default { get; } = new(TimeSpan.FromDays(14));
+
+    public static DispatchProviderSessionRetentionOptions FromEnvironment()
+    {
+        var value = Environment.GetEnvironmentVariable(RetentionDaysEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(value) ||
+            !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var days) ||
+            double.IsNaN(days) ||
+            double.IsInfinity(days))
+        {
+            return Default;
+        }
+
+        return new DispatchProviderSessionRetentionOptions(TimeSpan.FromDays(Math.Max(0, days)));
+    }
+}
+
 public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
 {
     private readonly string _eventsDirectory;
     private readonly IClock _clock;
+    private readonly AgentOrchestratorKernel? _kernel;
+    private readonly DispatchProviderSessionRetentionOptions _sessionRetentionOptions;
 
     private readonly ConcurrentDictionary<string, object> _locks = new();
     private readonly ConcurrentDictionary<string, int> _nextCursors = new();
 
-    public GoalLifecycleEventWriter(string eventsDirectory, IClock? clock = null)
+    public GoalLifecycleEventWriter(
+        string eventsDirectory,
+        IClock? clock = null,
+        AgentOrchestratorKernel? kernel = null,
+        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null)
     {
         _eventsDirectory = eventsDirectory;
         _clock = clock ?? new SystemClock();
+        _kernel = kernel;
+        _sessionRetentionOptions = sessionRetentionOptions ?? DispatchProviderSessionRetentionOptions.FromEnvironment();
     }
 
     public void AppendTimelineEvent(ProgressEvent progressEvent) =>
@@ -75,8 +105,57 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["source"] = source;
         });
 
-    public void AppendCleanedUp(GoalId goalId) =>
-        Append(goalId, "CleanedUp", _ => { });
+    public void AppendCleanedUp(GoalId goalId)
+    {
+        var cleanedUpAt = _clock.UtcNow;
+        Append(goalId, "CleanedUp", obj =>
+        {
+            obj["providerSessionRetentionDays"] = _sessionRetentionOptions.RetentionPeriod.TotalDays;
+            obj["providerSessionRetireAfter"] = cleanedUpAt.Add(_sessionRetentionOptions.RetentionPeriod);
+        });
+        RetireDispatchProviderSessions(_kernel, goalId, cleanedUpAt, _sessionRetentionOptions);
+    }
+
+    public static int RetireDispatchProviderSessions(
+        AgentOrchestratorKernel? kernel,
+        GoalId goalId,
+        DateTimeOffset cleanedUpAt,
+        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null)
+    {
+        if (kernel is null)
+        {
+            return 0;
+        }
+
+        var options = sessionRetentionOptions ?? DispatchProviderSessionRetentionOptions.FromEnvironment();
+        var retireAt = cleanedUpAt.Add(options.RetentionPeriod);
+        Goal goal;
+        try
+        {
+            goal = kernel.GetGoal(goalId);
+        }
+        catch (KeyNotFoundException)
+        {
+            return 0;
+        }
+
+        var retired = 0;
+        foreach (var task in goal.Tasks)
+        {
+            var dispatch = task.LastDispatch;
+            if (dispatch is null ||
+                string.IsNullOrWhiteSpace(dispatch.ProviderSessionId) ||
+                dispatch.ProviderSessionRetiredAt is not null)
+            {
+                continue;
+            }
+
+            kernel.RetireDispatchProviderSession(goalId, task.Id, retireAt);
+            retired++;
+        }
+
+        return retired;
+    }
 
     private void Append(GoalId goalId, string eventType, Action<JsonObject> addFields)
     {

@@ -97,6 +97,67 @@ public sealed class GoalLifecycleEventWriterTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "AppendCleanedUp_schedules_provider_session_retirement_after_configured_retention")]
+    public void AppendCleanedUpSchedulesProviderSessionRetirementAfterConfiguredRetention()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var cleanedUpAt = DateTimeOffset.Parse("2026-07-19T23:30:00Z");
+            var clock = new TestClock(cleanedUpAt);
+            var kernel = new AgentOrchestratorKernel(clock);
+            var cleanedTask = new TaskSpec(TaskId.New(), "Dispatch cleaned task", AgentRole.Developer);
+            var missingSessionTask = new TaskSpec(TaskId.New(), "Dispatch without session", AgentRole.Tester);
+            var liveTask = new TaskSpec(TaskId.New(), "Dispatch live task", AgentRole.Developer);
+            var cleanedGoal = kernel.CreateGoal("Cleaned provider session goal", [cleanedTask, missingSessionTask]);
+            var liveGoal = kernel.CreateGoal("Live provider session goal", [liveTask]);
+            kernel.ActivateGoal(cleanedGoal.Id, AgentCatalog.Default().Agents);
+            kernel.ActivateGoal(liveGoal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskDispatch(cleanedGoal.Id, cleanedTask.Id, new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                root,
+                cleanedUpAt.AddMinutes(-10),
+                ProviderSessionId: "cleaned-session",
+                WorktreeHeadSha: "abc123",
+                DirtyStateHash: "dirty-hash"));
+            kernel.RecordTaskDispatch(cleanedGoal.Id, missingSessionTask.Id, new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                root,
+                cleanedUpAt.AddMinutes(-9),
+                WorktreeHeadSha: "abc123",
+                DirtyStateHash: "dirty-hash"));
+            kernel.RecordTaskDispatch(liveGoal.Id, liveTask.Id, new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                root,
+                cleanedUpAt.AddMinutes(-8),
+                ProviderSessionId: "live-session",
+                WorktreeHeadSha: "abc123",
+                DirtyStateHash: "dirty-hash"));
+            var writer = new GoalLifecycleEventWriter(
+                workspace.GoalLifecycleEventsDirectory,
+                clock,
+                kernel,
+                new DispatchProviderSessionRetentionOptions(TimeSpan.FromDays(3)));
+
+            writer.AppendCleanedUp(cleanedGoal.Id);
+
+            Xunit.Assert.Equal(
+                cleanedUpAt.AddDays(3),
+                cleanedTask.LastDispatch!.ProviderSessionRetiredAt);
+            Xunit.Assert.Null(missingSessionTask.LastDispatch!.ProviderSessionRetiredAt);
+            Xunit.Assert.Null(liveTask.LastDispatch!.ProviderSessionRetiredAt);
+            Xunit.Assert.Equal("cleaned-session", cleanedTask.LastDispatch.ProviderSessionId);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact]
     public void RealLandingAndConductorEscalationAppendLifecycleEvents()
     {
