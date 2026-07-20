@@ -16,7 +16,7 @@ internal static class OperatorInboxControlPlaneProjection
             fingerprint,
             item.Title,
             $"{item.Message}\nEvidence: {item.Evidence}\nSuggested action: {item.SuggestedAction}",
-            item.AcknowledgedAt ?? DateTimeOffset.UtcNow,
+            item.RaisedAt,
             item.Acknowledged,
             IsBoardIntegrityKind(item.Kind),
             [new ControlPlaneAction("Acknowledge", DiscordInteractionHandler.BuildDirectCustomId(item.Id, 0), DiscordButtonStyle.Secondary)]);

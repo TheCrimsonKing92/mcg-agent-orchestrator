@@ -4,7 +4,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record DeadManHeartbeatOptions(
     bool Enabled = false,
-    Uri? Endpoint = null);
+    Uri? Endpoint = null,
+    TimeSpan? Interval = null)
+{
+    public TimeSpan EffectiveInterval => Interval ?? TimeSpan.FromMinutes(5);
+}
 
 public sealed class DeadManHeartbeatClient
 {

@@ -12,6 +12,9 @@ public interface IControlPlaneDeliveryStore
         ControlPlaneDeliveryChannel channel,
         DateTimeOffset since,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<SystemicStormDeliveryState>> ListSystemicStormsAsync(
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryControlPlaneDeliveryStore : IControlPlaneDeliveryStore
@@ -34,6 +37,15 @@ public sealed class InMemoryControlPlaneDeliveryStore : IControlPlaneDeliverySto
         DateTimeOffset since,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(_marks.Values.Count(mark => mark.Channel == channel && mark.FirstDeliveredAt >= since));
+
+    public Task<IReadOnlyList<SystemicStormDeliveryState>> ListSystemicStormsAsync(
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SystemicStormDeliveryState>>(
+            _marks.Values
+                .Select(ControlPlaneDeliveryStoreSystemicStorms.TryRead)
+                .Where(item => item is not null)
+                .Select(item => item!)
+                .ToList());
 }
 
 public sealed class SqliteControlPlaneDeliveryStore : IControlPlaneDeliveryStore
@@ -105,6 +117,36 @@ public sealed class SqliteControlPlaneDeliveryStore : IControlPlaneDeliveryStore
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken));
     }
 
+    public async Task<IReadOnlyList<SystemicStormDeliveryState>> ListSystemicStormsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT dedup_key
+            FROM control_plane_delivery_marks
+            WHERE dedup_key LIKE 'system:systemic%:storm-window:%'
+            """;
+        var states = new List<SystemicStormDeliveryState>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var mark = new ControlPlaneDeliveryMark(
+                reader.GetString(0),
+                ControlPlaneDeliveryChannel.Decisions,
+                0,
+                DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch,
+                null,
+                string.Empty,
+                false);
+            if (ControlPlaneDeliveryStoreSystemicStorms.TryRead(mark) is { } state)
+                states.Add(state);
+        }
+
+        return states;
+    }
+
     private SqliteConnection OpenConnection()
     {
         var conn = new SqliteConnection(ConnectionString);
@@ -160,4 +202,23 @@ public sealed class SqliteControlPlaneDeliveryStore : IControlPlaneDeliveryStore
             reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5)),
             reader.GetString(6),
             reader.GetInt32(7) != 0);
+
+}
+
+internal static class ControlPlaneDeliveryStoreSystemicStorms
+{
+    public static SystemicStormDeliveryState? TryRead(ControlPlaneDeliveryMark mark)
+    {
+        var parts = mark.DedupKey.Split(':');
+        if (parts.Length != 4 ||
+            !parts[0].Equals("system", StringComparison.OrdinalIgnoreCase) ||
+            !parts[1].StartsWith("systemic", StringComparison.OrdinalIgnoreCase) ||
+            !parts[2].Equals("storm-window", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var kind = parts[1]["systemic".Length..];
+        return kind.Length == 0 ? null : new SystemicStormDeliveryState(kind, mark.DedupKey);
+    }
 }

@@ -886,6 +886,7 @@ public sealed class OperatorChannelTests
             "Suggested action here.",
             suggestedCommand ?? "next abc123",
             $"{kind}:source",
+            DateTimeOffset.Parse("2026-07-20T09:00:00Z"),
             acknowledged,
             acknowledged ? DateTimeOffset.UtcNow : null,
             null);

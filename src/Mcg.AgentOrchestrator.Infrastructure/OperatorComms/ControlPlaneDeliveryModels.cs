@@ -111,6 +111,8 @@ public sealed record ControlPlaneDeliveryPolicy(
     }
 }
 
+public sealed record SystemicStormDeliveryState(string Kind, string DedupKey);
+
 public sealed record ControlPlaneDeliveryMark(
     string DedupKey,
     ControlPlaneDeliveryChannel Channel,

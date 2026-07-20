@@ -75,7 +75,7 @@ public sealed class DiscordControlPlaneDeliverer
         CancellationToken cancellationToken = default)
     {
         var operations = new List<ControlPlaneDeliveryOperation>();
-        var candidates = CollapseStorms(cards, now)
+        var candidates = (await CollapseStormsAsync(cards, now, cancellationToken))
             .OrderByDescending(card => card.IsBoardIntegrity)
             .ThenBy(card => card.RaisedAt)
             .ToList();
@@ -197,6 +197,9 @@ public sealed class DiscordControlPlaneDeliverer
         var mark = await _store.TryGetAsync(card.DedupKey, cancellationToken);
         if (mark is null)
         {
+            if (card.IsResolved)
+                return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, null, "resolved-unseen", content);
+
             var messageId = await _transport.SendAsync(ControlPlaneDeliveryChannel.Decisions, content, buttons, cancellationToken);
             await _store.UpsertAsync(
                 new ControlPlaneDeliveryMark(card.DedupKey, ControlPlaneDeliveryChannel.Decisions, messageId, now, now, null, hash, card.IsResolved),
@@ -251,22 +254,30 @@ public sealed class DiscordControlPlaneDeliverer
         return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, mark.MessageId, "over-budget-rollup", content);
     }
 
-    private IReadOnlyList<ControlPlaneDecisionCard> CollapseStorms(IEnumerable<ControlPlaneDecisionCard> cards, DateTimeOffset now)
+    private async Task<IReadOnlyList<ControlPlaneDecisionCard>> CollapseStormsAsync(
+        IEnumerable<ControlPlaneDecisionCard> cards,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         var source = cards
             .Where(card => card.Source is ControlPlaneCardSource.CollaborationDecision or ControlPlaneCardSource.OperatorInboxEscalation)
-            .Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow || !card.IsResolved)
             .ToList();
+        var existingSystemicKinds = (await _store.ListSystemicStormsAsync(cancellationToken))
+            .Select(state => state.Kind)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var collapsedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<ControlPlaneDecisionCard>();
 
         foreach (var group in source.Where(card => !card.IsResolved).GroupBy(card => card.Kind, StringComparer.OrdinalIgnoreCase))
         {
             var inWindow = group.Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow).ToList();
-            if (inWindow.Count < _policy.SystemicMergeThreshold)
+            var groupCards = existingSystemicKinds.Contains(group.Key)
+                ? group.ToList()
+                : inWindow;
+            if (groupCards.Count < _policy.SystemicMergeThreshold)
                 continue;
 
-            foreach (var card in inWindow)
+            foreach (var card in groupCards)
                 collapsedKeys.Add(card.DedupKey);
 
             result.Add(new ControlPlaneDecisionCard(
@@ -275,10 +286,10 @@ public sealed class DiscordControlPlaneDeliverer
                 $"Systemic{group.Key}",
                 "storm-window",
                 ControlPlaneDecisionCard.ComputeFingerprint(group.Key),
-                $"{inWindow.Count} {group.Key} escalations need one systemic decision",
-                string.Join('\n', inWindow.Take(12).Select(card => $"- {ShortGoal(card.GoalId)}: {Truncate(card.Title, 120)}")),
-                inWindow.Min(card => card.RaisedAt),
-                IsBoardIntegrity: inWindow.Any(card => card.IsBoardIntegrity)));
+                $"{groupCards.Count} {group.Key} escalations need one systemic decision",
+                string.Join('\n', groupCards.OrderBy(card => card.RaisedAt).Take(12).Select(card => $"- {ShortGoal(card.GoalId)}: {Truncate(card.Title, 120)}")),
+                groupCards.Min(card => card.RaisedAt),
+                IsBoardIntegrity: groupCards.Any(card => card.IsBoardIntegrity)));
         }
 
         result.AddRange(source.Where(card => !collapsedKeys.Contains(card.DedupKey)));

@@ -52,6 +52,7 @@ public sealed record OperatorInboxItem(
     string SuggestedAction,
     string SuggestedCommand,
     string Source,
+    DateTimeOffset RaisedAt,
     bool Acknowledged,
     DateTimeOffset? AcknowledgedAt,
     string? AcknowledgementNote);
@@ -168,6 +169,7 @@ internal static class OperatorInbox
                 item.SuggestedAction,
                 $"answer {item.RequestId.Value[..8]} <answer>",
                 $"human-input:{item.RequestId.Value}",
+                item.RequestedAt,
                 acknowledgements));
         }
     }
@@ -207,6 +209,7 @@ internal static class OperatorInbox
                 "Inspect the goal and apply the next safe action.",
                 command,
                 $"monitor:{item.Kind}:{item.TaskId?.Value ?? "goal"}:{item.Message}",
+                ResolveRaisedAt(goal, item.TaskId),
                 acknowledgements));
         }
     }
@@ -238,6 +241,7 @@ internal static class OperatorInbox
                 "Run the acceptance command after reviewing the goal branch diff.",
                 $"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto",
                 $"acceptance:ready:{goal.Id.Value}",
+                summary.Outcomes.OrderByDescending(outcome => outcome.OccurredAt).Select(outcome => (DateTimeOffset?)outcome.OccurredAt).FirstOrDefault() ?? ResolveRaisedAt(goal, null),
                 acknowledgements));
             return;
         }
@@ -257,6 +261,7 @@ internal static class OperatorInbox
                 blocker.SuggestedAction,
                 BuildAcceptanceBlockerCommand(goal, blocker, taskNumber),
                 $"acceptance:blocker:{blocker.Kind}:{blocker.TaskId?.Value ?? blocker.HumanInputRequestId?.Value ?? "goal"}",
+                goal.LatestAcceptanceFailure?.OccurredAt ?? ResolveRaisedAt(goal, blocker.TaskId),
                 acknowledgements));
         }
     }
@@ -297,6 +302,7 @@ internal static class OperatorInbox
                     : "Resolve the readiness blocker before unattended start.",
                 command,
                 $"readiness:{finding.Kind}:{finding.Message}",
+                ResolveRaisedAt(goal, null),
                 acknowledgements));
         }
     }
@@ -329,6 +335,7 @@ internal static class OperatorInbox
                     : "Operator decision is required before automation can continue.",
                 proposal.SuggestedCommand,
                 $"supervisor:{proposal.Kind}:{proposal.TaskId?.Value ?? "goal"}",
+                ResolveRaisedAt(goal, proposal.TaskId),
                 acknowledgements));
         }
     }
@@ -361,6 +368,7 @@ internal static class OperatorInbox
                 item.Detail,
                 $"subscription-plan {goal.Id.Value[..8]}",
                 $"subscription-route:{item.TaskId}:{item.Route.Disposition}",
+                ResolveRaisedAt(goal, new TaskId(item.TaskId)),
                 acknowledgements));
         }
     }
@@ -392,6 +400,7 @@ internal static class OperatorInbox
                 plan.ReadyStartCostRecommendation ?? "Inspect the subscription plan before starting subscription workers.",
                 $"subscription-plan {goal.Id.Value[..8]}",
                 $"budget:ready-start:{plan.ReadyStartPromptCharacterCount}",
+                ResolveRaisedAt(goal, null),
                 acknowledgements));
         }
 
@@ -413,6 +422,7 @@ internal static class OperatorInbox
                 "Wait for retry-after or route work to another provider before starting more subscription workers.",
                 $"subscription-plan {goal.Id.Value[..8]}",
                 $"budget:provider:{budget.ProviderName}:{budget.RetryAfter?.ToUnixTimeSeconds() ?? budget.RecoverableLimitFailureCount}",
+                budget.RetryAfter ?? ResolveRaisedAt(goal, null),
                 acknowledgements));
         }
     }
@@ -507,6 +517,7 @@ internal static class OperatorInbox
                 BuildEscalationSuggestedAction(escalation.IntegrationBranch),
                 BuildEscalationCommand(goal.Id.Value[..8], escalation.IntegrationBranch),
                 $"landing-escalation:{escalation.GoalId}:{escalation.Reason}",
+                escalation.EscalatedAt,
                 acknowledgements));
         }
     }
@@ -549,6 +560,7 @@ internal static class OperatorInbox
         string suggestedAction,
         string suggestedCommand,
         string sourceKey,
+        DateTimeOffset raisedAt,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
         var id = BuildId(goal.Id, kind, sourceKey);
@@ -568,9 +580,20 @@ internal static class OperatorInbox
             suggestedAction,
             suggestedCommand,
             sourceKey,
+            raisedAt,
             acknowledgement is not null,
             acknowledgement?.AcknowledgedAt,
             acknowledgement?.Note);
+    }
+
+    private static DateTimeOffset ResolveRaisedAt(Goal goal, TaskId? taskId)
+    {
+        var candidates = goal.Timeline.Where(evt => taskId is null || evt.TaskId == taskId || evt.TaskId is null);
+        return candidates
+            .OrderByDescending(evt => evt.OccurredAt)
+            .Select(evt => (DateTimeOffset?)evt.OccurredAt)
+            .FirstOrDefault()
+            ?? DateTimeOffset.UnixEpoch;
     }
 
     private static void Add(Dictionary<string, OperatorInboxItem> items, OperatorInboxItem item)

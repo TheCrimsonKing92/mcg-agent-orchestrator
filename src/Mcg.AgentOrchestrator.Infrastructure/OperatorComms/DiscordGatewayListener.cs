@@ -7,27 +7,40 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
 {
     private readonly DiscordSocketClient _client;
     private readonly DiscordCollaborationViewService _view;
+    private readonly CancellationTokenSource _deadManHeartbeatCts = new();
+    private readonly Task? _deadManHeartbeatTask;
 
     private DiscordGatewayListener(
         DiscordSocketClient client,
-        DiscordCollaborationViewService view)
+        DiscordCollaborationViewService view,
+        DeadManHeartbeatClient? deadManHeartbeat,
+        TimeSpan deadManHeartbeatInterval)
     {
         _client = client;
         _view = view;
         _client.ButtonExecuted += OnButtonExecutedAsync;
         _client.ModalSubmitted += OnModalSubmittedAsync;
+        _deadManHeartbeatTask = deadManHeartbeat is null
+            ? null
+            : RunDeadManHeartbeatLoopAsync(deadManHeartbeat, deadManHeartbeatInterval, _deadManHeartbeatCts.Token);
     }
 
     public static async Task<DiscordGatewayListener> CreateAndConnectAsync(
         string botToken,
-        DiscordCollaborationViewService view)
+        DiscordCollaborationViewService view,
+        DeadManHeartbeatClient? deadManHeartbeat = null,
+        TimeSpan? deadManHeartbeatInterval = null)
     {
         var config = new DiscordSocketConfig { GatewayIntents = GatewayIntents.Guilds };
         var client = new DiscordSocketClient(config);
         await client.LoginAsync(TokenType.Bot, botToken);
         await client.StartAsync();
         await view.ReconcileAsync();
-        return new DiscordGatewayListener(client, view);
+        return new DiscordGatewayListener(
+            client,
+            view,
+            deadManHeartbeat,
+            deadManHeartbeatInterval ?? TimeSpan.FromMinutes(5));
     }
 
     private async Task OnButtonExecutedAsync(SocketMessageComponent component)
@@ -143,10 +156,31 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await _deadManHeartbeatCts.CancelAsync();
+        if (_deadManHeartbeatTask is not null)
+        {
+            try { await _deadManHeartbeatTask; } catch (OperationCanceledException) { }
+        }
+
         _client.ButtonExecuted -= OnButtonExecutedAsync;
         _client.ModalSubmitted -= OnModalSubmittedAsync;
         await _client.StopAsync();
         await _client.LogoutAsync();
         _client.Dispose();
+        _deadManHeartbeatCts.Dispose();
+    }
+
+    private static async Task RunDeadManHeartbeatLoopAsync(
+        DeadManHeartbeatClient heartbeat,
+        TimeSpan interval,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try { await heartbeat.SendAsync(cancellationToken); }
+            catch when (!cancellationToken.IsCancellationRequested) { }
+
+            await Task.Delay(interval, cancellationToken);
+        }
     }
 }

@@ -127,6 +127,43 @@ public sealed class ControlPlaneDelivererTests
         Assert.Single(store.Marks.Where(mark => mark.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_existing_systemic_merge_keeps_aged_originals_collapsed")]
+    public async Task ControlPlaneDelivererExistingSystemicMergeKeepsAgedOriginalsCollapsed()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 6, SystemicMergeThreshold: 3);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var start = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var cards = new[]
+        {
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: start),
+            Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: start.AddMinutes(1)),
+            Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: start.AddMinutes(2))
+        };
+
+        await deliverer.DeliverAsync(cards, start.AddMinutes(2));
+        var later = await deliverer.DeliverAsync(cards, start.AddHours(2));
+
+        Assert.Single(transport.Sent);
+        Assert.DoesNotContain(later.Operations, operation => operation.Reason == "new-card");
+        Assert.Contains(later.Operations, operation => operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_resolved_unseen_card_is_suppressed")]
+    public async Task ControlPlaneDelivererResolvedUnseenCardIsSuppressed()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport);
+        var card = Card("goal-a", "Decision", "gate", "cause", "Resolved", "body") with { IsResolved = true };
+
+        var result = await deliverer.DeliverAsync([card], DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+
+        Assert.Empty(transport.Sent);
+        Assert.Equal("resolved-unseen", Assert.Single(result.Operations).Reason);
+    }
+
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_board_wedge_bypasses_budget_after_collapse")]
     public async Task ControlPlaneDelivererBoardWedgeBypassesBudgetAfterCollapse()
     {
@@ -240,6 +277,22 @@ public sealed class ControlPlaneDelivererTests
         Assert.False(sent);
     }
 
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_wires_dead_man_heartbeat_only_when_catalog_enables_valid_url")]
+    public void OperatorChannelFactoryWiresDeadManHeartbeatOnlyWhenCatalogEnablesValidUrl()
+    {
+        var disabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(OperatorChannelCatalog.Default());
+        var enabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(
+            new OperatorChannelCatalog(
+                "discord",
+                ForumChannelId: "42",
+                DeadManHeartbeatEnabled: true,
+                DeadManHeartbeatUrl: "https://example.test/deadman"));
+
+        Assert.False(disabled.Enabled);
+        Assert.True(enabled.Enabled);
+        Assert.Equal(new Uri("https://example.test/deadman"), enabled.Endpoint);
+    }
+
     [Xunit.Fact(DisplayName = "OperatorInboxControlPlaneProjection_projects_escalation_to_neutral_card")]
     public void OperatorInboxControlPlaneProjectionProjectsEscalationToNeutralCard()
     {
@@ -258,6 +311,7 @@ public sealed class ControlPlaneDelivererTests
             "retry",
             "retry abcdef 1",
             "source",
+            DateTimeOffset.Parse("2026-07-20T09:00:00Z"),
             false,
             null,
             null);
@@ -265,6 +319,7 @@ public sealed class ControlPlaneDelivererTests
         var card = OperatorInboxControlPlaneProjection.Project(item);
 
         Assert.Equal(ControlPlaneCardSource.OperatorInboxEscalation, card.Source);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-20T09:00:00Z"), card.RaisedAt);
         Assert.Equal("goal-abcdef:failedtask:task-123:" + card.CauseFingerprint, card.DedupKey);
         var action = Assert.Single(card.ActionList);
         var parsed = DiscordInteractionHandler.Process(action.CustomId, "operator-1", "interaction-1", ["operator-1"]);
