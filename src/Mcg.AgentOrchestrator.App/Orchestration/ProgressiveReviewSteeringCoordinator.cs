@@ -117,9 +117,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
 
         var originalDispatch = task.LastDispatch;
         var originalProcess = task.LastProcess;
-        var trackedPids = originalProcess.TrackedProcessIds.ToArray();
+        var ownedProcessSnapshot = CaptureOwnedProcessSnapshot(originalProcess);
         var cancelled = _cancelProcess(kernel, goal.Id, taskId);
-        var cancelConfirmation = ConfirmTreeDead(cancelled, trackedPids);
+        var cancelConfirmation = ConfirmTreeDead(cancelled, ownedProcessSnapshot);
         if (!cancelConfirmation.Confirmed)
         {
             AppendFailSafeReceipt(intent, cancelConfirmation.Proof, "operator-attention", now);
@@ -296,16 +296,43 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             now)).GetAwaiter().GetResult();
     }
 
-    private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> trackedPids)
+    private static IReadOnlyList<int> CaptureOwnedProcessSnapshot(TaskProcessRecord process)
+    {
+        var processIds = new HashSet<int>();
+        AddProcessId(processIds, process.ProcessId);
+        foreach (var processId in process.TrackedProcessIds)
+            AddProcessId(processIds, processId);
+
+        var heartbeat = ProcessLogReader.ReadHeartbeat(process);
+        if (heartbeat.IsAvailable)
+        {
+            AddProcessId(processIds, heartbeat.ProcessId);
+            if (heartbeat.ChildProcessId is { } childProcessId)
+                AddProcessId(processIds, childProcessId);
+
+            foreach (var processId in heartbeat.OwnedProcessIds)
+                AddProcessId(processIds, processId);
+        }
+
+        return processIds.OrderBy(processId => processId).ToArray();
+    }
+
+    private static void AddProcessId(HashSet<int> processIds, int processId)
+    {
+        if (processId > 0)
+            processIds.Add(processId);
+    }
+
+    private TreeDeathConfirmation ConfirmTreeDead(TaskProcessRecord cancelled, IReadOnlyList<int> ownedProcessSnapshot)
     {
         if (!cancelled.WasCancelled || cancelled.CompletedAt is null)
             return new TreeDeathConfirmation(false, "cancelled process record missing terminal cancellation fields");
 
-        var live = trackedPids.Where(_isProcessRunning).Distinct().ToArray();
+        var live = ownedProcessSnapshot.Where(_isProcessRunning).Distinct().OrderBy(processId => processId).ToArray();
         if (live.Length > 0)
             return new TreeDeathConfirmation(false, $"owned pid(s) still alive: {string.Join(",", live)}");
 
-        return new TreeDeathConfirmation(true, $"tree-dead pids=[{string.Join(",", trackedPids)}] cancelled_at={cancelled.CompletedAt:u}; partial dispatch receipt consumed");
+        return new TreeDeathConfirmation(true, $"tree-dead pids=[{string.Join(",", ownedProcessSnapshot)}] cancelled_at={cancelled.CompletedAt:u}; partial dispatch receipt consumed");
     }
 
     private void RaiseAttention(ProgressiveReviewSteerIntent intent, string reason)

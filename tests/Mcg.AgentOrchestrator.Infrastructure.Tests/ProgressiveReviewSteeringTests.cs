@@ -46,7 +46,7 @@ public sealed class ProgressiveReviewSteeringTests
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
-        Assert.Contains("SameGoal:Passed", receipt.AdmissionChecks);
+        Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("SameGoal:Passed:", StringComparison.Ordinal));
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
     }
 
@@ -143,6 +143,47 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_heartbeat_owned_child_survives")]
+    public void BlocksResumeWhenHeartbeatOwnedChildSurvives()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-owned-child");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        WriteHeartbeat(task.LastProcess!, now, childPid: 6002, ownedPids: [6001, 6002, 6003], state: "running");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while child is alive")).GetAwaiter().GetResult();
+        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var started = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            isProcessRunning: pid => pid == 6002,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                return cancelled;
+            },
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run over a live heartbeat-owned child");
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(started);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("owned pid(s) still alive: 6002", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
     private static ProgressiveReviewSteeringCoordinator NewCoordinator(
         string root,
         InMemoryProgressiveReviewSteeringStore store,
@@ -233,5 +274,23 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.True(GitCli.Run(root, "add", "README.md").Succeeded);
         Assert.True(GitCli.Run(root, "commit", "-m", "initial").Succeeded);
         return root;
+    }
+
+    private static void WriteHeartbeat(
+        TaskProcessRecord process,
+        DateTimeOffset observedAt,
+        int? childPid,
+        IReadOnlyList<int> ownedPids,
+        string state)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(BackgroundDispatchRunner.GetHeartbeatPath(process))!);
+        var childPidJson = childPid.HasValue
+            ? childPid.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "null";
+        File.WriteAllText(
+            BackgroundDispatchRunner.GetHeartbeatPath(process),
+            $$"""
+            {"pid":{{process.ProcessId}},"childPid":{{childPidJson}},"ownedPids":[{{string.Join(",", ownedPids)}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":0,"stderrBytes":0,"ownedCpuMs":0}
+            """);
     }
 }
