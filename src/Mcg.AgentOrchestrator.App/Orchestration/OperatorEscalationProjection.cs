@@ -7,7 +7,8 @@ public static class OperatorEscalationProjection
     private static readonly HashSet<OperatorInboxKind> PromoteToMainKinds =
     [
         OperatorInboxKind.LandingEscalation,
-        OperatorInboxKind.AcceptanceGate
+        OperatorInboxKind.AcceptanceGate,
+        OperatorInboxKind.OwnershipHold
     ];
 
     public static OperatorEscalation? Project(OperatorInboxItem item, string? dashboardBaseUrl = null)
@@ -50,7 +51,8 @@ public static class OperatorEscalationProjection
 
         var requiresConfirm = IsPromoteToMain(item.Kind, command);
         var requiresInput = command.Contains("<answer>", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("<command>", StringComparison.OrdinalIgnoreCase);
+            || command.Contains("<command>", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("<note>", StringComparison.OrdinalIgnoreCase);
 
         var label = BuildActionLabel(item.Kind, item.TaskNumber);
 
@@ -59,7 +61,9 @@ public static class OperatorEscalationProjection
             new(label, command, requiresConfirm, requiresInput)
         };
 
-        if (item.Kind == OperatorInboxKind.AcceptanceGate && !requiresInput)
+        if (item.Kind == OperatorInboxKind.AcceptanceGate &&
+            item.Severity != OperatorInboxSeverity.Blocker &&
+            !requiresInput)
         {
             var acknowledgeCommand = $"operator-inbox-ack {item.Id}";
             actions.Add(new OperatorEscalationAction("Acknowledge", acknowledgeCommand, RequiresConfirm: false));
@@ -85,6 +89,9 @@ public static class OperatorEscalationProjection
             OperatorInboxKind.FailedVerification => "Re-verify",
             OperatorInboxKind.MissingVerification => "Run Verification",
             OperatorInboxKind.AcceptanceGate => "Accept Goal",
+            OperatorInboxKind.OwnershipHold => "Accept Goal",
+            OperatorInboxKind.HoldPersistenceFailure => "Recover Goal",
+            OperatorInboxKind.HoldClearanceFailure => "Recover Goal",
             OperatorInboxKind.LandingEscalation => "Promote to Main",
             OperatorInboxKind.ReadinessPreflight => "View Readiness",
             _ => "Take Action"
