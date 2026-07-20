@@ -1561,7 +1561,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     !string.IsNullOrWhiteSpace(entry.MainHeadSha))
                 {
                     records.Add(new PartitionVerdictRecord(
-                        entry.GoalId,
+                        entry.GoalId.Value,
                         entry.PartitionAttemptId,
                         NormalizeShaToken(entry.BranchHeadSha),
                         NormalizeShaToken(entry.MainHeadSha),
@@ -1632,7 +1632,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var entries = cacheContext.FreshRecords
             .Select(record => new PartitionVerdictJournalEntry(
                 $"{record.CacheKey}:partition-verdict",
-                record.GoalId,
+                new GoalId(record.GoalId),
                 PartitionVerdictJournalOperation,
                 record.Passed ? "Completed" : "Failed",
                 record.RecordedAt,
@@ -1649,7 +1649,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ToList();
         entries.Add(new PartitionVerdictJournalEntry(
             $"{cacheContext.PairKey}:partition-cache:{cacheContext.AttemptId}",
-            cacheContext.GoalId,
+            new GoalId(cacheContext.GoalId),
             PartitionVerdictCacheJournalOperation,
             aggregateVerdict.Equals("GREEN", StringComparison.OrdinalIgnoreCase) ? "Completed" : "Failed",
             summaryRecordedAt,
@@ -4311,7 +4311,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private sealed record PartitionVerdictJournalEntry(
         string IdempotencyKey,
-        string GoalId,
+        GoalId GoalId,
         string Operation,
         string Status,
         DateTimeOffset At,

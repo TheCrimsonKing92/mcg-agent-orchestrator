@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json.Nodes;
 
@@ -1359,6 +1360,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.False(first.Passed);
             Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
             Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "acceptance-partition-verdicts.json")));
+            var sharedJournal = GoalOperationJournal.Read(root, goalId);
+            Assert.Contains(sharedJournal.Entries, entry =>
+                entry.GoalId == goalId &&
+                entry.Operation == "acceptance:partition-verdict" &&
+                entry.PartitionId == "cli");
 
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
