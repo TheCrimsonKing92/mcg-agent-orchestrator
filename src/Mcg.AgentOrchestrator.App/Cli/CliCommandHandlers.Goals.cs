@@ -903,7 +903,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); },
                     handoffOnMaxDuration: handoff,
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
-                    progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles)).Run(
+                    progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
+                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -966,7 +967,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     wk => watchReaper.RequeueInterruptedDispatches(wk),
                     (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal); },
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
-                    progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles)).Run(
+                    progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
+                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),

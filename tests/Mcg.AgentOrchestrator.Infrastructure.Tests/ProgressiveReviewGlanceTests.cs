@@ -495,6 +495,43 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("cancel plus resume-with-guidance", items.Single().Body, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_misdirection_enqueues_steer_intent_without_attention_when_store_is_available")]
+    public void MisdirectionEnqueuesSteerIntentWhenStoreIsAvailable()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, _) = RunningDeveloperRound(now);
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
+        var collaborationStore = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var steeringStore = new InMemoryProgressiveReviewSteeringStore();
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Correct toward the scoped implementation.",
+            "diff edits the forbidden surface",
+            5,
+            5));
+        var coordinator = new ProgressiveReviewGlanceCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            collaborationStore,
+            new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            (_, _) => "diff",
+            _ => "transcript",
+            steeringStore);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var intent = Assert.Single(steeringStore.Intents);
+        Assert.Equal(goal.Id.Value, intent.GoalId);
+        Assert.Equal("diff edits the forbidden surface", intent.MisdirectionEvidence);
+        Assert.Contains("authoritative over remembered session context", intent.GuidanceText, StringComparison.Ordinal);
+        Assert.Contains("diff", intent.GuidanceText, StringComparison.Ordinal);
+        Assert.Empty(collaborationStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_receipt_and_attention_failures_are_advisory_only")]
     public void ReceiptAndAttentionFailuresAreAdvisoryOnly()
     {

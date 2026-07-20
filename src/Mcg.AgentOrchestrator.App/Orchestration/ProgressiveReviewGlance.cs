@@ -93,6 +93,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly IProgressiveReviewGlanceRunner _runner;
     private readonly IGoalLifecycleEventWriter _eventWriter;
     private readonly ICollaborationItemStore _collaborationStore;
+    private readonly IProgressiveReviewSteeringStore? _steeringStore;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?, string?, DispatchLiveChangeSnapshot> _liveChanges;
     private readonly Func<string, string?, string> _diffReader;
@@ -112,7 +113,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         Func<DateTimeOffset>? utcNow = null,
         Func<string?, string?, DispatchLiveChangeSnapshot>? liveChanges = null,
         Func<string, string?, string>? diffReader = null,
-        Func<TaskProcessRecord?, string>? transcriptReader = null)
+        Func<TaskProcessRecord?, string>? transcriptReader = null,
+        IProgressiveReviewSteeringStore? steeringStore = null)
     {
         _runner = runner;
         _eventWriter = eventWriter;
@@ -122,6 +124,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFilePromptLimit));
         _diffReader = diffReader ?? ReadDiff;
         _transcriptReader = transcriptReader ?? (process => ReadTranscriptTail(process, _options.TranscriptTailByteLimit));
+        _steeringStore = steeringStore;
     }
 
     public static ProgressiveReviewGlanceCoordinator CreateDefault(
@@ -133,7 +136,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
             new SubscriptionCliProgressiveReviewGlanceRunner(workerProfiles),
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-            options);
+            options,
+            steeringStore: SqliteProgressiveReviewSteeringStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
     public ProgressiveReviewGlanceObservationResult Observe(
@@ -387,7 +391,7 @@ Transcript tail:
             }
             else if (result.Verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
             {
-                TryRaiseMisdirectionAttention(running, result, lines);
+                TryEnqueueSteerIntent(running, result, lines);
             }
 
             lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=receipt verdict={result.Verdict} tokens={totalTokens} wall_ms={(long)running.Stopwatch.Elapsed.TotalMilliseconds}");
@@ -528,6 +532,78 @@ Note: {result.Note}
         {
             lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=attention-write-failed error={BoundSingleLine(ex.Message, 300)}");
         }
+    }
+
+    private void TryEnqueueSteerIntent(
+        RunningGlance running,
+        ProgressiveReviewGlanceDispatchResult result,
+        List<string> lines)
+    {
+        if (_steeringStore is null)
+        {
+            TryRaiseMisdirectionAttention(running, result, lines);
+            return;
+        }
+
+        try
+        {
+            var intent = new ProgressiveReviewSteerIntent(
+                Id: $"glance-{running.InputHash}",
+                GoalId: running.GoalId.Value,
+                TaskId: running.TaskId.Value,
+                Role: AgentRole.Developer.ToString(),
+                RoundKey: running.RoundKey,
+                TriggerGlanceId: $"glance-{running.InputHash}",
+                InputsHash: running.InputHash,
+                GlanceVerdictTimestamp: _utcNow(),
+                MisdirectionEvidence: result.EvidenceLine,
+                CorrectiveDirection: result.Note,
+                GuidanceText: BuildSteeringGuidance(running, result),
+                CreatedAt: _utcNow());
+            _steeringStore.EnqueueIntentAsync(intent, CancellationToken.None).GetAwaiter().GetResult();
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=steer-intent id={intent.Id}");
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=steer-intent-write-failed error={BoundSingleLine(ex.Message, 300)}");
+            TryRaiseMisdirectionAttention(running, result, lines);
+        }
+    }
+
+    private static string BuildSteeringGuidance(
+        RunningGlance running,
+        ProgressiveReviewGlanceDispatchResult result)
+    {
+        var overlay = running.Inputs.CriteriaCorrectionOverlay.Count == 0
+            ? "- none"
+            : string.Join(Environment.NewLine, running.Inputs.CriteriaCorrectionOverlay.Select(item => $"- {item}"));
+        var changedFiles = running.Inputs.ChangedFiles.Count == 0
+            ? "- none"
+            : string.Join(Environment.NewLine, running.Inputs.ChangedFiles.Select(item => $"- {item}"));
+        return $"""
+ProgressiveReviewSteer guidance. Treat this message as authoritative over remembered session context.
+
+Freshness envelope:
+- Goal id: {running.GoalId.Value}
+- Task id: {running.TaskId.Value}
+- Worktree diff at steer time:
+{running.Inputs.DiffExcerpt}
+
+Current acceptance criteria:
+{running.Inputs.AcceptanceSection}
+
+Active criteria-correction overlay:
+{overlay}
+
+Changed files at steer time:
+{changedFiles}
+
+Misdirection evidence:
+{result.EvidenceLine}
+
+Corrective direction:
+{result.Note}
+""";
     }
 
     private bool IsSmallRound(
@@ -946,6 +1022,8 @@ Note: {result.Note}
             .Trim();
         return text.Length <= limit ? text : text[..limit];
     }
+
+    internal static string BoundSingleLineForSteering(string? value, int limit) => BoundSingleLine(value, limit);
 
     private static int EstimateTokens(string text) =>
         Math.Max(1, (int)Math.Ceiling((text?.Length ?? 0) / 4.0));
