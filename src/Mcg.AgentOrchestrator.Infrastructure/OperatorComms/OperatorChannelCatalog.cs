@@ -9,7 +9,10 @@ public sealed record OperatorChannelCatalog(
     IReadOnlyList<string>? OperatorUserIds = null,
     string? ProgressThreadId = null,
     string? ProgressStatusMessageId = null,
-    string? ProgressStatusContentHash = null)
+    string? ProgressStatusContentHash = null,
+    DateTimeOffset? ControlPlaneMutedUntil = null,
+    bool DeadManHeartbeatEnabled = false,
+    string? DeadManHeartbeatUrl = null)
 {
     public static OperatorChannelCatalog Default() => new("null");
 

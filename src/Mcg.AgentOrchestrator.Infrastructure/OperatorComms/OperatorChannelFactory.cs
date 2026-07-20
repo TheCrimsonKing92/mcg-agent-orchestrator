@@ -81,7 +81,9 @@ public static class OperatorChannelFactory
             resolveClarificationAnswer,
             BuildCorrelationGoalStateVersionReader(store, stateDirectory),
             dispatchAction);
-        return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view)
+        var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
+        var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
+        return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view, heartbeat, heartbeatOptions.EffectiveInterval)
             .GetAwaiter().GetResult();
     }
 
@@ -108,7 +110,9 @@ public static class OperatorChannelFactory
             resolveClarificationAnswer,
             BuildCorrelationGoalStateVersionReader(store, stateDirectory),
             dispatchAction);
-        var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView)
+        var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
+        var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
+        var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView, heartbeat, heartbeatOptions.EffectiveInterval)
             .GetAwaiter().GetResult();
         var progressView = new DiscordProgressViewService(api, forumChannelId, catalogPath);
         return new DiscordOperatorRuntime(listener, collaborationView, progressView, api);
@@ -155,6 +159,23 @@ public static class OperatorChannelFactory
         return (goalId, cancellationToken) =>
             SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(stateDbPath, goalId, cancellationToken);
     }
+
+    public static DeadManHeartbeatOptions BuildDeadManHeartbeatOptions(OperatorChannelCatalog catalog)
+    {
+        if (!catalog.DeadManHeartbeatEnabled ||
+            string.IsNullOrWhiteSpace(catalog.DeadManHeartbeatUrl) ||
+            !Uri.TryCreate(catalog.DeadManHeartbeatUrl, UriKind.Absolute, out var endpoint))
+        {
+            return new DeadManHeartbeatOptions();
+        }
+
+        return new DeadManHeartbeatOptions(Enabled: true, Endpoint: endpoint);
+    }
+
+    private static DeadManHeartbeatClient? CreateDeadManHeartbeatClient(DeadManHeartbeatOptions options) =>
+        options.Enabled && options.Endpoint is not null
+            ? new DeadManHeartbeatClient(new HttpClient { Timeout = TimeSpan.FromSeconds(5) }, options)
+            : null;
 
     private static Func<string, CancellationToken, Task<long?>> BuildCorrelationGoalStateVersionReader(
         ICollaborationItemStore store,
