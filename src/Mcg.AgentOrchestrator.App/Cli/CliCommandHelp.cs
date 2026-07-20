@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliCommandHelp
 {
-    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>]";
+    public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix>] | goal --brief-file <path> | goal --text-file <path>";
     public const string AddTaskUsage = "Usage: add-task <role> <description> | add-task <role> --text-file <path>";
     public const string RetryUsage = "Usage: retry <task-number> <message> [--mechanical] | retry <goal-prefix> <task-number> <message> [--mechanical] | retry --goal <goal-prefix> <task-number> <message> [--mechanical] | retry <task-number> --text-file <path> [--mechanical]";
@@ -62,6 +62,7 @@ internal static class CliCommandHelp
             "--quiet",
             "--stall-warning-seconds",
             "--stall-warning-minutes",
+            "--unscoped-stall-ticks",
             "--help",
             "-h"
         ]);
@@ -680,6 +681,10 @@ internal static class CliCommandHelp
             else if (flag.Equals("--watch-interval", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine($"  {flag} <n>    Legacy alias for --poll-seconds.");
+            }
+            else if (flag.Equals("--unscoped-stall-ticks", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>    Consecutive unscoped dispatchable ticks before auto-rescope; default {ConductorBatchLoop.DefaultUnscopedStallTickThreshold}.");
             }
             else if (flag.Equals("--limit", StringComparison.OrdinalIgnoreCase))
             {

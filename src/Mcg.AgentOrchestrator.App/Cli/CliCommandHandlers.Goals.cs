@@ -787,6 +787,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     maxDuration = TimeSpan.FromSeconds(int.Parse(mdStr, System.Globalization.CultureInfo.InvariantCulture));
                 var quietWatchProgress = HasCliConfirmation(parts, "--quiet");
                 var stallWarningThreshold = ResolveWatchStallWarningThreshold(parts);
+                var unscopedStallTickThreshold = ResolveUnscopedStallTickThreshold(parts);
 
                 // --daemon: run as a PERSISTENT conductor — never exit on an empty backlog. The loop stays
                 // alive and polls, so goals submitted later (via a separate `goal` command, backlog
@@ -894,7 +895,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     persistGoalTick: context.PersistGoalCheckpoint,
                     buildOperatorDispositions: loopKernel => ConductorOperatorDispositionSnapshots.Build(loopKernel, context.Workspace.ExecutionDirectory),
                     quiet: quietWatchProgress,
-                    stallWarningThreshold: stallWarningThreshold);
+                    stallWarningThreshold: stallWarningThreshold,
+                    unscopedStallTickThreshold: unscopedStallTickThreshold);
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -2582,6 +2584,21 @@ private static int ResolveConductPollSeconds(IReadOnlyList<string> parts)
     }
 
     return ConductorBatchLoop.DefaultWatchIntervalSeconds;
+}
+
+private static int ResolveUnscopedStallTickThreshold(IReadOnlyList<string> parts)
+{
+    if (GetFlagValue(parts, "--unscoped-stall-ticks") is { } ticks)
+    {
+        return ParsePositiveInteger(ticks, "--unscoped-stall-ticks");
+    }
+
+    if (HasCliConfirmation(parts, "--unscoped-stall-ticks"))
+    {
+        throw new ArgumentException("--unscoped-stall-ticks requires a positive integer value.");
+    }
+
+    return ConductorBatchLoop.DefaultUnscopedStallTickThreshold;
 }
 
 private static int ParsePositiveInteger(string value, string flag)

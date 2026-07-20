@@ -76,7 +76,6 @@ internal sealed class ConductorDriver
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
-        var openClarificationGoalIds = GoalRefinementGate.OpenClarificationGoalIds(workspace, factGoalIds);
         void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
         void RecordMissingBranchRetirement(Goal goal, string detail)
         {
@@ -102,7 +101,7 @@ internal sealed class ConductorDriver
             var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
             var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
             var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
-            var hasOpenClarification = openClarificationGoalIds.Contains(goal.Id);
+            var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
             return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
         };
 

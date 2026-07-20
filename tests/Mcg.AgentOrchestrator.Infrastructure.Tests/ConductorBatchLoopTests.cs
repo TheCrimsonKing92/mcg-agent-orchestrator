@@ -3924,6 +3924,75 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, workspaceCreates);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_readmits_store_answered_clarification_without_restart_and_dispatches")]
+    public async Task BatchLoopReadmitsStoreAnsweredClarificationWithoutRestartAndDispatches()
+    {
+        var root = CreateTempDirectory("mcg-clarification-readmit");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var (kernel, goal) = SimpleGoal("Clarified goal");
+        var questionKey = $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:scope:test";
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Do the clarified thing.",
+            ["Dispatch starts after clarification."],
+            VerificationClass.TestVerifiable,
+            [],
+            [new RefinedSpecOpenQuestion(questionKey, "Which scope?", "scope", "Open")]));
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Which scope?",
+            "body",
+            questionKey);
+        var workspaceCreated = false;
+        var dispatches = 0;
+        var resolved = false;
+        var task = goal.Tasks.Single();
+
+        var driver = MakeDriver(
+            getFacts: g => new GoalLifecycleFacts(
+                WorkspaceExists: workspaceCreated,
+                HasOpenClarification: GoalRefinementGate.HasOpenClarification(workspace, g)),
+            createWorkspace: _ =>
+            {
+                workspaceCreated = true;
+                return "C:\\goal";
+            },
+            dispatchAndStart: g =>
+            {
+                dispatches++;
+                kernel.RecordTaskDispatch(g.Id, task.Id,
+                    new TaskDispatchRecord("test-worker", "test.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                if (!resolved)
+                {
+                    store.TryResolveAsync(questionKey, "Use the narrow scope.").GetAwaiter().GetResult();
+                    resolved = true;
+                }
+
+                return false;
+            });
+
+        Assert.Equal(3, summary.Ticks);
+        Assert.True(workspaceCreated);
+        Assert.Equal(1, dispatches);
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_readmits_escalated_goal_when_task_state_changes_mid_run")]
     public void BatchLoopReadmitsEscalatedGoalWhenTaskStateChangesMidRun()
     {
@@ -4070,6 +4139,122 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, escalations);
         Assert.Equal(1, dispatches);
         Assert.True(blockedClarificationPolls >= 3);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_auto_rescopes_active_dispatchable_goal_after_configured_unscoped_ticks")]
+    public void BatchLoopAutoRescopesActiveDispatchableGoalAfterConfiguredUnscopedTicks()
+    {
+        var (kernel, goal) = SimpleGoal("stale unscoped goal");
+        var firstAdvance = true;
+        var workspaceCreates = 0;
+        var sleeps = 0;
+        var driver = MakeDriver(
+            createWorkspace: _ =>
+            {
+                if (firstAdvance)
+                {
+                    firstAdvance = false;
+                    throw new InvalidOperationException("transient stale exclusion");
+                }
+
+                workspaceCreates++;
+                return "C:\\goal";
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                sleeps++;
+                return false;
+            },
+            keepAliveWhenIdle: true,
+            unscopedStallTickThreshold: 2);
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, workspaceCreates);
+        Assert.Equal(2, sleeps);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("stall reconciliation", StringComparison.Ordinal) &&
+            evt.Message.Contains("after 2 unscoped tick(s)", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_unscoped_stall_threshold_controls_detection_tick")]
+    public void BatchLoopUnscopedStallThresholdControlsDetectionTick()
+    {
+        var (kernel, goal) = SimpleGoal("threshold goal");
+        var firstAdvance = true;
+        var workspaceCreates = 0;
+        var sleeps = 0;
+        var driver = MakeDriver(
+            createWorkspace: _ =>
+            {
+                if (firstAdvance)
+                {
+                    firstAdvance = false;
+                    throw new InvalidOperationException("transient stale exclusion");
+                }
+
+                workspaceCreates++;
+                return "C:\\goal";
+            });
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                sleeps++;
+                return false;
+            },
+            keepAliveWhenIdle: true,
+            unscopedStallTickThreshold: 1);
+
+        Assert.Equal(1, workspaceCreates);
+        Assert.Equal(1, sleeps);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("after 1 unscoped tick(s)", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_scoped_goal_does_not_trigger_unscoped_stall_backstop")]
+    public void BatchLoopScopedGoalDoesNotTriggerUnscopedStallBackstop()
+    {
+        var (kernel, goal) = SimpleGoal("held but scoped goal");
+        var dispatchAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ =>
+            {
+                dispatchAttempts++;
+                return DispatchStartOutcome.EmptyBatch("No ready batch.");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false,
+            unscopedStallTickThreshold: 1);
+
+        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(3, dispatchAttempts);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("stall reconciliation", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_escalated_goal_reaps_only_its_owned_running_dispatches")]
