@@ -54,6 +54,7 @@ public sealed class DiscordControlPlaneDeliverer
     public const string PendingRollupKey = "control-plane:pending-rollup";
     public const string BoardHeartbeatKey = "control-plane:board-heartbeat";
     public const string DigestRollupKey = "control-plane:digest-rollup";
+    public const string DailyBacklogDigestKey = "control-plane:daily-backlog-digest";
 
     private readonly IControlPlaneDeliveryStore _store;
     private readonly IControlPlaneMessageTransport _transport;
@@ -92,13 +93,19 @@ public sealed class DiscordControlPlaneDeliverer
             cancellationToken);
         var remainingBudget = Math.Max(0, _policy.DailyDecisionBudget - decisionPushesToday);
         var pendingRollupMark = await _store.TryGetAsync(PendingRollupKey, cancellationToken);
-        var nonBoardCount = candidates.Count(card => !card.IsBoardIntegrity);
+        var nonBoardCount = candidates.Count(card => !card.IsBoardIntegrity && !card.IsResolved);
         var reserveNewRollupSlot = pendingRollupMark is null && nonBoardCount > remainingBudget && remainingBudget > 0;
         var remainingCardBudget = reserveNewRollupSlot ? remainingBudget - 1 : remainingBudget;
         var overBudget = new List<ControlPlaneDecisionCard>();
 
         foreach (var card in candidates)
         {
+            if (card.IsResolved)
+            {
+                operations.Add(await UpsertCardAsync(card, now, cancellationToken));
+                continue;
+            }
+
             if (_policy.IsQuietHours(now) && !card.IsBoardIntegrity)
             {
                 operations.Add(Suppressed(card, "quiet-hours"));
@@ -186,6 +193,31 @@ public sealed class DiscordControlPlaneDeliverer
         return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Digest, DigestRollupKey, mark.MessageId, "digest", content);
     }
 
+    public async Task<ControlPlaneDeliveryOperation> DeliverDailyBacklogDigestAsync(
+        IReadOnlyList<ControlPlaneBacklogDigestItem> backlogItems,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        var mark = await _store.TryGetAsync(DailyBacklogDigestKey, cancellationToken);
+        if (mark is not null && now - mark.LastDeliveredAt < _policy.EffectiveBacklogDigestCadence)
+        {
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, mark.MessageId, "daily-backlog-digest-cadence", string.Empty);
+        }
+
+        var content = RenderDailyBacklogDigest(backlogItems, now);
+        var hash = Hash(content);
+        if (mark is null)
+        {
+            var id = await _transport.SendAsync(ControlPlaneDeliveryChannel.Digest, content, [], cancellationToken);
+            await _store.UpsertAsync(new ControlPlaneDeliveryMark(DailyBacklogDigestKey, ControlPlaneDeliveryChannel.Digest, id, now, now, null, hash, false), cancellationToken);
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, id, "daily-backlog-digest", content);
+        }
+
+        await _transport.EditAsync(ControlPlaneDeliveryChannel.Digest, mark.MessageId, content, [], cancellationToken);
+        await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Digest, DailyBacklogDigestKey, mark.MessageId, "daily-backlog-digest", content);
+    }
+
     private async Task<ControlPlaneDeliveryOperation> UpsertCardAsync(
         ControlPlaneDecisionCard card,
         DateTimeOffset now,
@@ -271,10 +303,9 @@ public sealed class DiscordControlPlaneDeliverer
         foreach (var group in source.Where(card => !card.IsResolved).GroupBy(card => card.Kind, StringComparer.OrdinalIgnoreCase))
         {
             var inWindow = group.Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow).ToList();
-            var groupCards = existingSystemicKinds.Contains(group.Key)
-                ? group.ToList()
-                : inWindow;
-            if (groupCards.Count < _policy.SystemicMergeThreshold)
+            var existingSystemic = existingSystemicKinds.Contains(group.Key);
+            var groupCards = existingSystemic ? group.ToList() : inWindow;
+            if (!existingSystemic && groupCards.Count < _policy.SystemicMergeThreshold)
                 continue;
 
             foreach (var card in groupCards)
@@ -327,6 +358,18 @@ public sealed class DiscordControlPlaneDeliverer
         var resolved = cards.Count(card => card.IsResolved);
         return $"Control-plane digest {now:O}\nopen={open} resolved={resolved}\n" +
             string.Join('\n', cards.Take(20).Select(card => $"- [{card.Kind}] {ShortGoal(card.GoalId)} {Truncate(card.Title, 100)}"));
+    }
+
+    private static string RenderDailyBacklogDigest(IReadOnlyList<ControlPlaneBacklogDigestItem> backlogItems, DateTimeOffset now)
+    {
+        var open = backlogItems.Count(item => item.Status == BacklogItemStatus.Open);
+        var done = backlogItems.Count(item => item.Status == BacklogItemStatus.Done);
+        var lines = backlogItems
+            .OrderByDescending(item => item.UpdatedAt)
+            .Take(20)
+            .Select(item => $"- [{item.Status}] {ShortGoal(item.SourceGoalId ?? string.Empty)} {Truncate(item.Title, 100)}");
+        return $"Daily backlog digest {now:O}\nopen={open} done={done}\n" +
+            string.Join('\n', lines);
     }
 
     private static string FormatAge(TimeSpan age) =>

@@ -84,12 +84,24 @@ public sealed record ControlPlaneBoardSnapshot(
     int EscalatedLanes,
     DateTimeOffset ObservedAt);
 
+public sealed record ControlPlaneBacklogDigestItem(
+    string Id,
+    string Title,
+    BacklogItemStatus Status,
+    DateTimeOffset UpdatedAt,
+    string? SourceGoalId)
+{
+    public static ControlPlaneBacklogDigestItem FromBacklogItem(BacklogItem item) =>
+        new(item.Id, item.Title, item.Status, item.UpdatedAt, item.SourceGoalId);
+}
+
 public sealed record ControlPlaneDeliveryPolicy(
     int DailyDecisionBudget = 6,
     int SystemicMergeThreshold = 3,
     TimeSpan? StormWindow = null,
     TimeSpan? BoardHeartbeatCadence = null,
     TimeSpan? DigestCadence = null,
+    TimeSpan? BacklogDigestCadence = null,
     TimeSpan? ReminderCadence = null,
     int QuietHoursStartHour = 22,
     int QuietHoursEndHour = 7,
@@ -98,6 +110,7 @@ public sealed record ControlPlaneDeliveryPolicy(
     public TimeSpan EffectiveStormWindow => StormWindow ?? TimeSpan.FromMinutes(30);
     public TimeSpan EffectiveBoardHeartbeatCadence => BoardHeartbeatCadence ?? TimeSpan.FromMinutes(10);
     public TimeSpan EffectiveDigestCadence => DigestCadence ?? TimeSpan.FromHours(4);
+    public TimeSpan EffectiveBacklogDigestCadence => BacklogDigestCadence ?? TimeSpan.FromHours(24);
     public TimeSpan EffectiveReminderCadence => ReminderCadence ?? TimeSpan.FromHours(24);
 
     public bool IsMuted(DateTimeOffset now) => MutedUntil is not null && now < MutedUntil.Value;

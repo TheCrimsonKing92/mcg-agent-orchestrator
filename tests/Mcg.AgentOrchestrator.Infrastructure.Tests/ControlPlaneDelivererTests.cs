@@ -150,6 +150,30 @@ public sealed class ControlPlaneDelivererTests
         Assert.Contains(later.Operations, operation => operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_existing_systemic_merge_keeps_below_threshold_originals_collapsed")]
+    public async Task ControlPlaneDelivererExistingSystemicMergeKeepsBelowThresholdOriginalsCollapsed()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 6, SystemicMergeThreshold: 3);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var start = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var cards = new[]
+        {
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: start),
+            Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: start.AddMinutes(1)),
+            Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: start.AddMinutes(2))
+        };
+
+        await deliverer.DeliverAsync(cards, start.AddMinutes(2));
+        var later = await deliverer.DeliverAsync(cards.Take(2), start.AddHours(2));
+
+        Assert.Single(transport.Sent);
+        Assert.Single(transport.Edited);
+        Assert.DoesNotContain(later.Operations, operation => operation.Reason == "new-card");
+        Assert.Contains(later.Operations, operation => operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_resolved_unseen_card_is_suppressed")]
     public async Task ControlPlaneDelivererResolvedUnseenCardIsSuppressed()
     {
@@ -162,6 +186,27 @@ public sealed class ControlPlaneDelivererTests
 
         Assert.Empty(transport.Sent);
         Assert.Equal("resolved-unseen", Assert.Single(result.Operations).Reason);
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_resolved_existing_card_bypasses_exhausted_budget")]
+    public async Task ControlPlaneDelivererResolvedExistingCardBypassesExhaustedBudget()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 1, SystemicMergeThreshold: 99);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var now = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var card = Card("goal-a", "Decision", "gate", "cause", "Review", "body",
+            [new ControlPlaneAction("Resolve", "resolve-1")]);
+
+        await deliverer.DeliverAsync([card], now);
+        var resolved = await deliverer.DeliverAsync([card with { IsResolved = true }], now.AddHours(1));
+
+        Assert.Single(transport.Sent);
+        var edit = Assert.Single(transport.Edited);
+        Assert.Empty(edit.Buttons);
+        Assert.Contains("~~[Decision] Review~~", edit.Content);
+        Assert.Equal("resolved", Assert.Single(resolved.Operations).Reason);
     }
 
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_board_wedge_bypasses_budget_after_collapse")]
@@ -251,6 +296,29 @@ public sealed class ControlPlaneDelivererTests
         Assert.Equal(2, report.Decisions);
         Assert.Equal(1, report.Board);
         Assert.Equal(1, report.Digest);
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_includes_daily_backlog_digest_when_backlog_items_are_supplied")]
+    public async Task ControlPlaneReplayHarnessIncludesDailyBacklogDigestWhenBacklogItemsAreSupplied()
+    {
+        var from = DateTimeOffset.Parse("2026-07-20T00:00:00Z");
+        var backlog = new[]
+        {
+            new ControlPlaneBacklogDigestItem("backlog-a", "Operator channel follow-up", BacklogItemStatus.Open, from.AddHours(6), "goal-a")
+        };
+
+        var report = await new ControlPlaneReplayHarness(new ControlPlaneDeliveryPolicy(SystemicMergeThreshold: 99))
+            .ReplayAsync(
+                [Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from.AddHours(10))],
+                backlog,
+                from,
+                from.AddHours(48));
+
+        var daily = Assert.Single(report.Operations, operation => operation.Reason == "daily-backlog-digest");
+        Assert.Equal(ControlPlaneDeliveryChannel.Digest, daily.Channel);
+        Assert.Contains("Daily backlog digest", daily.Content);
+        Assert.Contains("Operator channel follow-up", daily.Content);
+        Assert.Equal(2, report.Digest);
     }
 
     [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_uses_event_times_for_storm_windows")]

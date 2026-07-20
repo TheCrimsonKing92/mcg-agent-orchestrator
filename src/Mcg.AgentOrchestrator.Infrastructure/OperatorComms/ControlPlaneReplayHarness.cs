@@ -15,9 +15,34 @@ public sealed class ControlPlaneReplayHarness
         DateTimeOffset to,
         CancellationToken cancellationToken = default)
     {
+        return await ReplayCoreAsync(cards, [], false, from, to, cancellationToken);
+    }
+
+    public async Task<ControlPlaneReplayReport> ReplayAsync(
+        IEnumerable<ControlPlaneDecisionCard> cards,
+        IEnumerable<ControlPlaneBacklogDigestItem> backlogItems,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken = default)
+    {
+        return await ReplayCoreAsync(cards, backlogItems, true, from, to, cancellationToken);
+    }
+
+    private async Task<ControlPlaneReplayReport> ReplayCoreAsync(
+        IEnumerable<ControlPlaneDecisionCard> cards,
+        IEnumerable<ControlPlaneBacklogDigestItem> backlogItems,
+        bool includeDailyBacklogDigest,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
         var ordered = cards
             .Where(card => card.RaisedAt >= from && card.RaisedAt <= to)
             .OrderBy(card => card.RaisedAt)
+            .ToList();
+        var backlog = backlogItems
+            .Where(item => item.UpdatedAt <= to)
+            .OrderByDescending(item => item.UpdatedAt)
             .ToList();
         var store = new InMemoryControlPlaneDeliveryStore();
         var transport = new RecordingControlPlaneMessageTransport();
@@ -39,6 +64,8 @@ public sealed class ControlPlaneReplayHarness
             EscalatedLanes: ordered.Count(card => !card.IsResolved),
             ObservedAt: to), to, cancellationToken)).Operations);
         operations.Add(await deliverer.DeliverDigestAsync(ordered, to, cancellationToken));
+        if (includeDailyBacklogDigest)
+            operations.Add(await deliverer.DeliverDailyBacklogDigestAsync(backlog, to, cancellationToken));
 
         return new ControlPlaneReplayReport(
             CountPushOperations(operations, ControlPlaneDeliveryChannel.Decisions),

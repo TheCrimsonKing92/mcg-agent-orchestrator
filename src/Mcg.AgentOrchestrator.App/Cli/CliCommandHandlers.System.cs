@@ -981,6 +981,11 @@ internal static partial class CliCommandHandlers
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
                 var collaborationCards = store.ListAsync().GetAwaiter().GetResult()
                     .Select(ControlPlaneDecisionCard.FromCollaborationItem);
+                var backlogItems = new BacklogStore(context.Workspace.BacklogStorePath)
+                    .ListAsync(includeAll: false)
+                    .GetAwaiter()
+                    .GetResult()
+                    .Select(ControlPlaneBacklogDigestItem.FromBacklogItem);
                 var inboxCards = OperatorInbox.Build(
                         context.Kernel,
                         context.Agents,
@@ -990,7 +995,7 @@ internal static partial class CliCommandHandlers
                     .Items
                     .Select(OperatorInboxControlPlaneProjection.Project);
                 var report = new ControlPlaneReplayHarness(policy)
-                    .ReplayAsync(collaborationCards.Concat(inboxCards), from, now)
+                    .ReplayAsync(collaborationCards.Concat(inboxCards), backlogItems, from, now)
                     .GetAwaiter()
                     .GetResult();
                 Console.WriteLine($"control-plane-replay windowHours={hours} {report.FormatCounts()}");
