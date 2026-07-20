@@ -792,6 +792,42 @@ public sealed class ProgressiveReviewGlanceTests
 
         public Task<IReadOnlyList<CollaborationDecisionAuditEntry>> ListDecisionAuditAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+
+        public Task<DecisionRequest> RaiseDecisionRequestAsync(DecisionRequest request, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DecisionState?> GetDecisionStateAsync(string requestId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<DecisionRequest>> ListDecisionRequestsAsync(string? goalId = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<NotificationDelivery> RecordNotificationDeliveryAsync(NotificationDelivery delivery, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DecisionReceipt> RecordDecisionAsync(
+            string requestId,
+            string actorId,
+            string channel,
+            AuthorizationTier authenticationAssurance,
+            long? expectedGoalStateVersion,
+            DecisionResponse response,
+            DateTimeOffset recordedAt,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DecisionReceipt> RecordExpiredDefaultDispositionAsync(string requestId, DateTimeOffset expiredAt, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DecisionEffectApplyResult> TryApplyDecisionEffectAsync(
+            string requestId,
+            string decisionReceiptId,
+            DecisionActionRef actionRef,
+            long? currentGoalStateVersion,
+            string result,
+            DateTimeOffset appliedAt,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed record Receipt(
