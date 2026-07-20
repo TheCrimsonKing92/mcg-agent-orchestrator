@@ -53,6 +53,26 @@ public sealed class StewardTests
         Assert.Equal(StewardDispositionKind.RaisedRaw, Assert.Single(receipt.Dispositions).Kind);
     }
 
+    [Xunit.Fact(DisplayName = "StewardDispatcher_timeout_cancels_timed_out_triage_work")]
+    public async Task StewardDispatcherTimeoutCancelsTimedOutTriageWork()
+    {
+        var store = new InMemoryStewardTriageReceiptStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var engine = new CancellationRecordingEngine();
+        var dispatcher = new StewardDispatcher(
+            engine,
+            store,
+            transport,
+            new StewardDispatchOptions(TimeSpan.FromMinutes(2), TimeSpan.FromMilliseconds(10)));
+
+        var result = await dispatcher.DispatchAsync(Bundle(), DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        var cancellationObserved = await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.True(result.FailedOpen);
+        Assert.True(cancellationObserved);
+        Assert.Equal(StewardOutputKind.FailOpenRawEscalation, Assert.Single(store.Receipts).OutputKind);
+    }
+
     [Xunit.Fact(DisplayName = "StewardDispatcher_fail_open_routes_raw_when_engine_errors")]
     public async Task StewardDispatcherFailOpenRoutesRawWhenEngineErrors()
     {
@@ -60,6 +80,24 @@ public sealed class StewardTests
         var transport = new RecordingControlPlaneMessageTransport();
         var dispatcher = new StewardDispatcher(
             new ThrowingEngine(),
+            store,
+            transport,
+            new StewardDispatchOptions(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(5)));
+
+        var result = await dispatcher.DispatchAsync(Bundle(), DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+
+        Assert.True(result.FailedOpen);
+        Assert.Single(transport.Sent);
+        Assert.Equal(StewardOutputKind.FailOpenRawEscalation, Assert.Single(store.Receipts).OutputKind);
+    }
+
+    [Xunit.Fact(DisplayName = "StewardDispatcher_fail_open_routes_raw_when_engine_cancels_internally")]
+    public async Task StewardDispatcherFailOpenRoutesRawWhenEngineCancelsInternally()
+    {
+        var store = new InMemoryStewardTriageReceiptStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var dispatcher = new StewardDispatcher(
+            new TaskCanceledEngine(),
             store,
             transport,
             new StewardDispatchOptions(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(5)));
@@ -346,5 +384,37 @@ public sealed class StewardTests
             DateTimeOffset now,
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("boom");
+    }
+
+    private sealed class TaskCanceledEngine : IStewardTriageEngine
+    {
+        public Task<StewardTriageBatch> TriageAsync(
+            StewardBriefingBundle bundle,
+            DateTimeOffset now,
+            CancellationToken cancellationToken = default) =>
+            throw new TaskCanceledException("internal steward timeout");
+    }
+
+    private sealed class CancellationRecordingEngine : IStewardTriageEngine
+    {
+        public TaskCompletionSource<bool> CancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<StewardTriageBatch> TriageAsync(
+            StewardBriefingBundle bundle,
+            DateTimeOffset now,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                CancellationObserved.TrySetResult(true);
+            }
+
+            return new StewardTriageBatch([], []);
+        }
     }
 }

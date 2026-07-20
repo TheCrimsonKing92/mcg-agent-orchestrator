@@ -47,12 +47,15 @@ public sealed class StewardDispatcher
                 .ToList()
         };
 
+        using var triageCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
-            var batchTask = _engine.TriageAsync(triageBundle, now, cancellationToken);
+            var batchTask = _engine.TriageAsync(triageBundle, now, triageCancellation.Token);
             var completed = await Task.WhenAny(batchTask, Task.Delay(_options.FailOpenTimeout, cancellationToken));
             if (completed != batchTask)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                await triageCancellation.CancelAsync();
                 receipts.AddRange(await FailOpenAsync(triageBundle, now, cancellationToken));
                 await StoreAsync(receipts, cancellationToken);
                 return new StewardDispatchResult([], receipts, FailedOpen: true);
@@ -62,6 +65,12 @@ public sealed class StewardDispatcher
             receipts.AddRange(batch.Receipts);
             await StoreAsync(receipts, cancellationToken);
             return new StewardDispatchResult(batch.Cards, receipts, FailedOpen: false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            receipts.AddRange(await FailOpenAsync(triageBundle, now, cancellationToken));
+            await StoreAsync(receipts, cancellationToken);
+            return new StewardDispatchResult([], receipts, FailedOpen: true);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
