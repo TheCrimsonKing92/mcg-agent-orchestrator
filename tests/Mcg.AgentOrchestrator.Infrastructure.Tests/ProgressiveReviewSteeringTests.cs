@@ -102,6 +102,72 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("cancelled", ProcessLogReader.ReadHeartbeat(cancelledProcessRecord).State);
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_first_misdirection_steers_second_same_round_misdirection_attention")]
+    public void FirstMisdirectionSteersSecondSameRoundMisdirectionRaisesAttention()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-cap");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        var firstIntent = Intent(goal, task, now, "first steer guidance");
+        var secondIntent = Intent(goal, task, now, "second steer guidance suppressed");
+        store.EnqueueIntentAsync(firstIntent).GetAwaiter().GetResult();
+        store.EnqueueIntentAsync(secondIntent).GetAwaiter().GetResult();
+        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var cancelCount = 0;
+        var startCount = 0;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                cancelCount++;
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                WriteExitAndHeartbeat(cancelled, now.AddSeconds(1), childPid: null, ownedPids: [cancelled.ProcessId], state: "exited");
+                return cancelled;
+            },
+            startProcess: (k, goalId, taskId) =>
+            {
+                startCount++;
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                var started = new TaskProcessRecord(
+                    7000 + startCount,
+                    dispatch.Command,
+                    dispatch.WorkingDirectory,
+                    $"out-cap-{startCount}.log",
+                    $"err-cap-{startCount}.log",
+                    $"exit-cap-{startCount}.txt",
+                    now.AddSeconds(2 + startCount),
+                    null,
+                    null,
+                    OwnedProcessIds: [7000 + startCount]);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            });
+
+        var firstResult = coordinator.ExecutePending(kernel, goal);
+        var secondResult = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(firstResult.MutatedTaskState);
+        Assert.True(secondResult.MutatedTaskState);
+        Assert.Equal(1, cancelCount);
+        Assert.Equal(1, startCount);
+        var firstReceipt = Assert.Single(store.Receipts.Where(receipt => receipt.IntentId == firstIntent.Id));
+        Assert.Equal("warm-resume", firstReceipt.Decision);
+        var secondReceipt = Assert.Single(store.Receipts.Where(receipt => receipt.IntentId == secondIntent.Id));
+        Assert.Equal("operator-attention", secondReceipt.Decision);
+        Assert.Equal(firstReceipt.RoundKey, secondReceipt.RoundKey);
+        Assert.Equal("steer-cap-reached", secondReceipt.CancelConfirmation);
+        Assert.Contains("steer-cap", string.Join('\n', secondResult.ProgressLines), StringComparison.Ordinal);
+        var attention = Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+        Assert.Contains("no second steer attempted", attention.Body, StringComparison.Ordinal);
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_admission_fails")]
     public void FallsBackToFreshDispatchWhenAdmissionFails()
     {
