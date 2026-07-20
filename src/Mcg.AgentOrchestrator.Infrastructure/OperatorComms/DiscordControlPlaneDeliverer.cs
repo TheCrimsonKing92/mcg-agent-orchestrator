@@ -1,0 +1,317 @@
+using System.Security.Cryptography;
+using System.Text;
+
+namespace Mcg.AgentOrchestrator.Infrastructure;
+
+public interface IControlPlaneMessageTransport
+{
+    Task<ulong> SendAsync(
+        ControlPlaneDeliveryChannel channel,
+        string content,
+        IReadOnlyList<DiscordButtonDefinition> buttons,
+        CancellationToken cancellationToken = default);
+
+    Task EditAsync(
+        ControlPlaneDeliveryChannel channel,
+        ulong messageId,
+        string content,
+        IReadOnlyList<DiscordButtonDefinition> buttons,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class RecordingControlPlaneMessageTransport : IControlPlaneMessageTransport
+{
+    private ulong _nextMessageId = 1000;
+
+    public List<(ControlPlaneDeliveryChannel Channel, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> Sent { get; } = [];
+
+    public List<(ControlPlaneDeliveryChannel Channel, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> Edited { get; } = [];
+
+    public Task<ulong> SendAsync(
+        ControlPlaneDeliveryChannel channel,
+        string content,
+        IReadOnlyList<DiscordButtonDefinition> buttons,
+        CancellationToken cancellationToken = default)
+    {
+        Sent.Add((channel, content, buttons));
+        return Task.FromResult(++_nextMessageId);
+    }
+
+    public Task EditAsync(
+        ControlPlaneDeliveryChannel channel,
+        ulong messageId,
+        string content,
+        IReadOnlyList<DiscordButtonDefinition> buttons,
+        CancellationToken cancellationToken = default)
+    {
+        Edited.Add((channel, messageId, content, buttons));
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class DiscordControlPlaneDeliverer
+{
+    public const string PendingRollupKey = "control-plane:pending-rollup";
+    public const string BoardHeartbeatKey = "control-plane:board-heartbeat";
+    public const string DigestRollupKey = "control-plane:digest-rollup";
+
+    private readonly IControlPlaneDeliveryStore _store;
+    private readonly IControlPlaneMessageTransport _transport;
+    private readonly ControlPlaneDeliveryPolicy _policy;
+
+    public DiscordControlPlaneDeliverer(
+        IControlPlaneDeliveryStore store,
+        IControlPlaneMessageTransport transport,
+        ControlPlaneDeliveryPolicy? policy = null)
+    {
+        _store = store;
+        _transport = transport;
+        _policy = policy ?? new ControlPlaneDeliveryPolicy();
+    }
+
+    public async Task<ControlPlaneDeliveryBatchResult> DeliverAsync(
+        IEnumerable<ControlPlaneDecisionCard> cards,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        var operations = new List<ControlPlaneDeliveryOperation>();
+        var candidates = CollapseStorms(cards, now)
+            .OrderByDescending(card => card.IsBoardIntegrity)
+            .ThenBy(card => card.RaisedAt)
+            .ToList();
+
+        if (_policy.IsMuted(now))
+        {
+            operations.AddRange(candidates.Select(card => Suppressed(card, "muted")));
+            return new ControlPlaneDeliveryBatchResult(operations);
+        }
+
+        var decisionPushesToday = await _store.CountPushesAsync(
+            ControlPlaneDeliveryChannel.Decisions,
+            now.AddHours(-24),
+            cancellationToken);
+        var remainingBudget = Math.Max(0, _policy.DailyDecisionBudget - decisionPushesToday);
+        var overBudget = new List<ControlPlaneDecisionCard>();
+
+        foreach (var card in candidates)
+        {
+            if (_policy.IsQuietHours(now) && !card.IsBoardIntegrity)
+            {
+                operations.Add(Suppressed(card, "quiet-hours"));
+                continue;
+            }
+
+            if (!card.IsBoardIntegrity && remainingBudget <= 0)
+            {
+                overBudget.Add(card);
+                continue;
+            }
+
+            var operation = await UpsertCardAsync(card, now, cancellationToken);
+            operations.Add(operation);
+            if (operation.Kind == ControlPlaneDeliveryOperationKind.Send && !card.IsBoardIntegrity)
+                remainingBudget--;
+        }
+
+        if (overBudget.Count > 0)
+            operations.Add(await UpsertRollupAsync(overBudget, now, cancellationToken));
+
+        return new ControlPlaneDeliveryBatchResult(operations);
+    }
+
+    public async Task<ControlPlaneDeliveryBatchResult> DeliverBoardHeartbeatAsync(
+        ControlPlaneBoardSnapshot snapshot,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        var mark = await _store.TryGetAsync(BoardHeartbeatKey, cancellationToken);
+        if (mark is not null && now - mark.LastDeliveredAt < _policy.EffectiveBoardHeartbeatCadence)
+        {
+            return new ControlPlaneDeliveryBatchResult(
+                [new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, mark.MessageId, "heartbeat-cadence", string.Empty)]);
+        }
+
+        var content = RenderBoard(snapshot);
+        var hash = Hash(content);
+        if (mark is null)
+        {
+            var id = await _transport.SendAsync(ControlPlaneDeliveryChannel.Board, content, [], cancellationToken);
+            await _store.UpsertAsync(new ControlPlaneDeliveryMark(BoardHeartbeatKey, ControlPlaneDeliveryChannel.Board, id, now, now, null, hash, false), cancellationToken);
+            return new ControlPlaneDeliveryBatchResult(
+                [new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, id, "heartbeat", content)]);
+        }
+
+        await _transport.EditAsync(ControlPlaneDeliveryChannel.Board, mark.MessageId, content, [], cancellationToken);
+        await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        return new ControlPlaneDeliveryBatchResult(
+            [new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Board, BoardHeartbeatKey, mark.MessageId, "heartbeat", content)]);
+    }
+
+    public async Task<ControlPlaneDeliveryOperation> DeliverDigestAsync(
+        IReadOnlyList<ControlPlaneDecisionCard> cards,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        var mark = await _store.TryGetAsync(DigestRollupKey, cancellationToken);
+        if (mark is not null && now - mark.LastDeliveredAt < _policy.EffectiveDigestCadence)
+        {
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Digest, DigestRollupKey, mark.MessageId, "digest-cadence", string.Empty);
+        }
+
+        var content = RenderDigest(cards, now);
+        var hash = Hash(content);
+        if (mark is null)
+        {
+            var id = await _transport.SendAsync(ControlPlaneDeliveryChannel.Digest, content, [], cancellationToken);
+            await _store.UpsertAsync(new ControlPlaneDeliveryMark(DigestRollupKey, ControlPlaneDeliveryChannel.Digest, id, now, now, null, hash, false), cancellationToken);
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Digest, DigestRollupKey, id, "digest", content);
+        }
+
+        await _transport.EditAsync(ControlPlaneDeliveryChannel.Digest, mark.MessageId, content, [], cancellationToken);
+        await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Digest, DigestRollupKey, mark.MessageId, "digest", content);
+    }
+
+    private async Task<ControlPlaneDeliveryOperation> UpsertCardAsync(
+        ControlPlaneDecisionCard card,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var content = RenderCard(card);
+        var buttons = card.IsResolved ? [] : BuildButtons(card);
+        var hash = Hash(content);
+        var mark = await _store.TryGetAsync(card.DedupKey, cancellationToken);
+        if (mark is null)
+        {
+            var messageId = await _transport.SendAsync(ControlPlaneDeliveryChannel.Decisions, content, buttons, cancellationToken);
+            await _store.UpsertAsync(
+                new ControlPlaneDeliveryMark(card.DedupKey, ControlPlaneDeliveryChannel.Decisions, messageId, now, now, null, hash, card.IsResolved),
+                cancellationToken);
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, messageId, "new-card", content);
+        }
+
+        if (card.IsResolved && !mark.Resolved)
+        {
+            await _transport.EditAsync(ControlPlaneDeliveryChannel.Decisions, mark.MessageId, content, [], cancellationToken);
+            await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash, Resolved = true }, cancellationToken);
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, "resolved", content);
+        }
+
+        var reminderDue = !card.IsResolved &&
+            (mark.LastReminderAt is null || now - mark.LastReminderAt.Value >= _policy.EffectiveReminderCadence);
+        if (hash != mark.ContentHash || reminderDue)
+        {
+            await _transport.EditAsync(ControlPlaneDeliveryChannel.Decisions, mark.MessageId, content, buttons, cancellationToken);
+            await _store.UpsertAsync(mark with
+            {
+                LastDeliveredAt = now,
+                LastReminderAt = reminderDue ? now : mark.LastReminderAt,
+                ContentHash = hash,
+                Resolved = card.IsResolved
+            }, cancellationToken);
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, reminderDue ? "reminder" : "content-change", content);
+        }
+
+        return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, mark.MessageId, "dedup", content);
+    }
+
+    private async Task<ControlPlaneDeliveryOperation> UpsertRollupAsync(
+        IReadOnlyList<ControlPlaneDecisionCard> cards,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var content = $"Pending control-plane rollup: {cards.Count} over-budget item(s).\n" +
+            string.Join('\n', cards.Take(10).Select(card => $"- [{card.Kind}] {ShortGoal(card.GoalId)} {Truncate(card.Title, 120)}"));
+        var hash = Hash(content);
+        var mark = await _store.TryGetAsync(PendingRollupKey, cancellationToken);
+        if (mark is null)
+        {
+            var messageId = await _transport.SendAsync(ControlPlaneDeliveryChannel.Decisions, content, [], cancellationToken);
+            await _store.UpsertAsync(new ControlPlaneDeliveryMark(PendingRollupKey, ControlPlaneDeliveryChannel.Decisions, messageId, now, now, null, hash, false), cancellationToken);
+            return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Send, ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, messageId, "over-budget-rollup", content);
+        }
+
+        await _transport.EditAsync(ControlPlaneDeliveryChannel.Decisions, mark.MessageId, content, [], cancellationToken);
+        await _store.UpsertAsync(mark with { LastDeliveredAt = now, ContentHash = hash }, cancellationToken);
+        return new ControlPlaneDeliveryOperation(ControlPlaneDeliveryOperationKind.Edit, ControlPlaneDeliveryChannel.Decisions, PendingRollupKey, mark.MessageId, "over-budget-rollup", content);
+    }
+
+    private IReadOnlyList<ControlPlaneDecisionCard> CollapseStorms(IEnumerable<ControlPlaneDecisionCard> cards, DateTimeOffset now)
+    {
+        var source = cards
+            .Where(card => card.Source is ControlPlaneCardSource.CollaborationDecision or ControlPlaneCardSource.OperatorInboxEscalation)
+            .Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow || !card.IsResolved)
+            .ToList();
+        var collapsedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<ControlPlaneDecisionCard>();
+
+        foreach (var group in source.Where(card => !card.IsResolved).GroupBy(card => card.Kind, StringComparer.OrdinalIgnoreCase))
+        {
+            var inWindow = group.Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow).ToList();
+            if (inWindow.Count < _policy.SystemicMergeThreshold)
+                continue;
+
+            foreach (var card in inWindow)
+                collapsedKeys.Add(card.DedupKey);
+
+            result.Add(new ControlPlaneDecisionCard(
+                ControlPlaneCardSource.OperatorInboxEscalation,
+                "system",
+                $"Systemic{group.Key}",
+                "storm-window",
+                ControlPlaneDecisionCard.ComputeFingerprint(string.Join('|', inWindow.Select(card => card.DedupKey).Order(StringComparer.OrdinalIgnoreCase))),
+                $"{inWindow.Count} {group.Key} escalations need one systemic decision",
+                string.Join('\n', inWindow.Take(12).Select(card => $"- {ShortGoal(card.GoalId)}: {Truncate(card.Title, 120)}")),
+                inWindow.Min(card => card.RaisedAt),
+                IsBoardIntegrity: inWindow.Any(card => card.IsBoardIntegrity)));
+        }
+
+        result.AddRange(source.Where(card => !collapsedKeys.Contains(card.DedupKey)));
+        return result;
+    }
+
+    private static ControlPlaneDeliveryOperation Suppressed(ControlPlaneDecisionCard card, string reason) =>
+        new(ControlPlaneDeliveryOperationKind.Suppressed, ControlPlaneDeliveryChannel.Decisions, card.DedupKey, null, reason, string.Empty);
+
+    private static IReadOnlyList<DiscordButtonDefinition> BuildButtons(ControlPlaneDecisionCard card) =>
+        card.ActionList
+            .Take(25)
+            .Select(action => new DiscordButtonDefinition(action.Label, action.CustomId, action.Style))
+            .ToList();
+
+    private static string RenderCard(ControlPlaneDecisionCard card)
+    {
+        var header = $"[{card.Kind}] {card.Title}";
+        if (card.IsResolved)
+            header = $"~~{header}~~";
+        return $"{header}\nGoal: {ShortGoal(card.GoalId)}\n{Truncate(card.Body, 1600)}";
+    }
+
+    private static string RenderBoard(ControlPlaneBoardSnapshot snapshot)
+    {
+        var state = snapshot.LoopAlive ? "alive" : "stale";
+        return $"Board heartbeat: {state}\n" +
+            $"tickAge={FormatAge(snapshot.TickAge)} active={snapshot.ActiveLanes} held={snapshot.HeldLanes} escalated={snapshot.EscalatedLanes}\n" +
+            $"observedAt={snapshot.ObservedAt:O}";
+    }
+
+    private static string RenderDigest(IReadOnlyList<ControlPlaneDecisionCard> cards, DateTimeOffset now)
+    {
+        var open = cards.Count(card => !card.IsResolved);
+        var resolved = cards.Count(card => card.IsResolved);
+        return $"Control-plane digest {now:O}\nopen={open} resolved={resolved}\n" +
+            string.Join('\n', cards.Take(20).Select(card => $"- [{card.Kind}] {ShortGoal(card.GoalId)} {Truncate(card.Title, 100)}"));
+    }
+
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes}m" : $"{Math.Max(0, (int)age.TotalSeconds)}s";
+
+    private static string ShortGoal(string goalId) =>
+        string.IsNullOrWhiteSpace(goalId) ? "none" : goalId[..Math.Min(8, goalId.Length)];
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max];
+
+    private static string Hash(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+}
