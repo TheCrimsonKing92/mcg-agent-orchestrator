@@ -300,16 +300,34 @@ public sealed class DiscordControlPlaneDeliverer
         var collapsedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<ControlPlaneDecisionCard>();
 
-        foreach (var group in source.Where(card => !card.IsResolved).GroupBy(card => card.Kind, StringComparer.OrdinalIgnoreCase))
+        foreach (var group in source.GroupBy(card => card.Kind, StringComparer.OrdinalIgnoreCase))
         {
-            var inWindow = group.Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow).ToList();
+            var grouped = group.ToList();
+            var unresolved = grouped.Where(card => !card.IsResolved).ToList();
+            var inWindow = unresolved.Where(card => now - card.RaisedAt <= _policy.EffectiveStormWindow).ToList();
             var existingSystemic = existingSystemicKinds.Contains(group.Key);
-            var groupCards = existingSystemic ? group.ToList() : inWindow;
+            var groupCards = existingSystemic ? unresolved : inWindow;
             if (!existingSystemic && groupCards.Count < _policy.SystemicMergeThreshold)
                 continue;
 
-            foreach (var card in groupCards)
+            foreach (var card in grouped)
                 collapsedKeys.Add(card.DedupKey);
+
+            if (existingSystemic && groupCards.Count == 0)
+            {
+                result.Add(new ControlPlaneDecisionCard(
+                    ControlPlaneCardSource.OperatorInboxEscalation,
+                    "system",
+                    $"Systemic{group.Key}",
+                    "storm-window",
+                    ControlPlaneDecisionCard.ComputeFingerprint(group.Key),
+                    $"{group.Key} escalation storm resolved",
+                    "All underlying escalations for this systemic card are resolved.",
+                    grouped.Min(card => card.RaisedAt),
+                    IsResolved: true,
+                    IsBoardIntegrity: grouped.Any(card => card.IsBoardIntegrity)));
+                continue;
+            }
 
             result.Add(new ControlPlaneDecisionCard(
                 ControlPlaneCardSource.OperatorInboxEscalation,

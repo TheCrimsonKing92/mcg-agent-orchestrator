@@ -42,6 +42,7 @@ public sealed class InMemoryControlPlaneDeliveryStore : IControlPlaneDeliverySto
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<SystemicStormDeliveryState>>(
             _marks.Values
+                .Where(mark => !mark.Resolved)
                 .Select(ControlPlaneDeliveryStoreSystemicStorms.TryRead)
                 .Where(item => item is not null)
                 .Select(item => item!)
@@ -125,7 +126,7 @@ public sealed class SqliteControlPlaneDeliveryStore : IControlPlaneDeliveryStore
         cmd.CommandText = """
             SELECT dedup_key
             FROM control_plane_delivery_marks
-            WHERE dedup_key LIKE 'system:systemic%:storm-window:%'
+            WHERE dedup_key LIKE 'system:systemic%:storm-window:%' AND resolved = 0
             """;
         var states = new List<SystemicStormDeliveryState>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);

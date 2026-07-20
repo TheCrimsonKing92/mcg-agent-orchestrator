@@ -174,6 +174,34 @@ public sealed class ControlPlaneDelivererTests
         Assert.Contains(later.Operations, operation => operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_existing_systemic_merge_resolves_when_underlying_cards_resolve")]
+    public async Task ControlPlaneDelivererExistingSystemicMergeResolvesWhenUnderlyingCardsResolve()
+    {
+        var store = new InMemoryControlPlaneDeliveryStore();
+        var transport = new RecordingControlPlaneMessageTransport();
+        var policy = new ControlPlaneDeliveryPolicy(DailyDecisionBudget: 6, SystemicMergeThreshold: 3);
+        var deliverer = new DiscordControlPlaneDeliverer(store, transport, policy);
+        var start = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var cards = new[]
+        {
+            Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: start),
+            Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: start.AddMinutes(1)),
+            Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: start.AddMinutes(2))
+        };
+
+        await deliverer.DeliverAsync(cards, start.AddMinutes(2));
+        var resolved = await deliverer.DeliverAsync(cards.Select(card => card with { IsResolved = true }), start.AddMinutes(10));
+
+        Assert.Single(transport.Sent);
+        var edit = Assert.Single(transport.Edited);
+        Assert.Contains("~~[SystemicFailedTask] FailedTask escalation storm resolved~~", edit.Content);
+        Assert.Empty(edit.Buttons);
+        Assert.Contains(resolved.Operations, operation =>
+            operation.Reason == "resolved" &&
+            operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(await store.ListSystemicStormsAsync(), state => state.Kind == "FailedTask");
+    }
+
     [Xunit.Fact(DisplayName = "ControlPlaneDeliverer_resolved_unseen_card_is_suppressed")]
     public async Task ControlPlaneDelivererResolvedUnseenCardIsSuppressed()
     {
@@ -333,6 +361,29 @@ public sealed class ControlPlaneDelivererTests
             ], from, from.AddHours(2));
 
         Assert.DoesNotContain(report.Operations, operation => operation.Content.Contains("systemic decision", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_incremental_same_kind_storm_sends_only_systemic_card")]
+    public async Task ControlPlaneReplayHarnessIncrementalSameKindStormSendsOnlySystemicCard()
+    {
+        var from = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var report = await new ControlPlaneReplayHarness()
+            .ReplayAsync([
+                Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from),
+                Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: from.AddMinutes(10)),
+                Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: from.AddMinutes(20))
+            ], from, from.AddHours(2));
+
+        var decisionPushes = report.Operations
+            .Where(operation => operation.Channel == ControlPlaneDeliveryChannel.Decisions)
+            .Where(operation => operation.Kind is ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit)
+            .ToList();
+        var pushed = Assert.Single(decisionPushes);
+        Assert.Contains(":systemicfailedtask:", pushed.DedupKey, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(report.Operations, operation =>
+            operation.Reason == "new-card" &&
+            operation.DedupKey.Contains(":failedtask:", StringComparison.OrdinalIgnoreCase) &&
+            !operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "DeadManHeartbeatClient_default_options_do_not_send")]
