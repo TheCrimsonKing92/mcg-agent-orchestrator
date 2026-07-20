@@ -17,7 +17,8 @@ internal sealed record ProgressiveReviewSteeringResult(
 internal sealed record ProgressiveReviewSteeringOptions(
     int PerRoundSteerCap = 1,
     TimeSpan? MaxResumeSessionAge = null,
-    int MaxResumeTranscriptTokens = 64000)
+    int MaxResumeTranscriptTokens = 64000,
+    bool WriteTerminalCancelProofArtifacts = true)
 {
     public TimeSpan EffectiveMaxResumeSessionAge => MaxResumeSessionAge ?? TimeSpan.FromMinutes(60);
 }
@@ -65,7 +66,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _getLineageDescendants = getLineageDescendants ?? GetLiveLineageDescendants;
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
-        _prepareFreshDispatch = prepareFreshDispatch ?? PrepareFreshSubscriptionDispatch;
+        _prepareFreshDispatch = prepareFreshDispatch ?? PrepareRawFreshSubscriptionDispatch;
     }
 
     public static ProgressiveReviewSteeringCoordinator CreateDefault(
@@ -97,6 +98,28 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         if (intent is null)
             return ProgressiveReviewSteeringResult.None;
 
+        try
+        {
+            return ExecuteReservedIntent(kernel, goal, lines, intent);
+        }
+        catch (Exception ex)
+        {
+            var now = _utcNow();
+            var reason = $"steering exception: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}";
+            AppendFailSafeReceipt(intent, reason, "operator-attention", now);
+            RaiseAttention(intent, reason);
+            _store.CompleteIntentAsync(intent.Id, now).GetAwaiter().GetResult();
+            lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=exception");
+            return new ProgressiveReviewSteeringResult(true, lines);
+        }
+    }
+
+    private ProgressiveReviewSteeringResult ExecuteReservedIntent(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        List<string> lines,
+        ProgressiveReviewSteerIntent intent)
+    {
         var taskId = new TaskId(intent.TaskId);
         var now = _utcNow();
         var priorReceipts = _store.CountReceiptsForRoundAsync(intent.RoundKey).GetAwaiter().GetResult();
@@ -123,6 +146,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var originalProcess = task.LastProcess;
         var cancelTimeOwnedProcessSet = CaptureCancelTimeOwnedProcessSet(originalProcess);
         var cancelled = _cancelProcess(kernel, goal.Id, taskId);
+        EnsureTerminalCancelProofArtifacts(cancelled, cancelTimeOwnedProcessSet, now);
         var cancelConfirmation = ConfirmTreeDead(cancelled, cancelTimeOwnedProcessSet);
         if (!cancelConfirmation.Confirmed)
         {
@@ -140,12 +164,36 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var admission = BuildAdmission(refreshedGoal, refreshedTask, originalDispatch, originalProcess, intent);
         var stopwatch = Stopwatch.StartNew();
         var decision = admission.AllowsResume ? "warm-resume" : "fresh-dispatch";
-        if (admission.AllowsResume)
-            PrepareWarmResumeDispatch(kernel, refreshedGoal, refreshedTask, originalDispatch, intent.GuidanceText);
-        else
-            _prepareFreshDispatch(kernel, refreshedGoal, refreshedTask, intent.GuidanceText);
+        TaskProcessRecord started;
+        try
+        {
+            if (admission.AllowsResume)
+                PrepareWarmResumeDispatch(kernel, refreshedGoal, refreshedTask, originalDispatch, intent.GuidanceText);
+            else
+                PrepareFreshDispatchWithGuidance(kernel, refreshedGoal, refreshedTask, intent.GuidanceText);
 
-        var started = _startProcess(kernel, goal.Id, taskId);
+            started = _startProcess(kernel, goal.Id, taskId);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            var failureReceipt = BuildReceipt(
+                intent,
+                cancelConfirmation.Proof,
+                "operator-attention",
+                admission.Checks.Select(check => $"{check.Kind}:{check.Status}:{check.Reason}").Concat([$"RestartDecision:{decision}"]).ToArray(),
+                originalDispatch,
+                originalProcess,
+                null,
+                stopwatch.Elapsed,
+                $"steer-restart-failed: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}",
+                _utcNow());
+            _store.AppendReceiptAsync(failureReceipt).GetAwaiter().GetResult();
+            RaiseAttention(intent, $"Progressive-review steer restart failed after confirmed cancel ({decision}): {ex.Message}");
+            _store.CompleteIntentAsync(intent.Id, _utcNow()).GetAwaiter().GetResult();
+            lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=restart-failed receipt={failureReceipt.Id}");
+            return new ProgressiveReviewSteeringResult(true, lines);
+        }
         stopwatch.Stop();
 
         var receipt = BuildReceipt(
@@ -176,6 +224,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var currentHead = TryResolveHead(currentWorktree);
         var requestedProvider = ResolveCurrentProviderKind(task);
         var requestedModel = ResolveCurrentModelName(goal, task);
+        var latestIntegrationChange = LatestIntegrationChangeAfter(_workspace.GoalLifecycleEventsDirectory, goal.Id, originalDispatch.DispatchedAt);
         var context = new InquiryAdmissionContext(
             goal.Id,
             task.Id,
@@ -190,15 +239,23 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                 .Where(correction => correction.RecordedAt > originalDispatch.DispatchedAt)
                 .Select(correction => (DateTimeOffset?)correction.RecordedAt)
                 .FirstOrDefault(),
-            LatestIntegrationChangeAfter(_workspace.GoalLifecycleEventsDirectory, goal.Id, originalDispatch.DispatchedAt),
+            latestIntegrationChange,
             false,
             Math.Max(1, EstimateTokens(ProgressiveReviewGlanceCoordinator.ReadTranscriptTail(originalProcess))));
-        return InquiryResumeAdmission.Evaluate(
+        var decision = InquiryResumeAdmission.Evaluate(
             goal,
             task,
             originalDispatch,
             context,
             new InquiryAdmissionOptions(_options.EffectiveMaxResumeSessionAge, _options.MaxResumeTranscriptTokens));
+        return decision with
+        {
+            Checks = decision.Checks.Concat([
+                BuildAcceptanceCriteriaHashCheck(goal, originalDispatch),
+                BuildBranchMovementCheck(originalDispatch, currentHead, context.CapturedHeadIsAncestorOfCurrentHead),
+                BuildMainIntegrationMovementCheck(latestIntegrationChange, originalDispatch.DispatchedAt)
+            ]).ToArray()
+        };
     }
 
     private void PrepareWarmResumeDispatch(
@@ -228,7 +285,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             ModelSelectionReason: "progressive-review-steer:warm-resume"));
     }
 
-    private void PrepareFreshSubscriptionDispatch(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)
+    private void PrepareRawFreshSubscriptionDispatch(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)
     {
         _ = guidanceText;
         GoalManagementCommandService.SubscriptionDispatchTask(
@@ -241,6 +298,32 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             providers: _providers);
     }
 
+    private void PrepareFreshDispatchWithGuidance(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)
+    {
+        _prepareFreshDispatch(kernel, goal, task, guidanceText);
+        var prepared = kernel.GetTask(goal.Id, task.Id).LastDispatch
+            ?? throw new InvalidOperationException("Fresh steering fallback did not produce a dispatch record.");
+        var freshPrompt = string.IsNullOrWhiteSpace(prepared.PromptPath) || !File.Exists(prepared.PromptPath)
+            ? string.Empty
+            : File.ReadAllText(prepared.PromptPath);
+        var guidedPrompt = string.IsNullOrWhiteSpace(freshPrompt)
+            ? guidanceText
+            : $"{guidanceText}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{Environment.NewLine}{freshPrompt}";
+        var promptPath = WriteGuidancePrompt(goal.Id, task.Id, prepared.WorkerName, guidedPrompt);
+        var command = RewritePromptPath(prepared.Command, prepared.PromptPath, promptPath);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            prepared with
+            {
+                Command = command,
+                PromptPath = promptPath,
+                PromptCharacterCount = guidedPrompt.Length,
+                ModelSelectionReason = "progressive-review-steer:fresh-fallback"
+            },
+            allowPendingRecordedDispatchRefresh: true);
+    }
+
     private ProgressiveReviewSteerReceipt BuildReceipt(
         ProgressiveReviewSteerIntent intent,
         string cancelConfirmation,
@@ -248,7 +331,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         IReadOnlyList<string> admissionChecks,
         TaskDispatchRecord originalDispatch,
         TaskProcessRecord originalProcess,
-        TaskProcessRecord startedProcess,
+        TaskProcessRecord? startedProcess,
         TimeSpan steeredWall,
         string outcome,
         DateTimeOffset createdAt)
@@ -271,7 +354,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             intent.GuidanceText,
             originalDispatch.PromptCharacterCount ?? 0,
             0,
-            startedProcess.Command.Length,
+            startedProcess?.Command.Length ?? intent.GuidanceText.Length,
             0,
             Math.Max(0, (long)cancelledWall.TotalMilliseconds),
             Math.Max(0, (long)steeredWall.TotalMilliseconds),
@@ -379,6 +462,43 @@ internal sealed class ProgressiveReviewSteeringCoordinator
          heartbeat.State.Equals("exiting", StringComparison.OrdinalIgnoreCase) ||
          heartbeat.State.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
          heartbeat.State.Equals("cancelled", StringComparison.OrdinalIgnoreCase));
+
+    private void EnsureTerminalCancelProofArtifacts(TaskProcessRecord cancelled, IReadOnlyList<int> cancelTimeOwnedProcessSet, DateTimeOffset now)
+    {
+        if (!_options.WriteTerminalCancelProofArtifacts)
+            return;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(cancelled.ExitCodePath) ?? _workspace.LogDirectory);
+        if (!File.Exists(cancelled.ExitCodePath))
+            File.WriteAllText(cancelled.ExitCodePath, "1", Encoding.UTF8);
+
+        var heartbeat = ProcessLogReader.ReadHeartbeat(cancelled, now);
+        if (heartbeat.IsAvailable && IsTerminalHeartbeat(heartbeat))
+            return;
+
+        var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(cancelled);
+        Directory.CreateDirectory(Path.GetDirectoryName(heartbeatPath) ?? _workspace.LogDirectory);
+        var payload = new
+        {
+            pid = cancelled.ProcessId,
+            childPid = (int?)null,
+            ownedPids = cancelTimeOwnedProcessSet,
+            startedAt = cancelled.StartedAt.ToString("O"),
+            lastObservedAt = now.ToString("O"),
+            lastProgressAt = now.ToString("O"),
+            state = "cancelled",
+            stdoutBytes = SafeLength(cancelled.StandardOutputPath),
+            stderrBytes = SafeLength(cancelled.StandardErrorPath),
+            ownedCpuMs = cancelled.ResourceAccounting?.CpuMilliseconds ?? 0L,
+            providerSessionId = (string?)null,
+            worktreeHeadSha = (string?)null,
+            dirtyStateHash = (string?)null,
+            exitFileExists = true
+        };
+        var tmp = heartbeatPath + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web)), new UTF8Encoding(false));
+        File.Move(tmp, heartbeatPath, overwrite: true);
+    }
 
     private static IReadOnlyList<int> GetLiveLineageDescendants(TaskProcessRecord process) =>
         process.ProcessId > 0 ? WorkerProcessJobs.ListLiveDescendantProcessIds(process.ProcessId) : [];
@@ -555,6 +675,45 @@ Evidence: {intent.MisdirectionEvidence}
             source.GetString()?.Contains("integration", StringComparison.OrdinalIgnoreCase) == true;
     }
 
+    private static InquiryAdmissionCheck BuildAcceptanceCriteriaHashCheck(Goal goal, TaskDispatchRecord originalDispatch)
+    {
+        if (goal.RefinedSpec is null)
+            return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "goal has no refined acceptance criteria hash to compare");
+
+        if (string.IsNullOrWhiteSpace(originalDispatch.PromptPath) || !File.Exists(originalDispatch.PromptPath))
+            return Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "spawn prompt unavailable; cannot compare acceptance criteria hash");
+
+        var currentHash = HashText(string.Join("\n", goal.RefinedSpec.AcceptanceCriteria));
+        var prompt = File.ReadAllText(originalDispatch.PromptPath);
+        return prompt.Contains(currentHash, StringComparison.OrdinalIgnoreCase) ||
+            goal.RefinedSpec.AcceptanceCriteria.All(criterion => prompt.Contains(criterion, StringComparison.Ordinal))
+            ? Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} unchanged from spawn prompt")
+            : Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} is not present in spawn prompt");
+    }
+
+    private static InquiryAdmissionCheck BuildBranchMovementCheck(TaskDispatchRecord originalDispatch, string? currentHead, bool capturedHeadIsAncestor)
+    {
+        if (string.IsNullOrWhiteSpace(originalDispatch.WorktreeHeadSha) || string.IsNullOrWhiteSpace(currentHead))
+            return Fail(InquiryAdmissionCheckKind.BranchHeadMovement, "branch movement cannot be compared without captured and current HEAD");
+
+        return capturedHeadIsAncestor
+            ? Pass(InquiryAdmissionCheckKind.BranchHeadMovement, $"captured branch HEAD {originalDispatch.WorktreeHeadSha} remains an ancestor of current HEAD {currentHead}")
+            : Fail(InquiryAdmissionCheckKind.BranchHeadMovement, $"captured branch HEAD {originalDispatch.WorktreeHeadSha} is not an ancestor of current HEAD {currentHead}");
+    }
+
+    private static InquiryAdmissionCheck BuildMainIntegrationMovementCheck(DateTimeOffset? latestIntegrationChange, DateTimeOffset dispatchedAt)
+    {
+        return latestIntegrationChange is null || latestIntegrationChange <= dispatchedAt
+            ? Pass(InquiryAdmissionCheckKind.MainIntegrationMovement, "no branch/main integration movement recorded after spawn")
+            : Fail(InquiryAdmissionCheckKind.MainIntegrationMovement, $"branch/main integration movement recorded after spawn: {latestIntegrationChange:u}");
+    }
+
+    private static InquiryAdmissionCheck Pass(InquiryAdmissionCheckKind kind, string reason) =>
+        new(kind, InquiryAdmissionCheckStatus.Passed, reason);
+
+    private static InquiryAdmissionCheck Fail(InquiryAdmissionCheckKind kind, string reason) =>
+        new(kind, InquiryAdmissionCheckStatus.Failed, reason);
+
     private static bool IsProcessRunning(int processId)
     {
         try
@@ -569,6 +728,30 @@ Evidence: {intent.MisdirectionEvidence}
     }
 
     private static int EstimateTokens(string text) => Math.Max(1, text.Length / 4);
+
+    private static long SafeLength(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length : 0L;
+        }
+        catch
+        {
+            return 0L;
+        }
+    }
+
+    private static string RewritePromptPath(string command, string? oldPromptPath, string newPromptPath)
+    {
+        if (string.IsNullOrWhiteSpace(oldPromptPath))
+            return command;
+
+        return command.Replace(Quote(oldPromptPath), Quote(newPromptPath), StringComparison.OrdinalIgnoreCase)
+            .Replace(oldPromptPath, newPromptPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string HashText(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private static string Quote(string value) => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 

@@ -63,6 +63,45 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_writes_terminal_cancel_proof_after_owned_tree_is_dead")]
+    public void WritesTerminalCancelProofAfterOwnedTreeIsDead()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-produced-proof");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var cancelledProcessRecord = task.LastProcess!;
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "resume after generated cancel proof")).GetAwaiter().GetResult();
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = now.AddSeconds(1), WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                return cancelled;
+            },
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                var started = new TaskProcessRecord(7010, dispatch.Command, dispatch.WorkingDirectory, "out-produced.log", "err-produced.log", "exit-produced.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("warm-resume", receipt.Decision);
+        Assert.Contains("partial dispatch receipt consumed", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.True(File.Exists(cancelledProcessRecord.ExitCodePath));
+        Assert.Equal("cancelled", ProcessLogReader.ReadHeartbeat(cancelledProcessRecord).State);
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_admission_fails")]
     public void FallsBackToFreshDispatchWhenAdmissionFails()
     {
@@ -89,6 +128,7 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
                 Assert.Equal("fresh-guided", dispatch.Command);
+                Assert.Contains("fresh fallback guidance", File.ReadAllText(dispatch.PromptPath!), StringComparison.Ordinal);
                 var started = new TaskProcessRecord(7002, dispatch.Command, dispatch.WorkingDirectory, "out3.log", "err3.log", "exit3.txt", now.AddSeconds(2), null, null);
                 k.RecordTaskProcessStarted(goalId, taskId, started);
                 return started;
@@ -115,6 +155,59 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("fresh-dispatch", receipt.Decision);
         Assert.Contains(receipt.AdmissionChecks, check => check.Contains("SpawnHeadAncestor:Failed", StringComparison.Ordinal));
         Assert.Equal(head, GitCli.Run(root, "rev-parse", "HEAD").Output.Trim());
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_acceptance_criteria_hash_changed")]
+    public void FallsBackToFreshDispatchWhenAcceptanceCriteriaHashChanged()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-ac-drift");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        File.WriteAllText(task.LastDispatch.PromptPath!, "Acceptance criteria:\n- old criterion\n");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "contract",
+            ["new criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback after AC drift")).GetAwaiter().GetResult();
+        var preparedFresh = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                Assert.Equal("fresh-guided", dispatch.Command);
+                var started = new TaskProcessRecord(7011, dispatch.Command, dispatch.WorkingDirectory, "out-ac.log", "err-ac.log", "exit-ac.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            prepareFreshDispatch: (k, g, t, _) =>
+            {
+                preparedFresh = true;
+                k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                    "codex-cli",
+                    "fresh-guided",
+                    root,
+                    now.AddSeconds(2),
+                    "OpenAI",
+                    "gpt-5.5",
+                    WorkerProviderKind: ProviderKind.OpenAICodexCli));
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.True(preparedFresh);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("fresh-dispatch", receipt.Decision);
+        Assert.Contains(receipt.AdmissionChecks, check => check.Contains("AcceptanceCriteriaHash:Failed", StringComparison.Ordinal));
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_current_model_differs")]
@@ -397,7 +490,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 started = true;
                 throw new InvalidOperationException("start must not run without terminal proof");
-            });
+            },
+            options: new ProgressiveReviewSteeringOptions(WriteTerminalCancelProofArtifacts: false));
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -406,6 +500,34 @@ public sealed class ProgressiveReviewSteeringTests
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("operator-attention", receipt.Decision);
         Assert.Contains("exit artifact missing", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_records_receipt_and_attention_when_steer_start_throws")]
+    public void RecordsReceiptAndAttentionWhenSteerStartThrows()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-start-throws");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "start throws")).GetAwaiter().GetResult();
+        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (_, _, _) => throw new InvalidOperationException("dispatch start failed"));
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Contains("dispatch start failed", receipt.Outcome, StringComparison.Ordinal);
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
@@ -418,7 +540,8 @@ public sealed class ProgressiveReviewSteeringTests
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelProcess = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
-        IReadOnlyList<AgentDefinition>? agents = null)
+        IReadOnlyList<AgentDefinition>? agents = null,
+        ProgressiveReviewSteeringOptions? options = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
@@ -428,6 +551,7 @@ public sealed class ProgressiveReviewSteeringTests
             new InMemoryModelProviderRegistry([]),
             store,
             attentionStore,
+            options,
             utcNow: () => new DateTimeOffset(2026, 7, 20, 12, 0, 10, TimeSpan.Zero),
             isProcessRunning: isProcessRunning ?? (_ => false),
             getLineageDescendants: getLineageDescendants,

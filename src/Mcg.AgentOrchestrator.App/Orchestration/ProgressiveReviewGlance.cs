@@ -778,8 +778,8 @@ Corrective direction:
             running.ProviderSessionId ?? string.Empty,
             worktreeHeadSha ?? string.Empty,
             verdictTimestamp,
-            HashText(running.Inputs.AcceptanceSection),
-            HashLines(running.Inputs.CriteriaCorrectionOverlay));
+            $"sha256:{HashText(running.Inputs.AcceptanceSection)}",
+            $"sha256:{HashLines(running.Inputs.CriteriaCorrectionOverlay)}");
         var text = JsonSerializer.Serialize(inputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
     }
@@ -1136,8 +1136,8 @@ Corrective direction:
         string SessionId,
         string WorktreeHeadSha,
         DateTimeOffset GlanceVerdictTimestamp,
-        string AcceptanceCriteriaHash,
-        string CriteriaCorrectionOverlayHash);
+        string AcceptanceCriteriaVersionHash,
+        string CriteriaCorrectionOverlayVersionHash);
 
     private sealed class RoundState
     {
