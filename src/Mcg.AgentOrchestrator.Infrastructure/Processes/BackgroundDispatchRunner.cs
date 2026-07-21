@@ -36,6 +36,7 @@ public sealed record DispatchProcessStartResult(
 public sealed class BackgroundDispatchRunner
 {
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
+    public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
@@ -48,6 +49,17 @@ public sealed class BackgroundDispatchRunner
     // ownedCpuMs above this means the tool consumed real CPU since start (it launched and ran), beyond
     // the bare pwsh wrapper baseline - one of the signals that the tool was invoked.
     private const long CpuStartupBurstMs = 1000L;
+    private const string TestSafeWorkerEchoCommand =
+        "Write-Output 'WORKER_RESULT:'; " +
+        "Write-Output 'files: none'; " +
+        "Write-Output 'commands: test-safe real-worker rewrite'; " +
+        "Write-Output 'tests: not-run - test-safe real-worker rewrite'; " +
+        "Write-Output 'commit: none'; " +
+        "Write-Output 'blockers: none'; " +
+        "Write-Output 'model_fit: test-safe-rewrite - adequate - infrastructure test guard'; " +
+        "Write-Output 'skills: none'; " +
+        "Write-Output 'confidence: high'; " +
+        "Write-Output 'END_WORKER_RESULT'";
     private static readonly string[] BuildServerCandidates = ["VBCSCompiler", "MSBuild"];
     private sealed record DispatchSpawnReceipt(
         string Command,
@@ -100,6 +112,46 @@ public sealed class BackgroundDispatchRunner
     {
         var value = Environment.GetEnvironmentVariable(DisableDispatchStartVariable);
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTestRealWorkerCommandRewriteEnabled()
+    {
+        var value = Environment.GetEnvironmentVariable(TestRewriteRealWorkerCommandsVariable);
+        return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string RewriteRealWorkerCommandForTests(string command, bool rewriteEnabled)
+    {
+        if (!rewriteEnabled || !LooksLikeRealSubscriptionWorkerCommand(command))
+        {
+            return command;
+        }
+
+        return TestSafeWorkerEchoCommand;
+    }
+
+    private static bool LooksLikeRealSubscriptionWorkerCommand(string command)
+    {
+        var normalized = Regex.Replace(command, @"\s+", " ").Trim();
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        return normalized.Contains("codex exec", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("@openai/codex", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("gpt-5.3-codex-spark", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("gpt-5-codex", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("gpt-5.5-codex", StringComparison.OrdinalIgnoreCase) ||
+            IsClaudeSubscriptionCommand(normalized);
+    }
+
+    private static bool IsClaudeSubscriptionCommand(string normalizedCommand)
+    {
+        return Regex.IsMatch(normalizedCommand, @"(^|[;&|]\s*)claude(\.exe)?\s", RegexOptions.IgnoreCase) &&
+            (normalizedCommand.Contains(" -p ", StringComparison.OrdinalIgnoreCase) ||
+                normalizedCommand.Contains(" --print", StringComparison.OrdinalIgnoreCase) ||
+                normalizedCommand.Contains(" --model ", StringComparison.OrdinalIgnoreCase));
     }
 
     public TaskProcessRecord StartLatestDispatch(
@@ -186,8 +238,10 @@ public sealed class BackgroundDispatchRunner
             sandboxProvider);
         kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
 
+        var dispatchHostCommand = RewriteRealWorkerCommandForTests(dispatch.Command, IsTestRealWorkerCommandRewriteEnabled());
+
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
-            dispatch.Command,
+            dispatchHostCommand,
             dispatch.WorkingDirectory,
             stdoutPath,
             stderrPath,
