@@ -95,7 +95,7 @@ internal static class LandingExecutor
 
         var changedFiles = changedFilesResult.Files;
         var ownershipGuard = RepositoryOwnershipMap.GuardWriteSet(changedFiles);
-        if (ownershipGuard.RequiresOperatorApproval)
+        if (ownershipGuard.RequiresOperatorApproval && policy?.AllowsAutonomousHighRiskOwnership != true)
         {
             var holdRequests = BuildOwnershipHoldRequests(goal, executionDirectory, ownershipGuard);
             if (holdRequests.Count > 0)

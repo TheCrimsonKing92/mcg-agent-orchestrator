@@ -4081,6 +4081,65 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(3, heldAttempts);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_sets_aside_ownership_hold_escalation_without_relanding")]
+    public void BatchLoopSetsAsideOwnershipHoldEscalationWithoutRelanding()
+    {
+        var root = CreateTempDirectory("mcg-ownership-hold-set-aside");
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var (kernel, goal) = SimpleGoal("ownership held goal");
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            var landAttempts = 0;
+
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptance: _ => true,
+                land: g =>
+                {
+                    landAttempts++;
+                    OperatorInbox.RecordOwnershipHolds(
+                        workspace,
+                        g,
+                        [
+                            new OwnershipHoldRequest(
+                                task.Id,
+                                1,
+                                task.RequiredRole,
+                                ["src/Mcg.AgentOrchestrator.Infrastructure/Protected.cs"],
+                                "test ownership hold")
+                        ]);
+                    return new LandingResult(
+                        g.Id.Value,
+                        g.Id.Value[..8],
+                        new LandingDecision.Escalate("ownership-denylist hold: task touched protected path"),
+                        "integration",
+                        false,
+                        "Held");
+                });
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 3,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false);
+
+            Assert.Equal(3, summary.Ticks);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(1, landAttempts);
+            var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.OwnershipHold));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_keeps_unresolved_clarification_set_aside_without_reescalating")]
     public void BatchLoopKeepsUnresolvedClarificationSetAsideWithoutReescalating()
     {

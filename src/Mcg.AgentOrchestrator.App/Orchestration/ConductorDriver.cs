@@ -1926,7 +1926,7 @@ internal sealed class ConductorDriver
             if (LandingExecutor.IsOwnershipHoldEscalation(escalate.Reason))
             {
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
-                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, escalate.Reason));
+                    new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, escalate.Reason));
             }
 
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, escalate.Reason);
