@@ -88,7 +88,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 continue;
             }
 
-            if (IsReviewerOrTesterBlocker(evt))
+            if (IsReviewerOrTesterBlocker(goal, evt))
             {
                 AddFinding(findings, ExtractBlocker(evt.Message), timelineRound);
             }
@@ -113,10 +113,18 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsReviewerOrTesterBlocker(ProgressEvent evt) =>
-        evt.Kind == ProgressKind.TaskFailed &&
-        (evt.Message.StartsWith(ReviewerBlockerPrefix, StringComparison.Ordinal) ||
-            evt.Message.StartsWith(WorkerResultBlockerPrefix, StringComparison.Ordinal));
+    private static bool IsReviewerOrTesterBlocker(Goal goal, ProgressEvent evt)
+    {
+        if (evt.Kind != ProgressKind.TaskFailed ||
+            evt.TaskId is not { } taskId ||
+            goal.Tasks.FirstOrDefault(task => task.Id == taskId)?.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
+        {
+            return false;
+        }
+
+        return evt.Message.StartsWith(ReviewerBlockerPrefix, StringComparison.Ordinal) ||
+            evt.Message.StartsWith(WorkerResultBlockerPrefix, StringComparison.Ordinal);
+    }
 
     private static string ExtractBlocker(string message)
     {

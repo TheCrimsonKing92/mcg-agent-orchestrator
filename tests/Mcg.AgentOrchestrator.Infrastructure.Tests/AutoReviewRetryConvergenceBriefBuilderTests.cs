@@ -19,7 +19,9 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
         var latestTesterFinding = "p1 src/Foo.cs:42 retry-feedback path remains unwired.";
         var uniqueReviewerFinding = "P2 tests/FooTests.cs:17 missing assertion for the convergence mandate.";
         var uniqueTesterFinding = "src/Bar.cs:9 still skips the focused receipt quote.";
+        var developerFinding = "src/DeveloperOnly.cs:5 developer blocker should not pollute convergence brief.";
 
+        kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, $"WORKER_RESULT reported blocker: {developerFinding}");
         kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Failed, $"WORKER_RESULT reported blocker: {firstTesterFinding}");
         kernel.RetryTask(goal.Id, developer.Id, "auto-review-retry round 1: retry upstream Developer");
         kernel.ReportTaskProgress(goal.Id, reviewer.Id, WorkTaskStatus.Failed, $"Reviewer WORKER_RESULT reported blocker: {uniqueReviewerFinding}");
@@ -41,6 +43,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
         Xunit.Assert.Contains("seen in rounds 1, 3", brief);
         Xunit.Assert.Contains(uniqueReviewerFinding, brief);
         Xunit.Assert.Contains(uniqueTesterFinding, brief);
+        Xunit.Assert.DoesNotContain(developerFinding, brief);
         Xunit.Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.RerunMandate, brief);
     }
 
