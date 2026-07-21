@@ -31,7 +31,13 @@ public static class DispatchProcessHost
     // idle-stall cap (no stdout/stderr growth), then reaps the whole tree. Both are overridable via
     // env so an operator can widen them for an unusually long legitimate dispatch.
     private static readonly TimeSpan DefaultMaxRuntime = TimeSpan.FromMinutes(60);
-    private static readonly TimeSpan DefaultMaxIdle = TimeSpan.FromMinutes(20);
+    // Idle/stall cap: reap a worker that has streamed output but then made no progress -- no new output
+    // AND no CPU growth (lastProgressAt updates on either) -- for this long. Cut 20m -> 15m to recover
+    // faster from the known codex-CLI mid-session hang (openai/codex #7156/#7187): codex's reqwest client
+    // sets no request/read timeout and its Request.timeout field is never applied, so a black-holed API
+    // request hangs at ~0 CPU indefinitely. A working codex keeps lastProgressAt fresh via CPU growth, so
+    // a 15m full stall is almost certainly the hang; the margin still covers a long, quiet build/test.
+    private static readonly TimeSpan DefaultMaxIdle = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan WatchdogProbeInterval = TimeSpan.FromSeconds(15);
     private const long CpuProgressEpsilonMs = 50L;
 
