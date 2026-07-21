@@ -926,8 +926,8 @@ internal sealed class ConductorDriver
             : "WORKER_RESULT blocker";
         var message =
             $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} {triggerLabel}; " +
-            $"retry upstream {targetRole} task with findings: {TrimForConductorMessage(trigger.Finding)}. " +
-            $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}";
+            $"retry upstream {targetRole} task with convergence brief: " +
+            AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(goal, triggeringTask, trigger.Finding, round, outputArtifact);
         var warning = round >= policy.ReviewAutoRetryWarningRound
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
