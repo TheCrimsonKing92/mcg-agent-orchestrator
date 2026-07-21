@@ -4089,12 +4089,16 @@ public sealed class ConductorBatchLoopTests
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             var (kernel, goal) = SimpleGoal("ownership held goal");
+            var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "ordinary held goal");
             var task = goal.Tasks.Single();
             PassVerification(kernel, goal, task);
             var landAttempts = 0;
+            var heldAttempts = 0;
 
             var driver = MakeDriver(
-                getFacts: _ => GoalLifecycleFacts.None,
+                getFacts: g => g.Id == heldGoal.Id
+                    ? new GoalLifecycleFacts(WorkspaceExists: true)
+                    : GoalLifecycleFacts.None,
                 runAcceptance: _ => true,
                 land: g =>
                 {
@@ -4117,6 +4121,16 @@ public sealed class ConductorBatchLoopTests
                         "integration",
                         false,
                         "Held");
+                },
+                dispatchAndStart: g =>
+                {
+                    if (g.Id == heldGoal.Id)
+                    {
+                        heldAttempts++;
+                        return DispatchStartOutcome.EmptyBatch("Held for operator approval.");
+                    }
+
+                    return DispatchStartOutcome.Started();
                 });
 
             var summary = new ConductorBatchLoop().Run(
@@ -4131,6 +4145,7 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(3, summary.Ticks);
             Assert.Equal(1, summary.Escalated);
             Assert.Equal(1, landAttempts);
+            Assert.Equal(3, heldAttempts);
             var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
             Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.OwnershipHold));
         }
