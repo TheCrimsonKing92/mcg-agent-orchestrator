@@ -1098,8 +1098,8 @@ public sealed class ConductorDriverTests
         Xunit.Assert.Equal(new[] { "land", "semantic", "close" }, order);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_ownership_hold_skips_semantic_receipt")]
-    public void ConductorDriverVerifiedOwnershipHoldSkipsSemanticReceipt()
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_ownership_hold_escalates_and_skips_semantic_receipt")]
+    public void ConductorDriverVerifiedOwnershipHoldEscalatesAndSkipsSemanticReceipt()
     {
         var (kernel, goal) = SimpleGoal();
         PassVerification(kernel, goal, goal.Tasks.Single());
@@ -1124,7 +1124,9 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.True(result.Outcome is ConductorAdvanceOutcome.Held);
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, escalated.State);
+        Assert.True(LandingExecutor.IsOwnershipHoldEscalation(escalated.Reason));
         Assert.False(semanticCalled);
         Assert.True(landCalled);
     }

@@ -112,23 +112,33 @@ public sealed class LandingExecutorTests
     [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_non_approval_diff_auto_promotes_without_ownership_hold")]
     public void LandingExecutorGreenGateNonApprovalDiffAutoPromotesWithoutOwnershipHold()
     {
-        var repo = CreateGitRepository();
-        try
+        foreach (var policy in new ConductorAutonomyPolicy?[]
         {
-            var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var (kernel, goal) = CreateVerifiedGoal(repo);
-            var goalBranch = GoalWorktrees.BranchName(goal.Id);
-            AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.App/Feature.cs", "namespace TestApp; internal sealed class Feature;");
-
-            var result = LandingExecutor.Execute(kernel, goal, workspace);
-
-            Assert.True(result.MainAdvanced);
-            var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
-            Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
-        }
-        finally
+            null,
+            ConductorAutonomyPolicy.Conservative,
+            ConductorAutonomyPolicy.Manual,
+            ConductorAutonomyPolicy.Permissive
+        })
         {
-            TryDeleteDirectory(repo);
+            var repo = CreateGitRepository();
+            try
+            {
+                var policyName = policy?.Name ?? "null";
+                var workspace = OrchestratorWorkspace.ForDirectory(repo);
+                var (kernel, goal) = CreateVerifiedGoal(repo);
+                var goalBranch = GoalWorktrees.BranchName(goal.Id);
+                AddGoalBranchCommit(repo, goalBranch, "src/Mcg.AgentOrchestrator.App/Feature.cs", "namespace TestApp; internal sealed class Feature;");
+
+                var result = LandingExecutor.Execute(kernel, goal, workspace, policy: policy);
+
+                Assert.True(result.MainAdvanced, policyName);
+                var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+                Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
+            }
+            finally
+            {
+                TryDeleteDirectory(repo);
+            }
         }
     }
 
@@ -220,64 +230,46 @@ public sealed class LandingExecutorTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_holds_only_writing_task_touching_approval_path")]
-    public void LandingExecutorGreenGateApprovalDiffHoldsOnlyWritingTaskTouchingApprovalPath()
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_permissive_auto_promotes_without_ownership_hold")]
+    public void LandingExecutorGreenGateApprovalDiffPermissiveAutoPromotesWithoutOwnershipHold()
     {
         var repo = CreateGitRepository();
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var (kernel, goal) = CreateGoal(AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer);
-            var developer = goal.Tasks[0];
-            var tester = goal.Tasks[1];
-            var reviewer = goal.Tasks[2];
-            var baseCommit = ReadGit(repo, "rev-parse", "main");
-            Dispatch(kernel, goal, developer, "developer");
-            Dispatch(kernel, goal, tester, "tester");
-            Dispatch(kernel, goal, reviewer, "reviewer");
-            kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, baseCommit);
-            var goalBranch = GoalWorktrees.BranchName(goal.Id);
-            RunGit(repo, "checkout", "-b", goalBranch);
-            AppendCommit(repo, "src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", "namespace TestInfra; internal sealed class OwnershipTouched;");
-            var developerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
-            AppendCommit(repo, "src/Mcg.AgentOrchestrator.App/NonApprovalTouched.cs", "namespace TestApp; internal sealed class NonApprovalTouched;");
-            var testerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
-            RunGit(repo, "checkout", "main");
-            kernel.RecordDispatchResultCommit(goal.Id, developer.Id, developerResultCommit);
-            kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, developerResultCommit);
-            kernel.RecordDispatchResultCommit(goal.Id, tester.Id, testerResultCommit);
-            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, baseCommit);
-            kernel.RecordDispatchResultCommit(goal.Id, reviewer.Id, testerResultCommit);
-            kernel.RecordTaskVerification(
-                goal.Id,
-                developer.Id,
-                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            kernel.RecordTaskVerification(
-                goal.Id,
-                tester.Id,
-                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            kernel.RecordTaskVerification(
-                goal.Id,
-                reviewer.Id,
-                ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
-            Assert.Equal(GoalStatus.Verified, goal.Status);
+            var (kernel, goal, _, _, _) = CreateVerifiedOwnershipApprovalGoal(repo);
 
             var result = LandingExecutor.Execute(kernel, goal, workspace, policy: ConductorAutonomyPolicy.Permissive);
 
-            Assert.False(result.MainAdvanced);
-            Assert.True(result.Decision is LandingDecision.Escalate escalation &&
-                LandingExecutor.IsOwnershipHoldEscalation(escalation.Reason));
+            Assert.True(result.MainAdvanced);
+            Assert.IsType<LandingDecision.Promote>(result.Decision);
+            Assert.True(IsBranchReachableFromMain(repo, GoalWorktrees.BranchName(goal.Id)));
             var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
-            var hold = Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.OwnershipHold));
-            Assert.Equal(developer.Id.Value, hold.TaskId);
-            Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs", hold.Evidence);
-            Assert.DoesNotContain("src/Mcg.AgentOrchestrator.App/NonApprovalTouched.cs", hold.Evidence);
+            Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.OwnershipHold);
             Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
         }
         finally
         {
             TryDeleteDirectory(repo);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_conservative_records_ownership_hold")]
+    public void LandingExecutorGreenGateApprovalDiffConservativeRecordsOwnershipHold()
+    {
+        AssertOwnershipHoldEscalates(ConductorAutonomyPolicy.Conservative);
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_manual_records_ownership_hold")]
+    public void LandingExecutorGreenGateApprovalDiffManualRecordsOwnershipHold()
+    {
+        AssertOwnershipHoldEscalates(ConductorAutonomyPolicy.Manual);
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_approval_diff_null_policy_records_ownership_hold")]
+    public void LandingExecutorGreenGateApprovalDiffNullPolicyRecordsOwnershipHold()
+    {
+        AssertOwnershipHoldEscalates(null);
     }
 
     [Xunit.Fact(DisplayName = "LandingExecutor_git_diff_drain_timeout_fails_closed_even_with_empty_stdout")]
@@ -796,6 +788,74 @@ public sealed class LandingExecutorTests
             TryDeleteDirectory(repo);
             TryDeleteDirectory(remote);
         }
+    }
+
+    private static void AssertOwnershipHoldEscalates(ConductorAutonomyPolicy? policy)
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal, developer, approvalPath, nonApprovalPath) = CreateVerifiedOwnershipApprovalGoal(repo);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace, policy: policy);
+
+            Assert.False(result.MainAdvanced);
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.True(LandingExecutor.IsOwnershipHoldEscalation(escalation.Reason));
+            var inbox = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8]);
+            var hold = Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.OwnershipHold));
+            Assert.Equal(developer.Id.Value, hold.TaskId);
+            Assert.Contains(approvalPath, hold.Evidence);
+            Assert.DoesNotContain(nonApprovalPath, hold.Evidence);
+            Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer, string ApprovalPath, string NonApprovalPath)
+        CreateVerifiedOwnershipApprovalGoal(string repo)
+    {
+        const string approvalPath = "src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs";
+        const string nonApprovalPath = "src/Mcg.AgentOrchestrator.App/NonApprovalTouched.cs";
+        var (kernel, goal) = CreateGoal(AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer);
+        var developer = goal.Tasks[0];
+        var tester = goal.Tasks[1];
+        var reviewer = goal.Tasks[2];
+        var baseCommit = ReadGit(repo, "rev-parse", "main");
+        Dispatch(kernel, goal, developer, "developer");
+        Dispatch(kernel, goal, tester, "tester");
+        Dispatch(kernel, goal, reviewer, "reviewer");
+        kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, baseCommit);
+        var goalBranch = GoalWorktrees.BranchName(goal.Id);
+        RunGit(repo, "checkout", "-b", goalBranch);
+        AppendCommit(repo, approvalPath, "namespace TestInfra; internal sealed class OwnershipTouched;");
+        var developerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
+        AppendCommit(repo, nonApprovalPath, "namespace TestApp; internal sealed class NonApprovalTouched;");
+        var testerResultCommit = ReadGit(repo, "rev-parse", "HEAD");
+        RunGit(repo, "checkout", "main");
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, developerResultCommit);
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, developerResultCommit);
+        kernel.RecordDispatchResultCommit(goal.Id, tester.Id, testerResultCommit);
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, baseCommit);
+        kernel.RecordDispatchResultCommit(goal.Id, reviewer.Id, testerResultCommit);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            developer.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            tester.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", repo, DateTimeOffset.UtcNow));
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        return (kernel, goal, developer, approvalPath, nonApprovalPath);
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateGoal(params AgentRole[] roles)
