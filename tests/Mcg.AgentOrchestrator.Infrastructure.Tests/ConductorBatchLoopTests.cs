@@ -4099,6 +4099,11 @@ public sealed class ConductorBatchLoopTests
                 getFacts: g => g.Id == heldGoal.Id
                     ? new GoalLifecycleFacts(WorkspaceExists: true)
                     : GoalLifecycleFacts.None,
+                getRunningCount: () =>
+                {
+                    heldAttempts++;
+                    return ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers;
+                },
                 runAcceptance: _ => true,
                 land: g =>
                 {
@@ -4121,16 +4126,6 @@ public sealed class ConductorBatchLoopTests
                         "integration",
                         false,
                         "Held");
-                },
-                dispatchAndStart: g =>
-                {
-                    if (g.Id == heldGoal.Id)
-                    {
-                        heldAttempts++;
-                        return DispatchStartOutcome.EmptyBatch("Held for operator approval.");
-                    }
-
-                    return DispatchStartOutcome.Started();
                 });
 
             var summary = new ConductorBatchLoop().Run(
