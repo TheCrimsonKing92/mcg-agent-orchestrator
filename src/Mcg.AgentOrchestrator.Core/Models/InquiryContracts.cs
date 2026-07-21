@@ -13,10 +13,14 @@ public enum InquiryAdmissionCheckKind
     SameTask,
     SameRole,
     SameProvider,
+    SameModel,
     SameWorktree,
     SessionPresent,
     SessionNotRetired,
     SpawnHeadAncestor,
+    AcceptanceCriteriaHash,
+    BranchHeadMovement,
+    MainIntegrationMovement,
     NoCriteriaCorrectionSinceCapture,
     NoIntegrationChangeSinceCapture,
     SessionNotConsumedByNonForkedInquiry,
@@ -48,6 +52,7 @@ public sealed record InquiryAdmissionContext(
     TaskId RequestedTaskId,
     AgentRole RequestedRole,
     ProviderKind RequestedProviderKind,
+    string? RequestedModelName,
     string RequestedWorktree,
     string? CurrentWorktreeHeadSha,
     bool CapturedHeadIsAncestorOfCurrentHead,
@@ -103,6 +108,7 @@ public static class InquiryResumeAdmission
                 parentDispatch.WorkerProviderKind == context.RequestedProviderKind,
                 $"parent provider {parentDispatch.WorkerProviderKind} matches request",
                 $"parent provider {parentDispatch.WorkerProviderKind} does not match request {context.RequestedProviderKind}"),
+            CheckSameModel(parentDispatch, context),
             Check(
                 InquiryAdmissionCheckKind.SameWorktree,
                 SamePath(parentDispatch.WorkingDirectory, context.RequestedWorktree),
@@ -169,6 +175,23 @@ public static class InquiryResumeAdmission
             context.CapturedHeadIsAncestorOfCurrentHead,
             $"captured HEAD {parentDispatch.WorktreeHeadSha} is an ancestor of current HEAD {context.CurrentWorktreeHeadSha}",
             $"captured HEAD {parentDispatch.WorktreeHeadSha} is not an ancestor of current HEAD {context.CurrentWorktreeHeadSha}");
+    }
+
+    private static InquiryAdmissionCheck CheckSameModel(TaskDispatchRecord parentDispatch, InquiryAdmissionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(parentDispatch.ModelName) ||
+            string.IsNullOrWhiteSpace(context.RequestedModelName))
+        {
+            return Fail(
+                InquiryAdmissionCheckKind.SameModel,
+                $"parent model '{parentDispatch.ModelName ?? "unknown"}' cannot be compared to request '{context.RequestedModelName ?? "unknown"}'");
+        }
+
+        return Check(
+            InquiryAdmissionCheckKind.SameModel,
+            parentDispatch.ModelName.Equals(context.RequestedModelName, StringComparison.OrdinalIgnoreCase),
+            $"parent model {parentDispatch.ModelName} matches request",
+            $"parent model {parentDispatch.ModelName} does not match request {context.RequestedModelName}");
     }
 
     private static InquiryAdmissionCheck CheckNotAfter(

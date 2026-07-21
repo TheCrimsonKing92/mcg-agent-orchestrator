@@ -153,38 +153,64 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     public void StopRepoProcessRefusesExactPidWhenCommandGuardMismatches()
     {
         var repoRoot = FindCurrentSourceRoot();
-        var startInfo = new ProcessStartInfo
+        var targetStartInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            WorkingDirectory = repoRoot,
             UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
             CreateNoWindow = true
         };
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-ExecutionPolicy");
-        startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-File");
-        startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
-        startInfo.ArgumentList.Add("scripts\\Stop-RepoProcess.ps1");
-        startInfo.ArgumentList.Add("-Id");
-        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-        startInfo.ArgumentList.Add("-CommandContains");
-        startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
-        startInfo.ArgumentList.Add("-Force");
+        targetStartInfo.ArgumentList.Add("-NoProfile");
+        targetStartInfo.ArgumentList.Add("-Command");
+        targetStartInfo.ArgumentList.Add("Start-Sleep -Seconds 120");
+        using var target = Process.Start(targetStartInfo)
+            ?? throw new InvalidOperationException("Failed to start disposable process.");
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start Stop-RepoProcess.ps1.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                WorkingDirectory = repoRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(repoRoot, "scripts", "Invoke-RepoScript.ps1"));
+            startInfo.ArgumentList.Add("scripts\\Stop-RepoProcess.ps1");
+            startInfo.ArgumentList.Add("-Id");
+            startInfo.ArgumentList.Add(target.Id.ToString(CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add("-CommandContains");
+            startInfo.ArgumentList.Add("definitely-not-in-this-process-command-line");
+            startInfo.ArgumentList.Add("-Force");
 
-        Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
-        Assert.Equal(0, process.ExitCode);
-        Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
-        Assert.True(
-            stdout.Contains($"PROCESS id={Environment.ProcessId} status=refused reason=command-mismatch", StringComparison.Ordinal),
-            stdout);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start Stop-RepoProcess.ps1.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(30000), "Stop-RepoProcess.ps1 did not exit within 30 seconds.");
+            Assert.Equal(0, process.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+            Assert.True(
+                stdout.Contains($"PROCESS id={target.Id} status=refused reason=command-mismatch", StringComparison.Ordinal),
+                stdout);
+
+            target.Refresh();
+            Assert.False(target.HasExited, "Stop-RepoProcess.ps1 stopped a process after the command guard mismatched.");
+        }
+        finally
+        {
+            if (!target.HasExited)
+            {
+                target.Kill(entireProcessTree: true);
+                Assert.True(target.WaitForExit(5000), "Disposable process did not exit after test cleanup.");
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "Infrastructure_partition_helper_keeps_reconcile_tests_in_remainder")]

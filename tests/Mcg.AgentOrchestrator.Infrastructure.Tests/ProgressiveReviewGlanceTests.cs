@@ -119,6 +119,12 @@ public sealed class ProgressiveReviewGlanceTests
 
         var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
         var (kernel, goal, task) = RunningDeveloperRound(now, description: "Do work\n\nACCEPTANCE\n- Include correction overlay");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "contract",
+            ["Use refined acceptance criteria even when task text is stale."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["retry feedback is not the criteria correction overlay"]);
         kernel.RecordTaskNote(
             goal.Id,
@@ -158,6 +164,8 @@ public sealed class ProgressiveReviewGlanceTests
         _ = coordinator.Observe(kernel, [goal]);
 
         var inputs = runner.Calls.Single();
+        Xunit.Assert.Contains("Current refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Use refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("supersedes=\"criterion B\"", StringComparison.Ordinal));
@@ -181,6 +189,7 @@ public sealed class ProgressiveReviewGlanceTests
         {
             Xunit.Assert.False(string.IsNullOrWhiteSpace(delivery.StandardInput));
             Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Use refined acceptance criteria", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("supersedes=\"criterion B\"", delivery.StandardInput!, StringComparison.Ordinal);
@@ -495,6 +504,58 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("cancel plus resume-with-guidance", items.Single().Body, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_misdirection_enqueues_steer_intent_without_attention_when_store_is_available")]
+    public void MisdirectionEnqueuesSteerIntentWhenStoreIsAvailable()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, _) = RunningDeveloperRound(now);
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
+        var collaborationStore = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var steeringStore = new InMemoryProgressiveReviewSteeringStore();
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Correct toward the scoped implementation.",
+            "diff edits the forbidden surface",
+            5,
+            5));
+        var coordinator = new ProgressiveReviewGlanceCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            collaborationStore,
+            new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            (_, _) => "diff",
+            _ => "transcript",
+            steeringStore);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var intent = Assert.Single(steeringStore.Intents);
+        Assert.Equal(goal.Id.Value, intent.GoalId);
+        Assert.Equal("diff edits the forbidden surface", intent.MisdirectionEvidence);
+        Assert.Contains("authoritative over remembered session context", intent.GuidanceText, StringComparison.Ordinal);
+        Assert.Contains("diff", intent.GuidanceText, StringComparison.Ordinal);
+        Assert.Empty(collaborationStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_steer_inputs_hash_includes_session_context_not_only_glance_inputs")]
+    public void SteerInputsHashIncludesSessionContextNotOnlyGlanceInputs()
+    {
+        var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
+        var first = CaptureSteerIntentForSession(now, "session-one");
+        var second = CaptureSteerIntentForSession(now, "session-two");
+
+        Assert.Equal(first.GlanceInputHash, second.GlanceInputHash);
+        Assert.NotEqual(first.Intent.InputsHash, first.GlanceInputHash);
+        Assert.NotEqual(first.Intent.InputsHash, second.Intent.InputsHash);
+        Assert.Equal($"glance-{first.Intent.InputsHash}", first.Intent.Id);
+        Assert.Equal(first.Intent.Id, first.Intent.TriggerGlanceId);
+        Assert.NotEqual(first.Intent.Id, second.Intent.Id);
+    }
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_receipt_and_attention_failures_are_advisory_only")]
     public void ReceiptAndAttentionFailuresAreAdvisoryOnly()
     {
@@ -553,7 +614,9 @@ public sealed class ProgressiveReviewGlanceTests
         DateTimeOffset dispatchedAt,
         string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
         IClock? clock = null,
-        string workingDirectory = @"C:\work")
+        string workingDirectory = @"C:\work",
+        string? providerSessionId = null,
+        string? worktreeHeadSha = null)
     {
         var kernel = new AgentOrchestratorKernel(clock);
         var task = new TaskSpec(new TaskId("developer-task-0001"), description, AgentRole.Developer);
@@ -567,8 +630,42 @@ public sealed class ProgressiveReviewGlanceTests
                 "codex exec",
                 workingDirectory,
                 dispatchedAt,
-                BaseCommit: "base"));
+                BaseCommit: "base",
+                ProviderSessionId: providerSessionId,
+                WorktreeHeadSha: worktreeHeadSha));
         return (kernel, goal, task);
+    }
+
+    private static (ProgressiveReviewSteerIntent Intent, string GlanceInputHash) CaptureSteerIntentForSession(
+        DateTimeOffset now,
+        string sessionId)
+    {
+        var (kernel, goal, _) = RunningDeveloperRound(now, providerSessionId: sessionId);
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
+        var steeringStore = new InMemoryProgressiveReviewSteeringStore();
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Correct toward the scoped implementation.",
+            "diff edits the forbidden surface",
+            5,
+            5));
+        var events = new RecordingGlanceEvents();
+        var coordinator = new ProgressiveReviewGlanceCoordinator(
+            runner,
+            events,
+            new CollaborationItemStore(Path.Combine(root, "items.db")),
+            new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(["a.cs", "b.cs", "c.cs"], ["a.cs", "b.cs", "c.cs"], 0),
+            (_, _) => "diff",
+            _ => "transcript",
+            steeringStore);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        _ = coordinator.Observe(kernel, [goal]);
+
+        return (Assert.Single(steeringStore.Intents), Assert.Single(events.Receipts).InputsHash);
     }
 
     private static TaskProcessRecord CreateProcessRecord(

@@ -959,9 +959,9 @@ public static void DropToLow() {
                 TryShutdownBuildServer(parameters.WorkingDirectory);
             }
 
-            WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
-            WriteHeartbeat("exiting");
             TryWriteExitCode(parameters.ExitCodePath, exitCode);
+            WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
+            WriteHeartbeat("exited");
         }
 
         return exitCode;

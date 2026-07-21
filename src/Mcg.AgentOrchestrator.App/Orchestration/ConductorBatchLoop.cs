@@ -24,6 +24,7 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
+    private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -43,7 +44,8 @@ internal sealed class ConductorBatchLoop
         Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
         ConductEventLogWriter? conductEventLogWriter = null,
         Func<DateTimeOffset>? utcNow = null,
-        ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null)
+        ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null,
+        ProgressiveReviewSteeringCoordinator? progressiveReviewSteering = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -56,6 +58,7 @@ internal sealed class ConductorBatchLoop
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _progressiveReviewGlances = progressiveReviewGlances;
+        _progressiveReviewSteering = progressiveReviewSteering;
         _handoffOnMaxDuration = handoffOnMaxDuration;
         _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -343,6 +346,24 @@ internal sealed class ConductorBatchLoop
                             if (glanceResult.MutatedTaskState)
                             {
                                 changedGoalIds.Add(goal.Id);
+                            }
+                        }
+
+                        if (_progressiveReviewSteering is not null && watchInterval is not null)
+                        {
+                            var steerResult = _progressiveReviewSteering.ExecutePending(kernel, goal);
+                            foreach (var line in steerResult.ProgressLines)
+                            {
+                                EmitProgress(line, tickLines);
+                            }
+
+                            if (steerResult.MutatedTaskState)
+                            {
+                                changedGoalIds.Add(goal.Id);
+                                tickHeld++;
+                                goalProjectionCache.Invalidate(goal.Id);
+                                FinishGoalWalk("progressive-review-steer");
+                                continue;
                             }
                         }
 

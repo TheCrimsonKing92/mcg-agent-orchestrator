@@ -337,6 +337,52 @@ public static class WorkerProcessJobs
 
     internal static void ClearRegistryForTests() => Registry = null;
 
+    public static IReadOnlyList<int> ListLiveDescendantProcessIds(int ancestorProcessId)
+    {
+        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        var parentByProcessId = new Dictionary<int, int>();
+        var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
+        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+        {
+            return [];
+        }
+
+        try
+        {
+            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+            if (!Process32First(snapshot, ref entry))
+            {
+                return [];
+            }
+
+            do
+            {
+                var processId = (int)entry.th32ProcessID;
+                var parentProcessId = (int)entry.th32ParentProcessID;
+                if (processId > 0 && parentProcessId > 0)
+                {
+                    parentByProcessId[processId] = parentProcessId;
+                }
+            }
+            while (Process32Next(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+
+        return parentByProcessId.Keys
+            .Where(processId => processId != ancestorProcessId)
+            .Where(processId => IsDescendantOf(processId, ancestorProcessId, parentByProcessId))
+            .Where(IsProcessRunning)
+            .OrderBy(processId => processId)
+            .ToArray();
+    }
+
     private static void RegisterDurable(Process process, string? ownerId)
     {
         var registry = Registry;
@@ -507,6 +553,27 @@ public static class WorkerProcessJobs
         for (var i = 0; i < 64; i++)
         {
             if (!TryGetParentProcessId(current, out var parentProcessId))
+            {
+                return false;
+            }
+
+            if (parentProcessId == ancestorProcessId)
+            {
+                return true;
+            }
+
+            current = parentProcessId;
+        }
+
+        return false;
+    }
+
+    private static bool IsDescendantOf(int processId, int ancestorProcessId, IReadOnlyDictionary<int, int> parentByProcessId)
+    {
+        var current = processId;
+        for (var i = 0; i < 64; i++)
+        {
+            if (!parentByProcessId.TryGetValue(current, out var parentProcessId))
             {
                 return false;
             }

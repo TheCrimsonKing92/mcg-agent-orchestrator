@@ -28,6 +28,7 @@ public sealed class InquiryAdmissionTests
         AssertRejects(InquiryAdmissionCheckKind.SameTask, context: c => c with { RequestedTaskId = new TaskId("other-task") });
         AssertRejects(InquiryAdmissionCheckKind.SameRole, context: c => c with { RequestedRole = AgentRole.Tester });
         AssertRejects(InquiryAdmissionCheckKind.SameProvider, context: c => c with { RequestedProviderKind = ProviderKind.AnthropicClaudeCli });
+        AssertRejects(InquiryAdmissionCheckKind.SameModel, context: c => c with { RequestedModelName = "gpt-other" });
         AssertRejects(InquiryAdmissionCheckKind.SameWorktree, context: c => c with { RequestedWorktree = "C:\\other" });
         AssertRejects(InquiryAdmissionCheckKind.SessionPresent, dispatch: d => d with { ProviderSessionId = null });
         AssertRejects(InquiryAdmissionCheckKind.SessionNotRetired, dispatch: d => d with { ProviderSessionRetiredAt = Now });
@@ -75,6 +76,7 @@ public sealed class InquiryAdmissionTests
             "codex exec",
             "C:\\repo",
             DispatchedAt,
+            ModelName: "gpt-5.5",
             WorkerProviderKind: ProviderKind.OpenAICodexCli,
             ProviderSessionId: "session-12345678",
             WorktreeHeadSha: "abc123");
@@ -83,6 +85,7 @@ public sealed class InquiryAdmissionTests
             task.Id,
             task.RequiredRole,
             ProviderKind.OpenAICodexCli,
+            "gpt-5.5",
             "C:\\repo",
             "def456",
             CapturedHeadIsAncestorOfCurrentHead: true,
