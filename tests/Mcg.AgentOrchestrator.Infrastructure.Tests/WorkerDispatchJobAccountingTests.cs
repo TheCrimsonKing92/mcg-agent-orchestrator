@@ -114,7 +114,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
         using var sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var logs = Path.Combine(root, "logs");
-        var workingDirectory = InfrastructureTestSupport.FindRepositoryRoot();
+        var workingDirectory = CreateDirtySeededDispatchRepository();
         var expectedHead = ReadGit(workingDirectory, "rev-parse", "HEAD");
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Claude spawn tuple", [new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner)]);
@@ -156,7 +156,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
         using var sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var logs = Path.Combine(root, "logs");
-        var workingDirectory = InfrastructureTestSupport.FindRepositoryRoot();
+        var workingDirectory = CreateDirtySeededDispatchRepository();
         var expectedHead = ReadGit(workingDirectory, "rev-parse", "HEAD");
         var providerSessionId = "codex-session-abc12345";
         var kernel = new AgentOrchestratorKernel();
@@ -337,6 +337,18 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
         var result = GitCli.Run(workingDirectory, arguments);
         Assert.True(result.Succeeded, result.Error);
         return result.Output.Trim();
+    }
+
+    private static string CreateDirtySeededDispatchRepository()
+    {
+        var workingDirectory = DispatchRepositorySupport.CreateSeededRepository();
+        File.WriteAllText(Path.Combine(workingDirectory, "dirty-state.txt"), "dirty state fixture");
+        return workingDirectory;
+    }
+
+    private sealed class DispatchRepositorySupport : WorkerDispatchTestSupport
+    {
+        public static string CreateSeededRepository() => CreateSeededDispatchRepository();
     }
 
     private static IDisposable ClearWorkerSandboxEnv()
