@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -8,195 +6,197 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class AutoReviewRetryConvergenceBriefBuilder
 {
     internal const string AcceptedShapePreamble =
-        "the existing implementation is accepted in shape — do NOT rewrite it; close only the residual blockers below";
+        "Existing implementation shape is accepted. Do NOT rewrite or re-architect the accepted work; preserve it and close only the residual blockers below.";
 
-    internal const string RerunMandate =
-        "rerun the focused test classes at your final commit and quote receipts";
-
-    private const string ReviewerBlockerPrefix = "Reviewer WORKER_RESULT reported blocker:";
-    private const string WorkerResultBlockerPrefix = "WORKER_RESULT reported blocker:";
+    internal const string GenericRerunMandate =
+        "Rerun the focused test classes covering your changed files at your final commit and quote receipts.";
 
     private static readonly Regex WhitespacePattern = new(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex LeadingPriorityPattern = new(@"^\s*P\d+\s*[:.)-]?\s*", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex RoundReferencePattern = new(@"\bround\s+\d+\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex LocationPattern = new(
-        @"(?<location>(?:[A-Za-z]:\\|\.{0,2}[/\\])?[\w .-]+(?:[/\\][\w .-]+)*[/\\][\w .-]+\.[A-Za-z0-9]+(?::\d+)?|[\w.-]+\.[A-Za-z0-9]+(?::\d+)?)",
+    private static readonly Regex FocusedTestClassPattern = new(
+        @"(?:FullyQualifiedName~|tests[/\\][A-Za-z0-9_.-]+[/\\])?(?<class>[A-Z][A-Za-z0-9_]*(?:Tests|Test))(?:\.cs)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal static string BuildConvergenceBrief(
         Goal goal,
+        TaskSpec targetTask,
         TaskSpec triggeringTask,
         string currentFinding,
+        string triggerLabel,
+        AgentRole targetRole,
         int round,
-        string outputArtifact)
+        string outputArtifact,
+        IEnumerable<string> changedFileScopes)
     {
         ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(targetTask);
         ArgumentNullException.ThrowIfNull(triggeringTask);
 
-        var findings = CollectFindings(goal, triggeringTask, currentFinding, round);
-        var builder = new StringBuilder();
-        builder.AppendLine(AcceptedShapePreamble);
-        builder.AppendLine();
-        builder.AppendLine("Residual blockers:");
+        var accumulatedFindings = CollectAccumulatedVerifyingFindings(goal, targetTask, triggeringTask, currentFinding);
+        return BuildConvergenceBrief(
+            round,
+            triggeringTask.RequiredRole,
+            triggeringTask.Id,
+            triggerLabel,
+            targetRole,
+            outputArtifact,
+            accumulatedFindings,
+            changedFileScopes);
+    }
 
-        if (findings.Count == 0)
+    internal static string BuildConvergenceBrief(
+        int round,
+        AgentRole triggeringRole,
+        TaskId triggeringTaskId,
+        string triggerLabel,
+        AgentRole targetRole,
+        string outputArtifact,
+        IEnumerable<string> accumulatedFindings,
+        IEnumerable<string> changedFileScopes)
+    {
+        var residualBlockers = DeduplicateConvergenceFindings(accumulatedFindings);
+        var lines = new List<string>
         {
-            builder.AppendLine("- no structured Reviewer/Tester blocker text was recorded; inspect the latest verifier output.");
+            $"auto-review-retry round {round} convergence brief: {triggeringRole} task {triggeringTaskId.Value[..8]} {triggerLabel}; retry upstream {targetRole} task.",
+            AcceptedShapePreamble,
+            "Deduplicated residual blockers accumulated across reviewer/tester retry rounds:"
+        };
+
+        if (residualBlockers.Count == 0)
+        {
+            lines.Add("- No concrete reviewer/tester blocker text was extracted; inspect the verifier output artifact before changing code.");
         }
         else
         {
-            foreach (var finding in findings)
+            foreach (var blocker in residualBlockers)
             {
-                builder.Append("- ");
-                builder.Append(finding.Text);
-                if (finding.Rounds.Count > 1)
-                {
-                    builder.Append(" (seen in rounds ");
-                    builder.Append(string.Join(", ", finding.Rounds));
-                    builder.Append(')');
-                }
-
-                builder.AppendLine();
+                lines.Add($"- {blocker}");
             }
         }
 
-        builder.AppendLine();
-        builder.Append(RerunMandate);
-        if (!string.IsNullOrWhiteSpace(outputArtifact))
-        {
-            builder.Append("; latest verifier output: ");
-            builder.Append(outputArtifact.Trim());
-        }
-
-        return builder.ToString();
+        lines.Add(BuildFocusedTestReceiptMandate(residualBlockers, changedFileScopes));
+        lines.Add($"Full {triggeringRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static IReadOnlyList<CollapsedFinding> CollectFindings(
-        Goal goal,
-        TaskSpec triggeringTask,
-        string currentFinding,
-        int currentRound)
+    internal static IReadOnlyList<string> InferFocusedTestClasses(
+        IEnumerable<string> findings,
+        IEnumerable<string> changedFileScopes)
     {
-        var findings = new Dictionary<string, FindingAccumulator>(StringComparer.Ordinal);
-        var timelineRound = 1;
-
-        foreach (var evt in goal.Timeline)
+        var classes = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var finding in findings)
         {
-            if (IsAutoReviewRetry(evt))
+            foreach (Match match in FocusedTestClassPattern.Matches(finding))
             {
-                timelineRound++;
+                classes.Add(match.Groups["class"].Value);
+            }
+        }
+
+        foreach (var scope in changedFileScopes)
+        {
+            var normalized = scope.Replace('\\', '/').Trim();
+            if (!normalized.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
             }
 
-            if (IsReviewerOrTesterBlocker(goal, evt))
+            var name = Path.GetFileNameWithoutExtension(normalized);
+            if (string.IsNullOrWhiteSpace(name))
             {
-                AddFinding(findings, ExtractBlocker(evt.Message), timelineRound);
+                continue;
+            }
+
+            if (normalized.StartsWith("tests/", StringComparison.OrdinalIgnoreCase) &&
+                name.EndsWith("Tests", StringComparison.Ordinal))
+            {
+                classes.Add(name);
+            }
+            else if (normalized.StartsWith("src/", StringComparison.OrdinalIgnoreCase))
+            {
+                classes.Add(name.EndsWith("Tests", StringComparison.Ordinal) ? name : $"{name}Tests");
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(currentFinding) &&
-            !goal.Timeline.Any(evt =>
-                evt.Kind == ProgressKind.TaskFailed &&
-                evt.TaskId == triggeringTask.Id &&
-                string.Equals(ExtractBlocker(evt.Message), currentFinding.Trim(), StringComparison.Ordinal)))
+        return classes.ToArray();
+    }
+
+    private static IReadOnlyList<string> CollectAccumulatedVerifyingFindings(
+        Goal goal,
+        TaskSpec targetTask,
+        TaskSpec triggeringTask,
+        string currentFinding)
+    {
+        var findings = new List<string>();
+        var relevantTasks = goal.Tasks
+            .SkipWhile(task => task.Id != targetTask.Id)
+            .Where(task => task.Id == triggeringTask.Id ||
+                task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester);
+
+        foreach (var task in relevantTasks)
         {
-            AddFinding(findings, currentFinding, currentRound);
+            foreach (var verification in task.VerificationHistory)
+            {
+                if (task.RequiredRole == AgentRole.Reviewer &&
+                    WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
+                        verification,
+                        goal.EffectiveAcceptanceCriteriaCorrections,
+                        out var reviewerBlocker,
+                        out _))
+                {
+                    findings.AddRange(SplitConvergenceFindings(reviewerBlocker));
+                }
+                else if (task.RequiredRole == AgentRole.Tester &&
+                    WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var testerBlocker))
+                {
+                    findings.AddRange(SplitConvergenceFindings(testerBlocker));
+                }
+            }
         }
 
-        return findings.Values
-            .OrderBy(item => item.FirstSeenOrder)
-            .Select(item => new CollapsedFinding(item.LatestText, item.Rounds.Order().ToArray()))
+        findings.AddRange(SplitConvergenceFindings(currentFinding));
+        return findings;
+    }
+
+    private static IReadOnlyList<string> DeduplicateConvergenceFindings(IEnumerable<string> findings)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var finding in findings)
+        {
+            var normalized = NormalizeConvergenceText(finding);
+            if (normalized.Length > 0 && seen.Add(normalized))
+            {
+                result.Add(normalized);
+            }
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string> SplitConvergenceFindings(string finding)
+    {
+        var items = finding
+            .Replace("\r\n", "\n")
+            .Split(['\n', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => item.TrimStart('-', '*', ' '))
+            .Where(item => item.Length > 0)
             .ToArray();
+
+        return items.Length == 0 ? [finding.Trim()] : items;
     }
 
-    private static bool IsAutoReviewRetry(ProgressEvent evt) =>
-        evt.Kind == ProgressKind.TaskRetried &&
-        evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsReviewerOrTesterBlocker(Goal goal, ProgressEvent evt)
+    private static string BuildFocusedTestReceiptMandate(
+        IReadOnlyList<string> residualBlockers,
+        IEnumerable<string> changedFileScopes)
     {
-        if (evt.Kind != ProgressKind.TaskFailed ||
-            evt.TaskId is not { } taskId ||
-            goal.Tasks.FirstOrDefault(task => task.Id == taskId)?.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
+        var testClasses = InferFocusedTestClasses(residualBlockers, changedFileScopes);
+        if (testClasses.Count == 0)
         {
-            return false;
+            return GenericRerunMandate;
         }
 
-        return evt.Message.StartsWith(ReviewerBlockerPrefix, StringComparison.Ordinal) ||
-            evt.Message.StartsWith(WorkerResultBlockerPrefix, StringComparison.Ordinal);
+        return $"Rerun these focused test classes at your final commit and quote receipts: {string.Join(", ", testClasses)}.";
     }
 
-    private static string ExtractBlocker(string message)
-    {
-        if (message.StartsWith(ReviewerBlockerPrefix, StringComparison.Ordinal))
-        {
-            return message[ReviewerBlockerPrefix.Length..].Trim();
-        }
-
-        return message.StartsWith(WorkerResultBlockerPrefix, StringComparison.Ordinal)
-            ? message[WorkerResultBlockerPrefix.Length..].Trim()
-            : message.Trim();
-    }
-
-    private static void AddFinding(Dictionary<string, FindingAccumulator> findings, string text, int round)
-    {
-        var trimmed = text.Trim();
-        if (trimmed.Length == 0)
-        {
-            return;
-        }
-
-        var key = BuildDedupKey(trimmed);
-        if (!findings.TryGetValue(key, out var item))
-        {
-            item = new FindingAccumulator(findings.Count, trimmed);
-            findings.Add(key, item);
-        }
-
-        item.LatestText = trimmed;
-        item.Rounds.Add(round);
-    }
-
-    private static string BuildDedupKey(string text)
-    {
-        var location = ExtractLocation(text);
-        var normalized = NormalizeFindingText(text);
-        return location.Length == 0 ? normalized : location + "|" + normalized;
-    }
-
-    private static string ExtractLocation(string text)
-    {
-        var match = LocationPattern.Match(text);
-        if (!match.Success)
-        {
-            return string.Empty;
-        }
-
-        return match.Groups["location"].Value
-            .Replace('\\', '/')
-            .Trim()
-            .ToLowerInvariant();
-    }
-
-    private static string NormalizeFindingText(string text)
-    {
-        var normalized = text.Trim().ToLower(CultureInfo.InvariantCulture);
-        normalized = LocationPattern.Replace(normalized, string.Empty);
-        normalized = RoundReferencePattern.Replace(normalized, string.Empty);
-        normalized = LeadingPriorityPattern.Replace(normalized, string.Empty);
-        normalized = normalized.Replace('-', ' ');
-        normalized = Regex.Replace(normalized, @"[^\p{L}\p{N}\s]", " ", RegexOptions.CultureInvariant);
-        normalized = Regex.Replace(normalized, @"\b(the|a|an|still|remains?|leaves?)\b", " ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        normalized = WhitespacePattern.Replace(normalized, " ").Trim();
-        return normalized;
-    }
-
-    private sealed class FindingAccumulator(int firstSeenOrder, string latestText)
-    {
-        public int FirstSeenOrder { get; } = firstSeenOrder;
-        public string LatestText { get; set; } = latestText;
-        public HashSet<int> Rounds { get; } = [];
-    }
-
-    private sealed record CollapsedFinding(string Text, IReadOnlyList<int> Rounds);
+    private static string NormalizeConvergenceText(string value) =>
+        WhitespacePattern.Replace(value.Trim(), " ");
 }
