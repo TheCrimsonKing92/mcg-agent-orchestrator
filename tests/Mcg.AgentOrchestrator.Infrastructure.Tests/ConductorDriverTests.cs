@@ -2097,12 +2097,15 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_failure_blocks_without_empty_output_retry_or_dispatch")]
-    public void ConductorDriverSandboxPreflightFailureBlocksWithoutEmptyOutputRetryOrDispatch()
+    [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_failure_auto_retries_on_shared_dispatch_flake_budget")]
+    public void ConductorDriverSandboxPreflightFailureAutoRetriesOnSharedDispatchFlakeBudget()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         DispatchTask(kernel, goal, task);
+        // The worker never launched (sandbox launch-preflight failure): an intermittent sandbox-prep hiccup
+        // that a fresh dispatch usually clears, so the conductor auto-retries on the shared dispatch-flake
+        // budget instead of escalating the whole goal to the operator on a single flake.
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
             new TaskVerificationRecord(
                 "test.exe",
@@ -2112,23 +2115,71 @@ public sealed class ConductorDriverTests
                 "CreateProcessAsUser failed during Low Integrity preflight",
                 DateTimeOffset.UtcNow));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(0, task.EmptyOutputRetryCount);
+        Assert.Equal(1, task.EmptyOutputRetryCount);
 
         var retried = false;
-        var dispatched = false;
-        string? escalationMessage = null;
+        var escalated = false;
+        string? retryMessage = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
-            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
-            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
-            writeEscalation: (_, _, message) => { escalationMessage = message; });
+            retryTask: (gid, tid, msg) => { retried = true; retryMessage = msg; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, _) => { escalated = true; });
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.False(retried);
-        Assert.False(dispatched);
-        Assert.Equal(0, task.EmptyOutputRetryCount);
-        Assert.Contains("sandbox-preflight-failure", escalationMessage);
+        Assert.True(retried);
+        Assert.False(escalated);
+        Assert.Contains("sandbox-preflight dispatch flake", retryMessage!);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_budget_exhaustion_escalates_after_bounded_retries")]
+    public void ConductorDriverSandboxPreflightBudgetExhaustionEscalatesAfterBoundedRetries()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        const string preflightStderr = "CreateProcessAsUser failed during Low Integrity preflight";
+        for (var i = 0; i < 2; i++)
+        {
+            DispatchTask(kernel, goal, task);
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+                new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", preflightStderr, DateTimeOffset.UtcNow));
+            if (i == 0)
+            {
+                kernel.RetryTask(goal.Id, task.Id, "previous preflight retry");
+            }
+        }
+        Assert.Equal(2, task.EmptyOutputRetryCount);
+
+        var policy = ConductorAutonomyPolicy.Permissive with
+        {
+            MaxEmptyOutputDispatchRetries = 2,
+            MaxEmptyOutputAutoRecoverCycles = 1
+        };
+        var escalated = false;
+        var retried = false;
+        string? escalationMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, message) => { escalated = true; escalationMessage = message; });
+
+        // count=2, maxAttempts=2 (2*1): 2 > 2 is false, so it still auto-retries.
+        var result = driver.AdvanceOnce(goal, policy);
+        Assert.True(retried);
+        Assert.False(escalated);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+
+        // The next preflight failure pushes the count past the budget -> escalate for operator action.
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", preflightStderr, DateTimeOffset.UtcNow));
+        Assert.Equal(3, task.EmptyOutputRetryCount);
+
+        result = driver.AdvanceOnce(goal, policy);
+        Assert.True(escalated);
+        Assert.Contains("exhausted sandbox-preflight dispatch recovery", escalationMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 

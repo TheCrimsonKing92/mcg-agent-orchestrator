@@ -707,15 +707,36 @@ internal sealed class ConductorDriver
                     ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!));
             }
 
-            var preflightFailedTask = goal.Tasks.FirstOrDefault(t =>
+            var preflightFlakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 t.LastVerification is { } latest &&
                 DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.PreflightFailure);
-            if (preflightFailedTask is not null)
+            if (preflightFlakedTask is not null)
             {
-                var outcome = DispatchFailureClassifier.Classify(preflightFailedTask, preflightFailedTask.LastVerification!);
-                return Escalate(goal, goalPrefix, policy, state,
-                    $"Task {preflightFailedTask.Id.Value[..8]} blocked by {outcome.EvidenceSummary}; operator retry required");
+                var outcome = DispatchFailureClassifier.Classify(preflightFlakedTask, preflightFlakedTask.LastVerification!);
+                // A sandbox launch-preflight failure means the worker never launched -- usually an INTERMITTENT
+                // sandbox-prep hiccup that a fresh dispatch clears (most launches in the same window succeed).
+                // Auto-retry on the shared transient-dispatch-flake budget and only escalate once it is spent,
+                // instead of escalating the whole goal to the operator on a single flake.
+                var preflightMaxAttempts = policy.MaxEmptyOutputDispatchRetries * policy.MaxEmptyOutputAutoRecoverCycles;
+                if (preflightFlakedTask.EmptyOutputRetryCount > preflightMaxAttempts)
+                {
+                    return Escalate(goal, goalPrefix, policy, state,
+                        $"Task {preflightFlakedTask.Id.Value[..8]} exhausted sandbox-preflight dispatch recovery " +
+                        $"({preflightFlakedTask.EmptyOutputRetryCount}/{preflightMaxAttempts}); operator action required: {outcome.EvidenceSummary}");
+                }
+
+                var preflightDelay = ComputeEmptyOutputBackoff(policy, preflightFlakedTask.EmptyOutputRetryCount);
+                if (preflightDelay > TimeSpan.Zero)
+                {
+                    _emptyOutputBackoffDelay(preflightDelay);
+                }
+
+                var preflightNote = $"Auto-retry sandbox-preflight dispatch flake " +
+                    $"{preflightFlakedTask.EmptyOutputRetryCount}/{preflightMaxAttempts} for task " +
+                    $"{preflightFlakedTask.Id.Value[..8]}; worker never launched (preflight failure): {outcome.EvidenceSummary}";
+                _retryTask(goal.Id, preflightFlakedTask.Id, preflightNote, null);
+                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
