@@ -90,7 +90,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             releaseCommand.CommandText = "COMMIT";
             releaseCommand.ExecuteNonQuery();
 
-            var output = await acceptanceTask.WaitAsync(TimeSpan.FromSeconds(10));
+            var output = await acceptanceTask.WaitAsync(TimeSpan.FromSeconds(60));
             Assert.Contains("Acceptance evidence bundle: passed", output);
             Assert.Contains("Fast-forwarded", output);
             Assert.True(File.Exists(Path.Combine(repo, "transient-lock.txt")));

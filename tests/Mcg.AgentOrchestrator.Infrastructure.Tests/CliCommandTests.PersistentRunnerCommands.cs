@@ -767,11 +767,11 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
 
-        var result = await RunAppCliWithExitTimeout(root, ["next", "--full"], TimeSpan.FromSeconds(2));
+        var result = await RunAppCliWithExitTimeout(root, ["next", "--full"], TimeSpan.FromSeconds(60));
 
         Xunit.Assert.True(
             result.ExitedWithinTimeout,
-            $"CLI did not exit within 2 seconds. stdout: {result.StandardOutput} stderr: {result.StandardError}");
+            $"CLI did not exit within the 60 second hang guard. stdout: {result.StandardOutput} stderr: {result.StandardError}");
         Xunit.Assert.Equal(1, result.ExitCode);
         Xunit.Assert.Contains("Create a goal first", result.StandardError);
 

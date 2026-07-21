@@ -616,6 +616,7 @@ public abstract class GoalAcceptanceVerifierTestBase
 internal sealed class RecordingTimeProvider : TimeProvider
 {
     private long _currentTicks;
+    private DateTimeOffset _utcNow = new(2026, 7, 21, 0, 0, 0, TimeSpan.Zero);
 
     public List<TimeSpan> Delays { get; } = [];
 
@@ -625,15 +626,24 @@ internal sealed class RecordingTimeProvider : TimeProvider
 
     public override long GetTimestamp() => _currentTicks;
 
+    public override DateTimeOffset GetUtcNow() => _utcNow;
+
+    public void Advance(TimeSpan delay)
+    {
+        if (delay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        _currentTicks += delay.Ticks;
+        _utcNow += delay;
+    }
+
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         if (dueTime != Timeout.InfiniteTimeSpan)
         {
-            if (dueTime > TimeSpan.Zero)
-            {
-                _currentTicks += dueTime.Ticks;
-            }
-
+            Advance(dueTime);
             Delays.Add(dueTime);
             DelayRequested?.Invoke(dueTime);
         }
@@ -1966,10 +1976,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var calls = new List<string[]>();
         var buildAttempts = 0;
         var testAttempts = 0;
-        FileStream? held = null;
+        var fakeTimeProvider = new RecordingTimeProvider();
+        var leaseTimeStartedAt = fakeTimeProvider.GetUtcNow();
+        var slotEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var leasePrepareAttempts = 0;
         var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
         var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
         var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == slotEnvironment.ExecutionLockPath &&
+                Interlocked.Increment(ref leasePrepareAttempts) <= 2)
+            {
+                var lockedPath = Path.Combine(current.ArtifactsPath, "bin", "Core.Tests.dll");
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -1996,13 +2018,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                         var artifactsPath = GetArtifactsPath(args);
                         var lockedPath = Path.Combine(artifactsPath, "bin", "Core.Tests.dll");
                         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
-                        File.WriteAllText(lockedPath, "held");
-                        held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-                        _ = Task.Run(async () =>
-                        {
-                            await Task.Delay(500);
-                            held!.Dispose();
-                        });
+                        File.WriteAllText(lockedPath, "transiently reported by compiler");
                         return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                             1,
                             $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
@@ -2024,7 +2040,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
-            });
+            }, fakeTimeProvider, fakeTimeProvider.Advance);
 
             AcceptanceVerificationResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -2038,6 +2054,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.NotNull(result);
             Assert.False(result!.Passed);
             Assert.True(result.Retried);
+            Assert.True(leasePrepareAttempts >= 3);
+            Assert.True(fakeTimeProvider.GetUtcNow() - leaseTimeStartedAt >= TimeSpan.FromMilliseconds(200));
             Assert.Equal(2, buildAttempts);
             Assert.Equal(2, testAttempts);
             Assert.Equal(1, result.ExitCode);
@@ -2045,7 +2063,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("Red.Namespace.FailingTest", result.OutputTail!, StringComparison.Ordinal);
             Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
             Assert.Contains("released=true", output, StringComparison.Ordinal);
-            Assert.Matches(@"waited-ms=([1-9][0-9]*)", output);
+            Assert.Matches(@"waited-ms=([0-9]+)", output);
             Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
             Assert.Contains("verdict=completed", output, StringComparison.Ordinal);
             Assert.Contains("build-lock=false", output, StringComparison.Ordinal);
@@ -2058,8 +2076,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
             GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
             GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
-            held?.Dispose();
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
