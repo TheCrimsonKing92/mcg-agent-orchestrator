@@ -924,10 +924,16 @@ internal sealed class ConductorDriver
         var triggerLabel = triggeringTask.RequiredRole == AgentRole.Reviewer
             ? "verdict=needs-work"
             : "WORKER_RESULT blocker";
-        var message =
-            $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} {triggerLabel}; " +
-            $"retry upstream {targetRole} task with convergence brief: " +
-            AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(goal, triggeringTask, trigger.Finding, round, outputArtifact);
+        var message = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            targetTask,
+            triggeringTask,
+            trigger.Finding,
+            triggerLabel,
+            targetRole,
+            round,
+            outputArtifact,
+            _getLandingFileScopes(goal));
         var warning = round >= policy.ReviewAutoRetryWarningRound
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."

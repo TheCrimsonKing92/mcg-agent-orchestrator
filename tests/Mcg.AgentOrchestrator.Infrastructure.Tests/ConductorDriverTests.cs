@@ -158,6 +158,19 @@ public sealed class ConductorDriverTests
         }
     }
 
+    private static int CountOccurrences(string value, string expected)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = value.IndexOf(expected, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += expected.Length;
+        }
+
+        return count;
+    }
+
     private static GoalLifecycleFacts ReadFactsPerGoal(OrchestratorWorkspace workspace, Goal goal)
     {
         var dir = workspace.ExecutionDirectory;
@@ -1440,8 +1453,118 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_auto_retries_developer_with_findings")]
-    public void ConductorDriverReviewerNeedsWorkAutoRetriesDeveloperWithFindings()
+    [Xunit.Fact(DisplayName = "ConductorDriver_auto_review_retry_convergence_brief_deduplicates_multi_round_findings")]
+    public void ConductorDriverAutoReviewRetryConvergenceBriefDeduplicatesMultiRoundFindings()
+    {
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            3,
+            AgentRole.Reviewer,
+            new TaskId("reviewer-task-0001"),
+            "verdict=needs-work",
+            AgentRole.Developer,
+            "C:\\tmp\\reviewer.out.log",
+            [
+                "ConductorDriverTests still expects the raw findings passthrough.",
+                "Tester receipt omits ProgressiveReviewGlanceTests.",
+                "  ConductorDriverTests   still expects the raw findings passthrough.  ",
+                "Reviewer still needs InquiryDispatcherTests coverage."
+            ],
+            ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+
+        Assert.Contains("auto-review-retry round 3 convergence brief", brief);
+        Assert.Contains("Existing implementation shape is accepted", brief);
+        Assert.Contains("Do NOT rewrite", brief);
+        Assert.Contains("Deduplicated residual blockers", brief);
+        Assert.Equal(1, CountOccurrences(brief, "- ConductorDriverTests still expects the raw findings passthrough."));
+        Assert.Contains("- Tester receipt omits ProgressiveReviewGlanceTests.", brief);
+        Assert.Contains("- Reviewer still needs InquiryDispatcherTests coverage.", brief);
+        Assert.Contains("Rerun these focused test classes at your final commit and quote receipts:", brief);
+        Assert.Contains("ConductorDriverTests", brief);
+        Assert.Contains("ProgressiveReviewGlanceTests", brief);
+        Assert.Contains("InquiryDispatcherTests", brief);
+        Assert.Contains("C:\\tmp\\reviewer.out.log", brief);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_auto_review_retry_convergence_brief_keeps_single_round_findings")]
+    public void ConductorDriverAutoReviewRetryConvergenceBriefKeepsSingleRoundFindings()
+    {
+        var blocker = "Developer left tester receipt parsing unwired.";
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            1,
+            AgentRole.Tester,
+            new TaskId("tester-task-0001"),
+            "WORKER_RESULT blocker",
+            AgentRole.Developer,
+            "C:\\tmp\\tester.out.log",
+            [blocker],
+            []);
+
+        Assert.Contains("auto-review-retry round 1 convergence brief", brief);
+        Assert.Contains("Existing implementation shape is accepted", brief);
+        Assert.Equal(1, CountOccurrences(brief, $"- {blocker}"));
+        Assert.Contains("Rerun the focused test classes covering your changed files at your final commit and quote receipts.", brief);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_auto_review_retry_convergence_brief_keeps_all_unique_findings")]
+    public void ConductorDriverAutoReviewRetryConvergenceBriefKeepsAllUniqueFindings()
+    {
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            2,
+            AgentRole.Reviewer,
+            new TaskId("reviewer-task-0001"),
+            "verdict=needs-work",
+            AgentRole.Developer,
+            "reviewer output",
+            [
+                "First blocker remains open.",
+                "Second blocker remains open.",
+                "Third blocker remains open."
+            ],
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs"]);
+
+        Assert.Equal(1, CountOccurrences(brief, "- First blocker remains open."));
+        Assert.Equal(1, CountOccurrences(brief, "- Second blocker remains open."));
+        Assert.Equal(1, CountOccurrences(brief, "- Third blocker remains open."));
+        Assert.Contains("ConductorDriverTests", brief);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_convergence_brief_accumulates_prior_round_findings")]
+    public void ConductorDriverReviewerRetryConvergenceBriefAccumulatesPriorRoundFindings()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Shared blocker stays open.");
+        kernel.RetryTask(goal.Id, developer.Id, "auto-review-retry round 1 convergence brief: prior retry");
+        PassVerification(kernel, goal, developer);
+        PassVerification(kernel, goal, tester);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "  Shared   blocker stays open.  ; New blocker surfaced.");
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, msg, roundKind) =>
+            {
+                retryMessage = msg;
+                return kernel.RetryTask(gid, tid, msg, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Contains("auto-review-retry round 2 convergence brief", retryMessage);
+        Assert.Equal(1, CountOccurrences(retryMessage!, "- Shared blocker stays open."));
+        Assert.Contains("- New blocker surfaced.", retryMessage);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_auto_retries_developer_with_convergence_brief")]
+    public void ConductorDriverReviewerNeedsWorkAutoRetriesDeveloperWithConvergenceBrief()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
@@ -1476,8 +1599,11 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
         Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
-        Assert.Contains("auto-review-retry round 1", retryMessage);
+        Assert.Contains("auto-review-retry round 1 convergence brief", retryMessage);
+        Assert.Contains("Existing implementation shape is accepted", retryMessage);
+        Assert.DoesNotContain("retry upstream Developer task with findings:", retryMessage);
         Assert.Contains(blocker, retryMessage);
+        Assert.Contains("Rerun", retryMessage);
         Assert.Contains("C:\\tmp\\reviewer.out.log", retryMessage);
         Assert.Null(retryRoundKind);
         Assert.Null(developer.PendingRetryRoundKind);
@@ -1488,8 +1614,8 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_tester_worker_result_blocker_auto_retries_developer_with_findings")]
-    public void ConductorDriverTesterWorkerResultBlockerAutoRetriesDeveloperWithFindings()
+    [Xunit.Fact(DisplayName = "ConductorDriver_tester_worker_result_blocker_auto_retries_developer_with_convergence_brief")]
+    public void ConductorDriverTesterWorkerResultBlockerAutoRetriesDeveloperWithConvergenceBrief()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
@@ -1522,10 +1648,13 @@ public sealed class ConductorDriverTests
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
         Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
-        Assert.Contains("auto-review-retry round 1", retryMessage);
+        Assert.Contains("auto-review-retry round 1 convergence brief", retryMessage);
         Assert.Contains("Tester task", retryMessage);
         Assert.Contains("WORKER_RESULT blocker", retryMessage);
+        Assert.Contains("Existing implementation shape is accepted", retryMessage);
+        Assert.DoesNotContain("retry upstream Developer task with findings:", retryMessage);
         Assert.Contains(blocker, retryMessage);
+        Assert.Contains("Rerun", retryMessage);
         Assert.Contains("C:\\tmp\\tester.out.log", retryMessage);
         Assert.Null(retryRoundKind);
         Assert.Null(developer.PendingRetryRoundKind);
