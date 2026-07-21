@@ -81,12 +81,17 @@ public static class DotnetBuildEnvironmentManager
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
     private const int ArtifactPrepBusyRetryLimit = 3;
     private static readonly TimeSpan ArtifactPrepBusyRetryDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan SlotBusyPollDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeProvider DefaultLeaseTimeProvider = TimeProvider.System;
+    private static readonly Action<TimeSpan> DefaultLeaseSleep = Thread.Sleep;
     private static readonly object CurrentLandingFixtureRootsGate = new();
     private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
     private static int s_nextStableSlotScanStart = -1;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
     internal static Action? ShutdownBuildServersForTests { get; set; }
     internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
+    internal static TimeProvider DefaultLeaseTimeProviderForTests => DefaultLeaseTimeProvider;
+    internal static Action<TimeSpan> DefaultLeaseSleepForTests => DefaultLeaseSleep;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -416,15 +421,19 @@ public static class DotnetBuildEnvironmentManager
 
     public static FileStream AcquireLeaseExecutionLock(
         DotnetBuildEnvironment environment,
-        CancellationToken cancellationToken = default) =>
-        AcquireLeaseExecutionLock(environment, timeout: null, cancellationToken);
+        CancellationToken cancellationToken = default,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null) =>
+        AcquireLeaseExecutionLock(environment, null, cancellationToken, timeProvider, sleep);
 
     public static FileStream AcquireLeaseExecutionLock(
         DotnetBuildEnvironment environment,
         TimeSpan? timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null)
     {
-        return TryAcquireLeaseExecutionLock(environment, timeout, cancellationToken) switch
+        return TryAcquireLeaseExecutionLock(environment, timeout, cancellationToken, timeProvider, sleep) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease.DetachStreamForLegacyCaller(),
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -436,10 +445,14 @@ public static class DotnetBuildEnvironmentManager
     public static DotnetBuildLeaseAcquisition TryAcquireLeaseExecutionLock(
         DotnetBuildEnvironment environment,
         TimeSpan? timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
-        var timeoutAt = DateTimeOffset.UtcNow.Add(timeout ?? DefaultSlotBusyPollTimeout);
+        var clock = timeProvider ?? DefaultLeaseTimeProvider;
+        var delay = sleep ?? DefaultLeaseSleep;
+        var timeoutAt = clock.GetUtcNow().Add(timeout ?? DefaultSlotBusyPollTimeout);
         var attemptedCompilerLockRemediation = false;
         var attemptedOwnedProcessRemediation = false;
         var artifactPrepBusyAttempts = 0;
@@ -454,12 +467,12 @@ public static class DotnetBuildEnvironmentManager
                 if (selfHeldLandingFixtureAttribution is null &&
                     IsSlotArtifactsBusy(environment))
                 {
-                    if (DateTimeOffset.UtcNow >= timeoutAt)
+                    if (clock.GetUtcNow() >= timeoutAt)
                     {
                         return EmitSlotsBusy(environment.LeaseId);
                     }
 
-                    Thread.Sleep(100);
+                    delay(SlotBusyPollDelay);
                     continue;
                 }
 
@@ -467,12 +480,12 @@ public static class DotnetBuildEnvironmentManager
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (DateTimeOffset.UtcNow >= timeoutAt)
+                if (clock.GetUtcNow() >= timeoutAt)
                 {
                     return EmitSlotsBusy(environment.LeaseId);
                 }
 
-                Thread.Sleep(100);
+                delay(SlotBusyPollDelay);
                 continue;
             }
 
@@ -494,12 +507,12 @@ public static class DotnetBuildEnvironmentManager
                     LockAttribution.EmitReceipt(selfHeldLandingFixtureAttribution);
                     artifactPrepBusyAttempts++;
                     if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
-                        DateTimeOffset.UtcNow >= timeoutAt)
+                        clock.GetUtcNow() >= timeoutAt)
                     {
                         return EmitSlotsBusy(environment.LeaseId);
                     }
 
-                    Thread.Sleep(ArtifactPrepBusyRetryDelay);
+                    delay(ArtifactPrepBusyRetryDelay);
                     continue;
                 }
 
@@ -539,21 +552,21 @@ public static class DotnetBuildEnvironmentManager
                     }
 
                     if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
-                        DateTimeOffset.UtcNow >= timeoutAt)
+                        clock.GetUtcNow() >= timeoutAt)
                     {
                         return EmitSlotsBusy(environment.LeaseId);
                     }
 
-                    Thread.Sleep(ArtifactPrepBusyRetryDelay);
+                    delay(ArtifactPrepBusyRetryDelay);
                     continue;
                 }
 
-                if (DateTimeOffset.UtcNow >= timeoutAt)
+                if (clock.GetUtcNow() >= timeoutAt)
                 {
                     return EmitBuildLockBlocked(environment.LeaseId, blockedAttribution);
                 }
 
-                Thread.Sleep(100);
+                delay(SlotBusyPollDelay);
             }
         }
     }

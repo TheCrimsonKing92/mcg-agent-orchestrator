@@ -9,6 +9,15 @@ using Microsoft.Win32.SafeHandles;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class DotnetBuildEnvironmentManagerTests
 {
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_defaults_use_system_time_and_thread_sleep")]
+    public void DotnetBuildEnvironmentManagerLeaseDefaultsUseSystemTimeAndThreadSleep()
+    {
+        Assert.Same(TimeProvider.System, DotnetBuildEnvironmentManager.DefaultLeaseTimeProviderForTests);
+        Assert.Null(DotnetBuildEnvironmentManager.DefaultLeaseSleepForTests.Target);
+        Assert.Equal(typeof(Thread), DotnetBuildEnvironmentManager.DefaultLeaseSleepForTests.Method.DeclaringType);
+        Assert.Equal(nameof(Thread.Sleep), DotnetBuildEnvironmentManager.DefaultLeaseSleepForTests.Method.Name);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]
     public void DotnetBuildEnvironmentManagerReusesGoalLeaseWithMetadataAndCleanup()
     {
@@ -292,6 +301,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.Core.dll");
+        var fakeTimeProvider = new RecordingTimeProvider();
+        var startedAt = fakeTimeProvider.GetUtcNow();
         var prepareAttempts = 0;
         DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
         {
@@ -312,11 +323,14 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
                     environment,
-                    TimeSpan.FromSeconds(2)));
+                    TimeSpan.FromSeconds(2),
+                    timeProvider: fakeTimeProvider,
+                    sleep: fakeTimeProvider.Advance));
 
             var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
             acquired.Lease.Dispose();
             Assert.Equal(3, prepareAttempts);
+            Assert.Equal(TimeSpan.FromMilliseconds(200), fakeTimeProvider.GetUtcNow() - startedAt);
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
             Assert.Contains("holderName=\"unknown-probe-timeout\"", output, StringComparison.Ordinal);
             Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
@@ -604,6 +618,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
+        var fakeTimeProvider = new RecordingTimeProvider();
+        var startedAt = fakeTimeProvider.GetUtcNow();
         var prepareAttempts = 0;
         DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(lockedPath);
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot);
@@ -620,12 +636,22 @@ public sealed class DotnetBuildEnvironmentManagerTests
         try
         {
             DotnetBuildLeaseAcquisition? result = null;
+            void AdvancePastDeadline(TimeSpan _)
+            {
+                fakeTimeProvider.Advance(TimeSpan.FromSeconds(2));
+            }
+
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    environment,
+                    TimeSpan.FromSeconds(1),
+                    timeProvider: fakeTimeProvider,
+                    sleep: AdvancePastDeadline));
 
             var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
             Assert.Equal(environment.LeaseId, busy.WantedBy);
-            Assert.Equal(3, prepareAttempts);
+            Assert.Equal(2, prepareAttempts);
+            Assert.True(fakeTimeProvider.GetUtcNow() - startedAt >= TimeSpan.FromSeconds(1));
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
             Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
             Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);

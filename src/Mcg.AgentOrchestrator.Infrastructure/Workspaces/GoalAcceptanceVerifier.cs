@@ -136,6 +136,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
     private readonly TimeProvider _timeProvider;
+    private readonly Action<TimeSpan> _leaseSleep;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
     private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
@@ -173,9 +174,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal GoalAcceptanceVerifier(
         Func<string[], string, CancellationToken, Task<CommandResult>> runner,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        Action<TimeSpan>? leaseSleep = null)
         : this((arguments, workingDirectory, _, cancellationToken) =>
-            runner(arguments, workingDirectory, cancellationToken), timeProvider)
+            runner(arguments, workingDirectory, cancellationToken), timeProvider, leaseSleep)
     {
     }
 
@@ -186,10 +188,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal GoalAcceptanceVerifier(
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        Action<TimeSpan>? leaseSleep = null)
     {
         _runner = runner;
         _timeProvider = timeProvider;
+        _leaseSleep = leaseSleep ?? Thread.Sleep;
     }
 
     public static IDisposable PushGateProgressSink(Action<AcceptanceGateProgress> sink)
@@ -2274,7 +2278,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try
         {
             leaseLock = stableSlotLease is null
-                ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken)
+                ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                    environment,
+                    cancellationToken,
+                    _timeProvider,
+                    _leaseSleep)
                 : null;
             afterLeasePrepared?.Invoke(environment);
 
@@ -2311,7 +2319,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         leaseLock?.Dispose();
                         leaseLock = null;
                         environment = nextEnvironment;
-                        leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
+                        leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                            environment,
+                            cancellationToken,
+                            _timeProvider,
+                            _leaseSleep);
                     },
                     cancellationToken).ConfigureAwait(false);
             }
@@ -2369,7 +2381,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     leaseLock?.Dispose();
                     leaseLock = null;
                     environment = nextEnvironment;
-                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken);
+                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                        environment,
+                        cancellationToken,
+                        _timeProvider,
+                        _leaseSleep);
                 },
                 cancellationToken).ConfigureAwait(false);
 
