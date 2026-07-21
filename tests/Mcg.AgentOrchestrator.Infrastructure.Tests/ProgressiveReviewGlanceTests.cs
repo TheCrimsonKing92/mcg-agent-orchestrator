@@ -119,6 +119,12 @@ public sealed class ProgressiveReviewGlanceTests
 
         var now = new DateTimeOffset(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
         var (kernel, goal, task) = RunningDeveloperRound(now, description: "Do work\n\nACCEPTANCE\n- Include correction overlay");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "contract",
+            ["Use refined acceptance criteria even when task text is stale."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["retry feedback is not the criteria correction overlay"]);
         kernel.RecordTaskNote(
             goal.Id,
@@ -158,6 +164,8 @@ public sealed class ProgressiveReviewGlanceTests
         _ = coordinator.Observe(kernel, [goal]);
 
         var inputs = runner.Calls.Single();
+        Xunit.Assert.Contains("Current refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Use refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("supersedes=\"criterion B\"", StringComparison.Ordinal));
@@ -181,6 +189,7 @@ public sealed class ProgressiveReviewGlanceTests
         {
             Xunit.Assert.False(string.IsNullOrWhiteSpace(delivery.StandardInput));
             Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Use refined acceptance criteria", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("supersedes=\"criterion B\"", delivery.StandardInput!, StringComparison.Ordinal);

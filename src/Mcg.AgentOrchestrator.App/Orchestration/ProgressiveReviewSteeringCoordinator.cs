@@ -142,6 +142,15 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             return new ProgressiveReviewSteeringResult(true, lines);
         }
 
+        if (!IntentMatchesCurrentRunningRound(intent, task))
+        {
+            AppendFailSafeReceipt(intent, "stale-steer-intent: current running dispatch does not match trigger round", "operator-attention", now);
+            RaiseAttention(intent, "Misdirection steer requested for a stale dispatch round; no cancel or resume was attempted.");
+            _store.CompleteIntentAsync(intent.Id, now).GetAwaiter().GetResult();
+            lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=stale-round");
+            return new ProgressiveReviewSteeringResult(true, lines);
+        }
+
         var originalDispatch = task.LastDispatch;
         var originalProcess = task.LastProcess;
         var cancelTimeOwnedProcessSet = CaptureCancelTimeOwnedProcessSet(originalProcess);
@@ -162,9 +171,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var refreshedGoal = kernel.GetGoal(goal.Id);
         var refreshedTask = refreshedGoal.Tasks.Single(candidate => candidate.Id == taskId);
         var admission = BuildAdmission(refreshedGoal, refreshedTask, originalDispatch, originalProcess, intent);
-        var stopwatch = Stopwatch.StartNew();
         var decision = admission.AllowsResume ? "warm-resume" : "fresh-dispatch";
         TaskProcessRecord started;
+        TaskDispatchRecord? startedDispatch = null;
         try
         {
             if (admission.AllowsResume)
@@ -172,11 +181,11 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             else
                 PrepareFreshDispatchWithGuidance(kernel, refreshedGoal, refreshedTask, intent.GuidanceText);
 
+            startedDispatch = kernel.GetTask(goal.Id, taskId).LastDispatch;
             started = _startProcess(kernel, goal.Id, taskId);
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             var failureReceipt = BuildReceipt(
                 intent,
                 cancelConfirmation.Proof,
@@ -184,8 +193,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                 admission.Checks.Select(check => $"{check.Kind}:{check.Status}:{check.Reason}").Concat([$"RestartDecision:{decision}"]).ToArray(),
                 originalDispatch,
                 originalProcess,
+                startedDispatch,
                 null,
-                stopwatch.Elapsed,
                 $"steer-restart-failed: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}",
                 _utcNow());
             _store.AppendReceiptAsync(failureReceipt).GetAwaiter().GetResult();
@@ -194,7 +203,6 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=restart-failed receipt={failureReceipt.Id}");
             return new ProgressiveReviewSteeringResult(true, lines);
         }
-        stopwatch.Stop();
 
         var receipt = BuildReceipt(
             intent,
@@ -203,8 +211,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             admission.Checks.Select(check => $"{check.Kind}:{check.Status}:{check.Reason}").ToArray(),
             originalDispatch,
             originalProcess,
+            kernel.GetTask(goal.Id, taskId).LastDispatch,
             started,
-            stopwatch.Elapsed,
             "steer-started",
             _utcNow());
         _store.AppendReceiptAsync(receipt).GetAwaiter().GetResult();
@@ -331,8 +339,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         IReadOnlyList<string> admissionChecks,
         TaskDispatchRecord originalDispatch,
         TaskProcessRecord originalProcess,
+        TaskDispatchRecord? startedDispatch,
         TaskProcessRecord? startedProcess,
-        TimeSpan steeredWall,
         string outcome,
         DateTimeOffset createdAt)
     {
@@ -352,12 +360,12 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             decision,
             admissionChecks,
             intent.GuidanceText,
-            originalDispatch.PromptCharacterCount ?? 0,
-            0,
-            startedProcess?.Command.Length ?? intent.GuidanceText.Length,
-            0,
+            EstimateDispatchInputTokens(originalDispatch) ?? 0,
+            EstimateProcessOutputTokens(originalProcess),
+            EstimateDispatchInputTokens(startedDispatch) ?? EstimateTokens(intent.GuidanceText),
+            EstimateProcessOutputTokens(startedProcess),
             Math.Max(0, (long)cancelledWall.TotalMilliseconds),
-            Math.Max(0, (long)steeredWall.TotalMilliseconds),
+            EstimateProcessWallMilliseconds(startedProcess, createdAt),
             outcome,
             createdAt);
     }
@@ -462,6 +470,18 @@ internal sealed class ProgressiveReviewSteeringCoordinator
          heartbeat.State.Equals("exiting", StringComparison.OrdinalIgnoreCase) ||
          heartbeat.State.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
          heartbeat.State.Equals("cancelled", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IntentMatchesCurrentRunningRound(ProgressiveReviewSteerIntent intent, TaskSpec task)
+    {
+        if (!string.Equals(intent.Role, AgentRole.Developer.ToString(), StringComparison.Ordinal))
+            return false;
+
+        return task.LastDispatch is { } dispatch &&
+            string.Equals(
+                intent.RoundKey,
+                $"{intent.GoalId}|{intent.TaskId}|{dispatch.DispatchedAt.UtcTicks}",
+                StringComparison.Ordinal);
+    }
 
     private void EnsureTerminalCancelProofArtifacts(TaskProcessRecord cancelled, IReadOnlyList<int> cancelTimeOwnedProcessSet, DateTimeOffset now)
     {
@@ -772,6 +792,42 @@ Evidence: {intent.MisdirectionEvidence}
     }
 
     private static int EstimateTokens(string text) => Math.Max(1, text.Length / 4);
+
+    private static int? EstimateDispatchInputTokens(TaskDispatchRecord? dispatch)
+    {
+        if (dispatch is null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(dispatch.PromptPath) && File.Exists(dispatch.PromptPath))
+            return EstimateTokens(File.ReadAllText(dispatch.PromptPath));
+
+        if (dispatch.PromptCharacterCount is { } characters && characters > 0)
+            return Math.Max(1, characters / 4);
+
+        return EstimateTokens(dispatch.Command);
+    }
+
+    private static int EstimateProcessOutputTokens(TaskProcessRecord? process)
+    {
+        if (process is null)
+            return 0;
+
+        var bytes = SafeLength(process.StandardOutputPath) + SafeLength(process.StandardErrorPath);
+        var heartbeat = ProcessLogReader.ReadHeartbeat(process);
+        if (heartbeat.IsAvailable)
+            bytes = Math.Max(bytes, heartbeat.StandardOutputBytes + heartbeat.StandardErrorBytes);
+
+        return bytes <= 0 ? 0 : Math.Max(1, (int)Math.Min(int.MaxValue, bytes / 4));
+    }
+
+    private static long EstimateProcessWallMilliseconds(TaskProcessRecord? process, DateTimeOffset now)
+    {
+        if (process is null)
+            return 0;
+
+        var end = process.CompletedAt ?? now;
+        return Math.Max(0, (long)(end - process.StartedAt).TotalMilliseconds);
+    }
 
     private static long SafeLength(string path)
     {

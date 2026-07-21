@@ -315,7 +315,7 @@ Transcript tail:
             trigger.Value,
             triggerDetail,
             BoundBlock(goal.Objective, _options.ObjectiveCharacterLimit),
-            ExtractAcceptanceSection(task.Description, _options.AcceptanceCharacterLimit),
+            BuildAcceptanceSection(goal, task, _options.AcceptanceCharacterLimit),
             BoundList(
                 FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections),
                 _options.CriteriaCorrectionOverlayItemLimit,
@@ -827,6 +827,20 @@ Corrective direction:
                 return $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
             })
             .ToArray();
+    }
+
+    private static string BuildAcceptanceSection(Goal goal, TaskSpec task, int limit)
+    {
+        var sections = new List<string>();
+        if (goal.RefinedSpec?.AcceptanceCriteria is { Count: > 0 } criteria)
+        {
+            sections.Add("Current refined acceptance criteria:" + Environment.NewLine +
+                string.Join(Environment.NewLine, criteria.Select(criterion => $"- {criterion.Trim()}")));
+        }
+
+        sections.Add("Task acceptance excerpt:" + Environment.NewLine +
+            ExtractAcceptanceSection(task.Description, limit));
+        return BoundBlock(string.Join(Environment.NewLine + Environment.NewLine, sections), limit);
     }
 
     private static string ExtractAcceptanceSection(string description, int limit)

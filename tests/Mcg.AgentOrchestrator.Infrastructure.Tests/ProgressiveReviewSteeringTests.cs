@@ -60,7 +60,50 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("warm-resume", receipt.Decision);
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("SameGoal:Passed:", StringComparison.Ordinal));
+        Assert.Equal(308, receipt.CancelledInputTokens);
+        Assert.True(receipt.SteeredInputTokens > 0);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_stale_intent_raises_attention_without_cancelling_current_round")]
+    public void StaleIntentRaisesAttentionWithoutCancellingCurrentRound()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-stale");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var staleIntent = Intent(goal, task, now.AddMinutes(-10), "old-round guidance must not affect current dispatch");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(staleIntent).GetAwaiter().GetResult();
+        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var cancelCalled = false;
+        var startCalled = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            cancelProcess: (_, _, _) =>
+            {
+                cancelCalled = true;
+                throw new InvalidOperationException("cancel must not run for stale intent");
+            },
+            startProcess: (_, _, _) =>
+            {
+                startCalled = true;
+                throw new InvalidOperationException("start must not run for stale intent");
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(cancelCalled);
+        Assert.False(startCalled);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("stale-steer-intent", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Contains("stale-round", string.Join('\n', result.ProgressLines), StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_writes_terminal_cancel_proof_after_owned_tree_is_dead")]
