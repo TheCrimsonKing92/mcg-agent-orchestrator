@@ -683,12 +683,56 @@ Evidence: {intent.MisdirectionEvidence}
         if (string.IsNullOrWhiteSpace(originalDispatch.PromptPath) || !File.Exists(originalDispatch.PromptPath))
             return Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "spawn prompt unavailable; cannot compare acceptance criteria hash");
 
-        var currentHash = HashText(string.Join("\n", goal.RefinedSpec.AcceptanceCriteria));
+        var currentCriteria = goal.RefinedSpec.AcceptanceCriteria
+            .Select(criterion => criterion.Trim())
+            .ToArray();
+        var currentHash = HashText(string.Join("\n", currentCriteria));
         var prompt = File.ReadAllText(originalDispatch.PromptPath);
-        return prompt.Contains(currentHash, StringComparison.OrdinalIgnoreCase) ||
-            goal.RefinedSpec.AcceptanceCriteria.All(criterion => prompt.Contains(criterion, StringComparison.Ordinal))
-            ? Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} unchanged from spawn prompt")
-            : Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} is not present in spawn prompt");
+        if (prompt.Contains(currentHash, StringComparison.OrdinalIgnoreCase))
+            return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} unchanged from spawn prompt");
+
+        var spawnedCriteria = ExtractSpawnAcceptanceCriteria(prompt);
+        return spawnedCriteria.SequenceEqual(currentCriteria, StringComparer.Ordinal)
+            ? Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria snapshot matches current hash {currentHash[..16]}")
+            : Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria snapshot differs from current hash {currentHash[..16]}");
+    }
+
+    private static IReadOnlyList<string> ExtractSpawnAcceptanceCriteria(string prompt)
+    {
+        var markerIndex = prompt.IndexOf("Acceptance criteria:", StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+            return [];
+
+        var afterMarker = prompt[(markerIndex + "Acceptance criteria:".Length)..];
+        var criteria = new List<string>();
+        foreach (var rawLine in afterMarker.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                if (criteria.Count > 0)
+                    break;
+
+                continue;
+            }
+
+            if (line.StartsWith("## ", StringComparison.Ordinal) ||
+                line.EndsWith(":", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                criteria.Add(line[2..].Trim());
+                continue;
+            }
+
+            if (criteria.Count > 0)
+                break;
+        }
+
+        return criteria;
     }
 
     private static InquiryAdmissionCheck BuildBranchMovementCheck(TaskDispatchRecord originalDispatch, string? currentHead, bool capturedHeadIsAncestor)

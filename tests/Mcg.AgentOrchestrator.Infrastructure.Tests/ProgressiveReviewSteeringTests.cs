@@ -276,6 +276,67 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains(receipt.AdmissionChecks, check => check.Contains("AcceptanceCriteriaHash:Failed", StringComparison.Ordinal));
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_acceptance_criteria_were_removed_after_spawn")]
+    public void FallsBackToFreshDispatchWhenAcceptanceCriteriaWereRemovedAfterSpawn()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-ac-removed");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        File.WriteAllText(task.LastDispatch.PromptPath!, """
+            ## Refined Spec
+            Behavioral contract: contract
+
+            Acceptance criteria:
+            - keep criterion
+            - removed criterion
+
+            """);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "contract",
+            ["keep criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback after AC removal")).GetAwaiter().GetResult();
+        var preparedFresh = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                Assert.Equal("fresh-guided", dispatch.Command);
+                var started = new TaskProcessRecord(7012, dispatch.Command, dispatch.WorkingDirectory, "out-ac-removed.log", "err-ac-removed.log", "exit-ac-removed.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            prepareFreshDispatch: (k, g, t, _) =>
+            {
+                preparedFresh = true;
+                k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                    "codex-cli",
+                    "fresh-guided",
+                    root,
+                    now.AddSeconds(2),
+                    "OpenAI",
+                    "gpt-5.5",
+                    WorkerProviderKind: ProviderKind.OpenAICodexCli));
+            });
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.True(preparedFresh);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("fresh-dispatch", receipt.Decision);
+        Assert.Contains(receipt.AdmissionChecks, check => check.Contains("AcceptanceCriteriaHash:Failed", StringComparison.Ordinal));
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_current_model_differs")]
     public void FallsBackToFreshDispatchWhenCurrentModelDiffers()
     {
