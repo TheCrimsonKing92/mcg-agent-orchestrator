@@ -68,7 +68,8 @@ internal sealed class ConductorDriver
         _parallelAcceptanceEnabled = true;
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
-            dir);
+            dir,
+            tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         kernel.SetEventWriter(eventWriter);
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
@@ -1181,6 +1182,47 @@ internal sealed class ConductorDriver
         }
     }
 
+    internal ConductorParallelAcceptanceRunResult? RunParallelLandingAcceptancePreSlot(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy)
+    {
+        if (_executionDirectory is null)
+        {
+            return null;
+        }
+
+        var effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
+        var branchHeadSha = effectiveCandidate.BranchHeadSha;
+        if (string.IsNullOrWhiteSpace(branchHeadSha) ||
+            !IsCommitReachableFromMain(_executionDirectory, branchHeadSha))
+        {
+            return null;
+        }
+
+        var skippedAt = DateTimeOffset.UtcNow;
+        var mergeCommitSha = RecoverMainMergeCommitForBranchTip(_executionDirectory, branchHeadSha);
+        var detail = $"Acceptance skipped:skip-already-merged goalId={effectiveCandidate.Goal.Id.Value}; branchRef={GoalWorktrees.BranchName(effectiveCandidate.Goal.Id)}; mergeCommitSha={mergeCommitSha}; skippedAtUtc={skippedAt:O}.";
+        GoalOperationJournal.AcceptanceSkippedAlreadyMerged(
+            _executionDirectory,
+            effectiveCandidate.Goal,
+            "conductor:acceptance",
+            branchHeadSha,
+            effectiveCandidate.MainHeadSha,
+            detail,
+            skippedAt);
+        return ConductorParallelAcceptanceRunResult.Early(
+            effectiveCandidate,
+            new ConductorAdvanceResult(
+                effectiveCandidate.Goal.Id.Value,
+                effectiveCandidate.GoalPrefix,
+                policy.Name,
+                new ConductorAdvanceOutcome.Done(GoalLifecycleState.Verified)),
+            new ConductorParallelAcceptanceEarlyOutcome(
+                "skip-already-merged",
+                GoalLifecycleState.Verified,
+                detail));
+    }
+
     private ConductorParallelAcceptanceCandidate RefreshParallelAcceptanceCandidate(
         ConductorParallelAcceptanceCandidate candidate) =>
         ConductorParallelAcceptanceCandidate.Create(
@@ -1671,6 +1713,29 @@ internal sealed class ConductorDriver
 
     private static string FormatAcceptanceCandidate(string? branchHeadSha, string? mainHeadSha) =>
         $"branch={FormatShortSha(branchHeadSha)} main={FormatShortSha(mainHeadSha)}";
+
+    private static bool IsCommitReachableFromMain(string executionDirectory, string commitSha) =>
+        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commitSha, "main").ExitCode == 0;
+
+    private static string RecoverMainMergeCommitForBranchTip(string executionDirectory, string branchHeadSha)
+    {
+        var ancestry = GitCli.Run(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchHeadSha}..main");
+        if (ancestry.ExitCode == 0)
+        {
+            var mergeCommit = ancestry.Output
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(mergeCommit))
+            {
+                return mergeCommit;
+            }
+        }
+
+        var tipLog = GitCli.Run(executionDirectory, "log", "--format=%H", "-n", "1", branchHeadSha);
+        return tipLog.ExitCode == 0 && !string.IsNullOrWhiteSpace(tipLog.Output)
+            ? tipLog.Output.Trim()
+            : branchHeadSha;
+    }
 
     private static string FormatShortSha(string? sha) =>
         string.IsNullOrWhiteSpace(sha)

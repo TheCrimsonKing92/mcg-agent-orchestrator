@@ -216,6 +216,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
             var forceCleanup = HasCliConfirmation(parts, "--force");
+            var landedBranchRef = landedBranch;
             if (!forceCleanup)
             {
                 var localBranch = RunGoalMarkLandedStep(
@@ -231,6 +232,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         $"goal-mark-landed: branch '{landedBranch}' was not found locally or remotely; ancestry check cannot run. " +
                         "Use --force if you have manually confirmed the work is in main.");
                 var branchRef = localExists ? landedBranch : $"origin/{landedBranch}";
+                landedBranchRef = branchRef;
                 var ancestry = RunGoalMarkLandedStep(
                     "branch-ancestry-check",
                     () => GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD"));
@@ -238,6 +240,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     throw new InvalidOperationException(
                         $"goal-mark-landed: branch '{landedBranch}' is not an ancestor of the current HEAD; " +
                         "verify the work was merged into main before using this command. Use --force to bypass this check.");
+            }
+            var landedMergeCommit = RunGoalMarkLandedStep(
+                "landing-intent-commit-resolve",
+                () => GitCli.Run(landedDir, "rev-parse", forceCleanup ? "HEAD" : landedBranchRef));
+            if (landedMergeCommit.ExitCode == 0 && !string.IsNullOrWhiteSpace(landedMergeCommit.Output))
+            {
+                GoalOperationJournal.RecordLandingIntent(
+                    landedDir,
+                    landedGoal,
+                    landedBranch,
+                    LandingExecutor.IntegrationBranchName,
+                    landedMergeCommit.Output.Trim(),
+                    "goal-mark-landed");
             }
             GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:land", "Out-of-band landing recorded via goal-mark-landed.");
             GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:land", $"Goal {landedGp} was already merged to main.");

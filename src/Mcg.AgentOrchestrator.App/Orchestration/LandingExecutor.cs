@@ -123,9 +123,22 @@ internal static class LandingExecutor
 
         if (decision is LandingDecision.Promote)
         {
+            var mergeCommitSha = ResolveRef(executionDirectory, IntegrationBranchName);
+            GoalOperationJournal.RecordLandingIntent(
+                executionDirectory,
+                goal,
+                goalBranch,
+                IntegrationBranchName,
+                mergeCommitSha,
+                "LandingExecutor");
+
             var merge = RunGit(executionDirectory, "merge", "--ff-only", IntegrationBranchName);
             if (merge.ExitCode != 0)
             {
+                GoalOperationJournal.TombstoneLandingIntent(
+                    executionDirectory,
+                    goal,
+                    $"integration->main fast-forward failed after landing intent write: {merge.Error}");
                 var unexpectedReason = $"integration->main fast-forward failed: {merge.Error}";
                 OperatorInbox.RecordLandingEscalation(workspace, goal, unexpectedReason, IntegrationBranchName, channel);
                 eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, unexpectedReason, IntegrationBranchName);
@@ -183,6 +196,17 @@ internal static class LandingExecutor
     {
         // Exits 0 if main is an ancestor of integration — fast-forward from main to integration tip is possible.
         return RunGit(executionDirectory, "merge-base", "--is-ancestor", "main", IntegrationBranchName).ExitCode == 0;
+    }
+
+    private static string ResolveRef(string executionDirectory, string reference)
+    {
+        var result = RunGit(executionDirectory, "rev-parse", reference);
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            throw new InvalidOperationException($"Failed to resolve '{reference}' before landing: {result.Error}");
+        }
+
+        return result.Output.Trim();
     }
 
     private static bool BranchExists(string executionDirectory, string branch)
