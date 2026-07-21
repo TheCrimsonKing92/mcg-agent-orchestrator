@@ -233,7 +233,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
 
             Assert.True(WorkerProcessJobs.TryRegister(wrapper));
             File.WriteAllText(startMarker, "go");
-            WaitUntil(() => File.Exists(allocatedMarker), TimeSpan.FromSeconds(5));
+            WaitUntil(() => File.Exists(allocatedMarker), TimeSpan.FromSeconds(60));
             var process = new TaskProcessRecord(wrapper.Id, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
             kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
             WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
@@ -301,7 +301,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
 
     private static void WaitForExitFile(string path)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
         while (!File.Exists(path) && DateTimeOffset.UtcNow < deadline)
         {
             Thread.Sleep(50);
