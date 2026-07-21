@@ -166,7 +166,15 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             return new ProgressiveReviewSteeringResult(true, lines);
         }
 
-        kernel.RecordTaskNote(goal.Id, taskId, intent.GuidanceText);
+        var effectiveGuidanceText = BuildCurrentSteeringGuidance(goal, task, originalDispatch, intent);
+        var effectiveInputsHash = BuildCurrentSteeringInputsHash(goal, task, originalDispatch, intent);
+        var effectiveIntent = intent with
+        {
+            GuidanceText = effectiveGuidanceText,
+            InputsHash = effectiveInputsHash
+        };
+
+        kernel.RecordTaskNote(goal.Id, taskId, effectiveGuidanceText);
         kernel.RequeueInterruptedDispatch(goal.Id, taskId, "ProgressiveReviewSteer: cancelled misdirected Developer dispatch; restarting with guidance.");
         var refreshedGoal = kernel.GetGoal(goal.Id);
         var refreshedTask = refreshedGoal.Tasks.Single(candidate => candidate.Id == taskId);
@@ -177,9 +185,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         try
         {
             if (admission.AllowsResume)
-                PrepareWarmResumeDispatch(kernel, refreshedGoal, refreshedTask, originalDispatch, intent.GuidanceText);
+                PrepareWarmResumeDispatch(kernel, refreshedGoal, refreshedTask, originalDispatch, effectiveGuidanceText);
             else
-                PrepareFreshDispatchWithGuidance(kernel, refreshedGoal, refreshedTask, intent.GuidanceText);
+                PrepareFreshDispatchWithGuidance(kernel, refreshedGoal, refreshedTask, effectiveGuidanceText);
 
             startedDispatch = kernel.GetTask(goal.Id, taskId).LastDispatch;
             started = _startProcess(kernel, goal.Id, taskId);
@@ -187,7 +195,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         catch (Exception ex)
         {
             var failureReceipt = BuildReceipt(
-                intent,
+                effectiveIntent,
                 cancelConfirmation.Proof,
                 "operator-attention",
                 admission.Checks.Select(check => $"{check.Kind}:{check.Status}:{check.Reason}").Concat([$"RestartDecision:{decision}"]).ToArray(),
@@ -205,7 +213,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         }
 
         var receipt = BuildReceipt(
-            intent,
+            effectiveIntent,
             cancelConfirmation.Proof,
             decision,
             admission.Checks.Select(check => $"{check.Kind}:{check.Status}:{check.Reason}").ToArray(),
@@ -311,9 +319,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _prepareFreshDispatch(kernel, goal, task, guidanceText);
         var prepared = kernel.GetTask(goal.Id, task.Id).LastDispatch
             ?? throw new InvalidOperationException("Fresh steering fallback did not produce a dispatch record.");
-        var freshPrompt = string.IsNullOrWhiteSpace(prepared.PromptPath) || !File.Exists(prepared.PromptPath)
-            ? string.Empty
-            : File.ReadAllText(prepared.PromptPath);
+        var freshPrompt = TryReadText(prepared.PromptPath, out var preparedPrompt)
+            ? preparedPrompt
+            : string.Empty;
         var guidedPrompt = string.IsNullOrWhiteSpace(freshPrompt)
             ? guidanceText
             : $"{guidanceText}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{Environment.NewLine}{freshPrompt}";
@@ -368,6 +376,62 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             EstimateProcessWallMilliseconds(startedProcess, createdAt),
             outcome,
             createdAt);
+    }
+
+    private static string BuildCurrentSteeringGuidance(
+        Goal goal,
+        TaskSpec task,
+        TaskDispatchRecord originalDispatch,
+        ProgressiveReviewSteerIntent intent)
+    {
+        var workingDirectory = originalDispatch.WorkingDirectory;
+        var acceptanceSection = BuildAcceptanceSection(goal, task, 4000);
+        var overlay = FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections);
+        var changedFiles = TryGetChangedFiles(workingDirectory);
+        return $"""
+ProgressiveReviewSteer guidance. Treat this message as authoritative over remembered session context.
+
+Freshness envelope:
+- Goal id: {goal.Id.Value}
+- Task id: {task.Id.Value}
+- Worktree HEAD at steer time: {TryResolveHead(workingDirectory) ?? "(unknown)"}
+- Worktree diff at steer time:
+{BoundBlock(TryReadDiff(workingDirectory, originalDispatch.BaseCommit), 8000)}
+
+Current acceptance criteria:
+{acceptanceSection}
+
+Active criteria-correction overlay:
+{FormatBullets(overlay)}
+
+Changed files at steer time:
+{FormatBullets(changedFiles)}
+
+Misdirection evidence:
+{intent.MisdirectionEvidence}
+
+Corrective direction:
+{intent.CorrectiveDirection}
+""";
+    }
+
+    private static string BuildCurrentSteeringInputsHash(
+        Goal goal,
+        TaskSpec task,
+        TaskDispatchRecord originalDispatch,
+        ProgressiveReviewSteerIntent intent)
+    {
+        var inputs = new ProgressiveReviewSteeringHashInputs(
+            goal.Id.Value,
+            task.Id.Value,
+            AgentRole.Developer.ToString(),
+            originalDispatch.ProviderSessionId ?? "(no-session)",
+            TryResolveHead(originalDispatch.WorkingDirectory) ?? "(unknown-head)",
+            intent.GlanceVerdictTimestamp,
+            $"sha256:{HashText(BuildAcceptanceSection(goal, task, int.MaxValue))}",
+            $"sha256:{HashLines(FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections))}");
+        var text = JsonSerializer.Serialize(inputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return $"sha256:{HashText(text)}";
     }
 
     private void AppendFailSafeReceipt(ProgressiveReviewSteerIntent intent, string cancelConfirmation, string outcome, DateTimeOffset now)
@@ -700,14 +764,13 @@ Evidence: {intent.MisdirectionEvidence}
         if (goal.RefinedSpec is null)
             return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "goal has no refined acceptance criteria hash to compare");
 
-        if (string.IsNullOrWhiteSpace(originalDispatch.PromptPath) || !File.Exists(originalDispatch.PromptPath))
+        if (!TryReadText(originalDispatch.PromptPath, out var prompt))
             return Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "spawn prompt unavailable; cannot compare acceptance criteria hash");
 
         var currentCriteria = goal.RefinedSpec.AcceptanceCriteria
             .Select(criterion => criterion.Trim())
             .ToArray();
         var currentHash = HashText(string.Join("\n", currentCriteria));
-        var prompt = File.ReadAllText(originalDispatch.PromptPath);
         if (prompt.Contains(currentHash, StringComparison.OrdinalIgnoreCase))
             return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} unchanged from spawn prompt");
 
@@ -798,8 +861,8 @@ Evidence: {intent.MisdirectionEvidence}
         if (dispatch is null)
             return null;
 
-        if (!string.IsNullOrWhiteSpace(dispatch.PromptPath) && File.Exists(dispatch.PromptPath))
-            return EstimateTokens(File.ReadAllText(dispatch.PromptPath));
+        if (TryReadText(dispatch.PromptPath, out var prompt))
+            return EstimateTokens(prompt);
 
         if (dispatch.PromptCharacterCount is { } characters && characters > 0)
             return Math.Max(1, characters / 4);
@@ -840,6 +903,118 @@ Evidence: {intent.MisdirectionEvidence}
             return 0L;
         }
     }
+
+    private static bool TryReadText(string? path, out string text)
+    {
+        text = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        try
+        {
+            if (!File.Exists(path))
+                return false;
+
+            text = File.ReadAllText(path);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildAcceptanceSection(Goal goal, TaskSpec task, int limit)
+    {
+        var sections = new List<string>();
+        if (goal.RefinedSpec?.AcceptanceCriteria is { Count: > 0 } criteria)
+        {
+            sections.Add("Current refined acceptance criteria:" + Environment.NewLine +
+                string.Join(Environment.NewLine, criteria.Select(criterion => $"- {criterion.Trim()}")));
+        }
+
+        sections.Add("Task acceptance excerpt:" + Environment.NewLine +
+            ExtractAcceptanceSection(task.Description, limit));
+        return BoundBlock(string.Join(Environment.NewLine + Environment.NewLine, sections), limit);
+    }
+
+    private static string ExtractAcceptanceSection(string description, int limit)
+    {
+        var markers = new[] { "## Acceptance", "ACCEPTANCE", "Acceptance criteria:", "Acceptance Criteria:" };
+        var start = markers
+            .Select(marker => description.IndexOf(marker, StringComparison.OrdinalIgnoreCase))
+            .Where(index => index >= 0)
+            .DefaultIfEmpty(0)
+            .Min();
+        return BoundBlock(description[start..], limit);
+    }
+
+    private static IReadOnlyList<string> FormatCriteriaCorrectionOverlay(IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> corrections)
+    {
+        return corrections
+            .OrderByDescending(correction => correction.RecordedAt)
+            .Select(correction =>
+            {
+                var source = correction.SourceTaskId is null
+                    ? correction.SourceKind.ToString()
+                    : $"{correction.SourceKind}:{correction.SourceTaskId.Value}";
+                return $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> TryGetChangedFiles(string workingDirectory)
+    {
+        try
+        {
+            return GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(workingDirectory);
+        }
+        catch (Exception ex)
+        {
+            return [$"changed-files unavailable: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 200)}"];
+        }
+    }
+
+    private static string TryReadDiff(string workingDirectory, string? baseCommit)
+    {
+        try
+        {
+            return ProgressiveReviewGlanceCoordinator.ReadDiff(workingDirectory, baseCommit);
+        }
+        catch (Exception ex)
+        {
+            return $"diff unavailable: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}";
+        }
+    }
+
+    private static string FormatBullets(IReadOnlyList<string> values) =>
+        values.Count == 0
+            ? "- none"
+            : string.Join(Environment.NewLine, values.Select(value => $"- {value}"));
+
+    private static string HashLines(IReadOnlyList<string> values) =>
+        HashText(string.Join("\n", values.Select(value => value.Trim())));
+
+    private static string BoundBlock(string text, int limit)
+    {
+        if (limit <= 0 || string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var normalized = text.Trim();
+        return normalized.Length <= limit
+            ? normalized
+            : normalized[..limit] + $"{Environment.NewLine}[truncated]";
+    }
+
+    private sealed record ProgressiveReviewSteeringHashInputs(
+        string GoalId,
+        string TaskId,
+        string Role,
+        string SessionId,
+        string WorktreeHeadSha,
+        DateTimeOffset GlanceVerdictTimestamp,
+        string AcceptanceCriteriaVersionHash,
+        string CriteriaCorrectionOverlayVersionHash);
 
     private static string RewritePromptPath(string command, string? oldPromptPath, string newPromptPath)
     {

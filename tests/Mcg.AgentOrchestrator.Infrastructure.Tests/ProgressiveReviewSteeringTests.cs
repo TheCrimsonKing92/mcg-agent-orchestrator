@@ -65,6 +65,145 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_rebuilds_freshness_envelope_at_steer_time")]
+    public void RebuildsFreshnessEnvelopeAtSteerTime()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-current-envelope");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var staleIntent = new ProgressiveReviewSteerIntent(
+            Guid.NewGuid().ToString("n"),
+            goal.Id.Value,
+            task.Id.Value,
+            AgentRole.Developer.ToString(),
+            $"{goal.Id.Value}|{task.Id.Value}|{now.UtcTicks}",
+            "glance-stale",
+            "sha256:stale-glance-start-inputs",
+            now,
+            "diff shows wrong subsystem",
+            "return to the current steering envelope",
+            "ProgressiveReviewSteer guidance. stale criterion from glance start. stale diff from glance start.",
+            now);
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(staleIntent).GetAwaiter().GetResult();
+        File.WriteAllText(Path.Combine(root, "fresh.txt"), "fresh diff at steer time");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "current contract",
+            ["fresh criterion at steer time"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.RecordTaskNote(goal.Id, task.Id, "CRITERIA CORRECTION supersedes=\"old criterion\" correction=\"fresh overlay at steer time\"");
+        var preparedFresh = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                var prompt = File.ReadAllText(dispatch.PromptPath!);
+                Assert.Contains("fresh criterion at steer time", prompt, StringComparison.Ordinal);
+                Assert.Contains("fresh overlay at steer time", prompt, StringComparison.Ordinal);
+                Assert.Contains("fresh diff at steer time", prompt, StringComparison.Ordinal);
+                Assert.DoesNotContain("stale criterion from glance start", prompt, StringComparison.Ordinal);
+                Assert.DoesNotContain("stale diff from glance start", prompt, StringComparison.Ordinal);
+                var started = new TaskProcessRecord(7008, dispatch.Command, dispatch.WorkingDirectory, "out-current.log", "err-current.log", "exit-current.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            prepareFreshDispatch: (k, g, t, _) =>
+            {
+                preparedFresh = true;
+                k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                    "codex-cli",
+                    "fresh-guided",
+                    root,
+                    now.AddSeconds(2),
+                    "OpenAI",
+                    "gpt-5.5",
+                    WorkerProviderKind: ProviderKind.OpenAICodexCli));
+            });
+
+        var result = coordinator.ExecutePending(kernel, kernel.GetGoal(goal.Id));
+
+        Assert.True(result.MutatedTaskState);
+        Assert.True(preparedFresh);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.NotEqual(staleIntent.InputsHash, receipt.InputsHash);
+        Assert.StartsWith("sha256:", receipt.InputsHash, StringComparison.Ordinal);
+        Assert.Contains("fresh criterion at steer time", receipt.GuidanceText, StringComparison.Ordinal);
+        Assert.Contains("fresh overlay at steer time", receipt.GuidanceText, StringComparison.Ordinal);
+        Assert.Contains("fresh diff at steer time", receipt.GuidanceText, StringComparison.Ordinal);
+        Assert.DoesNotContain("stale criterion from glance start", receipt.GuidanceText, StringComparison.Ordinal);
+        Assert.DoesNotContain("stale diff from glance start", receipt.GuidanceText, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_prompt_read_failures_fall_back_in_admission_and_receipts")]
+    public void PromptReadFailuresFallBackInAdmissionAndReceipts()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-prompt-read-fallback");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        using var originalPromptLock = LockTextFile(task.LastDispatch.PromptPath!, "locked original prompt");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "contract",
+            ["current criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback despite prompt IO failure")).GetAwaiter().GetResult();
+        var locks = new List<FileStream>();
+
+        try
+        {
+            var coordinator = NewCoordinator(
+                root,
+                store,
+                cancelProcess: CancelWithTerminalProof(now),
+                startProcess: (k, goalId, taskId) =>
+                {
+                    var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                    Assert.Contains("ProgressiveReviewSteer guidance", File.ReadAllText(dispatch.PromptPath!), StringComparison.Ordinal);
+                    var started = new TaskProcessRecord(7009, dispatch.Command, dispatch.WorkingDirectory, "out-locked.log", "err-locked.log", "exit-locked.txt", now.AddSeconds(2), null, null);
+                    k.RecordTaskProcessStarted(goalId, taskId, started);
+                    return started;
+                },
+                prepareFreshDispatch: (k, g, t, _) =>
+                {
+                    var promptPath = Path.Combine(root, ".orchestrator", "prompts", "fresh-locked.md");
+                    locks.Add(LockTextFile(promptPath, "locked fresh prompt"));
+                    k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                        "codex-cli",
+                        "fresh-guided",
+                        root,
+                        now.AddSeconds(2),
+                        "OpenAI",
+                        "gpt-5.5",
+                        PromptPath: promptPath,
+                        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                });
+
+            var result = coordinator.ExecutePending(kernel, kernel.GetGoal(goal.Id));
+
+            Assert.True(result.MutatedTaskState);
+            var receipt = Assert.Single(store.Receipts);
+            Assert.Equal("fresh-dispatch", receipt.Decision);
+            Assert.Equal(308, receipt.CancelledInputTokens);
+            Assert.Contains(receipt.AdmissionChecks, check => check.Contains("AcceptanceCriteriaHash:Failed:spawn prompt unavailable", StringComparison.Ordinal));
+        }
+        finally
+        {
+            foreach (var stream in locks)
+                stream.Dispose();
+        }
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_stale_intent_raises_attention_without_cancelling_current_round")]
     public void StaleIntentRaisesAttentionWithoutCancellingCurrentRound()
     {
@@ -806,6 +945,17 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.True(GitCli.Run(root, "add", "README.md").Succeeded);
         Assert.True(GitCli.Run(root, "commit", "-m", "initial").Succeeded);
         return root;
+    }
+
+    private static FileStream LockTextFile(string path, string content)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var stream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        stream.Write(bytes, 0, bytes.Length);
+        stream.Flush();
+        stream.Position = 0;
+        return stream;
     }
 
     private static void WriteHeartbeat(
