@@ -314,7 +314,11 @@ public static partial class GoalWorktrees
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-
+    /// <summary>
+    /// Returns true when <paramref name="executionDirectory"/> is inside a git work tree.
+    /// Lets callers decide whether deterministic worktree chorekeeping is possible before
+    /// attempting it (e.g. dispatch auto-create falls back to the execution directory otherwise).
+    /// </summary>
     public static bool IsGitWorkTree(string executionDirectory)
     {
         return IsGitWorkTree(executionDirectory, GitCli.DefaultTimeoutMilliseconds);
