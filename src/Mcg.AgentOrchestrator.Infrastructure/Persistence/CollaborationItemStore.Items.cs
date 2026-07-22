@@ -58,7 +58,7 @@ public sealed partial class CollaborationItemStore
                 // refresh its subject/body and return it rather than inserting a duplicate. Without this, a
                 // conductor that re-escalates the same goal+reason each tick piles up identical items
                 // (observed: 12 copies of one landing escalation), which also collide as duplicate Discord
-                // button customIds. Raising "another one" while one is pending is the bug â€” not the rendering.
+                // button customIds. Raising "another one" while one is pending is the bug — not the rendering.
                 if (!string.IsNullOrWhiteSpace(correlationKey))
                 {
                     var existing = await TryReadOpenItemByCorrelationKeyAsync(conn, correlationKey!, cancellationToken);
