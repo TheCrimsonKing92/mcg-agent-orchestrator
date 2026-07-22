@@ -14,9 +14,9 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
     public OpenAiResponsesModelProvider(HttpClient httpClient, string apiKey, string modelName)
     {
         _httpClient = httpClient;
-        _modelName = RequireText(modelName, nameof(modelName));
+        _modelName = ModelProviderHelpers.RequireText(modelName, nameof(modelName));
         _httpClient.BaseAddress ??= new Uri("https://api.openai.com/");
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", RequireText(apiKey, nameof(apiKey)));
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ModelProviderHelpers.RequireText(apiKey, nameof(apiKey)));
     }
 
     public string ProviderName => "OpenAI";
@@ -34,11 +34,11 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
                 : new { effort = request.Options.ReasoningEffort }
         };
 
-        using var response = await _httpClient.PostAsJsonAsync("v1/responses", body, JsonOptions(), cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient.PostAsJsonAsync("v1/responses", body, ModelProviderHelpers.JsonOptions(), cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(response, json);
+        ModelProviderHelpers.EnsureSuccess(response, json, "OpenAI");
 
-        var payload = JsonSerializer.Deserialize<OpenAiResponsePayload>(json, JsonOptions())
+        var payload = JsonSerializer.Deserialize<OpenAiResponsePayload>(json, ModelProviderHelpers.JsonOptions())
             ?? throw new InvalidOperationException("OpenAI returned an empty response.");
 
         return new ModelResponse(
@@ -65,22 +65,6 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
             : string.Empty;
     }
 
-    private static JsonSerializerOptions JsonOptions() => SharedJson.Options;
-
-    private static string RequireText(string value, string parameterName)
-    {
-        return string.IsNullOrWhiteSpace(value)
-            ? throw new ArgumentException("Value cannot be empty.", parameterName)
-            : value.Trim();
-    }
-
-    private static void EnsureSuccess(HttpResponseMessage response, string body)
-    {
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(ProviderHttpErrorFormatter.Format("OpenAI", response, body));
-        }
-    }
 }
 
 public sealed class AnthropicMessagesModelProvider : IModelProvider
@@ -91,9 +75,9 @@ public sealed class AnthropicMessagesModelProvider : IModelProvider
     public AnthropicMessagesModelProvider(HttpClient httpClient, string apiKey, string modelName)
     {
         _httpClient = httpClient;
-        _modelName = RequireText(modelName, nameof(modelName));
+        _modelName = ModelProviderHelpers.RequireText(modelName, nameof(modelName));
         _httpClient.BaseAddress ??= new Uri("https://api.anthropic.com/");
-        _httpClient.DefaultRequestHeaders.Add("x-api-key", RequireText(apiKey, nameof(apiKey)));
+        _httpClient.DefaultRequestHeaders.Add("x-api-key", ModelProviderHelpers.RequireText(apiKey, nameof(apiKey)));
         _httpClient.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
     }
 
@@ -109,11 +93,11 @@ public sealed class AnthropicMessagesModelProvider : IModelProvider
             messages = request.Messages.Select(message => new { role = NormalizeRole(message.Role), content = message.Content }).ToArray()
         };
 
-        using var response = await _httpClient.PostAsJsonAsync("v1/messages", body, JsonOptions(), cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient.PostAsJsonAsync("v1/messages", body, ModelProviderHelpers.JsonOptions(), cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(response, json);
+        ModelProviderHelpers.EnsureSuccess(response, json, "Anthropic");
 
-        var payload = JsonSerializer.Deserialize<AnthropicResponsePayload>(json, JsonOptions())
+        var payload = JsonSerializer.Deserialize<AnthropicResponsePayload>(json, ModelProviderHelpers.JsonOptions())
             ?? throw new InvalidOperationException("Anthropic returned an empty response.");
 
         var text = payload.Content is null
@@ -131,20 +115,24 @@ public sealed class AnthropicMessagesModelProvider : IModelProvider
         return role.Equals("assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : "user";
     }
 
-    private static JsonSerializerOptions JsonOptions() => SharedJson.Options;
+}
 
-    private static string RequireText(string value, string parameterName)
+internal static class ModelProviderHelpers
+{
+    public static JsonSerializerOptions JsonOptions() => SharedJson.Options;
+
+    public static string RequireText(string value, string parameterName)
     {
         return string.IsNullOrWhiteSpace(value)
             ? throw new ArgumentException("Value cannot be empty.", parameterName)
             : value.Trim();
     }
 
-    private static void EnsureSuccess(HttpResponseMessage response, string body)
+    public static void EnsureSuccess(HttpResponseMessage response, string body, string providerName)
     {
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException(ProviderHttpErrorFormatter.Format("Anthropic", response, body));
+            throw new HttpRequestException(ProviderHttpErrorFormatter.Format(providerName, response, body));
         }
     }
 }
@@ -193,8 +181,8 @@ public sealed class ChatCompletionsModelProvider : IModelProvider
     public ChatCompletionsModelProvider(HttpClient httpClient, string modelName, string providerName)
     {
         _httpClient = httpClient;
-        _modelName = RequireText(modelName, nameof(modelName));
-        _providerName = RequireText(providerName, nameof(providerName));
+        _modelName = ModelProviderHelpers.RequireText(modelName, nameof(modelName));
+        _providerName = ModelProviderHelpers.RequireText(providerName, nameof(providerName));
     }
 
     public string ProviderName => _providerName;
@@ -223,11 +211,11 @@ public sealed class ChatCompletionsModelProvider : IModelProvider
             reasoning_effort = request.Options.ReasoningEffort
         };
 
-        using var response = await _httpClient.PostAsJsonAsync("v1/chat/completions", body, JsonOptions(), cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient.PostAsJsonAsync("v1/chat/completions", body, ModelProviderHelpers.JsonOptions(), cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(response, json);
+        ModelProviderHelpers.EnsureSuccess(response, json, _providerName);
 
-        var payload = JsonSerializer.Deserialize<ChatCompletionsPayload>(json, JsonOptions())
+        var payload = JsonSerializer.Deserialize<ChatCompletionsPayload>(json, ModelProviderHelpers.JsonOptions())
             ?? throw new InvalidOperationException($"{_providerName} returned an empty response.");
 
         var choice = payload.Choices?.FirstOrDefault();
@@ -245,22 +233,6 @@ public sealed class ChatCompletionsModelProvider : IModelProvider
             finishReason);
     }
 
-    private static JsonSerializerOptions JsonOptions() => SharedJson.Options;
-
-    private static string RequireText(string value, string parameterName)
-    {
-        return string.IsNullOrWhiteSpace(value)
-            ? throw new ArgumentException("Value cannot be empty.", parameterName)
-            : value.Trim();
-    }
-
-    private void EnsureSuccess(HttpResponseMessage response, string body)
-    {
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException(ProviderHttpErrorFormatter.Format(_providerName, response, body));
-        }
-    }
 }
 
 internal static class ProviderHttpErrorFormatter
