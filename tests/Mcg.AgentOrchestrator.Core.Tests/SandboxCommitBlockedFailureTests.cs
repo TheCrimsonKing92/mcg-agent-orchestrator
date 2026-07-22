@@ -50,6 +50,48 @@ public sealed class SandboxCommitBlockedFailureTests
         Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification));
     }
 
+    [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_reads_log_paths_for_evidence_outside_retained_excerpt")]
+    public void ReadsLogPathsForEvidenceOutsideRetainedExcerpt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-sandbox-blocked-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var stdoutPath = Path.Combine(root, "out.log");
+            var stderrPath = Path.Combine(root, "err.log");
+            var fullStdout =
+                new string('A', VerificationTextBounds.PreviewHeadChars) +
+                "\nWORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT\n" +
+                new string('Z', VerificationTextBounds.PreviewTailChars);
+            var fullStderr =
+                new string('B', VerificationTextBounds.PreviewHeadChars) +
+                "\nfatal: Unable to create '.git/index.lock': Permission denied\n" +
+                new string('Y', VerificationTextBounds.PreviewTailChars);
+            File.WriteAllText(stdoutPath, fullStdout);
+            File.WriteAllText(stderrPath, fullStderr);
+            var verification = new TaskVerificationRecord(
+                "codex exec",
+                root,
+                1,
+                VerificationTextBounds.BoundText(fullStdout, stdoutPath),
+                VerificationTextBounds.BoundText(fullStderr, stderrPath),
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath,
+                StandardErrorPath: stderrPath);
+
+            Assert.DoesNotContain("WORKER_RESULT", verification.StandardOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain("index.lock", verification.StandardError, StringComparison.Ordinal);
+            Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_false_when_succeeded")]
     public void FalseWhenSucceeded()
     {

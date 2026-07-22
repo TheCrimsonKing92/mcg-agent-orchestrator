@@ -248,6 +248,44 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(new FileInfo(stderrPath).Length > 1_000_000);
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_classifies_middle_log_verification_before_retained_excerpt")]
+    public void RefreshLatestProcessClassifiesMiddleLogVerificationBeforeRetainedExcerpt()
+{
+    var worktree = LandingExecutorTests.CreateGitRepository();
+    var logRoot = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var testerTask = new TaskSpec(TaskId.New(), "Verify existing behavior", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Classify full log before bounding", [testerTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(logRoot, "tester.out.log");
+    var stderrPath = Path.Combine(logRoot, "tester.err.log");
+    var exitPath = Path.Combine(logRoot, "tester.exit.txt");
+    var middleEvidence = "test run successful";
+    var stdout =
+        new string('H', VerificationTextBounds.PreviewHeadChars) +
+        Environment.NewLine +
+        middleEvidence +
+        Environment.NewLine +
+        new string('M', 2_000_000) +
+        new string('T', VerificationTextBounds.PreviewTailChars);
+    File.WriteAllText(stdoutPath, stdout);
+    File.WriteAllText(stderrPath, string.Empty);
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, testerTask.Id, new TaskDispatchRecord("codex-cli", "codex exec", worktree, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "codex exec", worktree, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, testerTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        findBuildDaemons: _ => []);
+    var refreshed = runner.RefreshLatestProcess(kernel, goal.Id, testerTask.Id);
+
+    Assert.Equal(0, refreshed.ExitCode);
+    Assert.Equal(WorkTaskStatus.Completed, testerTask.Status);
+    Assert.True(testerTask.LastVerification!.StandardOutput.Length <= 20_000);
+    Assert.DoesNotContain(middleEvidence, testerTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "CreateVerificationLog_truncates_long_output_at_2000_chars")]
     public void CreateVerificationLogTruncatesLongOutputAt2000Chars()
 {

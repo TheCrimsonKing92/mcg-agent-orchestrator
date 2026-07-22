@@ -2,7 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskSpec
 {
-    internal const int VerificationHistoryLimit = 20;
+    internal const int VerificationHistoryLimit = 50;
 
     private readonly List<TaskVerificationRecord> _verificationHistory = [];
 

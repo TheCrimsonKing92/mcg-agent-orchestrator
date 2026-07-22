@@ -836,6 +836,44 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Classify reads log path for verification evidence outside retained excerpt")]
+    public void ClassifyReadsLogPathForVerificationEvidenceOutsideRetainedExcerpt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-classify-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var stdoutPath = Path.Combine(root, "out.log");
+            var fullStdout =
+                new string('A', VerificationTextBounds.PreviewHeadChars) +
+                "\nTest run successful: 12 tests passed\n" +
+                new string('Z', VerificationTextBounds.PreviewTailChars);
+            File.WriteAllText(stdoutPath, fullStdout);
+            var retainedStdout = VerificationTextBounds.BoundText(fullStdout, stdoutPath);
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                root,
+                0,
+                retainedStdout,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath);
+
+            var outcome = DispatchFailureClassifier.Classify(SimpleTask(AgentRole.Reviewer), verification);
+
+            Xunit.Assert.DoesNotContain("Test run successful", verification.StandardOutput, StringComparison.Ordinal);
+            Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+            Xunit.Assert.Contains("Test run successful", outcome.EvidenceSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Classify returns DirtyWorktreeRecoverable for dirty guard developer task")]
     public void ClassifyDirtyWorktreeRecoverable()
     {

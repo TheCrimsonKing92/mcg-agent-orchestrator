@@ -176,6 +176,9 @@ public static class DispatchFailureClassifier
         !IsDirtyDispatchGuardFailure(verification) &&
         TryGetRecoverableSubscriptionLimitLine(verification, out _);
 
+    public static bool HasVerificationEvidenceInOutput(string standardOutput, string standardError) =>
+        HasVerificationEvidence(standardOutput, standardError);
+
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
         if (IsPreflightFailure(verification))
@@ -919,12 +922,12 @@ public static class DispatchFailureClassifier
             return TruncateEvidence(providerLimitLine);
         }
 
-        if (!HasVerificationEvidence(verification.StandardOutput, verification.StandardError))
+        if (!HasVerificationEvidence(verification))
         {
             return string.Empty;
         }
 
-        var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
+        var combined = CombineOutputWithArtifacts(verification);
         foreach (var rawLine in combined.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (HasVerificationEvidence(rawLine, string.Empty))
@@ -1129,6 +1132,12 @@ public static class DispatchFailureClassifier
              ExitCodeZeroPattern.IsMatch(output));
     }
 
+    private static bool HasVerificationEvidence(TaskVerificationRecord verification) =>
+        HasVerificationEvidence(verification.StandardOutput, verification.StandardError) ||
+        HasVerificationEvidence(
+            ReadEvidenceFile(verification.StandardOutputPath),
+            ReadEvidenceFile(verification.StandardErrorPath));
+
     private static bool HasArtifactEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent || hasCommittedChanges;
 
@@ -1171,7 +1180,7 @@ public static class DispatchFailureClassifier
         };
 
     private static bool HasPassingVerificationEvidence(TaskVerificationRecord verification) =>
-        HasVerificationEvidence(verification.StandardOutput, verification.StandardError) &&
+        HasVerificationEvidence(verification) &&
         !HasFailingTestsForCompatibility(verification);
 
     private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
@@ -1318,7 +1327,22 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        var output = $"{verification.StandardOutput}\n{verification.StandardError}";
+        if (HasSandboxCommitBlockedEvidence(verification.StandardOutput, verification.StandardError))
+        {
+            return true;
+        }
+
+        return HasSandboxCommitBlockedEvidence(
+            ReadEvidenceFile(verification.StandardOutputPath),
+            ReadEvidenceFile(verification.StandardErrorPath));
+    }
+
+    public static bool IsSandboxCommitBlockedFailure(int exitCode, string standardOutput, string standardError) =>
+        exitCode != 0 && HasSandboxCommitBlockedEvidence(standardOutput, standardError);
+
+    private static bool HasSandboxCommitBlockedEvidence(string standardOutput, string standardError)
+    {
+        var output = $"{standardOutput}\n{standardError}";
         var commitBlocked =
             output.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
@@ -1332,8 +1356,8 @@ public static class DispatchFailureClassifier
         // other useful-output signal. The downstream auto-verify additionally requires committed
         // changes against main and the acceptance suite, so this is the lightest of several gates.
         var didUsefulWork =
-            verification.StandardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
-            HasUsefulPreWorkOutput(verification.StandardOutput);
+            standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
+            HasUsefulPreWorkOutput(standardOutput);
 
         return commitBlocked && didUsefulWork;
     }

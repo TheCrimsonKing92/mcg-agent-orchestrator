@@ -948,8 +948,6 @@ public sealed class BackgroundDispatchRunner
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
-                task,
-                processRecord,
                 fullStandardOutput,
                 fullStandardError,
                 providerFailureKind);
@@ -1050,7 +1048,7 @@ public sealed class BackgroundDispatchRunner
             {
                 var requiresCommitEvidence =
                     RequiresPostDispatchCommitEvidence(task, fullStandardOutput, fullStandardError, workerResultPresent) &&
-                    !HasCompletedVerification(task, fullStandardOutput, fullStandardError) &&
+                    !HasCompletedVerification(fullStandardOutput, fullStandardError) &&
                     !AllowsNoChangeCompletion(task, fullStandardOutput, fullStandardError) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
@@ -1258,40 +1256,30 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            HasCompletedVerification(task, standardOutput, standardError);
+            HasCompletedVerification(standardOutput, standardError);
     }
 
     // A verification-role worker proves it did its job with recognised verification evidence.
     // WORKER_RESULT shape alone is not enough: evidence-less clean dispatches must fail so the
     // orchestrator does not convert a well-formed self-report into proof that checks actually passed.
-    private static bool HasClassifiedVerificationEvidence(TaskSpec task, string standardOutput, string standardError)
+    private static bool HasClassifiedVerificationEvidence(string standardOutput, string standardError)
     {
-        var tempVerification = new TaskVerificationRecord(
-            string.Empty, string.Empty, 1, standardOutput, standardError, DateTimeOffset.UtcNow);
-        return DispatchFailureClassifier.Classify(task, tempVerification).EvidenceSummary.Length > 0;
+        return DispatchFailureClassifier.HasVerificationEvidenceInOutput(standardOutput, standardError);
     }
 
-    private static bool HasCompletedVerification(TaskSpec task, string standardOutput, string standardError)
+    private static bool HasCompletedVerification(string standardOutput, string standardError)
     {
-        return HasClassifiedVerificationEvidence(task, standardOutput, standardError) &&
+        return HasClassifiedVerificationEvidence(standardOutput, standardError) &&
             !TryFindFailingTestsInWorkerResult($"{standardOutput}\n{standardError}", out _);
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
-        TaskSpec task,
-        TaskProcessRecord processRecord,
         string standardOutput,
         string standardError,
         ProviderFailureKind providerFailureKind)
     {
-        var verification = new TaskVerificationRecord(
-            processRecord.Command,
-            processRecord.WorkingDirectory,
-            1,
-            standardOutput,
-            standardError,
-            DateTimeOffset.UtcNow);
-        return DispatchFailureClassifier.Classify(task, verification, providerFailureKind).Kind == DispatchOutcomeKind.SandboxCommitBlocked;
+        return providerFailureKind == ProviderFailureKind.Sandbox1312 ||
+            DispatchFailureClassifier.IsSandboxCommitBlockedFailure(1, standardOutput, standardError);
     }
 
     private static bool HasLowIntegrityConfinementEvidence(

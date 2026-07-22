@@ -113,7 +113,7 @@ public sealed class TaskVerificationTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
 
-    for (var index = 0; index < 25; index++)
+    for (var index = 0; index < TaskSpec.VerificationHistoryLimit + 5; index++)
     {
         kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
             "verify",
@@ -124,10 +124,10 @@ public sealed class TaskVerificationTests
             DateTimeOffset.UtcNow.AddMinutes(index)));
     }
 
-    Assert.Equal(20, task.VerificationHistory.Count);
+    Assert.Equal(TaskSpec.VerificationHistoryLimit, task.VerificationHistory.Count);
     Assert.Equal("stdout-5", task.VerificationHistory[0].StandardOutput);
-    Assert.Equal("stdout-24", task.VerificationHistory[^1].StandardOutput);
-    Assert.Equal("stdout-24", task.LastVerification!.StandardOutput);
+    Assert.Equal("stdout-54", task.VerificationHistory[^1].StandardOutput);
+    Assert.Equal("stdout-54", task.LastVerification!.StandardOutput);
 }
 
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
