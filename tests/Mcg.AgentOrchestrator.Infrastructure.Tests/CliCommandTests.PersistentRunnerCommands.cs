@@ -1517,9 +1517,46 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var reduction = preFixBytes == 0
             ? 0
             : (double)(preFixBytes - repository.LoadedGoalSnapshotJsonBytes) / preFixBytes;
+        var artifactPath = WriteParkedHydrationMeasurementArtifact(
+            parkedGoalCount,
+            preFixBytes,
+            repository.LoadedGoalSnapshotJsonBytes,
+            reduction,
+            workingSetBefore,
+            workingSetAfter);
+        Console.WriteLine($"parked hydration measurement artifact: {artifactPath}");
+        Xunit.Assert.True(File.Exists(artifactPath));
         Xunit.Assert.True(
             reduction >= 0.70,
             $"parked_count={parkedGoalCount}; pre_fix_goal_json_bytes={preFixBytes}; after_goal_json_bytes={repository.LoadedGoalSnapshotJsonBytes}; reduction={reduction:P1}; working_set_before={workingSetBefore}; working_set_after={workingSetAfter}");
+    }
+
+    private static string WriteParkedHydrationMeasurementArtifact(
+        int parkedGoalCount,
+        long preFixGoalJsonBytes,
+        long afterGoalJsonBytes,
+        double reduction,
+        long workingSetBefore,
+        long workingSetAfter)
+    {
+        var artifactPath = Path.Combine(Path.GetTempPath(), "mcg-conduct-loop-parked-hydration-measurement-latest.json");
+        File.WriteAllText(
+            artifactPath,
+            JsonSerializer.Serialize(
+                new
+                {
+                    fixture = "conduct-loop-parked-hydration",
+                    parked_goal_count = parkedGoalCount,
+                    safety_net_sweep_cadence_ticks = CliPersistentStateRunner.ParkedGoalSafetyNetSweepCadenceTicks,
+                    pre_fix_goal_json_bytes = preFixGoalJsonBytes,
+                    after_goal_json_bytes = afterGoalJsonBytes,
+                    reduction,
+                    working_set_before = workingSetBefore,
+                    working_set_after = workingSetAfter
+                },
+                new JsonSerializerOptions { WriteIndented = true }));
+
+        return artifactPath;
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_hydrates_unparked_goal_on_next_kernel_load")]
@@ -1652,7 +1689,13 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         }
 
         var safetyNetRepository = new InMemoryTransactionalStateRepository(kernel);
-        var currentTickKernel = CliPersistentStateRunner.LoadConductLoopKernel(safetyNetRepository);
+        var currentTickKernel = AgentOrchestratorKernel.FromSnapshot(parkedAfterAnsweredSnapshot with
+        {
+            Goals = [parkedAfterAnsweredSnapshot.Goals.Single(goal => goal.Id == target.Id.Value)],
+            HumanInputRequests = parkedAfterAnsweredSnapshot.HumanInputRequests
+                .Where(request => request.GoalId == target.Id.Value)
+                .ToArray()
+        });
         var safetyNetKernel = CliPersistentStateRunner.LoadConductLoopParkedGoalSafetyNetKernel(safetyNetRepository);
         var promoted = safetyNetKernel.RefreshParkedGoalsWithResolvedHumanWaits();
         var promotedSnapshots = safetyNetKernel.ExportSnapshot().Goals
@@ -1666,7 +1709,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, promoted);
         Xunit.Assert.Contains(target.Id.Value, safetyNetRepository.LoadedGoalIds);
         Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.Contains(id.Value, safetyNetRepository.LoadedGoalIds));
-        Xunit.Assert.DoesNotContain(currentTickKernel.Goals, goal => goal.Id == target.Id);
+        Xunit.Assert.Contains(currentTickKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Parked);
         Xunit.Assert.Contains(nextPrewalkKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Active);
         Xunit.Assert.DoesNotContain(nextPrewalkKernel.Goals, goal => parkedGoalIds.Contains(goal.Id));
     }
@@ -1722,7 +1765,27 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         });
 
         var repository = new InMemoryTransactionalStateRepository(kernel);
-        var currentTickKernel = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+        var currentTickKernel = AgentOrchestratorKernel.FromSnapshot(answeredSnapshot with
+        {
+            Goals = answeredSnapshot.Goals
+                .Where(goal => goal.Id == target.Id.Value)
+                .Select(goal => goal with
+                {
+                    Status = GoalStatus.Parked,
+                    Timeline = goal.Timeline
+                        .Append(new ProgressEventSnapshot(
+                            target.Id.Value,
+                            null,
+                            ProgressKind.GoalPolicyDecision,
+                            "Goal parked: waiting for operator answer",
+                            answeredAt.AddTicks(-1)))
+                        .ToArray()
+                })
+                .ToArray(),
+            HumanInputRequests = answeredSnapshot.HumanInputRequests
+                .Where(request => request.GoalId == target.Id.Value)
+                .ToArray()
+        });
         var targetedKernel = CliPersistentStateRunner.LoadConductLoopResolvedParkedHumanWaitKernel(repository);
         var promoted = targetedKernel.RefreshParkedGoalsWithResolvedHumanWaits();
         var promotedSnapshots = targetedKernel.ExportSnapshot().Goals
@@ -1735,7 +1798,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains(target.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.DoesNotContain(id.Value, targetedKernel.Goals.Select(goal => goal.Id.Value)));
         Xunit.Assert.Equal(1, promoted);
-        Xunit.Assert.DoesNotContain(currentTickKernel.Goals, goal => goal.Id == target.Id);
+        Xunit.Assert.Contains(currentTickKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Parked);
         Xunit.Assert.Contains(nextTickKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Active);
     }
 
@@ -1757,9 +1820,9 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var promoted = targetedKernel.RefreshParkedGoalsWithResolvedHumanWaits();
 
         Xunit.Assert.Equal(1, repository.CompletedHumanInputQueryCount);
-        Xunit.Assert.Contains(target.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.DoesNotContain(target.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Equal(0, promoted);
-        Xunit.Assert.Contains(targetedKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Parked);
+        Xunit.Assert.Empty(targetedKernel.Goals);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_sweeps_terminal_candidates_loaded_on_demand")]

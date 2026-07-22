@@ -401,6 +401,23 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(target.Id, id);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_ignores_synthetic_parked_human_input_completions")]
+    public async Task ListGoalIdsWithCompletedHumanInputAsyncIgnoresSyntheticParkedCompletions()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal("Synthetic parked completion", [new TaskSpec(TaskId.New(), "Target task", AgentRole.Developer)]);
+        kernel.ActivateGoal(target.Id, AgentCatalog.Default().Agents);
+        kernel.RequestHumanInput(target.Id, target.Tasks.Single().Id, "Need operator decision.");
+        kernel.ParkGoal(target.Id, "waiting for operator answer");
+        await repo.SaveAsync(kernel);
+
+        var completed = await repo.ListGoalIdsWithCompletedHumanInputAsync([target.Id]);
+
+        Assert.Empty(completed);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadAsync_quarantines_malformed_goal_row_and_loads_remaining_state")]
     public async Task LoadAsyncQuarantinesMalformedGoalRowAndLoadsRemainingState()
     {

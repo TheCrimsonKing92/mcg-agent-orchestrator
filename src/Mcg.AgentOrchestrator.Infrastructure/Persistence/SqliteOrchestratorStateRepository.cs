@@ -659,7 +659,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         while (await reader.ReadAsync(cancellationToken))
         {
             var snapshot = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(reader.GetString(1), SerializerOptions);
-            if (snapshot?.IsCompleted == true)
+            if (snapshot?.IsCompleted == true &&
+                !IsSyntheticParkedHumanWaitCompletion(snapshot))
             {
                 results.Add(reader.GetString(0));
             }
@@ -667,6 +668,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         return results.Select(id => new GoalId(id)).ToArray();
     }
+
+    private static bool IsSyntheticParkedHumanWaitCompletion(HumanInputRequestSnapshot snapshot) =>
+        !snapshot.WasDismissed &&
+        snapshot.Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
 
     public async Task<IReadOnlyList<QuarantinedGoalSummary>> ListQuarantinedGoalRowsAsync(CancellationToken cancellationToken = default)
     {

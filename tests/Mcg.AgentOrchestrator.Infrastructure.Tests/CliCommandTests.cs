@@ -686,11 +686,18 @@ public abstract class CliCommandTestBase
             CompletedHumanInputQueryCount++;
             var ids = goalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
             return Task.FromResult<IReadOnlyList<GoalId>>(_kernel.ExportSnapshot().HumanInputRequests
-                .Where(request => ids.Contains(request.GoalId) && request.IsCompleted)
+                .Where(request =>
+                    ids.Contains(request.GoalId) &&
+                    request.IsCompleted &&
+                    !IsSyntheticParkedHumanWaitCompletion(request))
                 .Select(request => new GoalId(request.GoalId))
                 .Distinct()
                 .ToArray());
         }
+
+        private static bool IsSyntheticParkedHumanWaitCompletion(HumanInputRequestSnapshot request) =>
+            !request.WasDismissed &&
+            request.Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
 
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
