@@ -39,7 +39,13 @@ public sealed class BackgroundDispatchRunner
     public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
 
     private static readonly TimeSpan DefaultPostOutputIdleTimeout = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(20);
+    // Reap a launched worker that has made no progress -- no output growth AND less than
+    // CpuProgressEpsilonMs of CPU growth per heartbeat -- for this long. Cut from 20m to 15m to recover
+    // faster from the known codex-CLI mid-session hang (openai/codex #7156/#7187: an established-but-
+    // black-holed API request that never times out, so codex sits at ~0 CPU indefinitely). The CPU-growth
+    // progress signal keeps a genuinely working codex fresh, so a full stall of this length is almost
+    // certainly the hang; the remaining margin still tolerates a long, quiet build/test.
+    private static readonly TimeSpan DefaultProgressStallTimeout = TimeSpan.FromMinutes(15);
     // A startup-hang is a worker whose tool process never launched. The childPid/CPU-burst "invoked"
     // check in TryDetectStartupHang makes this window safe to keep short: a worker that DID launch and
     // is merely idling on the provider API (low local CPU, buffered output) is never flagged, so this
@@ -239,6 +245,7 @@ public sealed class BackgroundDispatchRunner
         kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
 
         var dispatchHostCommand = RewriteRealWorkerCommandForTests(dispatch.Command, IsTestRealWorkerCommandRewriteEnabled());
+        var egressProxyOptions = CodexEgressProxyOptions.FromEnvironment();
 
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatchHostCommand,
@@ -255,7 +262,11 @@ public sealed class BackgroundDispatchRunner
             SandboxWorktreeWritable: sandboxWorktreeWritable,
             ProviderSessionId: dispatch.ProviderSessionId,
             WorktreeHeadSha: dispatch.WorktreeHeadSha,
-            DirtyStateHash: dispatch.DirtyStateHash));
+            DirtyStateHash: dispatch.DirtyStateHash,
+            CodexEgressProxyEnabled: egressProxyOptions.Enabled,
+            CodexEgressProxyEnforce: egressProxyOptions.Enforce,
+            CodexEgressProxyIdleTimeoutMs: egressProxyOptions.IdleTimeoutMs,
+            CodexEgressProxyConnectTimeoutMs: egressProxyOptions.ConnectTimeoutMs));
 
         if (useSandbox && OperatingSystem.IsWindows())
         {

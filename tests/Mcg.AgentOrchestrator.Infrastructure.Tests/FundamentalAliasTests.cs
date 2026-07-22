@@ -499,6 +499,17 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.Equal("--confirm-goal-stop", parts[5]);
     }
 
+    [Xunit.Fact(DisplayName = "CliArgumentParser_normalize_args_stop_preserves_reason_mode_and_confirm_tokens")]
+    public void CliArgumentParserNormalizeArgsStopPreservesReasonModeAndConfirmTokens()
+    {
+        var parts = CliArgumentParser.NormalizeArgs(
+            ["stop", "8544c918", "Build", "verification", "failed", "--as", "park", "--confirm-goal-park"]);
+
+        Xunit.Assert.Equal(
+            ["stop", "8544c918", "Build verification failed", "--as", "park", "--confirm-goal-park"],
+            parts);
+    }
+
     [Xunit.Fact(DisplayName = "CliArgumentParser_goal_splits_objective_and_simple_flag")]
     public void CliArgumentParserGoalSplitsObjectiveAndSimpleFlag()
     {
