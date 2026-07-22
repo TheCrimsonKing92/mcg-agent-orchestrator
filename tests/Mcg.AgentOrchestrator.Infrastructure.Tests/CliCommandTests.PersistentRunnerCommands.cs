@@ -1593,6 +1593,85 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.All(sweepKernel.Goals, goal => Xunit.Assert.Equal(GoalStatus.Parked, goal.Status));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_safety_net_promotes_resolved_parked_wait_within_four_ticks")]
+    public void PersistentRunnerConductLoopSafetyNetPromotesResolvedParkedWaitWithinFourTicks()
+    {
+        const int parkedGoalCount = 101;
+        var kernel = new AgentOrchestratorKernel();
+        var parkedGoalIds = new List<GoalId>();
+        for (var i = 0; i < parkedGoalCount; i++)
+        {
+            var parked = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                $"Parked wait fixture {i}");
+            kernel.ParkGoal(parked.Id, "operator deferred");
+            parkedGoalIds.Add(parked.Id);
+        }
+
+        var target = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Parked answered wait fixture");
+        var targetTask = target.Tasks.Single();
+        kernel.RecordTaskDispatch(target.Id, targetTask.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", DateTimeOffset.UtcNow));
+        var wait = kernel.RequestHumanInput(target.Id, targetTask.Id, "Which option?");
+        kernel.SubmitHumanInput(wait.Id, "Use option A.");
+        var answeredSnapshot = kernel.ExportSnapshot();
+        var answeredGoal = answeredSnapshot.Goals.Single(goal => goal.Id == target.Id.Value);
+        var answeredAt = answeredGoal.Timeline
+            .Last(evt => evt.Kind == ProgressKind.HumanInputReceived)
+            .OccurredAt;
+        var parkedAfterAnsweredSnapshot = answeredSnapshot with
+        {
+            Goals = answeredSnapshot.Goals
+                .Select(goal => goal.Id == target.Id.Value
+                    ? goal with
+                    {
+                        Status = GoalStatus.Parked,
+                        Timeline = goal.Timeline
+                            .Append(new ProgressEventSnapshot(
+                                target.Id.Value,
+                                null,
+                                ProgressKind.GoalPolicyDecision,
+                                "Goal parked: waiting for operator answer",
+                                answeredAt.AddTicks(-1)))
+                            .ToArray()
+                    }
+                    : goal)
+                .ToArray()
+        };
+        kernel = AgentOrchestratorKernel.FromSnapshot(parkedAfterAnsweredSnapshot);
+
+        var normalTickRepository = new InMemoryTransactionalStateRepository(kernel);
+        for (var tick = 1; tick < CliPersistentStateRunner.ParkedGoalSafetyNetSweepCadenceTicks; tick++)
+        {
+            var normalTickKernel = CliPersistentStateRunner.LoadConductLoopKernel(normalTickRepository);
+            Xunit.Assert.DoesNotContain(target.Id, normalTickKernel.Goals.Select(goal => goal.Id));
+            Xunit.Assert.False(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(tick));
+        }
+
+        var safetyNetRepository = new InMemoryTransactionalStateRepository(kernel);
+        var safetyNetKernel = CliPersistentStateRunner.LoadConductLoopParkedGoalSafetyNetKernel(safetyNetRepository);
+        var promoted = safetyNetKernel.RefreshParkedGoalsWithResolvedHumanWaits();
+        var promotedSnapshot = safetyNetKernel.ExportSnapshot() with
+        {
+            Goals = safetyNetKernel.ExportSnapshot().Goals
+                .Where(goal => goal.Status != GoalStatus.Parked)
+                .ToArray()
+        };
+        var nextPrewalkKernel = new AgentOrchestratorKernel();
+        nextPrewalkKernel.IngestNewGoals(promotedSnapshot);
+
+        Xunit.Assert.Equal(4, CliPersistentStateRunner.ParkedGoalSafetyNetSweepCadenceTicks);
+        Xunit.Assert.True(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(4));
+        Xunit.Assert.Equal(1, promoted);
+        Xunit.Assert.Contains(target.Id.Value, safetyNetRepository.LoadedGoalIds);
+        Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.Contains(id.Value, safetyNetRepository.LoadedGoalIds));
+        Xunit.Assert.Contains(nextPrewalkKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Active);
+        Xunit.Assert.DoesNotContain(nextPrewalkKernel.Goals, goal => parkedGoalIds.Contains(goal.Id));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_sweeps_terminal_candidates_loaded_on_demand")]
     public void PersistentRunnerConductLoopSweepsTerminalCandidatesLoadedOnDemand()
     {

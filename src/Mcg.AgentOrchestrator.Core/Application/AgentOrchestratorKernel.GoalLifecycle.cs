@@ -467,6 +467,28 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
+    public int RefreshParkedGoalsWithResolvedHumanWaits()
+    {
+        var promoted = 0;
+        foreach (var goal in _goals.Values.Where(goal => goal.Status == GoalStatus.Parked).ToArray())
+        {
+            if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && !request.IsCompleted) ||
+                !HasHumanInputResolvedAfterLatestParkDecision(goal))
+            {
+                continue;
+            }
+
+            RefreshGoalStatus(goal, allowParkedRefresh: true);
+            if (goal.Status != GoalStatus.Parked)
+            {
+                promoted++;
+                Append(goal, null, ProgressKind.GoalPolicyDecision, "Goal unparked: resolved parked human wait.");
+            }
+        }
+
+        return promoted;
+    }
+
     public Goal CompleteGoal(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
@@ -815,6 +837,27 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return completed;
+    }
+
+    private static bool HasHumanInputResolvedAfterLatestParkDecision(Goal goal)
+    {
+        var latestParkDecisionIndex = -1;
+        var latestHumanInputReceivedIndex = -1;
+        for (var index = 0; index < goal.Timeline.Count; index++)
+        {
+            var evt = goal.Timeline[index];
+            if (evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+            {
+                latestParkDecisionIndex = index;
+            }
+            else if (evt.Kind == ProgressKind.HumanInputReceived)
+            {
+                latestHumanInputReceivedIndex = index;
+            }
+        }
+
+        return latestParkDecisionIndex >= 0 && latestHumanInputReceivedIndex > latestParkDecisionIndex;
     }
 
     private string? ResolveParkResolution(Goal goal)

@@ -876,6 +876,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
                         {
                             var parkedSweepKernel = context.ReloadParkedGoalSafetyNetKernel();
+                            parkedSweepKernel.RefreshParkedGoalsWithResolvedHumanWaits();
                             var parkedSweepSnapshot = parkedSweepKernel.ExportSnapshot();
                             var newlyEligibleSnapshot = parkedSweepSnapshot with
                             {
