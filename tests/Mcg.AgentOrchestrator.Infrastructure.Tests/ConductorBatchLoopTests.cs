@@ -3255,6 +3255,78 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, summary.Held);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_holds_when_parked_dependency_is_metadata_only")]
+    public void BatchLoopDependentGoalHoldsWhenParkedDependencyIsMetadataOnly()
+    {
+        var parkedDependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active dependent goal");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [parkedDependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(parkedDependencyId, GoalStatus.Parked.ToString())
+        ]);
+
+        var createdWorkspaces = new List<GoalId>();
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(createWorkspace: goal =>
+            {
+                createdWorkspaces.Add(goal.Id);
+                return "/tmp/workspace";
+            }),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.DoesNotContain(kernel.Goals, goal => goal.Id == parkedDependencyId);
+        Assert.Equal(1, summary.Held);
+        Assert.Empty(createdWorkspaces);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_advances_when_parked_dependency_completes_in_metadata")]
+    public void BatchLoopDependentGoalAdvancesWhenParkedDependencyCompletesInMetadata()
+    {
+        var dependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "active dependent goal");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [dependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Completed.ToString())
+        ]);
+
+        var createdWorkspaces = new List<GoalId>();
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(createWorkspace: goal =>
+            {
+                createdWorkspaces.Add(goal.Id);
+                return "/tmp/workspace";
+            }),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.DoesNotContain(kernel.Goals, goal => goal.Id == dependencyId);
+        Assert.False(kernel.IsKnownCompletedDependencyGoal(dependencyId));
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(0, summary.Held);
+        Assert.Contains(active.Id, createdWorkspaces);
+    }
+
     // ── Dynamic goal pickup: a goal ingested mid-run via the sweep is driven ──
 
     [Xunit.Fact(DisplayName = "BatchLoop_picks_up_a_goal_ingested_mid_run_via_the_sweep")]

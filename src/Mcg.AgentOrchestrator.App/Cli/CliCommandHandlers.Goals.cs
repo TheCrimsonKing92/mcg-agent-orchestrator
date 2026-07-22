@@ -864,7 +864,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // instead of stale loop-local objects.
                     try
                     {
-                        var snapshot = context.ReloadKernel().ExportSnapshot();
+                        var reloadedKernel = context.ReloadKernel();
+                        loopKernel.MarkKnownDependencyGoalStatuses(reloadedKernel.KnownDependencyGoalStatuses);
+                        loopKernel.MarkKnownCompletedDependencyGoals(reloadedKernel.KnownCompletedDependencyGoals);
+                        var snapshot = reloadedKernel.ExportSnapshot();
                         loopKernel.RefreshTrackedGoals(snapshot);
                         loopKernel.IngestNewGoals(snapshot);
                     }

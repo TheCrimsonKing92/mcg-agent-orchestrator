@@ -1476,6 +1476,85 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(terminalGoalIds[0], terminalSnapshot.Id);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_keeps_parked_goals_metadata_only")]
+    public void PersistentRunnerConductLoopKeepsParkedGoalsMetadataOnly()
+    {
+        const int parkedGoalCount = 53;
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active conductor goal");
+        var parkedGoalIds = new List<GoalId>();
+        var largePayload = new string('x', 8192);
+        for (var i = 0; i < parkedGoalCount; i++)
+        {
+            var parked = kernel.CreateGoal(
+                $"Parked memory fixture {i}: {largePayload}",
+                [new TaskSpec(TaskId.New(), $"Preserve parked metadata {i}", AgentRole.Researcher)]);
+            kernel.ActivateGoal(parked.Id, AgentCatalog.Default().Agents);
+            kernel.ParkGoal(parked.Id, "memory fixture");
+            parkedGoalIds.Add(parked.Id);
+        }
+
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var preFixHydratedIds = kernel.Goals
+            .Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
+            .Select(goal => goal.Id)
+            .ToArray();
+        var preFixBytes = repository.EstimateGoalSnapshotJsonBytes(preFixHydratedIds);
+        var workingSetBefore = Process.GetCurrentProcess().WorkingSet64;
+
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+
+        var workingSetAfter = Process.GetCurrentProcess().WorkingSet64;
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+        Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.DoesNotContain(id.Value, repository.LoadedGoalIds));
+        Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id == id));
+        Xunit.Assert.All(parkedGoalIds, id =>
+        {
+            Xunit.Assert.True(loaded.TryGetKnownDependencyGoalStatus(id, out var status));
+            Xunit.Assert.Equal(GoalStatus.Parked.ToString(), status);
+        });
+        var reduction = preFixBytes == 0
+            ? 0
+            : (double)(preFixBytes - repository.LoadedGoalSnapshotJsonBytes) / preFixBytes;
+        Xunit.Assert.True(
+            reduction >= 0.70,
+            $"parked_count={parkedGoalCount}; pre_fix_goal_json_bytes={preFixBytes}; after_goal_json_bytes={repository.LoadedGoalSnapshotJsonBytes}; reduction={reduction:P1}; working_set_before={workingSetBefore}; working_set_after={workingSetAfter}");
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_hydrates_unparked_goal_on_next_kernel_load")]
+    public void PersistentRunnerConductLoopHydratesUnparkedGoalOnNextKernelLoad()
+    {
+        const int parkedGoalCount = 100;
+        var kernel = new AgentOrchestratorKernel();
+        var parkedGoalIds = new List<GoalId>();
+        for (var i = 0; i < parkedGoalCount; i++)
+        {
+            var parked = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                $"Parked fixture {i}");
+            kernel.ParkGoal(parked.Id, "operator deferred");
+            parkedGoalIds.Add(parked.Id);
+        }
+
+        var initiallyParkedRepository = new InMemoryTransactionalStateRepository(kernel);
+        var initiallyLoaded = CliPersistentStateRunner.LoadConductLoopKernel(initiallyParkedRepository);
+        Xunit.Assert.Empty(initiallyLoaded.Goals);
+        Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.DoesNotContain(id.Value, initiallyParkedRepository.LoadedGoalIds));
+
+        var unparkedGoalId = parkedGoalIds[42];
+        kernel = WithGoalStatus(kernel, unparkedGoalId, GoalStatus.Active);
+        var nextTickRepository = new InMemoryTransactionalStateRepository(kernel);
+        var nextTickLoaded = CliPersistentStateRunner.LoadConductLoopKernel(nextTickRepository);
+
+        Xunit.Assert.Contains(unparkedGoalId.Value, nextTickRepository.LoadedGoalIds);
+        Xunit.Assert.Contains(nextTickLoaded.Goals, goal => goal.Id == unparkedGoalId);
+        Xunit.Assert.All(
+            parkedGoalIds.Where(id => id != unparkedGoalId),
+            id => Xunit.Assert.DoesNotContain(id.Value, nextTickRepository.LoadedGoalIds));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_sweeps_terminal_candidates_loaded_on_demand")]
     public void PersistentRunnerConductLoopSweepsTerminalCandidatesLoadedOnDemand()
     {
@@ -1689,7 +1768,6 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.DoesNotContain(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
             reason => reason.Equals("dependency could not be scheduled", StringComparison.OrdinalIgnoreCase));
     }
-
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_carries_prompt_budget_through_state_commit")]
     public void PersistentRunnerGoalMarkLandedCarriesPromptBudgetThroughStateCommit()

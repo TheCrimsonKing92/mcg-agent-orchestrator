@@ -1616,15 +1616,30 @@ internal sealed class ConductorBatchLoop
             if (escalatedGoals.Contains(depId.Value))
                 return $"dependency escalated: {depId.Value[..8]}";
 
-            if (!completedGoals.Contains(depId.Value) && !kernel.IsKnownCompletedDependencyGoal(depId))
+            if (completedGoals.Contains(depId.Value) ||
+                kernel.IsKnownCompletedDependencyGoal(depId) ||
+                (kernel.TryGetKnownDependencyGoalStatus(depId, out var dependencyStatus) &&
+                 IsMetadataSatisfiedDependencyStatus(dependencyStatus)))
             {
-                var depPrefix = kernel.Goals.FirstOrDefault(g => g.Id == depId)?.Id.Value[..8] ?? depId.Value[..8];
-                return $"waiting on dependency {depPrefix}";
+                continue;
             }
+
+            if (kernel.TryGetKnownDependencyGoalStatus(depId, out var knownStatus) &&
+                knownStatus.Equals(GoalStatus.Parked.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                return $"waiting on dependency {depId.Value[..8]}";
+            }
+
+            var depPrefix = kernel.Goals.FirstOrDefault(g => g.Id == depId)?.Id.Value[..8] ?? depId.Value[..8];
+            return $"waiting on dependency {depPrefix}";
         }
 
         return null;
     }
+
+    private static bool IsMetadataSatisfiedDependencyStatus(string status) =>
+        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
 
     private static void MarkCompletedDependencyGoals(
         AgentOrchestratorKernel kernel,

@@ -5,6 +5,7 @@ public sealed partial class AgentOrchestratorKernel
     private readonly Dictionary<GoalId, Goal> _goals = [];
     private readonly Dictionary<HumanInputRequestId, HumanInputRequest> _humanInputRequests = [];
     private readonly HashSet<GoalId> _knownCompletedDependencyGoals = [];
+    private readonly Dictionary<GoalId, string> _knownDependencyGoalStatuses = [];
     private readonly IClock _clock;
     private IGoalLifecycleEventWriter _eventWriter = NullGoalLifecycleEventWriter.Instance;
 
@@ -24,16 +25,35 @@ public sealed partial class AgentOrchestratorKernel
 
     public IReadOnlyCollection<GoalId> KnownCompletedDependencyGoals => _knownCompletedDependencyGoals;
 
+    public IReadOnlyDictionary<GoalId, string> KnownDependencyGoalStatuses => _knownDependencyGoalStatuses;
+
     public void MarkKnownCompletedDependencyGoals(IEnumerable<GoalId> goalIds)
     {
         foreach (var goalId in goalIds)
         {
             _knownCompletedDependencyGoals.Add(goalId);
+            _knownDependencyGoalStatuses.TryAdd(goalId, GoalStatus.Completed.ToString());
         }
     }
 
     public bool IsKnownCompletedDependencyGoal(GoalId goalId) =>
         _knownCompletedDependencyGoals.Contains(goalId);
+
+    public void MarkKnownDependencyGoalStatuses(IEnumerable<KeyValuePair<GoalId, string>> goalStatuses)
+    {
+        foreach (var (goalId, status) in goalStatuses)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                continue;
+            }
+
+            _knownDependencyGoalStatuses[goalId] = status;
+        }
+    }
+
+    public bool TryGetKnownDependencyGoalStatus(GoalId goalId, out string status) =>
+        _knownDependencyGoalStatuses.TryGetValue(goalId, out status!);
 
     public OrchestratorSnapshot ExportSnapshot()
     {
@@ -49,6 +69,7 @@ public sealed partial class AgentOrchestratorKernel
         foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
         {
             kernel._goals.Add(goal.Id, goal);
+            kernel._knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
         }
 
         foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
@@ -65,10 +86,12 @@ public sealed partial class AgentOrchestratorKernel
         _goals.Clear();
         _humanInputRequests.Clear();
         _knownCompletedDependencyGoals.Clear();
+        _knownDependencyGoalStatuses.Clear();
 
         foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
         {
             _goals.Add(goal.Id, goal);
+            _knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
         }
 
         foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
@@ -96,6 +119,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             ingested++;
+            _knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
         }
 
         foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
@@ -121,6 +145,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             _goals[goal.Id] = goal;
+            _knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
             refreshed++;
         }
 

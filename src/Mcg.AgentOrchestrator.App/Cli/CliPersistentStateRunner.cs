@@ -635,10 +635,14 @@ internal static class CliPersistentStateRunner
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
             .ToArray();
         var hydratedIds = summaries
-            .Where(summary => !IsConductLoopTerminalStatus(summary.Status))
+            .Where(summary =>
+                !IsConductLoopTerminalStatus(summary.Status) &&
+                !summary.Status.Equals(GoalStatus.Parked.ToString(), StringComparison.OrdinalIgnoreCase))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
+        kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
+            new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
             .Select(summary => new GoalId(summary.Id)));
 
@@ -655,8 +659,13 @@ internal static class CliPersistentStateRunner
         }
 
         var missingDependencySet = missingDependencyIds.ToHashSet(StringComparer.Ordinal);
-        var completedDependencyIds = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
-            .Where(summary => missingDependencySet.Contains(summary.Id) && IsConductLoopTerminalStatus(summary.Status))
+        var missingDependencySummaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(summary => missingDependencySet.Contains(summary.Id))
+            .ToArray();
+        kernel.MarkKnownDependencyGoalStatuses(missingDependencySummaries.Select(summary =>
+            new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
+        var completedDependencyIds = missingDependencySummaries
+            .Where(summary => IsConductLoopTerminalStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
