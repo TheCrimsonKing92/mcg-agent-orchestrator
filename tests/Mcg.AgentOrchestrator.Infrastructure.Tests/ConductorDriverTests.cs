@@ -392,6 +392,47 @@ public sealed class ConductorDriverTests
         Assert.False(File.Exists(Path.Combine(root, "DOGFOOD_LOG.md")));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_AwaitingClarification_surfaces_stale_recovery_action")]
+    public async Task ConductorDriverAwaitingClarificationSurfacesStaleRecoveryAction()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var (kernel, goal) = SimpleGoal("Conductor stale clarification goal.");
+        var key = $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:api-version";
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Spec clarification needed: Which API version?",
+            "Question: Which API version?\nFork kind: external-contract",
+            key);
+        Assert.True(await store.TryResolveAsync(key, "REST v2"));
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Spec clarification needed: Which API version?",
+            "Question: Which API version?\nFork kind: external-contract",
+            key);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.AwaitingClarification, escalated.State);
+        Assert.Contains("Stale spec clarification detected", escalated.Reason, StringComparison.Ordinal);
+        Assert.Contains("api-version", escalated.Reason, StringComparison.Ordinal);
+        Assert.Contains($"attention dismiss {goal.Id.Value[..8]}", escalated.Reason, StringComparison.Ordinal);
+        var eventsPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
+        var events = File.ReadAllText(eventsPath);
+        Assert.Contains("\"eventType\":\"StaleClarificationDetected\"", events, StringComparison.Ordinal);
+        Assert.Contains("\"recoveryCommand\":\"attention dismiss ", events, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_slots_busy_journals_blocked_outcome")]
     public void ConductorDriverAcceptanceSlotsBusyJournalsBlockedOutcome()
     {

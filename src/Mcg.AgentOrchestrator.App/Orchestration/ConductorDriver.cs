@@ -47,6 +47,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
     private readonly Func<bool> _hasGateReadyGoal;
+    private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
@@ -72,6 +73,10 @@ internal sealed class ConductorDriver
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         kernel.SetEventWriter(eventWriter);
+        _tryBuildAwaitingClarificationEscalationReason = goal =>
+            GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
+                ? reason
+                : null;
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
         var journalSnapshot = GoalOperationJournal.ReadAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -561,7 +566,8 @@ internal sealed class ConductorDriver
         Func<Goal, string, FocusedEvidenceRunResult>? runFocusedEvidence = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
-        Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null)
+        Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
+        Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -611,6 +617,8 @@ internal sealed class ConductorDriver
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
+        _tryBuildAwaitingClarificationEscalationReason =
+            tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
         _executionDirectory = null;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
@@ -791,10 +799,16 @@ internal sealed class ConductorDriver
             }
         }
 
+        if (state == GoalLifecycleState.AwaitingClarification)
+        {
+            return Escalate(goal, goalPrefix, policy, state,
+                _tryBuildAwaitingClarificationEscalationReason(goal) ??
+                $"Goal is in {state} state; operator action required");
+        }
+
         // Error states always escalate regardless of policy
         if (state is GoalLifecycleState.Failed
                   or GoalLifecycleState.Blocked
-                  or GoalLifecycleState.AwaitingClarification
                   or GoalLifecycleState.AwaitingHumanInput)
         {
             return Escalate(goal, goalPrefix, policy, state,

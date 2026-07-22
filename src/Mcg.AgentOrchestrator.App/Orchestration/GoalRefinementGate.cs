@@ -58,10 +58,23 @@ internal static class GoalRefinementGate
         Goal goal,
         IGoalLifecycleEventWriter? eventWriter = null)
     {
+        if (TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+    }
+
+    public static bool TryBuildAwaitingClarificationEscalationReason(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        IGoalLifecycleEventWriter? eventWriter,
+        out string reason)
+    {
         var items = ListGoalCollaborationItems(workspace, goal);
         if (!GoalRefinementService.HasOpenClarification(items))
         {
-            return;
+            reason = string.Empty;
+            return false;
         }
 
         var openClarifications = items
@@ -75,19 +88,20 @@ internal static class GoalRefinementGate
         {
             var recoveryCommand = $"attention dismiss {goal.Id.Value[..8]}";
             eventWriter?.AppendStaleClarificationDetected(goal.Id, staleTopicKeys, recoveryCommand);
-            throw new InvalidOperationException(
+            reason =
                 $"Stale spec clarification detected for goal {goal.Id.Value[..8]}: {string.Join(", ", staleTopicKeys)}. " +
-                $"Recovery: run `{recoveryCommand}` to clear stale clarification attention, then retry dispatch.");
+                $"Recovery: run `{recoveryCommand}` to clear stale clarification attention, then retry dispatch.";
+            return true;
         }
 
         var questions = openClarifications
             .Select(item => item.Subject)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var detail = questions.Length == 0
+        reason = questions.Length == 0
             ? "Resolve the spec clarification item before dispatching planner work."
             : $"Resolve spec clarification before dispatching planner work: {string.Join("; ", questions)}";
-        throw new InvalidOperationException(detail);
+        return true;
     }
 
     public static bool HasOpenClarification(OrchestratorWorkspace workspace, Goal goal) =>
