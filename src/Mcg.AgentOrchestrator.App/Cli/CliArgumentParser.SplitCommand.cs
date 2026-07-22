@@ -136,6 +136,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitTargetTextCommandWithFileFlags(command, remainder, "--body-file", "--text-file");
     }
 
+    if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitTargetCommandWithValueFlags(command, remainder, "--title", "--description", "--priority", "--tags", "--status");
+    }
+
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
         return SplitTargetTextCommandWithFileFlags(command, remainder, "--reason-file", "--text-file");
@@ -398,6 +403,44 @@ private static IReadOnlyList<string> SplitGoalDispositionCommand(string command,
     return string.IsNullOrWhiteSpace(reason)
         ? [parts[0], parts[1], confirmationFlag]
         : [parts[0], parts[1], reason, confirmationFlag];
+}
+
+private static IReadOnlyList<string> SplitTargetCommandWithValueFlags(string command, string remainder, params string[] valueFlags)
+{
+    var firstSpace = remainder.IndexOf(' ');
+    if (firstSpace < 0)
+        return [command, remainder];
+
+    var result = new List<string> { command, remainder[..firstSpace] };
+    var tail = remainder[(firstSpace + 1)..].Trim();
+    var tokens = tail.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    for (var i = 0; i < tokens.Length; i++)
+    {
+        var token = tokens[i];
+        if (!valueFlags.Any(flag => flag.Equals(token, StringComparison.OrdinalIgnoreCase)))
+        {
+            result.Add(token);
+            continue;
+        }
+
+        result.Add(token);
+        var value = new List<string>();
+        for (i++; i < tokens.Length; i++)
+        {
+            if (tokens[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                i--;
+                break;
+            }
+
+            value.Add(tokens[i]);
+        }
+
+        if (value.Count > 0)
+            result.Add(string.Join(' ', value));
+    }
+
+    return result;
 }
 
 private static bool TryGetGoalDispositionConfirmationFlag(string command, out string flag)

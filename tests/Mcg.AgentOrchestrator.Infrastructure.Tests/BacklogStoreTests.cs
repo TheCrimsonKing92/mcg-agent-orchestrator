@@ -136,6 +136,127 @@ public sealed class BacklogStoreTests
         Assert.True(reloaded.Notes[0].CreatedAt <= reloaded.Notes[1].CreatedAt);
     }
 
+    [Xunit.Fact(DisplayName = "BacklogStore_update_title_leaves_other_fields_unchanged")]
+    public async Task UpdateTitleLeavesOtherFieldsUnchanged()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Old title", "Original body");
+
+        var updated = await store.UpdateAsync(item.Id, new BacklogItemUpdate(Title: "New title"));
+
+        Assert.Equal("New title", updated.Title);
+        Assert.Equal("Original body", updated.Body);
+        Assert.Equal(BacklogItemStatus.Open, updated.Status);
+        Assert.Equal(item.CreatedAt, updated.CreatedAt);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_update_description_and_priority_atomically")]
+    public async Task UpdateDescriptionAndPriorityAtomically()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Atomic update", "Old body");
+
+        var updated = await store.UpdateAsync(item.Id, new BacklogItemUpdate(Body: "New body", Priority: "high"));
+
+        Assert.Equal("Atomic update", updated.Title);
+        Assert.Equal("New body", updated.Body);
+        Assert.Equal("high", updated.Priority);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_update_unknown_id_fails")]
+    public async Task UpdateUnknownIdFails()
+    {
+        var store = new BacklogStore(TempDb());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.UpdateAsync("missing", new BacklogItemUpdate(Title: "Nope")));
+
+        Assert.Contains("No backlog item found", ex.Message);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_supersede_hides_old_item_by_default_and_all_keeps_link")]
+    public async Task SupersedeHidesOldItemByDefaultAndAllKeepsLink()
+    {
+        var store = new BacklogStore(TempDb());
+        var oldItem = await store.AddAsync("Old truth");
+        var replacement = await store.AddAsync("Current truth");
+
+        var superseded = await store.SupersedeAsync(oldItem.Id, replacement.Id);
+        var defaultList = await store.ListAsync();
+        var all = await store.ListAsync(includeAll: true);
+
+        Assert.Equal(BacklogItemStatus.Superseded, superseded.Status);
+        Assert.Equal(replacement.Id, superseded.SupersededBy);
+        Assert.DoesNotContain(defaultList, item => item.Id == oldItem.Id);
+        Assert.Contains(defaultList, item => item.Id == replacement.Id);
+        Assert.Equal(replacement.Id, all.Single(item => item.Id == oldItem.Id).SupersededBy);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_supersede_validates_ids_and_self_reference")]
+    public async Task SupersedeValidatesIdsAndSelfReference()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Known item");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SupersedeAsync("missing", item.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SupersedeAsync(item.Id, "missing"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SupersedeAsync(item.Id, item.Id));
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_supersede_rejects_cycles_and_unsupersede_clears_metadata")]
+    public async Task SupersedeRejectsCyclesAndUnsupersedeClearsMetadata()
+    {
+        var store = new BacklogStore(TempDb());
+        var first = await store.AddAsync("First");
+        var second = await store.AddAsync("Second");
+
+        await store.SupersedeAsync(first.Id, second.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SupersedeAsync(second.Id, first.Id));
+        var result = await store.UnsupersedeAsync(first.Id);
+        var noop = await store.UnsupersedeAsync(second.Id);
+
+        Assert.True(result.Changed);
+        Assert.Equal(BacklogItemStatus.Open, result.Item.Status);
+        Assert.Null(result.Item.SupersededBy);
+        Assert.False(noop.Changed);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_link_duplicate_is_idempotent_bidirectional_and_hides_duplicate")]
+    public async Task LinkDuplicateIsIdempotentBidirectionalAndHidesDuplicate()
+    {
+        var store = new BacklogStore(TempDb());
+        var canonical = await store.AddAsync("Canonical");
+        var duplicate = await store.AddAsync("Duplicate");
+
+        await store.LinkAsync(canonical.Id, duplicate.Id);
+        await store.LinkAsync(canonical.Id, duplicate.Id);
+        var defaultList = await store.ListAsync();
+        var canonicalReloaded = await store.GetByExactIdAsync(canonical.Id);
+        var duplicateReloaded = await store.GetByExactIdAsync(duplicate.Id);
+
+        Assert.Contains(defaultList, item => item.Id == canonical.Id);
+        Assert.DoesNotContain(defaultList, item => item.Id == duplicate.Id);
+        Assert.Single(canonicalReloaded!.Links);
+        Assert.Single(duplicateReloaded!.Links);
+        Assert.Equal(canonical.Id, duplicateReloaded.Links.Single().CanonicalId);
+        Assert.Equal(duplicate.Id, canonicalReloaded.Links.Single().DuplicateId);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_link_related_keeps_both_items_visible")]
+    public async Task LinkRelatedKeepsBothItemsVisible()
+    {
+        var store = new BacklogStore(TempDb());
+        var first = await store.AddAsync("First related");
+        var second = await store.AddAsync("Second related");
+
+        await store.LinkAsync(first.Id, second.Id, BacklogLinkKind.Related);
+        var defaultList = await store.ListAsync();
+
+        Assert.Contains(defaultList, item => item.Id == first.Id);
+        Assert.Contains(defaultList, item => item.Id == second.Id);
+        Assert.Equal(BacklogLinkKind.Related, defaultList.Single(item => item.Id == first.Id).Links.Single().Kind);
+    }
+
     // ── TryCloseByIdAsync (idempotent close) ──────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_try_close_returns_true_and_closes_open_item")]

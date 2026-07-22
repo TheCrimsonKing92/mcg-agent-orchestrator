@@ -33,6 +33,17 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_update_groups_multi_word_field_values")]
+    public void CliBacklogUpdateGroupsMultiWordFieldValues()
+    {
+        var interactive = CliArgumentParser.SplitCommand("backlog-update abc123 --title New title --description Better current truth --priority high");
+        var oneShot = CliArgumentParser.NormalizeArgs(["backlog-update", "abc123", "--title", "New", "title", "--description", "Better", "current", "truth", "--priority", "high"]);
+
+        Xunit.Assert.Equal(["backlog-update", "abc123", "--title", "New title", "--description", "Better current truth", "--priority", "high"], interactive);
+        Xunit.Assert.Equal(interactive, oneShot);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_backlog_list_limit_filter_caps_results")]
     public void CliBacklogListLimitFilterCapsResults()
     {
@@ -97,6 +108,26 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var item = Xunit.Assert.Single(filtered);
         Xunit.Assert.Equal("First Foo", item.Title);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_renders_supersede_duplicate_and_related_annotations")]
+    public void CliBacklogListRendersSupersedeDuplicateAndRelatedAnnotations()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var superseded = new BacklogItem("old-item", "Old", "", BacklogItemStatus.Superseded, now, now, null, SupersededBy: "replacement-item");
+        var duplicate = new BacklogItem("duplicate-item", "Dup", "", BacklogItemStatus.Open, now, now, null)
+        {
+            Links = [new BacklogLink("canonical-item", "duplicate-item", BacklogLinkKind.Duplicate, "canonical-item", now)]
+        };
+        var related = new BacklogItem("related-one", "Related", "", BacklogItemStatus.Open, now, now, null)
+        {
+            Links = [new BacklogLink("related-one", "related-two", BacklogLinkKind.Related, null, now)]
+        };
+
+        Xunit.Assert.Equal("[Superseded→replacem]", CliCommandHandlers.RenderBacklogListTag(superseded));
+        Xunit.Assert.Equal("[Dup→canonica]", CliCommandHandlers.RenderBacklogListTag(duplicate));
+        Xunit.Assert.Equal(" [Related→related-]", CliCommandHandlers.RenderBacklogListSuffix(related));
     }
 
 
@@ -518,8 +549,12 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-update", "abc", "--title", "new"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-annotate", "abc", "receipt"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-close", "abc"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-supersede", "abc", "def"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-unsupersede", "abc"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-link", "abc", "def"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--help"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["conduct", "--loop", "--help"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["workspace", "--help"]));
@@ -1045,6 +1080,59 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(BacklogItemStatus.Done, annotated!.Status);
         Xunit.Assert.Contains("Receipt after closure", output);
         Xunit.Assert.Contains("Status:  Done", output);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_update_supersede_and_link_mutate_store_and_list_annotations")]
+    public async Task CliBacklogUpdateSupersedeAndLinkMutateStoreAndListAnnotations()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var old = await store.AddAsync("Old item", "Old body");
+        var replacement = await store.AddAsync("Replacement item");
+        var duplicate = await store.AddAsync("Duplicate item");
+        var related = await store.AddAsync("Related item");
+        var kernel = new AgentOrchestratorKernel();
+
+        ExecuteCliAndCapture(["backlog-update", old.Id[..8], "--title", "Updated old", "--description", "Updated body", "--priority", "high"], kernel, workspace);
+        ExecuteCliAndCapture(["backlog-supersede", old.Id[..8], replacement.Id[..8]], kernel, workspace);
+        ExecuteCliAndCapture(["backlog-link", replacement.Id[..8], duplicate.Id[..8]], kernel, workspace);
+        ExecuteCliAndCapture(["backlog-link", replacement.Id[..8], related.Id[..8], "--related"], kernel, workspace);
+        var defaultList = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
+        var allList = ExecuteCliAndCapture(["backlog-list", "--all"], kernel, workspace);
+        var updated = await store.GetByExactIdAsync(old.Id);
+
+        Xunit.Assert.Equal("Updated old", updated!.Title);
+        Xunit.Assert.Equal("Updated body", updated.Body);
+        Xunit.Assert.Equal("high", updated.Priority);
+        Xunit.Assert.DoesNotContain(old.Id, defaultList);
+        Xunit.Assert.DoesNotContain(duplicate.Id, defaultList);
+        Xunit.Assert.Contains(replacement.Id, defaultList);
+        Xunit.Assert.Contains($"[Superseded→{replacement.Id[..8]}]", allList);
+        Xunit.Assert.Contains($"[Dup→{replacement.Id[..8]}]", allList);
+        Xunit.Assert.Contains($"[Related→{related.Id[..8]}]", defaultList);
+    }
+
+
+    [Xunit.Fact(DisplayName = "Backlog_planner_mapper_use_default_list_that_hides_superseded_and_duplicates")]
+    public async Task BacklogPlannerMapperUseDefaultListThatHidesSupersededAndDuplicates()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var old = await store.AddAsync("Old hidden");
+        var replacement = await store.AddAsync("Current visible");
+        var duplicate = await store.AddAsync("Duplicate hidden");
+        await store.SupersedeAsync(old.Id, replacement.Id);
+        await store.LinkAsync(replacement.Id, duplicate.Id);
+
+        var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, maxItems: 5);
+        var plan = GoalDependencyPlanner.Build(intake);
+        var dto = DashboardResponseMapper.ToBacklogGoalPlanDto(intake, plan);
+
+        Xunit.Assert.Equal(["Current visible"], intake.Items.Select(item => item.Heading));
+        Xunit.Assert.Equal(1, dto.NodeCount);
     }
 
 

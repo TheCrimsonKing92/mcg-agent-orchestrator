@@ -30,9 +30,13 @@ internal static class CliCommandHelp
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>";
+    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
+    public const string BacklogSupersedeUsage = "Usage: backlog-supersede <old-id-prefix> <new-id-prefix>";
+    public const string BacklogUnsupersedeUsage = "Usage: backlog-unsupersede <id-prefix>";
+    public const string BacklogLinkUsage = "Usage: backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related]";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
     public const string EpicAddUsage = "Usage: epic-add <title> | epic-add --text-file <path>";
@@ -199,6 +203,11 @@ internal static class CliCommandHelp
         "Add a backlog item.",
         ["--body-file", "--text-file", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry BacklogUpdate = new(
+        BacklogUpdateUsage,
+        "Update user-settable backlog item fields by id prefix.",
+        ["--title", "--description", "--priority", "--tags", "--status", "--help", "-h"]);
+
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,
         "Show a backlog item by id prefix.",
@@ -213,6 +222,21 @@ internal static class CliCommandHelp
         BacklogCloseUsage,
         "Close a backlog item by id prefix.",
         ["--reason-file", "--text-file", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogSupersede = new(
+        BacklogSupersedeUsage,
+        "Mark one backlog item as superseded by another existing item.",
+        ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogUnsupersede = new(
+        BacklogUnsupersedeUsage,
+        "Clear a backlog item's supersede metadata.",
+        ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogLink = new(
+        BacklogLinkUsage,
+        "Link duplicate or related backlog items.",
+        ["--related", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogReopen = new(
         BacklogReopenUsage,
@@ -500,6 +524,12 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogUpdate;
+            return true;
+        }
+
         if (args[0].Equals("backlog-show", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogShow;
@@ -515,6 +545,24 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogClose;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-supersede", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogSupersede;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-unsupersede", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogUnsupersede;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-link", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogLink;
             return true;
         }
 

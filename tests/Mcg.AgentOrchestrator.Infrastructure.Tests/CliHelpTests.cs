@@ -9,9 +9,13 @@ public sealed class CliHelpTests
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
+    [Xunit.InlineData(new[] { "backlog-update", "--help" }, "backlog-update", "--description")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
     [Xunit.InlineData(new[] { "backlog-annotate", "--help" }, "backlog-annotate", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-close", "-h" }, "backlog-close", "--text-file")]
+    [Xunit.InlineData(new[] { "backlog-supersede", "--help" }, "backlog-supersede", "new-id-prefix")]
+    [Xunit.InlineData(new[] { "backlog-unsupersede", "--help" }, "backlog-unsupersede", "id-prefix")]
+    [Xunit.InlineData(new[] { "backlog-link", "--help" }, "backlog-link", "--related")]
     [Xunit.InlineData(new[] { "backlog-reopen", "--help" }, "backlog-reopen", "-h")]
     [Xunit.InlineData(new[] { "retry", "--help" }, "retry", "--text-file")]
     [Xunit.InlineData(new[] { "note", "--help" }, "note", "--text-file")]
@@ -260,6 +264,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "help", "goals", "subscribe" }, "goals subscribe", "--wait-terminal")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
+    [Xunit.InlineData(new[] { "backlog-update", "--help" }, "backlog-update", "--description")]
     public void CliHelpStartupExitsZeroBeforeStateCreation(string[] args, string synopsisToken, string optionToken)
     {
         var root = CreateTempDirectory();
@@ -354,6 +359,7 @@ public sealed class CliHelpTests
     [Xunit.Theory(DisplayName = "Cli_invalid_flags_fail_before_handler_execution")]
     [Xunit.InlineData(new[] { "backlog-list", "--frobnitz" }, "backlog-list", "--frobnitz")]
     [Xunit.InlineData(new[] { "backlog-list", "-x" }, "backlog-list", "-x")]
+    [Xunit.InlineData(new[] { "backlog-update", "abc123", "--frobnitz" }, "backlog-update", "--frobnitz")]
     [Xunit.InlineData(new[] { "backlog-close", "abc123", "--frobnitz" }, "backlog-close", "--frobnitz")]
     public void CliInvalidFlagsFailBeforeHandlerExecution(string[] args, string usageToken, string invalidFlag)
     {

@@ -98,6 +98,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeTargetTextCommandWithFileFlags(args, 1, "--body-file", "--text-file");
     }
 
+    if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeTargetCommandWithValueFlags(args, 1, "--title", "--description", "--priority", "--tags", "--status");
+    }
+
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeTargetTextCommandWithFileFlags(args, 1, "--reason-file", "--text-file");
@@ -207,6 +212,41 @@ private static IReadOnlyList<string> NormalizeAttentionAnswerWithFileFlag(string
         ? 4
         : 3;
     return NormalizeTargetTextCommandWithFileFlags(args, textStartIndex - 1, "--text-file");
+}
+
+private static IReadOnlyList<string> NormalizeTargetCommandWithValueFlags(string[] args, int targetIndex, params string[] valueFlags)
+{
+    if (args.Length <= targetIndex + 1)
+        return args;
+
+    var result = new List<string> { args[0], args[targetIndex] };
+    for (var i = targetIndex + 1; i < args.Length; i++)
+    {
+        var token = args[i];
+        if (!valueFlags.Any(flag => flag.Equals(token, StringComparison.OrdinalIgnoreCase)))
+        {
+            result.Add(token);
+            continue;
+        }
+
+        result.Add(token);
+        var value = new List<string>();
+        for (i++; i < args.Length; i++)
+        {
+            if (args[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                i--;
+                break;
+            }
+
+            value.Add(args[i]);
+        }
+
+        if (value.Count > 0)
+            result.Add(string.Join(' ', value));
+    }
+
+    return result;
 }
 
 private static IReadOnlyList<string> NormalizeFlagTextValueWithFileFlags(string[] args, string valueFlag, params string[] fileFlags)
