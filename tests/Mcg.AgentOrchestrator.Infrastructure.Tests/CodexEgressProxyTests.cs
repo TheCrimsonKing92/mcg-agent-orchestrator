@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -167,6 +168,17 @@ public sealed class CodexEgressProxyTests
         Assert.False(options.Enforce);
         Assert.True(options.IdleTimeoutMs > 0);
         Assert.True(options.ConnectTimeoutMs > 0);
+    }
+
+    [Xunit.Fact(DisplayName = "CodexEgressProxy_runner_command_flags_pass_through_normalizer")]
+    public void CodexEgressProxyRunnerCommandFlagsPassThroughNormalizer()
+    {
+        // Regression: the runner is a long-running listener, so NormalizeArgs must pass its flags through
+        // as separate tokens. Without the pass-through registration they get joined into one string and
+        // GetFlagValue never sees them (the bug that made --duration-seconds silently no-op).
+        string[] raw = ["codex-egress-proxy", "--enforce", "--idle-ms", "30000", "--duration-seconds", "60"];
+        var normalized = CliArgumentParser.NormalizeArgs(raw);
+        Assert.Equal(raw, normalized);
     }
 
     private static DispatchProcessHost.DispatchRunParameters MinimalCodexParameters(

@@ -148,7 +148,8 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase))
+        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("codex-egress-proxy", StringComparison.OrdinalIgnoreCase))
     {
         return args;
     }
