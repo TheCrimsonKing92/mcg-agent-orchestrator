@@ -51,7 +51,29 @@ private static int PersistResolvedParkedHumanWaitsForNextTick(
         .ToArray();
     // Parked goals are persisted here but not ingested into the live loop kernel.
     // The next conduct tick reloads them as normal non-Parked goals before prewalk.
-    context.PersistGoalCheckpoint(parkedKernel, changedGoalIds);
+    try
+    {
+        context.PersistGoalCheckpoint(parkedKernel, changedGoalIds);
+    }
+    catch (Exception ex)
+    {
+        var goalPrefixes = string.Join(',', changedGoalIds.Select(id => id.Value[..Math.Min(8, id.Value.Length)]));
+        var detail = $"PARKED_UNPARK_PERSISTENCE_FAILED goals={goalPrefixes} count={changedGoalIds.Length} exception={ex.GetType().Name} message={FormatConductToken(ex.Message)}";
+        Console.WriteLine(detail);
+        Console.Out.Flush();
+        try
+        {
+            new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                .Append("parked-unpark-persistence-failure", changedGoalIds.Length == 1 ? goalPrefixes : null, detail);
+        }
+        catch
+        {
+            // Shared event streaming is advisory; stdout remains the primary conduct receipt.
+        }
+
+        throw;
+    }
+
     return changedGoalIds.Length;
 }
 
@@ -891,22 +913,38 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         var snapshot = reloadedKernel.ExportSnapshot();
                         loopKernel.RefreshTrackedGoals(snapshot);
                         loopKernel.IngestNewGoals(snapshot);
-
-                        // Fast path: every tick, query completed human-input rows for Parked goal ids,
-                        // hydrate only those candidates, and persist promotions for the next tick's prewalk.
-                        PersistResolvedParkedHumanWaitsForNextTick(
-                            context,
-                            context.ReloadResolvedParkedHumanWaitKernel());
-
-                        parkedGoalSafetyNetTick++;
-                        if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
-                        {
-                            PersistResolvedParkedHumanWaitsForNextTick(
-                                context,
-                                context.ReloadParkedGoalSafetyNetKernel());
-                        }
                     }
                     catch { /* dynamic pickup is best-effort */ }
+
+                    AgentOrchestratorKernel? resolvedParkedHumanWaitKernel = null;
+                    try
+                    {
+                        // Fast path: every tick, query completed human-input rows for Parked goal ids,
+                        // hydrate only those candidates, and persist promotions for the next tick's prewalk.
+                        resolvedParkedHumanWaitKernel = context.ReloadResolvedParkedHumanWaitKernel();
+                    }
+                    catch { /* dynamic pickup is best-effort */ }
+
+                    if (resolvedParkedHumanWaitKernel is not null)
+                    {
+                        PersistResolvedParkedHumanWaitsForNextTick(context, resolvedParkedHumanWaitKernel);
+                    }
+
+                    AgentOrchestratorKernel? parkedGoalSafetyNetKernel = null;
+                    parkedGoalSafetyNetTick++;
+                    if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
+                    {
+                        try
+                        {
+                            parkedGoalSafetyNetKernel = context.ReloadParkedGoalSafetyNetKernel();
+                        }
+                        catch { /* dynamic pickup is best-effort */ }
+                    }
+
+                    if (parkedGoalSafetyNetKernel is not null)
+                    {
+                        PersistResolvedParkedHumanWaitsForNextTick(context, parkedGoalSafetyNetKernel);
+                    }
 
                     foreach (var resolved in loopKernel.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
                     {

@@ -1802,6 +1802,82 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains(nextTickKernel.Goals, goal => goal.Id == target.Id && goal.Status == GoalStatus.Active);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_unpark_persist_failure_is_surfaced")]
+    public void PersistentRunnerConductLoopUnparkPersistFailureIsSurfaced()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Parked targeted persist failure fixture");
+        var targetTask = target.Tasks.Single();
+        kernel.RecordTaskDispatch(target.Id, targetTask.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", DateTimeOffset.UtcNow));
+        var wait = kernel.RequestHumanInput(target.Id, targetTask.Id, "Which option?");
+        kernel.SubmitHumanInput(wait.Id, "Use option A.");
+        var answeredSnapshot = kernel.ExportSnapshot();
+        var answeredAt = answeredSnapshot.Goals
+            .Single(goal => goal.Id == target.Id.Value)
+            .Timeline
+            .Last(evt => evt.Kind == ProgressKind.HumanInputReceived)
+            .OccurredAt;
+        kernel = AgentOrchestratorKernel.FromSnapshot(answeredSnapshot with
+        {
+            Goals = answeredSnapshot.Goals
+                .Select(goal => goal.Id == target.Id.Value
+                    ? goal with
+                    {
+                        Status = GoalStatus.Parked,
+                        Timeline = goal.Timeline
+                            .Append(new ProgressEventSnapshot(
+                                target.Id.Value,
+                                null,
+                                ProgressKind.GoalPolicyDecision,
+                                "Goal parked: waiting for operator answer",
+                                answeredAt.AddTicks(-1)))
+                            .ToArray()
+                    }
+                    : goal)
+                .ToArray()
+        });
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var loopKernel = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        var persistAttempts = 0;
+        var context = new CliExecutionContext(
+            loopKernel,
+            workspace,
+            providers,
+            agents,
+            profiles,
+            currentGoal: null,
+            reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+            persistKernel: _ => { },
+            persistGoalKernel: (_, changedGoalIds) =>
+            {
+                if (changedGoalIds.Contains(target.Id))
+                {
+                    persistAttempts++;
+                    throw new InvalidOperationException("resolved parked promotion write failed");
+                }
+            },
+            reloadResolvedParkedHumanWaitKernel: () => CliPersistentStateRunner.LoadConductLoopResolvedParkedHumanWaitKernel(repository),
+            reloadParkedGoalSafetyNetKernel: () => new AgentOrchestratorKernel());
+
+        var output = CaptureConsole(() => CliCommandHandlers.Execute(["conduct", "--loop", "--max-iterations", "1"], context));
+
+        var eventText = File.ReadAllText(workspace.ConductEventsLogPath);
+        Xunit.Assert.Equal(1, persistAttempts);
+        Xunit.Assert.Contains("PARKED_UNPARK_PERSISTENCE_FAILED", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("resolved parked promotion write failed", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("LOOP_JANITORIAL_FAILED", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("PARKED_UNPARK_PERSISTENCE_FAILED", eventText, StringComparison.Ordinal);
+        Xunit.Assert.Contains("loop-janitorial-failure", eventText, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_targeted_query_ignores_synthetic_parked_wait_completion")]
     public void PersistentRunnerConductLoopTargetedQueryIgnoresSyntheticParkedWaitCompletion()
     {
