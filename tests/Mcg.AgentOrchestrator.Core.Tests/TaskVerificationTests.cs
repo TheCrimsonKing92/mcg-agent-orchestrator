@@ -87,6 +87,26 @@ public sealed class TaskVerificationTests
     Assert.Contains("full output path not recorded", verification.StandardOutput, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "TaskVerificationRecord_rebounds_large_pathless_output_containing_truncation_marker")]
+    public void TaskVerificationRecordReboundsLargePathlessOutputContainingTruncationMarker()
+{
+    var largeOutput =
+        new string('H', 1_000_000) +
+        "\n...[1,234 chars; full output at: C:\\logs\\old.out.log]...\n" +
+        new string('T', 1_000_000);
+
+    var verification = new TaskVerificationRecord(
+        "manual",
+        "C:\\repo",
+        0,
+        largeOutput,
+        string.Empty,
+        DateTimeOffset.UtcNow);
+
+    AssertRetainedTextBounded(verification.StandardOutput);
+    Assert.Contains("full output path not recorded", verification.StandardOutput, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "TaskExecutionSnapshot_bounds_large_output_at_construction")]
     public void TaskExecutionSnapshotBoundsLargeOutputAtConstruction()
 {
@@ -113,7 +133,11 @@ public sealed class TaskVerificationTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
 
-    for (var index = 0; index < TaskSpec.VerificationHistoryLimit + 5; index++)
+    const int expectedHistoryLimit = 20;
+
+    Assert.Equal(expectedHistoryLimit, TaskSpec.VerificationHistoryLimit);
+
+    for (var index = 0; index < expectedHistoryLimit + 5; index++)
     {
         kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
             "verify",
@@ -124,10 +148,10 @@ public sealed class TaskVerificationTests
             DateTimeOffset.UtcNow.AddMinutes(index)));
     }
 
-    Assert.Equal(TaskSpec.VerificationHistoryLimit, task.VerificationHistory.Count);
+    Assert.Equal(expectedHistoryLimit, task.VerificationHistory.Count);
     Assert.Equal("stdout-5", task.VerificationHistory[0].StandardOutput);
-    Assert.Equal("stdout-54", task.VerificationHistory[^1].StandardOutput);
-    Assert.Equal("stdout-54", task.LastVerification!.StandardOutput);
+    Assert.Equal("stdout-24", task.VerificationHistory[^1].StandardOutput);
+    Assert.Equal("stdout-24", task.LastVerification!.StandardOutput);
 }
 
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
@@ -386,7 +410,7 @@ public sealed class TaskVerificationTests
 
 private static void AssertRetainedTextBounded(string text)
 {
-    Assert.True(text.Length <= 20_000, $"Expected retained text <= 20000 chars, actual {text.Length}.");
+    Assert.True(text.Length <= VerificationTextBounds.MaxRetainedChars, $"Expected retained text <= {VerificationTextBounds.MaxRetainedChars} chars, actual {text.Length}.");
     Assert.Contains("chars;", text, StringComparison.Ordinal);
 }
 

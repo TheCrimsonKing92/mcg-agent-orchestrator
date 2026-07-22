@@ -177,11 +177,15 @@ public static class VerificationTextBounds
     public const int PreviewHeadChars = 8192;
     public const int PreviewTailChars = 8192;
     public const int BoundThreshold = PreviewHeadChars + PreviewTailChars;
+    public const int MaxRetainedChars = 20_000;
 
     public static string BoundText(string text, string? path)
     {
-        if (text.Length <= BoundThreshold || IsBoundedExcerpt(text))
+        if (text.Length <= BoundThreshold ||
+            (text.Length <= MaxRetainedChars && IsBoundedExcerpt(text)))
+        {
             return text;
+        }
 
         var head = text[..PreviewHeadChars];
         var tail = text[^PreviewTailChars..];
