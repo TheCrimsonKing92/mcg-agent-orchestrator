@@ -35,6 +35,13 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             : args;
     }
 
+    if (command.Equals("stop", StringComparison.OrdinalIgnoreCase))
+    {
+        return args.Length >= 3
+            ? NormalizeStopAliasCommand(args)
+            : args;
+    }
+
     if (command.Equals("verification-plan", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
@@ -312,6 +319,44 @@ private static IReadOnlyList<string> NormalizeGoalDispositionCommand(string[] ar
         ? [parts[0], parts[1], confirmationFlag]
         : [parts[0], parts[1], reason, confirmationFlag];
 }
+
+private static IReadOnlyList<string> NormalizeStopAliasCommand(string[] args)
+{
+    var parts = new List<string> { args[0], args[1] };
+    var reasonTokens = new List<string>();
+    var flagParts = new List<string>();
+
+    for (var index = 2; index < args.Length; index++)
+    {
+        var arg = args[index];
+        if (IsStopAliasValueFlag(arg) && index + 1 < args.Length)
+        {
+            flagParts.Add(arg);
+            flagParts.Add(args[++index]);
+            continue;
+        }
+
+        if (arg.StartsWith("--", StringComparison.Ordinal))
+        {
+            flagParts.Add(arg);
+            continue;
+        }
+
+        reasonTokens.Add(arg);
+    }
+
+    if (reasonTokens.Count > 0)
+    {
+        parts.Add(string.Join(' ', reasonTokens));
+    }
+
+    parts.AddRange(flagParts);
+    return parts;
+}
+
+private static bool IsStopAliasValueFlag(string arg) =>
+    arg.Equals("--as", StringComparison.OrdinalIgnoreCase) ||
+    arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase);
 
 private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int trailingArgumentCount, bool allowTextFile = false)
 {
