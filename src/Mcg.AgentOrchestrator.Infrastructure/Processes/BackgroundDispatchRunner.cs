@@ -1092,9 +1092,10 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
-        fullStandardError = AppendDiagnostic(fullStandardError, standardErrorDiagnostic);
-        var standardOutput = VerificationTextBounds.BoundText(fullStandardOutput, processRecord.StandardOutputPath);
-        var standardError = VerificationTextBounds.BoundText(fullStandardError, processRecord.StandardErrorPath);
+        var standardOutput = ReadBoundedBestEffort(processRecord.StandardOutputPath);
+        var standardError = AppendDiagnostic(
+            ReadBoundedBestEffort(processRecord.StandardErrorPath),
+            standardErrorDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {
             TryWriteExitCode(processRecord.ExitCodePath, exitCode);
@@ -2030,6 +2031,97 @@ public sealed class BackgroundDispatchRunner
         {
             return $"[log unreadable at refresh — see {path}]";
         }
+    }
+
+    internal static string ReadBoundedBestEffort(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return ReadBoundedText(reader, path);
+        }
+        catch (IOException)
+        {
+            return $"[log locked at refresh — see {path}]";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"[log unreadable at refresh — see {path}]";
+        }
+    }
+
+    private static string ReadBoundedText(TextReader reader, string path)
+    {
+        var retainedPrefix = new StringBuilder(VerificationTextBounds.BoundThreshold);
+        var tail = new char[VerificationTextBounds.PreviewTailChars];
+        var tailStart = 0;
+        var tailCount = 0;
+        var totalChars = 0L;
+        var buffer = new char[4096];
+
+        while (true)
+        {
+            var read = reader.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+            {
+                break;
+            }
+
+            if (retainedPrefix.Length < VerificationTextBounds.BoundThreshold)
+            {
+                retainedPrefix.Append(buffer, 0, Math.Min(read, VerificationTextBounds.BoundThreshold - retainedPrefix.Length));
+            }
+
+            for (var index = 0; index < read; index++)
+            {
+                if (tailCount < tail.Length)
+                {
+                    tail[(tailStart + tailCount) % tail.Length] = buffer[index];
+                    tailCount++;
+                }
+                else
+                {
+                    tail[tailStart] = buffer[index];
+                    tailStart = (tailStart + 1) % tail.Length;
+                }
+            }
+
+            totalChars += read;
+        }
+
+        if (totalChars <= VerificationTextBounds.BoundThreshold)
+        {
+            return retainedPrefix.ToString();
+        }
+
+        var head = retainedPrefix.ToString(0, VerificationTextBounds.PreviewHeadChars);
+        var tailText = BuildTailText(tail, tailStart, tailCount);
+        return VerificationTextBounds.BuildBoundedText(head, tailText, totalChars, path);
+    }
+
+    private static string BuildTailText(char[] tail, int tailStart, int tailCount)
+    {
+        if (tailCount == 0)
+        {
+            return string.Empty;
+        }
+
+        if (tailStart + tailCount <= tail.Length)
+        {
+            return new string(tail, tailStart, tailCount);
+        }
+
+        var suffixLength = tail.Length - tailStart;
+        var builder = new StringBuilder(tailCount);
+        builder.Append(tail, tailStart, suffixLength);
+        builder.Append(tail, 0, tailCount - suffixLength);
+        return builder.ToString();
     }
 
     private static long SafeFileLength(string path)
