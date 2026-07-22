@@ -245,6 +245,7 @@ public sealed class BackgroundDispatchRunner
         kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
 
         var dispatchHostCommand = RewriteRealWorkerCommandForTests(dispatch.Command, IsTestRealWorkerCommandRewriteEnabled());
+        var egressProxyOptions = CodexEgressProxyOptions.FromEnvironment();
 
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatchHostCommand,
@@ -261,7 +262,11 @@ public sealed class BackgroundDispatchRunner
             SandboxWorktreeWritable: sandboxWorktreeWritable,
             ProviderSessionId: dispatch.ProviderSessionId,
             WorktreeHeadSha: dispatch.WorktreeHeadSha,
-            DirtyStateHash: dispatch.DirtyStateHash));
+            DirtyStateHash: dispatch.DirtyStateHash,
+            CodexEgressProxyEnabled: egressProxyOptions.Enabled,
+            CodexEgressProxyEnforce: egressProxyOptions.Enforce,
+            CodexEgressProxyIdleTimeoutMs: egressProxyOptions.IdleTimeoutMs,
+            CodexEgressProxyConnectTimeoutMs: egressProxyOptions.ConnectTimeoutMs));
 
         if (useSandbox && OperatingSystem.IsWindows())
         {
