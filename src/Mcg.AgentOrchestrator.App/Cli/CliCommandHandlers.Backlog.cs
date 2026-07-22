@@ -26,7 +26,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 return false;
             }
             foreach (var item in items)
-                Console.WriteLine($"[{item.Status}] {item.Id} - {item.Title}");
+                Console.WriteLine($"{RenderBacklogListTag(item)} {item.Id} - {item.Title}{RenderBacklogListSuffix(item)}");
             return false;
         }
 
@@ -48,6 +48,17 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = store.AddAsync(title, body).GetAwaiter().GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
+            return false;
+        }
+
+        case "backlog-update":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]");
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var item = ResolveBacklogItemByPrefix(store, parts[1]);
+            var update = ParseBacklogItemUpdate(parts);
+            var updated = store.UpdateAsync(item.Id, update).GetAwaiter().GetResult();
+            Console.WriteLine($"Updated: [{updated.Id}] {updated.Title}");
             return false;
         }
 
@@ -112,11 +123,45 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         {
             CliArgumentParser.RequirePartCount(parts, 2, "backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path>");
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
-            var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
-                ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
+            var item = ResolveBacklogItemByPrefix(store, parts[1]);
             var reason = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: null, "--reason-file", "--text-file");
             var closed = store.CloseAsync(item.Id, reason).GetAwaiter().GetResult();
             Console.WriteLine($"Closed: [{closed.Id}] {closed.Title}");
+            return false;
+        }
+
+        case "backlog-supersede":
+        {
+            CliArgumentParser.RequirePartCount(parts, 3, "backlog-supersede <old-id-prefix> <new-id-prefix>");
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var oldItem = ResolveBacklogItemByPrefix(store, parts[1]);
+            var newItem = ResolveBacklogItemByPrefix(store, parts[2]);
+            var superseded = store.SupersedeAsync(oldItem.Id, newItem.Id).GetAwaiter().GetResult();
+            Console.WriteLine($"Superseded: [{superseded.Id}] -> {newItem.Id[..Math.Min(8, newItem.Id.Length)]}");
+            return false;
+        }
+
+        case "backlog-unsupersede":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "backlog-unsupersede <id-prefix>");
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var item = ResolveBacklogItemByPrefix(store, parts[1]);
+            var result = store.UnsupersedeAsync(item.Id).GetAwaiter().GetResult();
+            Console.WriteLine(result.Changed
+                ? $"Unsuperseded: [{result.Item.Id}] {result.Item.Title}"
+                : $"Not superseded: [{result.Item.Id}] {result.Item.Title}");
+            return false;
+        }
+
+        case "backlog-link":
+        {
+            CliArgumentParser.RequirePartCount(parts, 3, "backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related]");
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var first = ResolveBacklogItemByPrefix(store, parts[1]);
+            var second = ResolveBacklogItemByPrefix(store, parts[2]);
+            var kind = HasCliConfirmation(parts, "--related") ? BacklogLinkKind.Related : BacklogLinkKind.Duplicate;
+            var link = store.LinkAsync(first.Id, second.Id, kind).GetAwaiter().GetResult();
+            Console.WriteLine($"{(kind == BacklogLinkKind.Duplicate ? "Linked duplicate" : "Linked related")}: [{link.Item1Id[..Math.Min(8, link.Item1Id.Length)]}] <-> [{link.Item2Id[..Math.Min(8, link.Item2Id.Length)]}]");
             return false;
         }
 
@@ -157,6 +202,59 @@ private static string ResolveBacklogShowGoalLandingState(CliExecutionContext con
         entry.Operation.Equals("workspace:remove", StringComparison.OrdinalIgnoreCase) &&
         entry.Status == GoalOperationStatus.Completed);
     return GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp)).ToString();
+}
+
+private static BacklogItem ResolveBacklogItemByPrefix(BacklogStore store, string prefix) =>
+    store.GetByIdPrefixAsync(prefix).GetAwaiter().GetResult()
+        ?? throw new InvalidOperationException($"No backlog item found with id prefix '{prefix}'.");
+
+private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> parts)
+{
+    var title = GetFlagValue(parts, "--title");
+    var description = GetFlagValue(parts, "--description");
+    var priority = GetFlagValue(parts, "--priority");
+    var tags = GetFlagValue(parts, "--tags");
+    BacklogItemStatus? status = null;
+    if (GetFlagValue(parts, "--status") is { } statusValue)
+    {
+        if (!Enum.TryParse<BacklogItemStatus>(statusValue, ignoreCase: true, out var parsed))
+            throw new ArgumentException("--status must be one of: open, done, superseded.");
+        status = parsed;
+    }
+
+    if (title is null &&
+        description is null &&
+        priority is null &&
+        tags is null &&
+        status is null)
+    {
+        throw new ArgumentException("Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]");
+    }
+
+    return new BacklogItemUpdate(title, description, priority, tags, status);
+}
+
+internal static string RenderBacklogListTag(BacklogItem item)
+{
+    if (item.SupersededBy is not null)
+        return $"[Superseded→{ShortBacklogId(item.SupersededBy)}]";
+
+    var duplicate = item.Links.FirstOrDefault(link =>
+        link.Kind == BacklogLinkKind.Duplicate &&
+        string.Equals(link.DuplicateId, item.Id, StringComparison.Ordinal));
+    if (duplicate?.CanonicalId is not null)
+        return $"[Dup→{ShortBacklogId(duplicate.CanonicalId)}]";
+
+    return $"[{item.Status}]";
+}
+
+internal static string RenderBacklogListSuffix(BacklogItem item)
+{
+    var related = item.Links
+        .Where(link => link.Kind == BacklogLinkKind.Related)
+        .Select(link => $"[Related→{ShortBacklogId(link.OtherId(item.Id))}]")
+        .ToArray();
+    return related.Length == 0 ? "" : " " + string.Join(' ', related);
 }
 
 internal static IReadOnlyList<BacklogItem> ApplyBacklogListFilters(
@@ -318,7 +416,9 @@ private static void AppendDuplicateBucket(System.Text.StringBuilder sb, IReadOnl
     }
 }
 
-private static string ShortBacklogId(BacklogItem item) => item.Id[..Math.Min(8, item.Id.Length)];
+private static string ShortBacklogId(BacklogItem item) => ShortBacklogId(item.Id);
+
+private static string ShortBacklogId(string id) => id[..Math.Min(8, id.Length)];
 
 private static bool IsTerminalGoalStatus(GoalStatus status) =>
     status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
