@@ -48,6 +48,88 @@ public sealed class TaskVerificationTests
     Assert.Equal(first, task.VerificationHistory[0]);
     Assert.Equal(second, task.VerificationHistory[1]);
 }
+    [Xunit.Fact(DisplayName = "TaskVerificationRecord_bounds_large_path_output_at_creation")]
+    public void TaskVerificationRecordBoundsLargePathOutputAtCreation()
+{
+    var largeOutput = new string('A', 2_000_000);
+    var largeError = new string('E', 2_000_000);
+
+    var verification = new TaskVerificationRecord(
+        "worker",
+        "C:\\repo",
+        1,
+        largeOutput,
+        largeError,
+        DateTimeOffset.UtcNow,
+        StandardOutputPath: "C:\\logs\\worker.out.log",
+        StandardErrorPath: "C:\\logs\\worker.err.log");
+
+    AssertRetainedTextBounded(verification.StandardOutput);
+    AssertRetainedTextBounded(verification.StandardError);
+    Assert.Contains("full output at: C:\\logs\\worker.out.log", verification.StandardOutput, StringComparison.Ordinal);
+    Assert.Contains("full output at: C:\\logs\\worker.err.log", verification.StandardError, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "TaskVerificationRecord_bounds_large_pathless_output_at_creation")]
+    public void TaskVerificationRecordBoundsLargePathlessOutputAtCreation()
+{
+    var largeOutput = new string('B', 2_000_000);
+
+    var verification = new TaskVerificationRecord(
+        "manual",
+        "C:\\repo",
+        0,
+        largeOutput,
+        string.Empty,
+        DateTimeOffset.UtcNow);
+
+    AssertRetainedTextBounded(verification.StandardOutput);
+    Assert.Contains("full output path not recorded", verification.StandardOutput, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "TaskExecutionSnapshot_bounds_large_output_at_construction")]
+    public void TaskExecutionSnapshotBoundsLargeOutputAtConstruction()
+{
+    var snapshot = new TaskExecutionSnapshot(
+        "agent",
+        "Developer",
+        "OpenAI",
+        "gpt",
+        new string('C', 2_000_000),
+        "stop",
+        null,
+        null,
+        DateTimeOffset.UtcNow);
+
+    AssertRetainedTextBounded(snapshot.Output);
+    Assert.Contains("full output path not recorded", snapshot.Output, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "RecordTaskVerification_caps_history_to_most_recent_entries")]
+    public void RecordTaskVerificationCapsHistoryToMostRecentEntries()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Cap verification history");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+
+    for (var index = 0; index < 25; index++)
+    {
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "verify",
+            "C:\\repo",
+            1,
+            $"stdout-{index}",
+            string.Empty,
+            DateTimeOffset.UtcNow.AddMinutes(index)));
+    }
+
+    Assert.Equal(20, task.VerificationHistory.Count);
+    Assert.Equal("stdout-5", task.VerificationHistory[0].StandardOutput);
+    Assert.Equal("stdout-24", task.VerificationHistory[^1].StandardOutput);
+    Assert.Equal("stdout-24", task.LastVerification!.StandardOutput);
+}
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
     public void RecordTaskVerificationCompletesGoalOnlyWhenAllGatesPass()
 {
@@ -300,6 +382,12 @@ public sealed class TaskVerificationTests
     Assert.Equal(1, restoredTask.VerificationHistory.Count);
     Assert.Equal("dotnet test", restoredTask.VerificationHistory.Single().Command);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
+}
+
+private static void AssertRetainedTextBounded(string text)
+{
+    Assert.True(text.Length <= 20_000, $"Expected retained text <= 20000 chars, actual {text.Length}.");
+    Assert.Contains("chars;", text, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_verification_current_state_but_preserves_history")]

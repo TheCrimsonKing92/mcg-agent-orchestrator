@@ -80,7 +80,10 @@ public sealed record TaskExecutionSnapshot(
     DateTimeOffset CompletedAt,
     TaskComplexity? TaskComplexity = null,
     int? MaxOutputTokens = null,
-    int? PromptCharacterCount = null);
+    int? PromptCharacterCount = null)
+{
+    public string Output { get; init; } = VerificationTextBounds.BoundText(Output, path: null);
+}
 
 public sealed record TaskVerificationSnapshot(
     string Command,
@@ -92,7 +95,12 @@ public sealed record TaskVerificationSnapshot(
     string? ModelFitNote = null,
     string? StandardOutputPath = null,
     string? StandardErrorPath = null,
-    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown);
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown)
+{
+    public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
+
+    public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
+}
 
 public sealed record TaskDispatchSnapshot(
     string WorkerName,
@@ -166,16 +174,30 @@ public sealed record HumanInputRequestSnapshot(
 
 public static class VerificationTextBounds
 {
-    private const int PreviewHeadChars = 4096;
-    private const int PreviewTailChars = 4096;
-    private const int BoundThreshold = PreviewHeadChars + PreviewTailChars;
+    public const int PreviewHeadChars = 8192;
+    public const int PreviewTailChars = 8192;
+    public const int BoundThreshold = PreviewHeadChars + PreviewTailChars;
 
     public static string BoundText(string text, string? path)
     {
-        if (path is null || text.Length <= BoundThreshold)
+        if (text.Length <= BoundThreshold || IsBoundedExcerpt(text))
             return text;
+
         var head = text[..PreviewHeadChars];
         var tail = text[^PreviewTailChars..];
-        return $"{head}\n...[{text.Length:N0} chars; full output at: {path}]...\n{tail}";
+        return BuildBoundedText(head, tail, text.Length, path);
     }
+
+    public static string BuildBoundedText(string head, string tail, long totalChars, string? path)
+    {
+        var location = string.IsNullOrWhiteSpace(path)
+            ? "full output path not recorded"
+            : $"full output at: {path}";
+        return $"{head}\n...[{totalChars:N0} chars; {location}]...\n{tail}";
+    }
+
+    private static bool IsBoundedExcerpt(string text) =>
+        text.Contains("\n...[", StringComparison.Ordinal) &&
+        text.Contains(" chars; ", StringComparison.Ordinal) &&
+        text.Contains("]...\n", StringComparison.Ordinal);
 }

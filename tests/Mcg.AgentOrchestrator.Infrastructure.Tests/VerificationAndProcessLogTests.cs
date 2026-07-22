@@ -205,6 +205,36 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(stderrPath, task.LastVerification.StandardErrorPath);
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_bounds_large_worker_logs_in_verification_record")]
+    public void RefreshLatestProcessBoundsLargeWorkerLogsInVerificationRecord()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Refresh bounds large worker logs", [reviewTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, new string('O', 2_000_000));
+    File.WriteAllText(stderrPath, new string('R', 2_000_000));
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+    Assert.True(reviewTask.LastVerification is not null);
+    Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= 20_000);
+    Assert.True(reviewTask.LastVerification.StandardError.Length <= 20_000);
+    Assert.Contains(stdoutPath, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+    Assert.Contains(stderrPath, reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(new FileInfo(stdoutPath).Length > 1_000_000);
+    Assert.True(new FileInfo(stderrPath).Length > 1_000_000);
+}
+
     [Xunit.Fact(DisplayName = "CreateVerificationLog_truncates_long_output_at_2000_chars")]
     public void CreateVerificationLogTruncatesLongOutputAt2000Chars()
 {

@@ -838,8 +838,8 @@ public sealed class BackgroundDispatchRunner
         var heartbeat = ProcessLogReader.ReadHeartbeat(processRecord, _clock.UtcNow);
         var stdoutFileBytes = SafeFileLength(processRecord.StandardOutputPath);
         var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
-        var stdout = ReadBestEffort(processRecord.StandardOutputPath);
-        var stderr = ReadBestEffort(processRecord.StandardErrorPath);
+        var stdout = ReadFullBestEffort(processRecord.StandardOutputPath);
+        var stderr = ReadFullBestEffort(processRecord.StandardErrorPath);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout, stderr);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
@@ -923,18 +923,18 @@ public sealed class BackgroundDispatchRunner
         TaskProcessResourceAccounting? capturedResourceAccounting = null)
     {
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
-        var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
-        var standardError = ReadBestEffort(processRecord.StandardErrorPath);
+        var fullStandardOutput = ReadFullBestEffort(processRecord.StandardOutputPath);
+        var fullStandardError = ReadFullBestEffort(processRecord.StandardErrorPath);
         var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
         if (resourceAccounting is not null &&
             !resourceAccounting.Reaped &&
-            IsDispatchHostReapCompletion(standardError))
+            IsDispatchHostReapCompletion(fullStandardError))
         {
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var task = kernel.GetTask(goalId, taskId);
-        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, standardOutput, standardError);
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, standardOutput, standardError);
+        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, fullStandardOutput, fullStandardError);
+        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, fullStandardOutput, fullStandardError);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         if (RequiresFileChangeEvidence(task) &&
@@ -950,22 +950,22 @@ public sealed class BackgroundDispatchRunner
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
                 task,
                 processRecord,
-                standardOutput,
-                standardError,
+                fullStandardOutput,
+                fullStandardError,
                 providerFailureKind);
             var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
                 task.LastDispatch,
                 processRecord,
-                standardError,
+                fullStandardError,
                 sandboxCommitBlocked);
             var successfulWorkerResult = HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
-                standardOutput,
-                standardError);
+                fullStandardOutput,
+                fullStandardError);
             if (TryFindFailedWorkerBuildCheck(
                     processRecord.WorkingDirectory,
-                    standardOutput,
-                    standardError,
+                    fullStandardOutput,
+                    fullStandardError,
                     out var failedBuildCheckDiagnostic))
             {
                 exitCode = 1;
@@ -988,7 +988,7 @@ public sealed class BackgroundDispatchRunner
             {
                 commitAttempt = TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
-                    BuildOrchestratorCommitSubject(task, standardOutput, standardError),
+                    BuildOrchestratorCommitSubject(task, fullStandardOutput, fullStandardError),
                     worktreeEvidence.DirtyPaths);
                 commitAttempted = true;
                 if (commitAttempt.Succeeded &&
@@ -1049,9 +1049,9 @@ public sealed class BackgroundDispatchRunner
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
                 var requiresCommitEvidence =
-                    RequiresPostDispatchCommitEvidence(task, standardOutput, standardError, workerResultPresent) &&
-                    !HasCompletedVerification(task, standardOutput, standardError) &&
-                    !AllowsNoChangeCompletion(task, standardOutput, standardError) &&
+                    RequiresPostDispatchCommitEvidence(task, fullStandardOutput, fullStandardError, workerResultPresent) &&
+                    !HasCompletedVerification(task, fullStandardOutput, fullStandardError) &&
+                    !AllowsNoChangeCompletion(task, fullStandardOutput, fullStandardError) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)
@@ -1092,7 +1092,9 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
-        standardError = AppendDiagnostic(standardError, standardErrorDiagnostic);
+        fullStandardError = AppendDiagnostic(fullStandardError, standardErrorDiagnostic);
+        var standardOutput = VerificationTextBounds.BoundText(fullStandardOutput, processRecord.StandardOutputPath);
+        var standardError = VerificationTextBounds.BoundText(fullStandardError, processRecord.StandardErrorPath);
         if (!exitArtifactAlreadyExisted)
         {
             TryWriteExitCode(processRecord.ExitCodePath, exitCode);
@@ -2007,7 +2009,7 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
-    private static string ReadBestEffort(string path)
+    private static string ReadFullBestEffort(string path)
     {
         if (!File.Exists(path))
         {
@@ -2067,8 +2069,8 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var standardOutput = ReadBestEffort(processRecord.StandardOutputPath);
-        var standardError = ReadBestEffort(processRecord.StandardErrorPath);
+        var standardOutput = ReadFullBestEffort(processRecord.StandardOutputPath);
+        var standardError = ReadFullBestEffort(processRecord.StandardErrorPath);
         if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
         {
             return false;

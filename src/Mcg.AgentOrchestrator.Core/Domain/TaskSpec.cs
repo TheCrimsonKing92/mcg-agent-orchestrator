@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskSpec
 {
+    internal const int VerificationHistoryLimit = 20;
+
     private readonly List<TaskVerificationRecord> _verificationHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
@@ -328,13 +330,22 @@ public sealed class TaskSpec
             }
         }
 
-        _verificationHistory.Add(verification);
+        AppendVerificationHistory(verification);
         LastVerification = verification;
     }
 
-    internal void RestoreVerificationHistory(TaskVerificationRecord verification) => _verificationHistory.Add(verification);
+    internal void RestoreVerificationHistory(TaskVerificationRecord verification) => AppendVerificationHistory(verification);
 
     internal void ClearLatestVerification() => LastVerification = null;
+
+    private void AppendVerificationHistory(TaskVerificationRecord verification)
+    {
+        _verificationHistory.Add(verification);
+        if (_verificationHistory.Count > VerificationHistoryLimit)
+        {
+            _verificationHistory.RemoveRange(0, _verificationHistory.Count - VerificationHistoryLimit);
+        }
+    }
 
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 

@@ -32,7 +32,10 @@ public sealed record TaskExecutionRecord(
     DateTimeOffset CompletedAt,
     TaskComplexity? TaskComplexity = null,
     int? MaxOutputTokens = null,
-    int? PromptCharacterCount = null);
+    int? PromptCharacterCount = null)
+{
+    public string Output { get; init; } = VerificationTextBounds.BoundText(Output, path: null);
+}
 
 public sealed record AgentTaskRunResult(Goal Goal, TaskSpec Task, TaskExecutionRecord Execution);
 
@@ -54,6 +57,10 @@ public sealed record TaskVerificationRecord(
     long? HeartbeatStandardOutputBytes = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown)
 {
+    public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
+
+    public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
+
     public bool Succeeded => ExitCode == 0;
 }
 
