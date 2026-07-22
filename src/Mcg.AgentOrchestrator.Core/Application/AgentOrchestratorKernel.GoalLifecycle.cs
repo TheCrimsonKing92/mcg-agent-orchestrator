@@ -841,23 +841,27 @@ public sealed partial class AgentOrchestratorKernel
 
     private static bool HasHumanInputResolvedAfterLatestParkDecision(Goal goal)
     {
-        var latestParkDecisionIndex = -1;
-        var latestHumanInputReceivedIndex = -1;
-        for (var index = 0; index < goal.Timeline.Count; index++)
+        DateTimeOffset? latestParkDecisionAt = null;
+        DateTimeOffset? latestHumanInputReceivedAt = null;
+        foreach (var evt in goal.Timeline)
         {
-            var evt = goal.Timeline[index];
             if (evt.Kind == ProgressKind.GoalPolicyDecision &&
                 evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
             {
-                latestParkDecisionIndex = index;
+                latestParkDecisionAt = evt.OccurredAt;
             }
             else if (evt.Kind == ProgressKind.HumanInputReceived)
             {
-                latestHumanInputReceivedIndex = index;
+                if (evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                latestHumanInputReceivedAt = evt.OccurredAt;
             }
         }
 
-        return latestParkDecisionIndex >= 0 && latestHumanInputReceivedIndex > latestParkDecisionIndex;
+        return latestParkDecisionAt is not null && latestHumanInputReceivedAt > latestParkDecisionAt;
     }
 
     private string? ResolveParkResolution(Goal goal)

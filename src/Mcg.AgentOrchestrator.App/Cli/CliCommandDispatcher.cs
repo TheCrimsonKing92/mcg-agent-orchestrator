@@ -24,6 +24,7 @@ public static bool ExecuteCommand(
     TimeSpan? stableSlotAcquisitionTimeout = null,
     Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
     Action? releaseConductLoopLease = null,
+    Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
@@ -42,6 +43,7 @@ public static bool ExecuteCommand(
         persistGoalKernel,
         phaseTimings: phaseTimings,
         releaseConductLoopLease: releaseConductLoopLease,
+        reloadResolvedParkedHumanWaitKernel: reloadResolvedParkedHumanWaitKernel,
         reloadParkedGoalSafetyNetKernel: reloadParkedGoalSafetyNetKernel)
     {
         EventWriter = eventWriter,

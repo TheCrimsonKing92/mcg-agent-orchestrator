@@ -35,6 +35,26 @@ private static readonly Regex OpeningBacklogObjectiveReferenceRegex = new(
 
 private sealed record SourceBacklogItemLink(BacklogItem Item, bool FromExplicitFlag);
 
+private static int PersistResolvedParkedHumanWaitsForNextTick(
+    CliExecutionContext context,
+    AgentOrchestratorKernel parkedKernel)
+{
+    var promoted = parkedKernel.RefreshParkedGoalsWithResolvedHumanWaits();
+    if (promoted == 0)
+    {
+        return 0;
+    }
+
+    var changedGoalIds = parkedKernel.Goals
+        .Where(goal => goal.Status != GoalStatus.Parked)
+        .Select(goal => goal.Id)
+        .ToArray();
+    // Parked goals are persisted here but not ingested into the live loop kernel.
+    // The next conduct tick reloads them as normal non-Parked goals before prewalk.
+    context.PersistGoalCheckpoint(parkedKernel, changedGoalIds);
+    return changedGoalIds.Length;
+}
+
 private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
     GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
 
@@ -872,20 +892,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopKernel.RefreshTrackedGoals(snapshot);
                         loopKernel.IngestNewGoals(snapshot);
 
+                        // Fast path: every tick, query completed human-input rows for Parked goal ids,
+                        // hydrate only those candidates, and persist promotions for the next tick's prewalk.
+                        PersistResolvedParkedHumanWaitsForNextTick(
+                            context,
+                            context.ReloadResolvedParkedHumanWaitKernel());
+
                         parkedGoalSafetyNetTick++;
                         if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
                         {
-                            var parkedSweepKernel = context.ReloadParkedGoalSafetyNetKernel();
-                            parkedSweepKernel.RefreshParkedGoalsWithResolvedHumanWaits();
-                            var parkedSweepSnapshot = parkedSweepKernel.ExportSnapshot();
-                            var newlyEligibleSnapshot = parkedSweepSnapshot with
-                            {
-                                Goals = parkedSweepSnapshot.Goals
-                                    .Where(goal => goal.Status != GoalStatus.Parked)
-                                    .ToArray()
-                            };
-                            loopKernel.RefreshTrackedGoals(newlyEligibleSnapshot);
-                            loopKernel.IngestNewGoals(newlyEligibleSnapshot);
+                            PersistResolvedParkedHumanWaitsForNextTick(
+                                context,
+                                context.ReloadParkedGoalSafetyNetKernel());
                         }
                     }
                     catch { /* dynamic pickup is best-effort */ }

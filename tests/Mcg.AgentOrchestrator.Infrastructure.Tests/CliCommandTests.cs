@@ -555,6 +555,8 @@ public abstract class CliCommandTestBase
 
         public int SaveGoalSnapshotsCount { get; private set; }
 
+        public int CompletedHumanInputQueryCount { get; private set; }
+
         public long LoadedGoalSnapshotJsonBytes { get; private set; }
 
         public int LoadWhileInTransactionCount { get; private set; }
@@ -676,6 +678,19 @@ public abstract class CliCommandTestBase
                     goal.Objective,
                     DateTimeOffset.UtcNow.ToString("O")))
                 .ToList());
+
+        public Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default)
+        {
+            CompletedHumanInputQueryCount++;
+            var ids = goalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            return Task.FromResult<IReadOnlyList<GoalId>>(_kernel.ExportSnapshot().HumanInputRequests
+                .Where(request => ids.Contains(request.GoalId) && request.IsCompleted)
+                .Select(request => new GoalId(request.GoalId))
+                .Distinct()
+                .ToArray());
+        }
 
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);

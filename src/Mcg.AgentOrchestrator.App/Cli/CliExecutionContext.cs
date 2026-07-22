@@ -19,6 +19,7 @@ internal sealed class CliExecutionContext(
     Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null,
     CliPhaseTimingRecorder? phaseTimings = null,
     Action? releaseConductLoopLease = null,
+    Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
@@ -27,6 +28,9 @@ public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kerne
 
 public AgentOrchestratorKernel ReloadParkedGoalSafetyNetKernel() =>
     reloadParkedGoalSafetyNetKernel?.Invoke() ?? new AgentOrchestratorKernel();
+
+public AgentOrchestratorKernel ReloadResolvedParkedHumanWaitKernel() =>
+    reloadResolvedParkedHumanWaitKernel?.Invoke() ?? new AgentOrchestratorKernel();
 
 /// <summary>
 /// Durably commits the current kernel state mid-command. Long-running loops (conduct --loop/--watch)

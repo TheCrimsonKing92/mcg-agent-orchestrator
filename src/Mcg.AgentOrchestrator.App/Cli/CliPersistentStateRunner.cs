@@ -575,7 +575,9 @@ internal static class CliPersistentStateRunner
                 {
                     var baseline = tickBaselines.TryGetValue(goal.Id, out var known)
                         ? known
-                        : goal;
+                        : stateRepository.LoadGoalAsync(new GoalId(goal.Id), CancellationToken.None)
+                            .GetAwaiter()
+                            .GetResult() ?? goal;
                     return new GoalSnapshotSaveRequest(baseline, goal);
                 })
                 .ToArray();
@@ -610,6 +612,7 @@ internal static class CliPersistentStateRunner
             Persist,
             persistGoalKernel: PersistGoals,
             releaseConductLoopLease: conductLoopLease.Dispose,
+            reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository));
 
         // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
@@ -691,6 +694,26 @@ internal static class CliPersistentStateRunner
         return parkedIds.Length == 0
             ? new AgentOrchestratorKernel()
             : stateRepository.LoadGoalsAsync(parkedIds).GetAwaiter().GetResult();
+    }
+
+    internal static AgentOrchestratorKernel LoadConductLoopResolvedParkedHumanWaitKernel(
+        ITransactionalOrchestratorStateRepository stateRepository)
+    {
+        var parkedIds = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(summary => summary.Status.Equals(GoalStatus.Parked.ToString(), StringComparison.OrdinalIgnoreCase))
+            .Select(summary => new GoalId(summary.Id))
+            .ToArray();
+        if (parkedIds.Length == 0)
+        {
+            return new AgentOrchestratorKernel();
+        }
+
+        var resolvedIds = stateRepository.ListGoalIdsWithCompletedHumanInputAsync(parkedIds)
+            .GetAwaiter()
+            .GetResult();
+        return resolvedIds.Count == 0
+            ? new AgentOrchestratorKernel()
+            : stateRepository.LoadGoalsAsync(resolvedIds).GetAwaiter().GetResult();
     }
 
     private static AgentOrchestratorKernel LoadConductLoopSweepKernel(
