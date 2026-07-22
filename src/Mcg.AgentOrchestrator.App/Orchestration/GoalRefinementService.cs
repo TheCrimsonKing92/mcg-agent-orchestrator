@@ -1,6 +1,8 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -30,6 +32,11 @@ internal sealed class GoalRefinementService
     private readonly SpecRefinerPrecedentStore _precedents;
     private readonly WorkerProfileCatalog? _workerProfiles;
     private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
+    private static readonly HashSet<string> QuestionStopWords = new(StringComparer.Ordinal)
+    {
+        "a", "an", "and", "are", "as", "be", "by", "for", "from", "how", "in", "is", "it", "of", "on",
+        "or", "should", "that", "the", "this", "to", "what", "when", "where", "which", "with"
+    };
 
     public GoalRefinementService(
         IModelProviderRegistry providers,
@@ -54,7 +61,11 @@ internal sealed class GoalRefinementService
         CancellationToken cancellationToken = default)
     {
         var goal = kernel.GetGoal(goalId);
-        var output = await RunRefinerAsync(goal.Objective, cancellationToken);
+        var resolvedClarifications = await LoadResolvedClarificationsAsync(goal, cancellationToken);
+        var existingOpenQuestions = goal.RefinedSpec?.OpenQuestions
+            .Where(question => string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase))
+            .ToList() ?? [];
+        var output = await RunRefinerAsync(goal.Objective, resolvedClarifications, cancellationToken);
 
         if (!output.IsValid)
         {
@@ -64,24 +75,75 @@ internal sealed class GoalRefinementService
         }
 
         var decisions = new List<RefinedSpecDecision>(output.Decisions);
+        foreach (var resolved in resolvedClarifications)
+        {
+            AddDecisionIfMissing(
+                decisions,
+                resolved.Question,
+                resolved.WasDismissed ? "dismissed by operator" : resolved.Resolution,
+                resolved.WasDismissed
+                    ? $"Dismissed by operator; topic already resolved (topic: {resolved.TopicKey})."
+                    : $"Answered by operator; topic already resolved (topic: {resolved.TopicKey}).");
+        }
+
         var openQuestions = new List<RefinedSpecOpenQuestion>();
+        var surfacedTopicKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var surfacedNormalizedQuestionKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var question in existingOpenQuestions)
+        {
+            surfacedTopicKeys.Add(ResolveQuestionTopicKey(question));
+            surfacedNormalizedQuestionKeys.Add(ResolveQuestionNormalizedKey(question));
+        }
 
         foreach (var fork in output.Forks)
         {
+            var topicKey = NormalizeTopicKey(fork.TopicKey, fork.Kind, fork.Question);
+            var normalizedQuestionKey = BuildNormalizedQuestionKey(fork.Kind, fork.Question);
+            var resolved = resolvedClarifications.FirstOrDefault(item =>
+                string.Equals(item.TopicKey, topicKey, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(item.NormalizedQuestionKey, normalizedQuestionKey, StringComparison.Ordinal));
+            if (resolved is not null)
+            {
+                AddDecisionIfMissing(
+                    decisions,
+                    fork.Question,
+                    resolved.WasDismissed ? "dismissed by operator" : resolved.Resolution,
+                    resolved.WasDismissed
+                        ? $"Dismissed by operator; stale regenerated clarification suppressed (topic: {resolved.TopicKey})."
+                        : $"Answered by operator; stale regenerated clarification suppressed (topic: {resolved.TopicKey}).");
+                continue;
+            }
+
+            var existingOpen = existingOpenQuestions.FirstOrDefault(question =>
+                string.Equals(ResolveQuestionTopicKey(question), topicKey, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ResolveQuestionNormalizedKey(question), normalizedQuestionKey, StringComparison.Ordinal));
+            if (existingOpen is not null)
+            {
+                AddOpenQuestionIfMissing(openQuestions, existingOpen);
+                continue;
+            }
+
             var disposition = SpecRefinerPlanner.ClassifyFork(fork, policy ?? ConductorAutonomyPolicy.Conservative);
             if (disposition == SpecForkDisposition.Ask)
             {
-                var precedent = await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
+                var precedent = await _precedents.TryGetPrecedentAsync(topicKey, cancellationToken)
+                    ?? await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
                 if (precedent is not null)
                 {
-                    decisions.Add(new RefinedSpecDecision(
+                    AddDecisionIfMissing(
+                        decisions,
                         fork.Question,
                         precedent.Choice,
-                        $"Precedent ({fork.Kind}): {precedent.Rationale}"));
+                        $"Precedent ({topicKey}): {precedent.Rationale}");
+                }
+                else if (!surfacedTopicKeys.Add(topicKey) ||
+                    !surfacedNormalizedQuestionKeys.Add(normalizedQuestionKey))
+                {
+                    continue;
                 }
                 else
                 {
-                    var correlationKey = BuildCorrelationKey(goalId, fork.Kind);
+                    var correlationKey = BuildCorrelationKey(goalId, topicKey);
                     await _collaboration.RaiseAsync(
                         CollaborationItemType.Clarification,
                         goalId.Value,
@@ -90,13 +152,17 @@ internal sealed class GoalRefinementService
                         correlationKey,
                         cancellationToken);
                     openQuestions.Add(new RefinedSpecOpenQuestion(
-                        correlationKey, fork.Question, fork.Kind, "Open"));
+                        correlationKey,
+                        fork.Question,
+                        fork.Kind,
+                        "Open",
+                        TopicKey: topicKey,
+                        NormalizedQuestionKey: normalizedQuestionKey));
                 }
             }
-            else if (!decisions.Any(d =>
-                string.Equals(d.Question, fork.Question, StringComparison.Ordinal)))
+            else
             {
-                decisions.Add(new RefinedSpecDecision(fork.Question, fork.Choice, fork.Rationale));
+                AddDecisionIfMissing(decisions, fork.Question, fork.Choice, fork.Rationale);
             }
         }
 
@@ -124,11 +190,11 @@ internal sealed class GoalRefinementService
         if (!resolved)
             return false;
 
-        var forkKind = ExtractForkKind(correlationKey);
-        if (!string.IsNullOrWhiteSpace(forkKind))
+        var topicKey = ExtractTopicKey(correlationKey);
+        if (!string.IsNullOrWhiteSpace(topicKey))
         {
             await _precedents.RecordPrecedentAsync(
-                forkKind,
+                topicKey,
                 answer,
                 $"Resolved via operator (key: {correlationKey})",
                 cancellationToken);
@@ -216,10 +282,9 @@ internal sealed class GoalRefinementService
             .Where(item =>
                 item.Type == CollaborationItemType.Clarification &&
                 CollaborationItemLifecycle.IsTerminal(item.Status) &&
-                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
-                !string.IsNullOrWhiteSpace(item.Resolution))
+                !string.IsNullOrWhiteSpace(item.CorrelationKey))
             .GroupBy(item => item.CorrelationKey!, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First().Resolution!, StringComparer.Ordinal);
+            .ToDictionary(group => group.Key, group => BuildResolutionText(group.First()), StringComparer.Ordinal);
 
         if (answers.Count == 0)
             return spec;
@@ -259,10 +324,11 @@ internal sealed class GoalRefinementService
 
     private async Task<SpecRefinementOutput> RunRefinerAsync(
         string objective,
+        IReadOnlyList<ResolvedSpecClarification> resolvedClarifications,
         CancellationToken cancellationToken)
     {
         var binding = ResolveSpecRefinerBinding(_catalog.Bindings);
-        var prompt = SpecRefinerPlanner.BuildPrompt(objective);
+        var prompt = SpecRefinerPlanner.BuildPrompt(objective, resolvedClarifications);
         if (binding.Subscription is { } subscription && _workerProfiles is not null)
         {
             return await RunSubscriptionRefinerAsync(subscription, prompt, cancellationToken).ConfigureAwait(false);
@@ -357,12 +423,10 @@ internal sealed class GoalRefinementService
             [],
             []);
 
-    private static string BuildCorrelationKey(GoalId goalId, string forkKind)
+    private static string BuildCorrelationKey(GoalId goalId, string topicKey)
     {
-        // Keep the key short enough to fit inside Discord's 100-char custom_id once prefixed
-        // for answer buttons/modals, while retaining the full goal id for spec write-back.
-        var nonce = Guid.NewGuid().ToString("n")[..16];
-        return $"{CorrelationKeyPrefix}{goalId.Value}:{forkKind}:{nonce}";
+        // Stable by topic so a regenerated equivalent fork refreshes the same collaboration item.
+        return $"{CorrelationKeyPrefix}{goalId.Value}:{NormalizeTopicKey(topicKey, null, topicKey)}";
     }
 
     private static string BuildClarificationBody(string objective, SpecRefinementFork fork) => $"""
@@ -370,14 +434,16 @@ internal sealed class GoalRefinementService
 
         Question: {fork.Question}
         Fork kind: {fork.Kind}
+        Topic key: {NormalizeTopicKey(fork.TopicKey, fork.Kind, fork.Question)}
         Blast radius: {fork.BlastRadius}
         Refiner confidence: {fork.RefinerConfidence}
 
         Please provide your answer to resolve this ambiguity before the goal can proceed.
         """;
 
-    // Extracts forkKind from correlation key: spec-clarification:{goalId}:{forkKind}:{guid}
-    private static string? ExtractForkKind(string correlationKey)
+    // Extracts topicKey from correlation key. Legacy keys had an additional nonce segment:
+    // spec-clarification:{goalId}:{forkKind}:{guid}
+    internal static string? ExtractTopicKey(string correlationKey)
     {
         if (!correlationKey.StartsWith(CorrelationKeyPrefix, StringComparison.Ordinal))
             return null;
@@ -399,4 +465,185 @@ internal sealed class GoalRefinementService
         var firstColon = remainder.IndexOf(':', StringComparison.Ordinal);
         return firstColon < 0 ? null : remainder[..firstColon];
     }
+
+    internal static string NormalizeTopicKey(string? topicKey, string? forkKind, string question)
+    {
+        var raw = FirstNonEmpty(topicKey, forkKind, question) ?? "other";
+        var chars = raw
+            .Trim()
+            .ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+            .ToArray();
+        var slug = string.Join(
+            '-',
+            new string(chars)
+                .Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        if (string.IsNullOrWhiteSpace(slug))
+            slug = "other";
+        return slug.Length <= 35 ? slug : slug[..35].TrimEnd('-');
+    }
+
+    internal static string BuildNormalizedQuestionKey(string forkKind, string question)
+    {
+        var scope = NormalizeTopicKey(null, forkKind, forkKind);
+        var normalized = NormalizeQuestionText(question);
+        var hashInput = $"{scope}|global|{normalized}";
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hashInput))).ToLowerInvariant()[..16];
+        return $"{scope}:global:{hash}";
+    }
+
+    private static string NormalizeQuestionText(string question)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        foreach (var ch in question.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                current.Append(ch);
+                continue;
+            }
+
+            AddToken(tokens, current);
+        }
+
+        AddToken(tokens, current);
+        return string.Join(' ', tokens);
+    }
+
+    private static void AddToken(List<string> tokens, StringBuilder current)
+    {
+        if (current.Length == 0)
+            return;
+
+        var token = current.ToString();
+        current.Clear();
+        if (!QuestionStopWords.Contains(token))
+            tokens.Add(token);
+    }
+
+    private async Task<IReadOnlyList<ResolvedSpecClarification>> LoadResolvedClarificationsAsync(
+        Goal goal,
+        CancellationToken cancellationToken)
+    {
+        var resolved = new List<ResolvedSpecClarification>();
+        foreach (var question in goal.RefinedSpec?.OpenQuestions ?? [])
+        {
+            if (string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(question.Answer))
+            {
+                continue;
+            }
+
+            resolved.Add(new ResolvedSpecClarification(
+                ResolveQuestionTopicKey(question),
+                ResolveQuestionNormalizedKey(question),
+                question.Question,
+                string.IsNullOrWhiteSpace(question.Answer) ? "dismissed by operator" : question.Answer!,
+                IsDismissedResolution(question.Answer)));
+        }
+
+        foreach (var item in await _collaboration.ListAsync(goal.Id.Value, cancellationToken))
+        {
+            if (item.Type != CollaborationItemType.Clarification ||
+                !CollaborationItemLifecycle.IsTerminal(item.Status) ||
+                item.CorrelationKey?.StartsWith(CorrelationKeyPrefix, StringComparison.Ordinal) != true)
+            {
+                continue;
+            }
+
+            var question = ExtractQuestion(item);
+            var forkKind = ExtractForkKindFromBody(item.Body) ?? ExtractTopicKey(item.CorrelationKey!) ?? "other";
+            var topicKey = NormalizeTopicKey(ExtractTopicKey(item.CorrelationKey!), forkKind, question);
+            resolved.Add(new ResolvedSpecClarification(
+                topicKey,
+                BuildNormalizedQuestionKey(forkKind, question),
+                question,
+                BuildResolutionText(item),
+                IsDismissedResolution(item.Resolution)));
+        }
+
+        return resolved
+            .GroupBy(item => $"{item.TopicKey}|{item.NormalizedQuestionKey}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    internal static string ResolveQuestionTopicKey(RefinedSpecOpenQuestion question) =>
+        NormalizeTopicKey(question.TopicKey ?? ExtractTopicKey(question.Id), question.ForkKind, question.Question);
+
+    internal static string ResolveQuestionNormalizedKey(RefinedSpecOpenQuestion question) =>
+        string.IsNullOrWhiteSpace(question.NormalizedQuestionKey)
+            ? BuildNormalizedQuestionKey(question.ForkKind, question.Question)
+            : question.NormalizedQuestionKey!;
+
+    internal static bool MatchesResolvedIdentity(
+        RefinedSpecOpenQuestion question,
+        IReadOnlyCollection<ResolvedSpecClarification> resolvedClarifications)
+    {
+        var topicKey = ResolveQuestionTopicKey(question);
+        var normalizedQuestionKey = ResolveQuestionNormalizedKey(question);
+        return resolvedClarifications.Any(item =>
+            string.Equals(item.TopicKey, topicKey, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(item.NormalizedQuestionKey, normalizedQuestionKey, StringComparison.Ordinal));
+    }
+
+    internal static string ExtractQuestion(CollaborationItem item)
+    {
+        const string subjectPrefix = "Spec clarification needed: ";
+        if (item.Subject.StartsWith(subjectPrefix, StringComparison.Ordinal))
+            return item.Subject[subjectPrefix.Length..].Trim();
+
+        foreach (var line in item.Body.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith("Question:", StringComparison.OrdinalIgnoreCase))
+                return line["Question:".Length..].Trim();
+        }
+
+        return item.Subject.Trim();
+    }
+
+    internal static string? ExtractForkKindFromBody(string body)
+    {
+        foreach (var line in body.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith("Fork kind:", StringComparison.OrdinalIgnoreCase))
+                return line["Fork kind:".Length..].Trim();
+        }
+
+        return null;
+    }
+
+    private static string BuildResolutionText(CollaborationItem item) =>
+        string.IsNullOrWhiteSpace(item.Resolution) ? "dismissed by operator" : item.Resolution!;
+
+    private static bool IsDismissedResolution(string? resolution) =>
+        string.IsNullOrWhiteSpace(resolution) ||
+        resolution.Contains("dismiss", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddDecisionIfMissing(
+        List<RefinedSpecDecision> decisions,
+        string question,
+        string choice,
+        string rationale)
+    {
+        if (!decisions.Any(decision => string.Equals(decision.Question, question, StringComparison.OrdinalIgnoreCase)))
+            decisions.Add(new RefinedSpecDecision(question, choice, rationale));
+    }
+
+    private static void AddOpenQuestionIfMissing(
+        List<RefinedSpecOpenQuestion> questions,
+        RefinedSpecOpenQuestion question)
+    {
+        if (!questions.Any(candidate =>
+            string.Equals(candidate.Id, question.Id, StringComparison.Ordinal) ||
+            string.Equals(ResolveQuestionTopicKey(candidate), ResolveQuestionTopicKey(question), StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(ResolveQuestionNormalizedKey(candidate), ResolveQuestionNormalizedKey(question), StringComparison.Ordinal)))
+        {
+            questions.Add(question);
+        }
+    }
+
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 }

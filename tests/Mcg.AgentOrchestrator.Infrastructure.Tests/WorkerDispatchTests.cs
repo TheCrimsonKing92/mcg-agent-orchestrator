@@ -638,3 +638,244 @@ protected static void WriteSkill(string workingDirectory, string skillName)
             throw new InvalidOperationException("Diagnostic writer failure (test-injected).");
     }
 }
+
+public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSupport
+{
+    [Xunit.Fact(DisplayName = "SpecRefiner_answered_clarification_is_resolved_input_and_not_reasked")]
+    public async Task SpecRefinerAnsweredClarificationIsResolvedInputAndNotReasked()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var provider = new QueueRefinerProvider(
+            AskJson("api-version", "external-contract", "Which API version should dispatch use?"),
+            AskJson("api-version", "external-contract", "Which API version should dispatch use?"));
+        var service = CreateRefinementService(workspace, store, provider);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Clarify API version.");
+
+        var first = await service.RefineAsync(kernel, goal.Id);
+        var item = Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.Equal(RefinementOutcome.AwaitingClarification, first.Outcome);
+
+        Assert.True(await service.TryResolveOpenClarificationAsync(kernel, item.CorrelationKey!, "REST v2"));
+        var second = await service.RefineAsync(kernel, goal.Id);
+
+        Assert.Equal(RefinementOutcome.AutoRefined, second.Outcome);
+        Assert.False(second.Spec.HasOpenQuestions);
+        Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.Contains(second.Spec.Decisions, decision => decision.Choice == "REST v2");
+        Assert.Contains("Already resolved clarification topics", provider.Requests[1].Messages.Single().Content);
+    }
+
+    [Xunit.Fact(DisplayName = "SpecRefiner_dismissed_clarification_is_resolved_input_and_not_reasked")]
+    public async Task SpecRefinerDismissedClarificationIsResolvedInputAndNotReasked()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var provider = new QueueRefinerProvider(
+            AskJson("recovery-action-form", "observable-behavior", "What recovery command should be shown?"),
+            AskJson("recovery-action-form", "observable-behavior", "What recovery command should be shown?"));
+        var service = CreateRefinementService(workspace, store, provider);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Clarify recovery command.");
+
+        await service.RefineAsync(kernel, goal.Id);
+        var item = Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.True(await store.TryResolveAsync(item.CorrelationKey!, "dismissed by operator"));
+
+        var second = await service.RefineAsync(kernel, goal.Id);
+
+        Assert.Equal(RefinementOutcome.AutoRefined, second.Outcome);
+        Assert.False(second.Spec.HasOpenQuestions);
+        Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.Contains(second.Spec.Decisions, decision => decision.Choice == "dismissed by operator");
+    }
+
+    [Xunit.Fact(DisplayName = "SpecRefiner_dedupes_semantically_equivalent_open_questions_by_normalized_hash")]
+    public async Task SpecRefinerDedupesSemanticallyEquivalentOpenQuestionsByNormalizedHash()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var provider = new QueueRefinerProvider(
+            AskJson("retroactive-scope", "reversibility", "Should this apply retroactively?"),
+            AskJson("backfill-scope", "reversibility", "Should this apply retroactively"));
+        var service = CreateRefinementService(workspace, store, provider);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Clarify retroactive behavior.");
+
+        var first = await service.RefineAsync(kernel, goal.Id);
+        var firstQuestion = Assert.Single(first.Spec.OpenQuestions);
+        var second = await service.RefineAsync(kernel, goal.Id);
+
+        Assert.Equal(RefinementOutcome.AwaitingClarification, second.Outcome);
+        var carriedQuestion = Assert.Single(second.Spec.OpenQuestions);
+        Assert.Equal(firstQuestion.Id, carriedQuestion.Id);
+        Assert.Single(await store.ListAsync(goal.Id.Value));
+    }
+
+    [Xunit.Fact(DisplayName = "Dispatch_gate_passes_when_all_clarifications_resolved_without_starting_paid_worker")]
+    public async Task DispatchGatePassesWhenAllClarificationsResolvedWithoutStartingPaidWorker()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, RefinerCatalog());
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var taskSpec = new TaskSpec(TaskId.New(), "Implement after clarified spec.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Dispatch after clarification.", [taskSpec]);
+        var agent = SubscriptionDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var questionId = $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:api-version";
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Resolved contract.",
+            ["Dispatch proceeds after clarification resolution."],
+            VerificationClass.TestVerifiable,
+            [],
+            [new RefinedSpecOpenQuestion(
+                questionId,
+                "Which API version should dispatch use?",
+                "external-contract",
+                "Open",
+                TopicKey: "api-version",
+                NormalizedQuestionKey: GoalRefinementService.BuildNormalizedQuestionKey("external-contract", "Which API version should dispatch use?"))]));
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Spec clarification needed: Which API version should dispatch use?",
+            "Question: Which API version should dispatch use?\nFork kind: external-contract",
+            questionId);
+        Assert.True(await store.TryResolveAsync(questionId, "REST v2"));
+
+        var result = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            kernel.GetGoal(goal.Id),
+            task,
+            new WorkerProfile("test-profile", "echo {promptPath}"),
+            [agent],
+            new InMemoryModelProviderRegistry([]));
+
+        Assert.NotNull(result.PromptPath);
+        Assert.Null(task.LastProcess);
+        Assert.NotNull(task.LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "Dispatch_gate_surfaces_stale_clarification_recovery_action")]
+    public async Task DispatchGateSurfacesStaleClarificationRecoveryAction()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Recover stale clarification.");
+        var key = $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:api-version";
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Spec clarification needed: Which API version?",
+            "Question: Which API version?\nFork kind: external-contract",
+            key);
+        Assert.True(await store.TryResolveAsync(key, "REST v2"));
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Spec clarification needed: Which API version?",
+            "Question: Which API version?\nFork kind: external-contract",
+            key);
+        var events = new RecordingLifecycleEvents();
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal, events));
+
+        Assert.Contains("Stale spec clarification detected", ex.Message, StringComparison.Ordinal);
+        Assert.Contains($"attention dismiss {goal.Id.Value[..8]}", ex.Message, StringComparison.Ordinal);
+        var stale = Assert.Single(events.StaleClarifications);
+        Assert.Equal("api-version", Assert.Single(stale.Keys));
+    }
+
+    private static GoalRefinementService CreateRefinementService(
+        OrchestratorWorkspace workspace,
+        ICollaborationItemStore store,
+        IModelProvider provider) =>
+        new(
+            new InMemoryModelProviderRegistry([provider]),
+            RefinerCatalog(),
+            store,
+            new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
+
+    private static ModelFunctionCatalog RefinerCatalog() =>
+        new([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]);
+
+    private static string AskJson(string topicKey, string kind, string question) => $$"""
+        ```json
+        {
+          "behavioralContract": "Clarified behavior.",
+          "acceptanceCriteria": ["Clarification state is deterministic."],
+          "verificationClass": "TestVerifiable",
+          "decisions": [],
+          "forks": [{"kind": "{{kind}}", "topicKey": "{{topicKey}}", "refinerConfidence": "low", "blastRadius": "high", "question": "{{question}}", "choice": "", "rationale": "Operator decision required."}]
+        }
+        ```
+        """;
+
+    private sealed class QueueRefinerProvider(params string[] responses) : IModelProvider
+    {
+        private readonly Queue<string> _responses = new(responses);
+
+        public string ProviderName => "fake-refiner";
+        public List<ModelRequest> Requests { get; } = [];
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new ModelResponse(_responses.Dequeue(), new ModelUsage(1, 1), "stop"));
+        }
+    }
+
+    private sealed class RecordingLifecycleEvents : IGoalLifecycleEventWriter
+    {
+        public List<(GoalId GoalId, IReadOnlyList<string> Keys, string Command)> StaleClarifications { get; } = [];
+
+        public void AppendTimelineEvent(ProgressEvent progressEvent) { }
+        public void AppendGoalCreated(GoalId goalId, string objective) { }
+        public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
+        public void AppendStaleClarificationDetected(GoalId goalId, IReadOnlyList<string> staleTopicKeys, string recoveryCommand) =>
+            StaleClarifications.Add((goalId, staleTopicKeys, recoveryCommand));
+        public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
+        public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
+        public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
+        public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
+        public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
+        public void AppendCleanedUp(GoalId goalId) { }
+        public void AppendProgressiveReviewGlanceReceipt(
+            GoalId goalId,
+            TaskId taskId,
+            string trigger,
+            string inputsHash,
+            string verdict,
+            string note,
+            int inputTokens,
+            int outputTokens,
+            int totalTokens,
+            TimeSpan wallTime,
+            string? model,
+            string? profile) { }
+        public void AppendProgressiveReviewGlanceSummary(
+            GoalId goalId,
+            int totalGlances,
+            int onTrack,
+            int concern,
+            int fundamentalMisdirection,
+            int invalid,
+            int totalTokens) { }
+    }
+}

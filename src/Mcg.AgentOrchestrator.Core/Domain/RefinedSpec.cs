@@ -13,7 +13,9 @@ public sealed record RefinedSpecOpenQuestion(
     string Question,
     string ForkKind,
     string Status,
-    string? Answer = null);
+    string? Answer = null,
+    string? TopicKey = null,
+    string? NormalizedQuestionKey = null);
 
 public sealed record RefinedSpec(
     string BehavioralContract,

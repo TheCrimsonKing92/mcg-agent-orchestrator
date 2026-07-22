@@ -55,7 +55,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var workerExecutionDirectory = context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id);
             GoalRefinementGate.EnsureRefined(context.Kernel, context.Workspace, context.Providers, context.CurrentGoal, eventWriter: context.EventWriter);
-            GoalRefinementGate.ThrowIfAwaitingClarification(context.Workspace, context.CurrentGoal);
+            GoalRefinementGate.ThrowIfAwaitingClarification(context.Workspace, context.CurrentGoal, context.EventWriter);
             var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
             var preparation = WorkerCommandTemplate.Prepare(
                 brief,

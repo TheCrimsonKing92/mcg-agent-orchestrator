@@ -5,6 +5,7 @@ public interface IGoalLifecycleEventWriter
     void AppendTimelineEvent(ProgressEvent progressEvent);
     void AppendGoalCreated(GoalId goalId, string objective);
     void AppendClarificationNeeded(GoalId goalId, string clarificationId);
+    void AppendStaleClarificationDetected(GoalId goalId, IReadOnlyList<string> staleTopicKeys, string recoveryCommand);
     void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName);
     void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt);
     void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures);
@@ -41,6 +42,7 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendTimelineEvent(ProgressEvent progressEvent) { }
     public void AppendGoalCreated(GoalId goalId, string objective) { }
     public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
+    public void AppendStaleClarificationDetected(GoalId goalId, IReadOnlyList<string> staleTopicKeys, string recoveryCommand) { }
     public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
     public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
     public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }

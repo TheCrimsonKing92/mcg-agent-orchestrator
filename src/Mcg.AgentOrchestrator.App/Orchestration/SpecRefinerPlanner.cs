@@ -15,7 +15,15 @@ internal sealed record SpecRefinementFork(
     string BlastRadius,
     string Question,
     string Choice,
-    string Rationale);
+    string Rationale,
+    string? TopicKey = null);
+
+internal sealed record ResolvedSpecClarification(
+    string TopicKey,
+    string NormalizedQuestionKey,
+    string Question,
+    string Resolution,
+    bool WasDismissed);
 
 internal sealed record SpecRefinementOutput(
     string BehavioralContract,
@@ -41,11 +49,17 @@ internal static class SpecRefinerPlanner
         @"\{[\s\S]*\}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static string BuildPrompt(string objective) => $$"""
+    public static string BuildPrompt(string objective) => BuildPrompt(objective, []);
+
+    public static string BuildPrompt(string objective, IReadOnlyList<ResolvedSpecClarification> resolvedClarifications)
+    {
+        var resolvedSection = BuildResolvedClarificationSection(resolvedClarifications);
+        return $$"""
         You are a SPECIFICATION REFINER. Convert the raw objective into a structured spec.
 
         For each ambiguity that could lead to materially different implementations, classify it on three axes:
         - kind: one of external-contract | observable-behavior | ownership-lifecycle | reversibility | other
+        - topicKey: a short stable slug naming the subject of the ambiguity, not the wording of the question
         - refinerConfidence: low | med | high  (your confidence in the right answer WITHOUT operator input)
         - blastRadius: high | low  (how hard it is to change later if you pick wrong)
 
@@ -57,10 +71,11 @@ internal static class SpecRefinerPlanner
         - "acceptanceCriteria": string array — concrete, testable outcomes
         - "verificationClass": "TestVerifiable" | "RealWorldDependent"
         - "decisions": array of {question, choice, rationale} — forks you resolved yourself
-        - "forks": array of {kind, refinerConfidence, blastRadius, question, choice, rationale} — ALL forks
+        - "forks": array of {kind, topicKey, refinerConfidence, blastRadius, question, choice, rationale} — ALL forks
 
         For ask forks: provide empty choice, explain in rationale what information is needed.
         Include decided forks in BOTH "decisions" and "forks".
+        {{resolvedSection}}
 
         OBJECTIVE:
         {{objective}}
@@ -72,10 +87,11 @@ internal static class SpecRefinerPlanner
           "acceptanceCriteria": ["GET /goals/{id} returns 200 with status field", "404 for unknown id"],
           "verificationClass": "TestVerifiable",
           "decisions": [{"question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}],
-          "forks": [{"kind": "observable-behavior", "refinerConfidence": "high", "blastRadius": "low", "question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}]
+          "forks": [{"kind": "observable-behavior", "topicKey": "http-method", "refinerConfidence": "high", "blastRadius": "low", "question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}]
         }
         ```
         """;
+    }
 
     public static SpecRefinementOutput Parse(string modelOutput)
     {
@@ -226,8 +242,36 @@ internal static class SpecRefinerPlanner
                 ReadString(item, "blastRadius"),
                 q,
                 ReadString(item, "choice"),
-                ReadString(item, "rationale")));
+                ReadString(item, "rationale"),
+                FirstNonEmpty(
+                    ReadString(item, "topicKey"),
+                    ReadString(item, "topic"),
+                    ReadString(item, "canonicalTopic"))));
         }
         return result;
     }
+
+    private static string BuildResolvedClarificationSection(IReadOnlyList<ResolvedSpecClarification> resolvedClarifications)
+    {
+        if (resolvedClarifications.Count == 0)
+            return string.Empty;
+
+        var lines = new List<string>
+        {
+            string.Empty,
+            "Already resolved clarification topics. Treat these as resolved inputs to the refined spec; do not re-raise semantically equivalent questions."
+        };
+        foreach (var item in resolvedClarifications)
+        {
+            var resolution = item.WasDismissed
+                ? "dismissed by operator; proceed without re-asking"
+                : item.Resolution;
+            lines.Add($"- topicKey={item.TopicKey}; normalizedQuestionKey={item.NormalizedQuestionKey}; question={item.Question}; resolution={resolution}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string? FirstNonEmpty(params string[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 }
