@@ -857,6 +857,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
+                var parkedGoalSafetyNetTick = 0;
                 TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
                 {
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
@@ -870,6 +871,21 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         var snapshot = reloadedKernel.ExportSnapshot();
                         loopKernel.RefreshTrackedGoals(snapshot);
                         loopKernel.IngestNewGoals(snapshot);
+
+                        parkedGoalSafetyNetTick++;
+                        if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
+                        {
+                            var parkedSweepKernel = context.ReloadParkedGoalSafetyNetKernel();
+                            var parkedSweepSnapshot = parkedSweepKernel.ExportSnapshot();
+                            var newlyEligibleSnapshot = parkedSweepSnapshot with
+                            {
+                                Goals = parkedSweepSnapshot.Goals
+                                    .Where(goal => goal.Status != GoalStatus.Parked)
+                                    .ToArray()
+                            };
+                            loopKernel.RefreshTrackedGoals(newlyEligibleSnapshot);
+                            loopKernel.IngestNewGoals(newlyEligibleSnapshot);
+                        }
                     }
                     catch { /* dynamic pickup is best-effort */ }
 

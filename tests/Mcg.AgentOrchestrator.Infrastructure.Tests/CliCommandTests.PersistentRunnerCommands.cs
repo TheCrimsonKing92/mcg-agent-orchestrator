@@ -1555,6 +1555,44 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             id => Xunit.Assert.DoesNotContain(id.Value, nextTickRepository.LoadedGoalIds));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_parked_safety_net_sweeps_every_four_ticks")]
+    public void PersistentRunnerConductLoopParkedSafetyNetSweepsEveryFourTicks()
+    {
+        const int parkedGoalCount = 100;
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Active conductor goal");
+        var parkedGoalIds = new List<GoalId>();
+        for (var i = 0; i < parkedGoalCount; i++)
+        {
+            var parked = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                $"Parked safety-net fixture {i}");
+            kernel.ParkGoal(parked.Id, "operator deferred");
+            parkedGoalIds.Add(parked.Id);
+        }
+
+        Xunit.Assert.Equal(4, CliPersistentStateRunner.ParkedGoalSafetyNetSweepCadenceTicks);
+        Xunit.Assert.False(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(1));
+        Xunit.Assert.False(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(2));
+        Xunit.Assert.False(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(3));
+        Xunit.Assert.True(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(4));
+        Xunit.Assert.False(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(5));
+        Xunit.Assert.True(CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(8));
+
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var sweepKernel = CliPersistentStateRunner.LoadConductLoopParkedGoalSafetyNetKernel(repository);
+
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+        Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
+        Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.Contains(id.Value, repository.LoadedGoalIds));
+        Xunit.Assert.Equal(parkedGoalCount, sweepKernel.Goals.Count);
+        Xunit.Assert.All(sweepKernel.Goals, goal => Xunit.Assert.Equal(GoalStatus.Parked, goal.Status));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_sweeps_terminal_candidates_loaded_on_demand")]
     public void PersistentRunnerConductLoopSweepsTerminalCandidatesLoadedOnDemand()
     {

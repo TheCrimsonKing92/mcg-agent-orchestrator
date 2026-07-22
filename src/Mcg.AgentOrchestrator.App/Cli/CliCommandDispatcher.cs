@@ -23,7 +23,8 @@ public static bool ExecuteCommand(
     CliPhaseTimingRecorder? phaseTimings = null,
     TimeSpan? stableSlotAcquisitionTimeout = null,
     Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
-    Action? releaseConductLoopLease = null)
+    Action? releaseConductLoopLease = null,
+    Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -40,7 +41,8 @@ public static bool ExecuteCommand(
         finalizeAcceptanceMerge,
         persistGoalKernel,
         phaseTimings: phaseTimings,
-        releaseConductLoopLease: releaseConductLoopLease)
+        releaseConductLoopLease: releaseConductLoopLease,
+        reloadParkedGoalSafetyNetKernel: reloadParkedGoalSafetyNetKernel)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),
