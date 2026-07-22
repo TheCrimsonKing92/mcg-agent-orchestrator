@@ -1373,8 +1373,8 @@ private static string WorkerResultStdout(string files, string tests, string bloc
     Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
 }
 
-    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_count_sandbox_preflight_failure_as_empty_output_retry")]
-    public void RecordDispatchExecutionResultDoesNotCountSandboxPreflightFailureAsEmptyOutputRetry()
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_counts_sandbox_preflight_failure_on_shared_empty_output_retry_budget")]
+    public void RecordDispatchExecutionResultCountsSandboxPreflightFailureOnSharedEmptyOutputRetryBudget()
 {
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
@@ -1392,7 +1392,7 @@ private static string WorkerResultStdout(string files, string tests, string bloc
         clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(0, task.EmptyOutputRetryCount);
+    Assert.Equal(1, task.EmptyOutputRetryCount);
     Assert.Equal(DispatchOutcomeKind.PreflightFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
     Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification!));
 }
