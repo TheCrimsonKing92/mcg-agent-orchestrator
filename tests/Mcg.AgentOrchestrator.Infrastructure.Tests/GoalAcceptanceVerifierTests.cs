@@ -1343,6 +1343,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var remainderRuns = 0;
         var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1403,6 +1404,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1415,6 +1417,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1446,6 +1449,51 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_rerun_tolerates_flaky_partition")]
+    public async Task GoalAcceptanceVerifierWithinAttemptRerunToleratesFlakyPartition()
+    {
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var goalId = new GoalId("12345678123456781234567812345678");
+        var calls = new List<string[]>();
+        var cliRuns = 0;
+        SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-b");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsInfrastructurePartitionTestCall(args) &&
+                    args.Any(arg => arg.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal)))
+                {
+                    cliRuns++;
+                    // Intermittent flake: fail the first run, pass the within-attempt re-run.
+                    return Task.FromResult(cliRuns < 2
+                        ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
+                        : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : ""));
+            });
+
+            var result = await verifier.RunAsync(root, goalId);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, cliRuns);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1467,6 +1515,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1495,6 +1544,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1507,6 +1557,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1532,6 +1583,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1544,6 +1596,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1570,6 +1623,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1584,6 +1638,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var failFirstPartitionOnForcedRerun = false;
         var previousBackstop = GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN;
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
         GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN = 2;
         try
         {
@@ -1627,6 +1682,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN = previousBackstop;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
