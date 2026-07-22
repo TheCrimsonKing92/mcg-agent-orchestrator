@@ -130,7 +130,7 @@ public sealed class CodexEgressProxyTests
     [Xunit.Fact(DisplayName = "CodexEgressProxy_wiring_disabled_leaves_proxy_env_untouched")]
     public void CodexEgressProxyWiringDisabledLeavesProxyEnvUntouched()
     {
-        var startInfo = new ProcessStartInfo();
+        var startInfo = new ProcessStartInfo { CreateNoWindow = true };
         var parameters = MinimalCodexParameters(WorkerSandboxProvider.Codex, enabled: false);
         using var proxy = DispatchProcessHost.StartCodexEgressProxyIfEnabled(parameters, startInfo);
         Assert.Null(proxy);
@@ -140,7 +140,7 @@ public sealed class CodexEgressProxyTests
     [Xunit.Fact(DisplayName = "CodexEgressProxy_wiring_enabled_codex_points_https_proxy_at_loopback")]
     public void CodexEgressProxyWiringEnabledCodexPointsHttpsProxyAtLoopback()
     {
-        var startInfo = new ProcessStartInfo();
+        var startInfo = new ProcessStartInfo { CreateNoWindow = true };
         var parameters = MinimalCodexParameters(WorkerSandboxProvider.Codex, enabled: true);
         using var proxy = DispatchProcessHost.StartCodexEgressProxyIfEnabled(parameters, startInfo);
         Assert.NotNull(proxy);
@@ -153,7 +153,7 @@ public sealed class CodexEgressProxyTests
     [Xunit.Fact(DisplayName = "CodexEgressProxy_wiring_skips_non_codex_provider")]
     public void CodexEgressProxyWiringSkipsNonCodexProvider()
     {
-        var startInfo = new ProcessStartInfo();
+        var startInfo = new ProcessStartInfo { CreateNoWindow = true };
         var parameters = MinimalCodexParameters(WorkerSandboxProvider.Claude, enabled: true);
         using var proxy = DispatchProcessHost.StartCodexEgressProxyIfEnabled(parameters, startInfo);
         Assert.Null(proxy);

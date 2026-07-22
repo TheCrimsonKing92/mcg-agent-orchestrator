@@ -155,6 +155,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static Func<string, string?>? ResolvePartitionVerdictMainShaForTests { get; set; }
     internal static Func<string, string?>? ResolvePartitionVerdictVerifyingCommitShaForTests { get; set; }
     internal static int PartitionVerdictFullRerunEveryN { get; set; } = DefaultPartitionVerdictFullRerunEveryN;
+    // When true (default), a failed infrastructure-test PARTITION is re-run ONCE within the same
+    // acceptance attempt; if the re-run passes, the failure was an intermittent flake and the partition
+    // is treated as passed (Retried=true keeps it visible). A genuine red still fails both runs, so real
+    // failures are unaffected. This is the within-attempt companion to the cross-attempt partition-verdict
+    // cache. Tests that assert exact per-attempt partition run counts disable it explicitly.
+    internal static bool PartitionVerdictWithinAttemptRerunEnabled { get; set; } = true;
     internal static DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
     private static readonly string[] CacheableProjects =
     [
@@ -517,6 +523,27 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotLease,
             dotnetTestBuildPhase,
             cancellationToken).ConfigureAwait(false);
+
+        // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
+        // (a concurrent test process grabbing a build-slot lease -> SlotsBusy, a live-repo-HEAD race, a
+        // testhost handle still settling). Re-run the failed partition ONCE with the same slot lease and
+        // build phase; if the re-run passes, the failure was a flake and the partition is treated as
+        // passed. A genuine red fails both runs. Bounded to a single retry, only for true partitions.
+        if (PartitionVerdictWithinAttemptRerunEnabled &&
+            !fresh.Result.Passed &&
+            cacheContext is not null &&
+            TryGetInfrastructurePartitionId(check, out _, out _))
+        {
+            var rerun = await RunCheckWithCancellationProbeAsync(
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                dotnetTestBuildPhase,
+                cancellationToken).ConfigureAwait(false);
+            fresh = rerun.Result.Passed ? (rerun.Result, true) : fresh;
+        }
 
         if (cacheContext is not null &&
             TryBuildPartitionCacheKey(cacheContext, check, out partitionId, out filterHash, out cacheKey))
