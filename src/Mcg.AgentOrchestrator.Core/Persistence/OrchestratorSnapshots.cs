@@ -201,6 +201,7 @@ public static class VerificationTextBounds
     }
 
     private static bool IsBoundedExcerpt(string text) =>
+        text.Length <= MaxRetainedChars &&
         text.Contains("\n...[", StringComparison.Ordinal) &&
         text.Contains(" chars; ", StringComparison.Ordinal) &&
         text.Contains("]...\n", StringComparison.Ordinal);
