@@ -87,14 +87,36 @@ public sealed class KernelIngestNewGoalsTests
     {
         var goalId = GoalId.New();
         var taskId = TaskId.New();
+        var createdAt = DateTimeOffset.Parse("2026-07-22T23:59:00Z");
+        var terminatedAt = DateTimeOffset.Parse("2026-07-23T00:00:00Z");
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
             [
                 new GoalSnapshot(
                     goalId.Value,
                     "Terminal title\nFULL_OBJECTIVE_SENTINEL",
                     GoalStatus.Completed,
-                    [new TaskSnapshot(taskId.Value, "TASK_SENTINEL", AgentRole.Developer, WorkTaskStatus.Completed, null, null, null, [], null, null)],
-                    [new ProgressEventSnapshot(goalId.Value, taskId.Value, ProgressKind.TaskCompleted, "TIMELINE_SENTINEL", DateTimeOffset.Parse("2026-07-23T00:00:00Z"))],
+                    [
+                        new TaskSnapshot(
+                            taskId.Value,
+                            "TASK_SENTINEL",
+                            AgentRole.Developer,
+                            WorkTaskStatus.Completed,
+                            null,
+                            null,
+                            null,
+                            [],
+                            new TaskDispatchSnapshot(
+                                "worker",
+                                "cmd",
+                                "C:\\repo",
+                                createdAt,
+                                ResultCommit: "result-sha"),
+                            null)
+                    ],
+                    [
+                        new ProgressEventSnapshot(goalId.Value, null, ProgressKind.GoalCreated, "CREATED_SENTINEL", createdAt),
+                        new ProgressEventSnapshot(goalId.Value, taskId.Value, ProgressKind.TaskCompleted, "TIMELINE_SENTINEL", terminatedAt)
+                    ],
                     RefinedSpec: new RefinedSpecSnapshot(
                         "REFINED_SPEC_SENTINEL",
                         ["ACCEPTANCE_SENTINEL"],
@@ -113,6 +135,9 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Empty(goal.Tasks);
         Xunit.Assert.Empty(goal.Timeline);
         Xunit.Assert.Null(goal.RefinedSpec);
+        Xunit.Assert.Equal("result-sha", goal.MetadataResultCommit);
+        Xunit.Assert.Equal(createdAt, goal.MetadataCreatedAt);
+        Xunit.Assert.Equal(terminatedAt, goal.MetadataTerminatedAt);
         Xunit.Assert.Empty(kernel.ExportSnapshot().Goals);
     }
 }

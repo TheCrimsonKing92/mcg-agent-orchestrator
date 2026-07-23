@@ -611,7 +611,30 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
-            SELECT id, status, {GoalMetadataTitleSql()}, updated_at
+            SELECT
+                id,
+                status,
+                {GoalMetadataTitleSql()},
+                updated_at,
+                (
+                    SELECT json_extract(task.value, '$.LastDispatch.ResultCommit')
+                    FROM json_each(goals.snapshot_json, '$.Tasks') AS task
+                    WHERE COALESCE(json_extract(task.value, '$.LastDispatch.ResultCommit'), '') <> ''
+                    ORDER BY CAST(task.key AS INTEGER) DESC
+                    LIMIT 1
+                ) AS result_commit,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) ASC
+                    LIMIT 1
+                ) AS created_at,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) DESC
+                    LIMIT 1
+                ) AS terminated_at
             FROM goals
             ORDER BY updated_at DESC
             """;
@@ -623,7 +646,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+                reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
         }
 
         return results;
@@ -1300,11 +1326,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }
 
-    private static string GoalMetadataTitleSql() =>
-        $"CASE WHEN instr(replace(objective, char(13), char(10)), char(10)) > 0 " +
-        $"THEN substr(replace(objective, char(13), char(10)), 1, instr(replace(objective, char(13), char(10)), char(10)) - 1) " +
-        $"WHEN length(objective) > {GoalMetadataTitleMaxChars} THEN substr(objective, 1, {GoalMetadataTitleMaxChars}) " +
-        "ELSE objective END";
+    private static string GoalMetadataTitleSql()
+    {
+        var normalized = "replace(objective, char(13), char(10))";
+        var firstLine = $"CASE WHEN instr({normalized}, char(10)) > 0 THEN substr({normalized}, 1, instr({normalized}, char(10)) - 1) ELSE objective END";
+        return $"substr(({firstLine}), 1, {GoalMetadataTitleMaxChars})";
+    }
 
     private static async Task<(int RowsWritten, long SerializedBytes)> UpsertModelFitHistoryRowAsync(
         SqliteConnection conn,

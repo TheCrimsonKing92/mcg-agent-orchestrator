@@ -660,7 +660,6 @@ internal static class CliPersistentStateRunner
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
-        kernel.AddTerminalGoalMetadataOnlyStubs(terminalSummaries.Select(ToTerminalGoalMetadata));
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         kernel.MarkKnownCompletedDependencyGoals(terminalSummaries

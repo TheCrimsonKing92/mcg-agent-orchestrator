@@ -1262,8 +1262,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(waiting.Id.Value, ids);
     }
 
-    [Xunit.Fact(DisplayName = "LoadConductLoopKernel_loads_terminal_goals_as_metadata_only_stubs")]
-    public async Task LoadConductLoopKernelLoadsTerminalGoalsAsMetadataOnlyStubs()
+    [Xunit.Fact(DisplayName = "LoadConductLoopKernel_excludes_terminal_goals_from_active_dictionary")]
+    public async Task LoadConductLoopKernelExcludesTerminalGoalsFromActiveDictionary()
     {
         var repo = new SqliteOrchestratorStateRepository(TempDb());
         var snapshots = Enumerable.Range(0, 10)
@@ -1271,24 +1271,52 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             .ToArray();
         await repo.SaveGoalSnapshotsAsync(snapshots);
 
+        var metadata = (await repo.ListConductLoopGoalMetadataAsync())
+            .OrderBy(goal => goal.Objective, StringComparer.Ordinal)
+            .ToArray();
         var kernel = CliPersistentStateRunner.LoadConductLoopKernel(repo);
 
-        var goals = kernel.Goals.OrderBy(goal => goal.Objective, StringComparer.Ordinal).ToArray();
-        Assert.Equal(10, goals.Length);
-        Assert.All(goals, goal =>
+        Assert.Equal(10, metadata.Length);
+        Assert.All(metadata, summary =>
         {
-            Assert.True(goal.IsMetadataOnly);
-            Assert.Equal(GoalStatus.Completed, goal.Status);
-            Assert.Empty(goal.Tasks);
-            Assert.Empty(goal.Timeline);
-            Assert.Null(goal.RefinedSpec);
-            Assert.DoesNotContain("FULL_OBJECTIVE_SENTINEL", goal.Objective, StringComparison.Ordinal);
-            Assert.DoesNotContain("REFINED_SPEC_SENTINEL", goal.Objective, StringComparison.Ordinal);
-            Assert.DoesNotContain("TIMELINE_SENTINEL", goal.Objective, StringComparison.Ordinal);
+            Assert.Equal(GoalStatus.Completed.ToString(), summary.Status);
+            Assert.DoesNotContain("FULL_OBJECTIVE_SENTINEL", summary.Objective, StringComparison.Ordinal);
+            Assert.DoesNotContain("REFINED_SPEC_SENTINEL", summary.Objective, StringComparison.Ordinal);
+            Assert.DoesNotContain("TIMELINE_SENTINEL", summary.Objective, StringComparison.Ordinal);
+            Assert.NotNull(summary.ResultCommit);
+            Assert.NotNull(summary.CreatedAt);
+            Assert.NotNull(summary.TerminatedAt);
         });
         Assert.All(Enumerable.Range(0, 10), index =>
-            Assert.Contains(goals, goal => goal.Objective == $"Terminal {index} title"));
+        {
+            Assert.Contains(metadata, goal => goal.Objective == $"Terminal {index} title");
+            Assert.Contains(metadata, goal => goal.ResultCommit == $"result-{index}");
+        });
+        Assert.Empty(kernel.Goals);
         Assert.Empty(kernel.ExportSnapshot().Goals);
+        Assert.All(snapshots, snapshot =>
+        {
+            var goalId = new GoalId(snapshot.Id);
+            Assert.True(kernel.IsKnownCompletedDependencyGoal(goalId));
+            Assert.True(kernel.TryGetKnownDependencyGoalStatus(goalId, out var status));
+            Assert.Equal(GoalStatus.Completed.ToString(), status);
+        });
+    }
+
+    [Xunit.Fact(DisplayName = "ListConductLoopGoalMetadata_caps_overlong_first_line_title")]
+    public async Task ListConductLoopGoalMetadataCapsOverlongFirstLineTitle()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var snapshot = BuildTerminalGoalSnapshot(0) with
+        {
+            Objective = new string('x', 300) + "\nFULL_OBJECTIVE_SENTINEL"
+        };
+        await repo.SaveGoalSnapshotsAsync([snapshot]);
+
+        var summary = (await repo.ListConductLoopGoalMetadataAsync()).Single();
+
+        Assert.Equal(240, summary.Objective.Length);
+        Assert.DoesNotContain("FULL_OBJECTIVE_SENTINEL", summary.Objective, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "LoadGoalsAsync_hydrates_full_terminal_aggregate_on_demand")]
@@ -1300,7 +1328,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var goalId = new GoalId(snapshot.Id);
 
         var conductKernel = CliPersistentStateRunner.LoadConductLoopKernel(repo);
-        Assert.True(conductKernel.Goals.Single().IsMetadataOnly);
+        Assert.Empty(conductKernel.Goals);
+        Assert.True(conductKernel.IsKnownCompletedDependencyGoal(goalId));
 
         var hydrated = await repo.LoadGoalsAsync([goalId]);
         var goal = hydrated.Goals.Single();
