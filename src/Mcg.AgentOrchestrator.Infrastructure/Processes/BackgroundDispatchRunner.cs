@@ -2794,6 +2794,7 @@ public sealed class BackgroundDispatchRunner
 
     private static TaskProcessResourceAccounting? ReleaseTrackedProcessJobs(TaskProcessRecord processRecord)
     {
+        var preReleaseSnapshot = SnapshotTrackedProcessAccounting(processRecord);
         long cpuMilliseconds = 0;
         long peakMemoryBytes = 0;
         long ioBytes = 0;
@@ -2819,7 +2820,7 @@ public sealed class BackgroundDispatchRunner
 
         return capturedAny
             ? new TaskProcessResourceAccounting(cpuMilliseconds, peakMemoryBytes, ioBytes, AccountingSource: accountingSource)
-            : null;
+            : preReleaseSnapshot;
     }
 
     private TaskProcessResourceAccounting? ReapTrackedProcessJobs(TaskProcessRecord processRecord, bool waitForExit)
