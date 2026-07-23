@@ -314,6 +314,61 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
 }
 
+    [Xunit.Fact(DisplayName = "BeginGoalAcceptanceVerification_moves_Verified_goal_to_Verifying")]
+    public void BeginGoalAcceptanceVerificationMovesVerifiedGoalToVerifying()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Acceptance in flight", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+
+    var changed = kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+
+    Assert.True(changed);
+    Assert.Equal(GoalStatus.Verifying, goal.Status);
+    Assert.Equal(GoalLifecycleState.Verifying, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ReconcileGoalAcceptanceVerified_moves_Verifying_goal_to_Verified")]
+    public void ReconcileGoalAcceptanceVerifiedMovesVerifyingGoalToVerified()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Acceptance passed", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+
+    var changed = kernel.ReconcileGoalAcceptanceVerified(goal.Id, "exit artifact passed");
+
+    Assert.True(changed);
+    Assert.Equal(GoalStatus.Verified, goal.Status);
+    Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(goal));
+}
+
+    [Xunit.Fact(DisplayName = "ReconcileGoalAcceptanceFailed_moves_Verifying_goal_to_AcceptanceFailed")]
+    public void ReconcileGoalAcceptanceFailedMovesVerifyingGoalToAcceptanceFailed()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Acceptance failed", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+
+    var changed = kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["TestClass.FailingCase"], "exit artifact failed", "branch-sha", "main-sha");
+
+    Assert.True(changed);
+    Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+    Assert.Equal(GoalLifecycleState.AcceptanceFailed, GoalLifecycle.ResolveState(goal));
+    Assert.NotNull(goal.LatestAcceptanceFailure);
+    Assert.Contains("TestClass.FailingCase", goal.LatestAcceptanceFailure!.FailedChecks);
+}
+
     [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_for_completed_goal_without_integration_cleanup_facts")]
     public void ResolveStateReturnsVerifiedForCompletedGoalWithoutIntegrationCleanupFacts()
 {
@@ -346,6 +401,28 @@ public sealed class GoalLifecycleTests
     // The retried task is no longer complete: the goal drops back to Active and resolves to a
     // dispatch state (WorkspaceReady), so the conductor RE-DISPATCHES the worker with the feedback.
     Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+    Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+}
+
+    [Xunit.Fact(DisplayName = "RetryTask_on_an_AcceptanceFailed_goal_clears_gate_failure_and_redispatches")]
+    public void RetryTaskOnAcceptanceFailedGoalClearsGateFailureAndRedispatches()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry failed acceptance", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+    kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["TestClass.FailingCase"], "exit artifact failed");
+    Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+    Assert.NotNull(goal.LatestAcceptanceFailure);
+
+    kernel.RetryTask(goal.Id, task.Id, "acceptance failed; fix the named check");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Null(goal.LatestAcceptanceFailure);
     Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }

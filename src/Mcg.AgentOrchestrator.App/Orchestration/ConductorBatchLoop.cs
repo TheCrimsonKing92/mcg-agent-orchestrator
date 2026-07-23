@@ -252,7 +252,8 @@ internal sealed class ConductorBatchLoop
                 completedGoals,
                 escalatedGoals,
                 totalTicks,
-                changedGoalLines);
+                changedGoalLines,
+                changedGoalIds);
 
             var previousPhaseTimingSink = driver.PhaseTimingSink;
             var perGoalPhaseTimingLines = new List<string>();
@@ -1016,7 +1017,8 @@ internal sealed class ConductorBatchLoop
         HashSet<string> completedGoals,
         HashSet<string> escalatedGoals,
         int tick,
-        List<string> changedGoalLines)
+        List<string> changedGoalLines,
+        HashSet<GoalId> changedGoalIds)
     {
         var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount);
         if (slotCount < 2)
@@ -1030,6 +1032,7 @@ internal sealed class ConductorBatchLoop
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
                 IsParallelAcceptanceLifecycleEligible(goal, driver) &&
+                goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
                 HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
@@ -1145,6 +1148,7 @@ internal sealed class ConductorBatchLoop
                             var terminalRun = terminalDecision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
                                 candidate,
                                 new InvalidOperationException("Completed acceptance attempt had no run result."));
+                            ReconcileParallelAcceptanceTerminalState(kernel, goal, terminalRun, terminalDecision.Attempt);
                             var terminalResult = CompleteParallelAcceptanceRun(driver, policy, terminalRun);
                             driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalDecision.Attempt);
                             oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
@@ -1157,6 +1161,7 @@ internal sealed class ConductorBatchLoop
                             break;
                         }
 
+                        ReconcileParallelAcceptanceTerminalState(kernel, goal, terminalDecision.Attempt);
                         results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
                             ParallelAcceptanceTerminal(driver, candidate, policy, terminalDecision.Attempt),
                             candidate.SlotIndex);
@@ -1167,6 +1172,10 @@ internal sealed class ConductorBatchLoop
                         break;
                     }
 
+                    if (MarkParallelAcceptanceStarted(kernel, candidate.Goal, decision.Attempt, tick))
+                    {
+                        changedGoalIds.Add(candidate.Goal.Id);
+                    }
                     activeCandidates.Add(candidate);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
@@ -1182,6 +1191,10 @@ internal sealed class ConductorBatchLoop
                         changedGoalLines);
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.Running:
+                    if (MarkParallelAcceptanceStarted(kernel, candidate.Goal, decision.Attempt, tick))
+                    {
+                        changedGoalIds.Add(candidate.Goal.Id);
+                    }
                     activeCandidates.Add(candidate);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
@@ -1200,6 +1213,7 @@ internal sealed class ConductorBatchLoop
                     var run = decision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
                         candidate,
                         new InvalidOperationException("Completed acceptance attempt had no run result."));
+                    ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
                     var result = CompleteParallelAcceptanceRun(driver, policy, run);
                     driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
@@ -1211,6 +1225,7 @@ internal sealed class ConductorBatchLoop
                         changedGoalLines);
                     break;
                 case ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun:
+                    ReconcileParallelAcceptanceTerminalState(kernel, goal, decision.Attempt);
                     results[candidate.Goal.Id.Value] = new ParallelLandingOutcome(
                         ParallelAcceptanceTerminal(driver, candidate, policy, decision.Attempt),
                         candidate.SlotIndex);
@@ -1230,6 +1245,138 @@ internal sealed class ConductorBatchLoop
         }
 
         return results;
+    }
+
+    private static bool MarkParallelAcceptanceStarted(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorParallelAcceptanceAttempt attempt,
+        int tick)
+    {
+        if (goal.Status != GoalStatus.Verified)
+        {
+            return false;
+        }
+
+        return kernel.BeginGoalAcceptanceVerification(
+            goal.Id,
+            $"Batch loop tick {tick}: acceptance gate record {attempt.AttemptId} is running in background; goal entered Verifying.");
+    }
+
+    private static void ReconcileParallelAcceptanceTerminalState(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorParallelAcceptanceRunResult run,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
+        if (goal.Status != GoalStatus.Verifying)
+        {
+            return;
+        }
+
+        var disposition = AcceptanceRunDisposition(run);
+        if (IsPassingAcceptanceRun(run))
+        {
+            kernel.ReconcileGoalAcceptanceVerified(
+                goal.Id,
+                $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal returned to Verified for deterministic landing classification.");
+            return;
+        }
+
+        if (IsRetryableAcceptanceRun(run))
+        {
+            return;
+        }
+
+        kernel.ReconcileGoalAcceptanceFailed(
+            goal.Id,
+            BuildFailedAcceptanceChecks(run, attempt),
+            $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal moved to AcceptanceFailed.",
+            run.Candidate.BranchHeadSha ?? attempt.BranchHeadSha,
+            run.Candidate.MainHeadSha ?? attempt.MainHeadSha);
+    }
+
+    private static void ReconcileParallelAcceptanceTerminalState(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
+        if (goal.Status != GoalStatus.Verifying)
+        {
+            return;
+        }
+
+        if (IsRetryableTerminalAttempt(attempt))
+        {
+            return;
+        }
+
+        // Terminal-without-run outcomes are process/artifact infrastructure failures, not positive
+        // acceptance-test failures. The caller surfaces the over-budget case as an operator escalation.
+        return;
+    }
+
+    private static bool IsPassingAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
+        run.Exception is null &&
+        (run.EarlyResult is not null
+            ? !run.EarlyResult.WasEscalated
+            : run.Acceptance is { Passed: true });
+
+    private static bool IsRetryableAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
+        run.EarlyResult is not null ||
+        run.Exception is DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException;
+
+    private static bool IsRetryableTerminalAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
+            or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
+            or ConductorParallelAcceptanceAttemptOutcome.Cancelled ||
+        ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(attempt) &&
+            attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap;
+
+    private static IReadOnlyList<string> BuildFailedAcceptanceChecks(
+        ConductorParallelAcceptanceRunResult run,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (run.Acceptance is { } acceptance)
+        {
+            var checks = acceptance.FailedChecks is { Count: > 0 }
+                ? acceptance.FailedChecks
+                : acceptance.RequiredUnmetCriteria.Select(criterion => criterion.Name).ToArray();
+            if (checks.Count > 0)
+            {
+                return checks;
+            }
+        }
+
+        if (run.Exception is not null)
+        {
+            return [$"background-acceptance-fault: {Sanitize(run.Exception.Message)}"];
+        }
+
+        if (run.EarlyOutcome is not null)
+        {
+            return [$"{run.EarlyOutcome.Kind}: {Sanitize(run.EarlyOutcome.Detail)}"];
+        }
+
+        return [AcceptanceAttemptFailureCheck(attempt)];
+    }
+
+    private static string AcceptanceAttemptFailureCheck(ConductorParallelAcceptanceAttempt attempt) =>
+        $"background-acceptance-{AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {Sanitize(attempt.Detail ?? attempt.AttemptId)}";
+
+    private static void EnsureParallelAcceptanceTerminalIsVerifying(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (goal.Status == GoalStatus.Verified)
+        {
+            kernel.BeginGoalAcceptanceVerification(
+                goal.Id,
+                $"Batch loop observed terminal background acceptance gate {attempt.AttemptId}; goal entered Verifying before terminal reconciliation.");
+        }
     }
 
     private static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
@@ -1660,7 +1807,7 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            if (IsPreWalkExcludedGoal(goal) || goal.Status is not (GoalStatus.Verified or GoalStatus.Completed))
+            if (IsPreWalkExcludedGoal(goal) || goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed))
             {
                 continue;
             }
@@ -1997,7 +2144,7 @@ internal sealed class ConductorBatchLoop
             return false;
         }
 
-        if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
+        if (goal.Status is GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed)
         {
             try
             {
@@ -2033,7 +2180,7 @@ internal sealed class ConductorBatchLoop
 
             if (evt.Kind == ProgressKind.GoalPolicyDecision
                 && evt.Message.Contains("escalated at Verified", StringComparison.OrdinalIgnoreCase)
-                && evt.Message.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase))
+                && IsPersistedVerifiedAcceptanceEscalationMessage(evt.Message))
             {
                 return true;
             }
@@ -2041,6 +2188,10 @@ internal sealed class ConductorBatchLoop
 
         return false;
     }
+
+    private static bool IsPersistedVerifiedAcceptanceEscalationMessage(string message) =>
+        message.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("background acceptance", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
     {

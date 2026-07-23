@@ -1542,10 +1542,24 @@ public sealed class DispatchProcessHostTests
         var exitPath = Path.Combine(logs, $"{label}.exit.txt");
         var heartbeatPath = Path.Combine(logs, $"{label}.heartbeat.json");
         var parametersPath = Path.Combine(logs, $"{label}.dispatch.json");
+        var prepRecordPath = Path.Combine(logs, $"{label}.prep.json");
+        var prepHeartbeatPath = Path.Combine(logs, $"{label}.prep.heartbeat.json");
+        var prepExitPath = Path.Combine(logs, $"{label}.prep.exit.txt");
         var markerPath = Path.Combine(worktree, $"{label}.worker-started.txt");
         var command =
             $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(markerPath)}' -Value 'worker-first-output'; " +
             "Write-Output worker-first-output";
+        DispatchProcessHost.WritePrepRecord(prepRecordPath, new DispatchProcessHost.DispatchPrepRecord(
+            DispatchProcessHost.PrepDispatchKind,
+            "goal-prep-record",
+            "task-prep-record",
+            worktree,
+            prepHeartbeatPath,
+            prepExitPath,
+            DateTimeOffset.UtcNow,
+            WorkerSandboxProvider.Codex,
+            SandboxWorktreeWritable: true,
+            CompletedAt: null));
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             command,
             worktree,
@@ -1556,7 +1570,13 @@ public sealed class DispatchProcessHostTests
             ShutdownBuildServerOnExit: false,
             DisableSharedCompilation: false,
             SandboxLowIntegrity: true,
-            WorkerSandboxProvider.Codex));
+            WorkerSandboxProvider.Codex,
+            Kind: DispatchProcessHost.WorkerDispatchKind,
+            PrepGoalId: "goal-prep-record",
+            PrepTaskId: "task-prep-record",
+            PrepRecordPath: prepRecordPath,
+            PrepHeartbeatPath: prepHeartbeatPath,
+            PrepExitCodePath: prepExitPath));
 
         var stopwatch = Stopwatch.StartNew();
         var exitCode = DispatchProcessHost.Run(parametersPath);
@@ -1564,7 +1584,27 @@ public sealed class DispatchProcessHostTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal("0", File.ReadAllText(exitPath).Trim());
+        Assert.Equal("0", File.ReadAllText(prepExitPath).Trim());
         Assert.True(File.Exists(markerPath), File.ReadAllText(stderrPath));
+        using (var workerHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath)))
+        {
+            Assert.Equal(DispatchProcessHost.WorkerDispatchKind, workerHeartbeat.RootElement.GetProperty("kind").GetString());
+        }
+
+        using (var prepRecord = JsonDocument.Parse(File.ReadAllText(prepRecordPath)))
+        {
+            Assert.Equal(DispatchProcessHost.PrepDispatchKind, prepRecord.RootElement.GetProperty("kind").GetString());
+            Assert.Equal("goal-prep-record", prepRecord.RootElement.GetProperty("goalId").GetString());
+            Assert.Equal("task-prep-record", prepRecord.RootElement.GetProperty("taskId").GetString());
+            Assert.Equal(prepHeartbeatPath, prepRecord.RootElement.GetProperty("heartbeatPath").GetString());
+            Assert.Equal(prepExitPath, prepRecord.RootElement.GetProperty("exitCodePath").GetString());
+        }
+
+        using (var prepHeartbeat = JsonDocument.Parse(File.ReadAllText(prepHeartbeatPath)))
+        {
+            Assert.Equal(DispatchProcessHost.PrepDispatchKind, prepHeartbeat.RootElement.GetProperty("kind").GetString());
+            Assert.NotEqual(heartbeatPath, prepHeartbeatPath);
+        }
 
         var terminalPrepEvent = ReadSandboxPrepEvents(stderrPath)
             .LastOrDefault(evt =>

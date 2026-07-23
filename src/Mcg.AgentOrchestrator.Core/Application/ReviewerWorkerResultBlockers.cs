@@ -241,13 +241,11 @@ public static class WorkerResultBlockers
 
     private static IEnumerable<string> EnumerateWorkerResultLines(TaskVerificationRecord verification)
     {
-        var combined = CombineOutputWithArtifacts(verification);
-        var lines = combined.Replace("\r\n", "\n").Split('\n');
         List<string>? latestBlock = null;
         var currentBlock = new List<string>();
         var inBlock = false;
 
-        foreach (var rawLine in lines)
+        foreach (var rawLine in EnumerateEvidenceLines(verification))
         {
             var line = NormalizeWorkerResultLine(rawLine);
             if (IsWorkerResultOpener(line))
@@ -495,37 +493,91 @@ public static class WorkerResultBlockers
             value.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string CombineOutputWithArtifacts(TaskVerificationRecord verification)
+    private static IEnumerable<string> EnumerateEvidenceLines(TaskVerificationRecord verification)
     {
-        var builder = new System.Text.StringBuilder()
-            .AppendLine(verification.StandardOutput)
-            .AppendLine(verification.StandardError);
+        foreach (var line in SplitRetainedLines(verification.StandardOutput))
+        {
+            yield return line;
+        }
 
-        AppendArtifactText(builder, verification.StandardOutputPath);
-        AppendArtifactText(builder, verification.StandardErrorPath);
-        return builder.ToString();
+        foreach (var line in SplitRetainedLines(verification.StandardError))
+        {
+            yield return line;
+        }
+
+        foreach (var line in ReadArtifactLines(verification.StandardOutputPath))
+        {
+            yield return line;
+        }
+
+        foreach (var line in ReadArtifactLines(verification.StandardErrorPath))
+        {
+            yield return line;
+        }
     }
 
-    private static void AppendArtifactText(System.Text.StringBuilder builder, string? path)
+    private static IEnumerable<string> SplitRetainedLines(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            yield break;
+        }
+
+        foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            yield return line;
+        }
+    }
+
+    private static IEnumerable<string> ReadArtifactLines(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            return;
+            yield break;
         }
 
+        StreamReader reader;
         try
         {
-            var text = File.ReadAllText(path);
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                builder.AppendLine(text);
-            }
+            reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         }
         catch (IOException)
         {
+            yield break;
         }
         catch (UnauthorizedAccessException)
         {
+            yield break;
+        }
+
+        using (reader)
+        {
+            while (true)
+            {
+                string? line;
+                try
+                {
+                    line = reader.ReadLine();
+                }
+                catch (IOException)
+                {
+                    yield break;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    yield break;
+                }
+
+                if (line is null)
+                {
+                    yield break;
+                }
+
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    yield return line;
+                }
+            }
         }
     }
 

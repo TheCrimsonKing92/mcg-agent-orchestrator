@@ -151,7 +151,8 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput)
+        var humanInputQuestion = verification.HumanInputQuestion
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput)
             ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardError);
         if (humanInputQuestion is not null)
         {

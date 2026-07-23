@@ -181,6 +181,8 @@ public sealed class ConductorBatchLoopTests
             Assert.True(startClock.Elapsed < TimeSpan.FromSeconds(1), $"background acceptance start tick took {startClock.Elapsed}.");
             Assert.Equal(0, startSummary.Advanced);
             Assert.Equal(2, startSummary.Held);
+            Assert.Equal(GoalStatus.Verifying, goalA.Status);
+            Assert.Equal(GoalStatus.Verifying, goalB.Status);
             Assert.True(bothStarted.Wait(TimeSpan.FromSeconds(5)));
             release.Set();
             Assert.True(bothFinished.Wait(TimeSpan.FromSeconds(5)));
@@ -213,7 +215,9 @@ public sealed class ConductorBatchLoopTests
                 attempt =>
                 {
                     Assert.True(attempt.OwnerProcessId > 0);
+                    Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, attempt.Kind);
                     using var heartbeat = JsonDocument.Parse(File.ReadAllText(attempt.HeartbeatPath));
+                    Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, heartbeat.RootElement.GetProperty("kind").GetString());
                     Assert.Equal(attempt.OwnerProcessId, heartbeat.RootElement.GetProperty("childPid").GetInt32());
                     Assert.Contains(
                         heartbeat.RootElement.GetProperty("ownedPids").EnumerateArray(),
@@ -771,19 +775,110 @@ public sealed class ConductorBatchLoopTests
     {
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/Dead.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var now = new DateTimeOffset(2026, 7, 23, 4, 0, 0, TimeSpan.Zero);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
+            utcNow: () => now,
             isProcessAlive: _ => false,
+            recentHeartbeatGrace: TimeSpan.FromMinutes(5),
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7010));
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Dead.cs"], "branch", "main");
 
         try
         {
             coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            var recent = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            now = now.AddMinutes(6);
             var terminal = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
 
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, recent.Kind);
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun, terminal.Kind);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.ProcessDied, terminal.Attempt.Outcome);
+            Assert.Equal(1, terminal.Attempt.TransientFailureCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_process_died_acceptance_relaunches_without_exposing_verified")]
+    public void BatchLoopProcessDiedAcceptanceRelaunchesWithoutExposingVerified()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadRelaunch.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var now = new DateTimeOffset(2026, 7, 23, 4, 0, 0, TimeSpan.Zero);
+        var launches = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            utcNow: () => now,
+            isProcessAlive: _ => false,
+            recentHeartbeatGrace: TimeSpan.FromMinutes(5),
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(8100 + ++launches));
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/DeadRelaunch.cs"],
+            parallelAcceptanceAttemptCoordinator: coordinator);
+
+        try
+        {
+            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(1, launches);
+
+            now = now.AddMinutes(6);
+            var staleSummary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(1, staleSummary.Held);
+            Assert.Equal(1, launches);
+
+            var relaunchSummary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(1, relaunchSummary.Held);
+            Assert.Equal(2, launches);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_running_attempt_writes_periodic_heartbeat")]
+    public void ParallelAcceptanceRunningAttemptWritesPeriodicHeartbeat()
+    {
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/Heartbeat.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        using var secondRunningHeartbeat = new ManualResetEventSlim(false);
+        var runningHeartbeats = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            heartbeatInterval: TimeSpan.FromMilliseconds(1),
+            heartbeatWritten: (_, state) =>
+            {
+                if (state == "running" && Interlocked.Increment(ref runningHeartbeats) >= 2)
+                {
+                    secondRunningHeartbeat.Set();
+                }
+            });
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Heartbeat.cs"], "branch", "main");
+
+        try
+        {
+            var completed = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, attemptPolicy, _, _) =>
+                {
+                    Assert.True(secondRunningHeartbeat.Wait(TimeSpan.FromSeconds(5)));
+                    return PassingRun(attemptCandidate, attemptPolicy);
+                });
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+            Assert.True(runningHeartbeats >= 2);
+            Assert.True(File.Exists(completed.Attempt.HeartbeatPath));
         }
         finally
         {
@@ -875,6 +970,54 @@ public sealed class ConductorBatchLoopTests
         finally
         {
             TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_owned_process_start_info_redirects_stdio")]
+    public void ParallelAcceptanceOwnedProcessStartInfoRedirectsStdio()
+    {
+        var root = CreateTempDirectory("mcg-conductor-acceptance-start-info");
+        try
+        {
+            var metadataPath = Path.Combine(root, "attempt.json");
+            var attempt = new ConductorParallelAcceptanceAttempt(
+                "attempt-1",
+                GoalId.New().Value,
+                "attempt1",
+                0,
+                "branch",
+                "main",
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                Environment.ProcessId,
+                ConductorParallelAcceptanceAttemptOutcome.Running,
+                Path.Combine(root, "attempt.out.log"),
+                Path.Combine(root, "attempt.err.log"),
+                Path.Combine(root, "attempt.exit.txt"),
+                Path.Combine(root, "attempt.heartbeat.json"),
+                Path.Combine(root, "attempt.result.json"),
+                metadataPath,
+                ExecutionDirectory: root);
+
+            var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
+                attempt,
+                "dotnet",
+                ["Mcg.AgentOrchestrator.App.dll"]);
+
+            Assert.False(startInfo.UseShellExecute);
+            Assert.True(startInfo.CreateNoWindow);
+            Assert.True(startInfo.RedirectStandardInput);
+            Assert.True(startInfo.RedirectStandardOutput);
+            Assert.True(startInfo.RedirectStandardError);
+            Assert.Equal(root, startInfo.WorkingDirectory);
+            Assert.Equal(root, startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable]);
+            Assert.Equal(
+                ["Mcg.AgentOrchestrator.App.dll", ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName, metadataPath],
+                startInfo.ArgumentList.ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
         }
     }
 
@@ -982,9 +1125,14 @@ public sealed class ConductorBatchLoopTests
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/TransientLaunch.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var escalations = new List<string>();
+        var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
-            launchOwnedProcess: _ => throw new IOException("The process cannot access the file 'attempt.out.log' because it is being used by another process"));
+            launchOwnedProcess: _ =>
+            {
+                launches++;
+                throw new IOException("The process cannot access the file 'attempt.out.log' because it is being used by another process");
+            });
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
@@ -1009,6 +1157,21 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
             Assert.Single(escalations);
             Assert.Contains("background acceptance launch-failed", escalations.Single(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, launches);
+
+            var restartSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, restartSummary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, launches);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
         }
         finally
         {
@@ -1102,9 +1265,51 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(1, attempts);
         Assert.Equal(1, summary.Advanced);
+        Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Null(goal.LatestAcceptanceFailure);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
         Assert.Contains("WorkerSandboxPreparer_second_round_reuses_prep_receipt", retryMessage!, StringComparison.Ordinal);
         Assert.Contains("acceptance failed checks", retryMessage!, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_failed_parallel_acceptance_artifact_reconciles_goal_to_AcceptanceFailed")]
+    public void BatchLoopFailedParallelAcceptanceArtifactReconcilesGoalToAcceptanceFailed()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/FailedGate.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 0 };
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(
+                false,
+                [],
+                "Acceptance failed.",
+                ["FailedGateTests.Fails"]),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/FailedGate.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                policy,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Contains("FailedGateTests.Fails", goal.LatestAcceptanceFailure!.FailedChecks);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
     }
 
     [Xunit.Fact(DisplayName = "ParallelAcceptance_fast_child_terminal_outcome_survives_parent_pid_update")]

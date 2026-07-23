@@ -376,6 +376,45 @@ public sealed class DispatchOutcomeClassifyTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Classify reads WORKER_RESULT fields from middle of large stdout artifact")]
+    public void ClassifyReadsWorkerResultFieldsFromMiddleOfLargeStdoutArtifact()
+    {
+        var stdoutPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                stdoutPath,
+                new string('A', VerificationTextBounds.PreviewHeadChars) +
+                Environment.NewLine +
+                WorkerResultStdoutWithCommit("pass - focused checks passed", "ce5e35c1") +
+                Environment.NewLine +
+                new string('Z', VerificationTextBounds.PreviewTailChars));
+            var retainedStdout = VerificationTextBounds.BoundText(File.ReadAllText(stdoutPath), stdoutPath);
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                "C:\\repo",
+                0,
+                retainedStdout,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath,
+                WorkerResultPresent: true,
+                HeartbeatStandardOutputBytes: 0);
+
+            var outcome = DispatchFailureClassifier.Classify(
+                RetryTaskWithBaseCommit("ce5e35c1"),
+                verification);
+
+            Xunit.Assert.DoesNotContain("WORKER_RESULT", verification.StandardOutput, StringComparison.Ordinal);
+            Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+            Xunit.Assert.Contains("rule=verified-no-new-commit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(stdoutPath);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "Classify completes historical committed worker result variants")]
     [Xunit.InlineData(-1, AgentRole.Developer, true, false, "manufactured-exit-minus-one")]
     [Xunit.InlineData(0, AgentRole.Tester, true, false, "tester-with-commit")]
@@ -789,6 +828,49 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.CommitAndVerify, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Classify reads sandbox commit evidence from middle of large log artifacts")]
+    public void ClassifyReadsSandboxCommitEvidenceFromMiddleOfLargeLogArtifacts()
+    {
+        var stdoutPath = Path.GetTempFileName();
+        var stderrPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                stdoutPath,
+                new string('A', VerificationTextBounds.PreviewHeadChars) +
+                Environment.NewLine +
+                "WORKER_RESULT:\nfiles: src/Foo.cs\ncommands: dotnet build\ntests: Passed: 3\nEND_WORKER_RESULT\n" +
+                new string('Z', VerificationTextBounds.PreviewTailChars));
+            File.WriteAllText(
+                stderrPath,
+                new string('E', VerificationTextBounds.PreviewHeadChars) +
+                Environment.NewLine +
+                "fatal: Unable to create '.git/index.lock': Permission denied\n" +
+                new string('R', VerificationTextBounds.PreviewTailChars));
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                "C:\\repo",
+                1,
+                VerificationTextBounds.BoundText(File.ReadAllText(stdoutPath), stdoutPath),
+                VerificationTextBounds.BoundText(File.ReadAllText(stderrPath), stderrPath),
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath,
+                StandardErrorPath: stderrPath);
+
+            var outcome = DispatchFailureClassifier.Classify(SimpleTask(), verification);
+
+            Xunit.Assert.DoesNotContain("WORKER_RESULT", verification.StandardOutput, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("index.lock", verification.StandardError, StringComparison.Ordinal);
+            Xunit.Assert.Equal(DispatchOutcomeKind.SandboxCommitBlocked, outcome.Kind);
+            Xunit.Assert.Equal(RecoveryRecommendation.CommitAndVerify, outcome.RecoveryRecommendation);
+        }
+        finally
+        {
+            File.Delete(stdoutPath);
+            File.Delete(stderrPath);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Classify returns ProviderNeutralProgressStall for stall timeout output")]
     public void ClassifyProviderNeutralProgressStall()
     {
@@ -834,6 +916,44 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify reads log path for verification evidence outside retained excerpt")]
+    public void ClassifyReadsLogPathForVerificationEvidenceOutsideRetainedExcerpt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-classify-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var stdoutPath = Path.Combine(root, "out.log");
+            var fullStdout =
+                new string('A', VerificationTextBounds.PreviewHeadChars) +
+                "\nTest run successful: 12 tests passed\n" +
+                new string('Z', VerificationTextBounds.PreviewTailChars);
+            File.WriteAllText(stdoutPath, fullStdout);
+            var retainedStdout = VerificationTextBounds.BoundText(fullStdout, stdoutPath);
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                root,
+                0,
+                retainedStdout,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath);
+
+            var outcome = DispatchFailureClassifier.Classify(SimpleTask(AgentRole.Reviewer), verification);
+
+            Xunit.Assert.DoesNotContain("Test run successful", verification.StandardOutput, StringComparison.Ordinal);
+            Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+            Xunit.Assert.Contains("Test run successful", outcome.EvidenceSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "Classify returns DirtyWorktreeRecoverable for dirty guard developer task")]

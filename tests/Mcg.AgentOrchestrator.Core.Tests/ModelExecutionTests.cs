@@ -795,7 +795,14 @@ public sealed class ModelExecutionTests
     var agents = DefaultAgents();
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-    var provider = new FakeModelProvider("OpenAI", "HUMAN_INPUT: Which branch should I modify?");
+    var output = new string('A', VerificationTextBounds.PreviewHeadChars) +
+        "\n" +
+        new string('M', 2_000) +
+        "\nHUMAN_INPUT: Which branch should I modify?\n" +
+        new string('N', 2_000) +
+        "\n" +
+        new string('Z', VerificationTextBounds.PreviewTailChars);
+    var provider = new FakeModelProvider("OpenAI", output);
     var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
 
     var result = await runner.RunAsync(goal.Id, task.Id);
@@ -805,7 +812,8 @@ public sealed class ModelExecutionTests
     Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
     Assert.Equal(task.Id, request.TaskId);
     Assert.Equal("Which branch should I modify?", request.Question);
-    Assert.Equal("HUMAN_INPUT: Which branch should I modify?", result.Execution.Output);
+    Assert.True(result.Execution.Output.Length <= VerificationTextBounds.MaxRetainedChars);
+    Assert.DoesNotContain("HUMAN_INPUT:", result.Execution.Output, StringComparison.Ordinal);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));

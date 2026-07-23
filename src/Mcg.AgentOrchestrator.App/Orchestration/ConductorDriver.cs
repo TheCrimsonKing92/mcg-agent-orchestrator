@@ -95,7 +95,7 @@ internal sealed class ConductorDriver
 
         _getFacts = goal =>
         {
-            if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
+            if (goal.Status is GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed)
             {
                 RefreshJournal(goal.Id);
             }
@@ -114,7 +114,11 @@ internal sealed class ConductorDriver
         _getRunningPaidWorkerCount = () =>
             kernel.Goals.Sum(g => g.Tasks.Count(t => t.LastProcess is { IsRunning: true }));
         _hasGateReadyGoal = () =>
-            kernel.Goals.Any(g => GoalLifecycle.ResolveState(g, _getFacts(g)) == GoalLifecycleState.Verified);
+            kernel.Goals.Any(g =>
+            {
+                var state = GoalLifecycle.ResolveState(g, _getFacts(g));
+                return state is GoalLifecycleState.Verifying or GoalLifecycleState.Verified;
+            });
 
         _createWorkspace = goal =>
         {
@@ -836,6 +840,8 @@ internal sealed class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, "Worker process running; auto-reconcile will handle completion")),
             GoalLifecycleState.AwaitingVerification => MakeResult(goalId, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, "All tasks done; awaiting task verification gates — auto-reconcile will advance goal to Verified")),
+            GoalLifecycleState.Verifying => MakeResult(goalId, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(state, "Acceptance gate running in background; reconciliation will handle terminal artifact")),
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
@@ -1170,7 +1176,7 @@ internal sealed class ConductorDriver
             return null;
         }
 
-        if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) != GoalLifecycleState.Verified)
+        if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying))
         {
             return null;
         }
@@ -1284,7 +1290,7 @@ internal sealed class ConductorDriver
                 .Goals
                 .FirstOrDefault(goal => goal.Id == goalId);
             return latest is null ||
-                latest.Status is GoalStatus.Parked or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
+                latest.Status is GoalStatus.Parked or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
         }
         catch
         {

@@ -2,7 +2,9 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskSpec
 {
-    private readonly List<TaskVerificationRecord> _verificationHistory = [];
+    internal const int VerificationHistoryLimit = 20;
+
+    private readonly CappedVerificationHistory _verificationHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -441,5 +443,17 @@ public sealed class TaskSpec
         }
 
         return value.Trim();
+    }
+
+    private sealed class CappedVerificationHistory : List<TaskVerificationRecord>
+    {
+        public new void Add(TaskVerificationRecord item)
+        {
+            base.Add(item);
+            if (Count > VerificationHistoryLimit)
+            {
+                RemoveRange(0, Count - VerificationHistoryLimit);
+            }
+        }
     }
 }

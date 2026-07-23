@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
@@ -55,7 +56,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     int TransientFailureCount = 0,
     IReadOnlyList<string>? TestResultPaths = null,
     IReadOnlyList<string>? LeaseReceipts = null,
-    int ReplayedLeaseReceiptCount = 0)
+    int ReplayedLeaseReceiptCount = 0,
+    string Kind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -100,10 +102,13 @@ internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAccepta
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
+    internal const string GateDispatchKind = "gate";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
+    private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
     private const int RetainedAttemptCountPerGoal = 20;
+    private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
 
     private readonly string _rootDirectory;
     private readonly string? _executionDirectory;
@@ -112,6 +117,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult> _launchOwnedProcess;
     private readonly bool _runInline;
     private readonly ConductorParallelAcceptanceTryRunPreSlot? _tryRunPreSlot;
+    private readonly TimeSpan _heartbeatInterval;
+    private readonly TimeSpan _recentHeartbeatGrace;
+    private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -120,7 +128,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Func<int, bool>? isProcessAlive = null,
         Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult>? launchOwnedProcess = null,
         bool runInline = false,
-        ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null)
+        ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null,
+        TimeSpan? heartbeatInterval = null,
+        TimeSpan? recentHeartbeatGrace = null,
+        Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null)
     {
         _rootDirectory = rootDirectory;
         _executionDirectory = executionDirectory;
@@ -129,6 +140,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _launchOwnedProcess = launchOwnedProcess ?? LaunchExternalOwnedProcess;
         _runInline = runInline;
         _tryRunPreSlot = tryRunPreSlot;
+        _heartbeatInterval = heartbeatInterval ?? DefaultHeartbeatInterval;
+        _recentHeartbeatGrace = recentHeartbeatGrace ?? DispatchRecoveryPolicy.DefaultRecentHeartbeatGrace;
+        _heartbeatWritten = heartbeatWritten;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -401,9 +415,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunResult? run = null;
         (ConductorParallelAcceptanceAttemptOutcome Outcome, string Detail, bool Transient)? terminalWithoutResult = null;
         string? stderrDetail = null;
+        using var heartbeatTimer = new Timer(
+            _ => WriteHeartbeat(attempt, "running"),
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
         try
         {
             WriteHeartbeat(attempt, "running");
+            heartbeatTimer.Change(_heartbeatInterval, _heartbeatInterval);
             run = _tryRunPreSlot?.Invoke(candidate, policy);
             if (run is null)
             {
@@ -672,11 +692,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(latest);
             }
 
-            var dead = attempt with
+            var effectiveAttempt = latest ?? attempt;
+            if (!IsHeartbeatStale(effectiveAttempt))
+            {
+                return null;
+            }
+
+            var dead = effectiveAttempt with
             {
                 Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
                 CompletedAt = _utcNow(),
-                Detail = "owner process was not alive and no terminal result artifact existed"
+                Detail = "owner process was not alive, heartbeat was stale, and no terminal result artifact existed",
+                TransientFailureCount = CountConsecutiveTransientFailures(effectiveAttempt) + 1
             };
             Persist(dead);
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(dead);
@@ -949,6 +976,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var now = _utcNow();
         var payload = new
         {
+            kind = string.IsNullOrWhiteSpace(attempt.Kind) ? GateDispatchKind : attempt.Kind,
             pid = Environment.ProcessId,
             childPid = attempt.OwnerProcessId > 0 ? attempt.OwnerProcessId : (int?)null,
             ownedPids = attempt.OwnerProcessId > 0 ? new[] { attempt.OwnerProcessId } : Array.Empty<int>(),
@@ -967,6 +995,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var tmp = TemporarySiblingPath(attempt.HeartbeatPath);
             File.WriteAllText(tmp, JsonSerializer.Serialize(payload, JsonOptions));
             File.Move(tmp, attempt.HeartbeatPath, overwrite: true);
+            _heartbeatWritten?.Invoke(attempt, state);
         }
         catch
         {
@@ -977,35 +1006,88 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        if (string.IsNullOrWhiteSpace(launch.Attempt.ExecutionDirectory))
+        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt);
+        var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+        var processId = process.Id;
+        DetachOwnedProcessStreams(process, launch.Attempt);
+        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId);
+    }
+
+    internal static ProcessStartInfo BuildOwnedProcessStartInfo(
+        ConductorParallelAcceptanceAttempt attempt,
+        string? executable = null,
+        IReadOnlyList<string>? commandLineArgs = null)
+    {
+        if (string.IsNullOrWhiteSpace(attempt.ExecutionDirectory))
         {
             throw new InvalidOperationException("acceptance attempt execution directory was not recorded");
         }
 
-        var commandLineArgs = Environment.GetCommandLineArgs();
-        var executable = Environment.ProcessPath ?? "dotnet";
+        executable ??= Environment.ProcessPath ?? "dotnet";
+        commandLineArgs ??= Environment.GetCommandLineArgs();
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = launch.Attempt.ExecutionDirectory
+            WorkingDirectory = attempt.ExecutionDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
         if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-            commandLineArgs.Length > 0)
+            commandLineArgs.Count > 0)
         {
             startInfo.ArgumentList.Add(commandLineArgs[0]);
         }
 
         startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
-        startInfo.ArgumentList.Add(launch.Attempt.MetadataPath);
-        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = launch.Attempt.ExecutionDirectory;
+        startInfo.ArgumentList.Add(attempt.MetadataPath);
+        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = attempt.ExecutionDirectory;
+        return startInfo;
+    }
 
-        var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+    private static void DetachOwnedProcessStreams(Process process, ConductorParallelAcceptanceAttempt attempt)
+    {
         var processId = process.Id;
-        process.Dispose();
-        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId);
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                TryAppend(attempt.StdoutPath, e.Data + Environment.NewLine);
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                TryAppend(attempt.StderrPath, e.Data + Environment.NewLine);
+            }
+        };
+        process.Exited += (_, _) =>
+        {
+            if (OwnedProcessDrains.TryRemove(processId, out var completed))
+            {
+                completed.Dispose();
+            }
+        };
+        process.EnableRaisingEvents = true;
+        OwnedProcessDrains[processId] = process;
+
+        try { process.StandardInput.Close(); } catch { }
+        try { process.BeginOutputReadLine(); } catch { }
+        try { process.BeginErrorReadLine(); } catch { }
+        try
+        {
+            if (process.HasExited && OwnedProcessDrains.TryRemove(processId, out var completed))
+            {
+                completed.Dispose();
+            }
+        }
+        catch
+        {
+        }
     }
 
     private static void RedirectConsole(ConductorParallelAcceptanceAttempt attempt)
@@ -1222,7 +1304,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static void WriteResult(string path, ConductorParallelAcceptanceRunArtifact artifact)
     {
         var tmp = TemporarySiblingPath(path);
-        File.WriteAllText(tmp, JsonSerializer.Serialize(artifact, JsonOptions));
+        WriteAllTextDurable(tmp, JsonSerializer.Serialize(artifact, JsonOptions));
         File.Move(tmp, path, overwrite: true);
     }
 
@@ -1284,7 +1366,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         for (var retry = 0; ; retry++)
         {
             var tmp = TemporarySiblingPath(attempt.MetadataPath);
-            File.WriteAllText(tmp, payload);
+            WriteAllTextDurable(tmp, payload);
             try
             {
                 File.Move(tmp, attempt.MetadataPath, overwrite: true);
@@ -1373,7 +1455,46 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     internal static bool IsTransientTerminalFailure(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.TransientFailureCount > 0 &&
         (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed ||
-            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts);
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts ||
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.ProcessDied);
+
+    private bool IsHeartbeatStale(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var observedAt = ReadHeartbeatObservedAt(attempt.HeartbeatPath) ?? attempt.LastHeartbeatAt;
+        return _utcNow() - observedAt >= _recentHeartbeatGrace;
+    }
+
+    private static DateTimeOffset? ReadHeartbeatObservedAt(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(ReadAllTextSharedWithRetry(path));
+            return document.RootElement.TryGetProperty("lastObservedAt", out var observedAt) &&
+                observedAt.ValueKind == JsonValueKind.String &&
+                DateTimeOffset.TryParse(observedAt.GetString(), out var parsed)
+                    ? parsed
+                    : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteAllTextDurable(string path, string payload)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+        using var writer = new StreamWriter(stream);
+        writer.Write(payload);
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
+    }
 
     private static bool IsTransientAttemptIo(Exception ex) =>
         ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException &&
@@ -1414,4 +1535,5 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? BranchHeadSha,
     string? MainHeadSha,
     string? EarlyOutcomeKind,
-    string? EarlyOutcomeDetail);
+    string? EarlyOutcomeDetail,
+    string DispatchKind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind);
