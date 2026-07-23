@@ -63,7 +63,9 @@ public static class StatusProjector
             }
 
             if (goal.Status == GoalStatus.WaitingForHuman ||
+                goal.Status == GoalStatus.Verifying ||
                 goal.Status == GoalStatus.Verified ||
+                goal.Status == GoalStatus.AcceptanceFailed ||
                 goal.Status == GoalStatus.Completed ||
                 item.PercentComplete >= 80 ||
                 item.Stage.Equals("accepting", StringComparison.Ordinal))
@@ -127,6 +129,10 @@ public static class StatusProjector
     {
         if (goal.LifecycleState is GoalLifecycleState.Merged or GoalLifecycleState.Recorded)
             return "cleanup";
+        if (goal.Status == GoalStatus.Verifying)
+            return "verifying";
+        if (goal.Status == GoalStatus.AcceptanceFailed)
+            return "acceptance failed";
         if (goal.Status is GoalStatus.Verified or GoalStatus.Completed)
             return "accepting";
         if (goal.Status == GoalStatus.WaitingForHuman ||
@@ -152,6 +158,10 @@ public static class StatusProjector
             return "needs recovery";
         if (goal.Tasks.Any(task => task.Status == WorkTaskStatus.Running))
             return "running";
+        if (goal.Status == GoalStatus.Verifying)
+            return "acceptance gate running";
+        if (goal.Status == GoalStatus.AcceptanceFailed)
+            return "acceptance failed";
         if (goal.Tasks.Any(task => task.Status == WorkTaskStatus.Assigned))
             return "ready";
         if (goal.LifecycleState == GoalLifecycleState.CleanedUp)

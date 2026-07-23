@@ -230,7 +230,7 @@ public sealed partial class AgentOrchestratorKernel
     public bool ReconcileGoalVerificationStatus(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
-        if (goal.Status is GoalStatus.Verified or GoalStatus.Parked or GoalStatus.WaitingForHuman)
+        if (goal.Status is GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Parked or GoalStatus.WaitingForHuman)
         {
             return false;
         }
@@ -256,6 +256,63 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
+    public bool BeginGoalAcceptanceVerification(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status == GoalStatus.Verifying)
+        {
+            return false;
+        }
+
+        if (goal.Status != GoalStatus.Verified)
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verified goals can start acceptance verification.");
+        }
+
+        if (!goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed) ||
+            !goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' cannot enter Verifying until all task verification gates have passed.");
+        }
+
+        goal.SetStatus(GoalStatus.Verifying);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
+    public bool ReconcileGoalAcceptanceVerified(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.Verifying)
+        {
+            return false;
+        }
+
+        goal.ClearAcceptanceFailure();
+        goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
+    public bool ReconcileGoalAcceptanceFailed(
+        GoalId goalId,
+        IReadOnlyList<string> failedChecks,
+        string reason,
+        string? branchHeadSha = null,
+        string? mainHeadSha = null)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.Verifying)
+        {
+            return false;
+        }
+
+        goal.RecordAcceptanceFailure(failedChecks, _clock.UtcNow, branchHeadSha, mainHeadSha);
+        goal.SetStatus(GoalStatus.AcceptanceFailed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
     }

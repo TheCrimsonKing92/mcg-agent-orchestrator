@@ -181,6 +181,8 @@ public sealed class ConductorBatchLoopTests
             Assert.True(startClock.Elapsed < TimeSpan.FromSeconds(1), $"background acceptance start tick took {startClock.Elapsed}.");
             Assert.Equal(0, startSummary.Advanced);
             Assert.Equal(2, startSummary.Held);
+            Assert.Equal(GoalStatus.Verifying, goalA.Status);
+            Assert.Equal(GoalStatus.Verifying, goalB.Status);
             Assert.True(bothStarted.Wait(TimeSpan.FromSeconds(5)));
             release.Set();
             Assert.True(bothFinished.Wait(TimeSpan.FromSeconds(5)));
@@ -213,7 +215,9 @@ public sealed class ConductorBatchLoopTests
                 attempt =>
                 {
                     Assert.True(attempt.OwnerProcessId > 0);
+                    Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, attempt.Kind);
                     using var heartbeat = JsonDocument.Parse(File.ReadAllText(attempt.HeartbeatPath));
+                    Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, heartbeat.RootElement.GetProperty("kind").GetString());
                     Assert.Equal(attempt.OwnerProcessId, heartbeat.RootElement.GetProperty("childPid").GetInt32());
                     Assert.Contains(
                         heartbeat.RootElement.GetProperty("ownedPids").EnumerateArray(),

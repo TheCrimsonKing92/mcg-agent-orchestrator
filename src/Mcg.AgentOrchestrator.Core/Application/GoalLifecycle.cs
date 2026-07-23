@@ -41,6 +41,12 @@ public static class GoalLifecycle
         if (facts.IsBlocked)
             return GoalLifecycleState.Blocked;
 
+        if (goal.Status == GoalStatus.Verifying)
+            return GoalLifecycleState.Verifying;
+
+        if (goal.Status == GoalStatus.AcceptanceFailed)
+            return GoalLifecycleState.AcceptanceFailed;
+
         // Task-level failure: goal stays Active when tasks fail, so check tasks directly
         if (goal.Tasks.Any(t => t.Status == WorkTaskStatus.Failed))
             return GoalLifecycleState.Failed;

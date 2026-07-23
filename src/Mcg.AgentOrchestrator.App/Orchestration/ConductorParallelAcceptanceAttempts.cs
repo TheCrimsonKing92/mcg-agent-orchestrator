@@ -55,7 +55,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     int TransientFailureCount = 0,
     IReadOnlyList<string>? TestResultPaths = null,
     IReadOnlyList<string>? LeaseReceipts = null,
-    int ReplayedLeaseReceiptCount = 0)
+    int ReplayedLeaseReceiptCount = 0,
+    string Kind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -100,6 +101,7 @@ internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAccepta
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
+    internal const string GateDispatchKind = "gate";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
@@ -949,6 +951,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var now = _utcNow();
         var payload = new
         {
+            kind = string.IsNullOrWhiteSpace(attempt.Kind) ? GateDispatchKind : attempt.Kind,
             pid = Environment.ProcessId,
             childPid = attempt.OwnerProcessId > 0 ? attempt.OwnerProcessId : (int?)null,
             ownedPids = attempt.OwnerProcessId > 0 ? new[] { attempt.OwnerProcessId } : Array.Empty<int>(),
@@ -1414,4 +1417,5 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? BranchHeadSha,
     string? MainHeadSha,
     string? EarlyOutcomeKind,
-    string? EarlyOutcomeDetail);
+    string? EarlyOutcomeDetail,
+    string DispatchKind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind);
