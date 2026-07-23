@@ -57,7 +57,7 @@ Findings by rule:
 - Rule b, seam every I/O boundary: 4
 - Rule c, narrowest layer: 2
 - Rule d, all-or-nothing gate pinning: 1
-- Rule e, parallel-safety declaration: 10
+- Rule e, parallel-safety declaration: 8
 - Rule f, no silent no-ops: 2
 
 Findings by risk:
