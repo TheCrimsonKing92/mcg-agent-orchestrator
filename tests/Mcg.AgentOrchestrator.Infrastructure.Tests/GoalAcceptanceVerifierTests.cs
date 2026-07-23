@@ -915,6 +915,69 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_mtp_runner_infrastructure_remainder_shard_uses_slot_executable")]
+    public async Task GoalAcceptanceVerifierMtpRunnerInfrastructureRemainderShardUsesSlotExecutable()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(args.Length >= 3 &&
+                    args[0] == "dotnet" &&
+                    args[1] == "test" &&
+                    args[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                    ? new GoalAcceptanceVerifier.CommandResult(1, "unexpected vstest fallback")
+                    : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            var shardChecks = result.Checks!
+                .Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
+                .ToArray();
+            var mtpCalls = calls
+                .Where(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                .ToArray();
+            Assert.Equal(shardChecks.Length, mtpCalls.Length);
+            Assert.Contains(mtpCalls, call => call.Contains("--filter-class") && call.Contains("CliCommandTests"));
+            Assert.Contains(mtpCalls, call =>
+                call.Contains("--filter-not-class") &&
+                call.Contains("CliCommandTests") &&
+                call.Contains("GoalAcceptanceVerifierTests"));
+            Assert.DoesNotContain(calls, call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dotnet_test_without_runner_uses_vstest")]
     public async Task GoalAcceptanceVerifierDotnetTestWithoutRunnerUsesVstest()
     {

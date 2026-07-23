@@ -1063,17 +1063,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         foreach (var lane in InfrastructureTestLanes)
         {
-            yield return new AcceptanceManifestCheck
-            {
-                Name = $"{check.Name}: {lane.Name}",
-                Type = check.Type,
-                Command = check.Command,
-                Project = check.Project,
-                Arguments = [.. check.Arguments, "--filter", lane.Filter],
-                TimeoutMinutes = check.TimeoutMinutes
-            };
+            yield return BuildInfrastructureShardCheck(check, lane);
         }
     }
+
+    private static AcceptanceManifestCheck BuildInfrastructureShardCheck(
+        AcceptanceManifestCheck check,
+        InfrastructureTestLane lane) =>
+        new()
+        {
+            Name = $"{check.Name}: {lane.Name}",
+            Type = check.Type,
+            Command = check.Command,
+            Project = check.Project,
+            Arguments = [.. check.Arguments, "--filter", lane.Filter],
+            Pattern = check.Pattern,
+            FilePath = check.FilePath,
+            TimeoutMinutes = check.TimeoutMinutes,
+            Advisory = check.Advisory,
+            Runner = check.Runner
+        };
 
     private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
