@@ -10,6 +10,7 @@
     {
       "name": "core tests",
       "type": "dotnet-test",
+      "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
       "arguments": [ "--verbosity", "minimal" ]
     },
