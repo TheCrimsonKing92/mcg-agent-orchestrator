@@ -973,6 +973,54 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_owned_process_start_info_redirects_stdio")]
+    public void ParallelAcceptanceOwnedProcessStartInfoRedirectsStdio()
+    {
+        var root = CreateTempDirectory("mcg-conductor-acceptance-start-info");
+        try
+        {
+            var metadataPath = Path.Combine(root, "attempt.json");
+            var attempt = new ConductorParallelAcceptanceAttempt(
+                "attempt-1",
+                GoalId.New().Value,
+                "attempt1",
+                0,
+                "branch",
+                "main",
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                Environment.ProcessId,
+                ConductorParallelAcceptanceAttemptOutcome.Running,
+                Path.Combine(root, "attempt.out.log"),
+                Path.Combine(root, "attempt.err.log"),
+                Path.Combine(root, "attempt.exit.txt"),
+                Path.Combine(root, "attempt.heartbeat.json"),
+                Path.Combine(root, "attempt.result.json"),
+                metadataPath,
+                ExecutionDirectory: root);
+
+            var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
+                attempt,
+                "dotnet",
+                ["Mcg.AgentOrchestrator.App.dll"]);
+
+            Assert.False(startInfo.UseShellExecute);
+            Assert.True(startInfo.CreateNoWindow);
+            Assert.True(startInfo.RedirectStandardInput);
+            Assert.True(startInfo.RedirectStandardOutput);
+            Assert.True(startInfo.RedirectStandardError);
+            Assert.Equal(root, startInfo.WorkingDirectory);
+            Assert.Equal(root, startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable]);
+            Assert.Equal(
+                ["Mcg.AgentOrchestrator.App.dll", ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName, metadataPath],
+                startInfo.ArgumentList.ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_durable_passed_attempt_survives_locked_receipt_artifact")]
     public void ParallelAcceptanceDurablePassedAttemptSurvivesLockedReceiptArtifact()
     {
@@ -1077,9 +1125,14 @@ public sealed class ConductorBatchLoopTests
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/TransientLaunch.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var escalations = new List<string>();
+        var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
-            launchOwnedProcess: _ => throw new IOException("The process cannot access the file 'attempt.out.log' because it is being used by another process"));
+            launchOwnedProcess: _ =>
+            {
+                launches++;
+                throw new IOException("The process cannot access the file 'attempt.out.log' because it is being used by another process");
+            });
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
@@ -1104,6 +1157,21 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
             Assert.Single(escalations);
             Assert.Contains("background acceptance launch-failed", escalations.Single(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, launches);
+
+            var restartSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, restartSummary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, launches);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
         }
         finally
         {

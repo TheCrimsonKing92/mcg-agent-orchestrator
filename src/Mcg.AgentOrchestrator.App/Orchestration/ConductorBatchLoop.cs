@@ -1313,12 +1313,9 @@ internal sealed class ConductorBatchLoop
             return;
         }
 
-        kernel.ReconcileGoalAcceptanceFailed(
-            goal.Id,
-            [AcceptanceAttemptFailureCheck(attempt)],
-            $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({AcceptanceAttemptOutcomeToken(attempt.Outcome)}); goal moved to AcceptanceFailed.",
-            attempt.BranchHeadSha,
-            attempt.MainHeadSha);
+        // Terminal-without-run outcomes are process/artifact infrastructure failures, not positive
+        // acceptance-test failures. The caller surfaces the over-budget case as an operator escalation.
+        return;
     }
 
     private static bool IsPassingAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
@@ -2183,7 +2180,7 @@ internal sealed class ConductorBatchLoop
 
             if (evt.Kind == ProgressKind.GoalPolicyDecision
                 && evt.Message.Contains("escalated at Verified", StringComparison.OrdinalIgnoreCase)
-                && evt.Message.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase))
+                && IsPersistedVerifiedAcceptanceEscalationMessage(evt.Message))
             {
                 return true;
             }
@@ -2191,6 +2188,10 @@ internal sealed class ConductorBatchLoop
 
         return false;
     }
+
+    private static bool IsPersistedVerifiedAcceptanceEscalationMessage(string message) =>
+        message.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("background acceptance", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
     {

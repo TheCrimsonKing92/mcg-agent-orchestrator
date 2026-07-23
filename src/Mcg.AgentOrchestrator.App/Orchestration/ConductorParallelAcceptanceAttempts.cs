@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
@@ -105,6 +106,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
+    private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
     private const int RetainedAttemptCountPerGoal = 20;
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
 
@@ -1004,35 +1006,88 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        if (string.IsNullOrWhiteSpace(launch.Attempt.ExecutionDirectory))
+        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt);
+        var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+        var processId = process.Id;
+        DetachOwnedProcessStreams(process, launch.Attempt);
+        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId);
+    }
+
+    internal static ProcessStartInfo BuildOwnedProcessStartInfo(
+        ConductorParallelAcceptanceAttempt attempt,
+        string? executable = null,
+        IReadOnlyList<string>? commandLineArgs = null)
+    {
+        if (string.IsNullOrWhiteSpace(attempt.ExecutionDirectory))
         {
             throw new InvalidOperationException("acceptance attempt execution directory was not recorded");
         }
 
-        var commandLineArgs = Environment.GetCommandLineArgs();
-        var executable = Environment.ProcessPath ?? "dotnet";
+        executable ??= Environment.ProcessPath ?? "dotnet";
+        commandLineArgs ??= Environment.GetCommandLineArgs();
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = launch.Attempt.ExecutionDirectory
+            WorkingDirectory = attempt.ExecutionDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
         if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-            commandLineArgs.Length > 0)
+            commandLineArgs.Count > 0)
         {
             startInfo.ArgumentList.Add(commandLineArgs[0]);
         }
 
         startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
-        startInfo.ArgumentList.Add(launch.Attempt.MetadataPath);
-        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = launch.Attempt.ExecutionDirectory;
+        startInfo.ArgumentList.Add(attempt.MetadataPath);
+        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = attempt.ExecutionDirectory;
+        return startInfo;
+    }
 
-        var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+    private static void DetachOwnedProcessStreams(Process process, ConductorParallelAcceptanceAttempt attempt)
+    {
         var processId = process.Id;
-        process.Dispose();
-        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId);
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                TryAppend(attempt.StdoutPath, e.Data + Environment.NewLine);
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                TryAppend(attempt.StderrPath, e.Data + Environment.NewLine);
+            }
+        };
+        process.Exited += (_, _) =>
+        {
+            if (OwnedProcessDrains.TryRemove(processId, out var completed))
+            {
+                completed.Dispose();
+            }
+        };
+        process.EnableRaisingEvents = true;
+        OwnedProcessDrains[processId] = process;
+
+        try { process.StandardInput.Close(); } catch { }
+        try { process.BeginOutputReadLine(); } catch { }
+        try { process.BeginErrorReadLine(); } catch { }
+        try
+        {
+            if (process.HasExited && OwnedProcessDrains.TryRemove(processId, out var completed))
+            {
+                completed.Dispose();
+            }
+        }
+        catch
+        {
+        }
     }
 
     private static void RedirectConsole(ConductorParallelAcceptanceAttempt attempt)
