@@ -675,6 +675,7 @@ internal static class CliPersistentStateRunner
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
+            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id)));
 
         var loadedIds = hydratedIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
@@ -696,7 +697,7 @@ internal static class CliPersistentStateRunner
         kernel.MarkKnownDependencyGoalStatuses(missingDependencySummaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         var completedDependencyIds = missingDependencySummaries
-            .Where(summary => IsConductLoopTerminalStatus(summary.Status))
+            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
@@ -850,6 +851,9 @@ internal static class CliPersistentStateRunner
         status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsConductLoopCompletedDependencyStatus(string status) =>
+        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase);
 
     private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
     {

@@ -1303,6 +1303,25 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         });
     }
 
+    [Xunit.Fact(DisplayName = "LoadConductLoopKernel_keeps_failed_terminal_dependencies_unsatisfied")]
+    public async Task LoadConductLoopKernelKeepsFailedTerminalDependenciesUnsatisfied()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var failed = BuildTerminalGoalSnapshot(0) with { Status = GoalStatus.Failed };
+        var completed = BuildTerminalGoalSnapshot(1);
+        await repo.SaveGoalSnapshotsAsync([failed, completed]);
+
+        var kernel = CliPersistentStateRunner.LoadConductLoopKernel(repo);
+
+        Assert.Empty(kernel.Goals);
+        Assert.False(kernel.IsKnownCompletedDependencyGoal(new GoalId(failed.Id)));
+        Assert.True(kernel.TryGetKnownDependencyGoalStatus(new GoalId(failed.Id), out var failedStatus));
+        Assert.Equal(GoalStatus.Failed.ToString(), failedStatus);
+        Assert.True(kernel.IsKnownCompletedDependencyGoal(new GoalId(completed.Id)));
+        Assert.True(kernel.TryGetKnownDependencyGoalStatus(new GoalId(completed.Id), out var completedStatus));
+        Assert.Equal(GoalStatus.Completed.ToString(), completedStatus);
+    }
+
     [Xunit.Fact(DisplayName = "ListConductLoopGoalMetadata_caps_overlong_first_line_title")]
     public async Task ListConductLoopGoalMetadataCapsOverlongFirstLineTitle()
     {

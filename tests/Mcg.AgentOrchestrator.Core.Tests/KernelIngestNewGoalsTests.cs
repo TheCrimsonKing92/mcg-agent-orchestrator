@@ -169,6 +169,31 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Equal(GoalStatus.Completed.ToString(), status);
     }
 
+    [Xunit.Fact(DisplayName = "IngestNewGoals_tracks_failed_terminal_metadata_without_satisfying_dependency")]
+    public void IngestNewGoalsTracksFailedTerminalMetadataWithoutSatisfyingDependency()
+    {
+        var terminalId = GoalId.New();
+        var snapshot = new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    terminalId.Value,
+                    "Failed terminal title\nFULL_OBJECTIVE_SENTINEL",
+                    GoalStatus.Failed,
+                    [new TaskSnapshot(TaskId.New().Value, "TASK_SENTINEL", AgentRole.Developer, WorkTaskStatus.Failed, null, null, null, [], null, null)],
+                    [new ProgressEventSnapshot(terminalId.Value, null, ProgressKind.TaskFailed, "TIMELINE_SENTINEL", DateTimeOffset.Parse("2026-07-23T00:00:00Z"))])
+            ],
+            []);
+        var kernel = new AgentOrchestratorKernel();
+
+        var ingested = kernel.IngestNewGoals(snapshot);
+
+        Xunit.Assert.Equal(0, ingested);
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.False(kernel.IsKnownCompletedDependencyGoal(terminalId));
+        Xunit.Assert.True(kernel.TryGetKnownDependencyGoalStatus(terminalId, out var status));
+        Xunit.Assert.Equal(GoalStatus.Failed.ToString(), status);
+    }
+
     [Xunit.Fact(DisplayName = "RefreshTrackedGoals_evicts_tracked_goal_that_became_terminal")]
     public void RefreshTrackedGoalsEvictsTrackedGoalThatBecameTerminal()
     {
@@ -203,6 +228,42 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.True(live.IsKnownCompletedDependencyGoal(goalId));
         Xunit.Assert.True(live.TryGetKnownDependencyGoalStatus(goalId, out var status));
         Xunit.Assert.Equal(GoalStatus.Completed.ToString(), status);
+    }
+
+    [Xunit.Fact(DisplayName = "RefreshTrackedGoals_evicts_failed_terminal_without_satisfying_dependency")]
+    public void RefreshTrackedGoalsEvictsFailedTerminalWithoutSatisfyingDependency()
+    {
+        var goalId = GoalId.New();
+        var taskId = TaskId.New();
+        var live = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    goalId.Value,
+                    "Runtime failing goal",
+                    GoalStatus.Active,
+                    [new TaskSnapshot(taskId.Value, "Implement.", AgentRole.Developer, WorkTaskStatus.Running, null, null, null, [], null, null)],
+                    [])
+            ],
+            []));
+        var store = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    goalId.Value,
+                    "Runtime failing goal\nFULL_OBJECTIVE_SENTINEL",
+                    GoalStatus.Failed,
+                    [new TaskSnapshot(taskId.Value, "Implement.", AgentRole.Developer, WorkTaskStatus.Failed, null, null, null, [], null, null)],
+                    [new ProgressEventSnapshot(goalId.Value, taskId.Value, ProgressKind.TaskFailed, "TIMELINE_SENTINEL", DateTimeOffset.Parse("2026-07-23T00:00:00Z"))])
+            ],
+            []));
+
+        var refreshed = live.RefreshTrackedGoals(store.ExportSnapshot());
+
+        Xunit.Assert.Equal(1, refreshed);
+        Xunit.Assert.Empty(live.Goals);
+        Xunit.Assert.Empty(live.ExportSnapshot().Goals);
+        Xunit.Assert.False(live.IsKnownCompletedDependencyGoal(goalId));
+        Xunit.Assert.True(live.TryGetKnownDependencyGoalStatus(goalId, out var status));
+        Xunit.Assert.Equal(GoalStatus.Failed.ToString(), status);
     }
 
     [Xunit.Fact(DisplayName = "FromSnapshot_metadata_only_terminal_stub_carries_required_metadata")]

@@ -235,8 +235,15 @@ public sealed partial class AgentOrchestratorKernel
             changed = true;
         }
 
-        if (_knownCompletedDependencyGoals.Add(stub.Id))
+        if (stub.Status == GoalStatus.Completed)
+        {
+            if (_knownCompletedDependencyGoals.Add(stub.Id))
+                changed = true;
+        }
+        else if (_knownCompletedDependencyGoals.Remove(stub.Id))
+        {
             changed = true;
+        }
 
         return changed;
     }
