@@ -181,8 +181,12 @@ public static class VerificationTextBounds
 
     public static string BoundText(string text, string? path)
     {
-        if (text.Length <= BoundThreshold ||
-            (text.Length <= MaxRetainedChars && IsBoundedExcerpt(text)))
+        if (text.Length <= BoundThreshold)
+        {
+            return text;
+        }
+
+        if (IsBoundedExcerpt(text))
         {
             return text;
         }
@@ -200,9 +204,15 @@ public static class VerificationTextBounds
         return $"{head}\n...[{totalChars:N0} chars; {location}]...\n{tail}";
     }
 
-    private static bool IsBoundedExcerpt(string text) =>
-        text.Length <= MaxRetainedChars &&
-        text.Contains("\n...[", StringComparison.Ordinal) &&
-        text.Contains(" chars; ", StringComparison.Ordinal) &&
-        text.Contains("]...\n", StringComparison.Ordinal);
+    private static bool IsBoundedExcerpt(string text)
+    {
+        if (text.Length > MaxRetainedChars)
+        {
+            return false;
+        }
+
+        return text.Contains("\n...[", StringComparison.Ordinal) &&
+            text.Contains(" chars; ", StringComparison.Ordinal) &&
+            text.Contains("]...\n", StringComparison.Ordinal);
+    }
 }

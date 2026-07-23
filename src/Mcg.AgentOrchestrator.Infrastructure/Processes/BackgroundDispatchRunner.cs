@@ -838,8 +838,8 @@ public sealed class BackgroundDispatchRunner
         var heartbeat = ProcessLogReader.ReadHeartbeat(processRecord, _clock.UtcNow);
         var stdoutFileBytes = SafeFileLength(processRecord.StandardOutputPath);
         var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
-        var stdout = ReadFullBestEffort(processRecord.StandardOutputPath);
-        var stderr = ReadFullBestEffort(processRecord.StandardErrorPath);
+        var stdout = ReadDecisionBestEffort(processRecord.StandardOutputPath);
+        var stderr = ReadDecisionBestEffort(processRecord.StandardErrorPath);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout, stderr);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
@@ -923,18 +923,18 @@ public sealed class BackgroundDispatchRunner
         TaskProcessResourceAccounting? capturedResourceAccounting = null)
     {
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
-        var fullStandardOutput = ReadFullBestEffort(processRecord.StandardOutputPath);
-        var fullStandardError = ReadFullBestEffort(processRecord.StandardErrorPath);
+        var decisionStandardOutput = ReadDecisionBestEffort(processRecord.StandardOutputPath);
+        var decisionStandardError = ReadDecisionBestEffort(processRecord.StandardErrorPath);
         var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
         if (resourceAccounting is not null &&
             !resourceAccounting.Reaped &&
-            IsDispatchHostReapCompletion(fullStandardError))
+            IsDispatchHostReapCompletion(decisionStandardError))
         {
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var task = kernel.GetTask(goalId, taskId);
-        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, fullStandardOutput, fullStandardError);
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, fullStandardOutput, fullStandardError);
+        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
+        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         if (RequiresFileChangeEvidence(task) &&
@@ -948,22 +948,22 @@ public sealed class BackgroundDispatchRunner
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
-                fullStandardOutput,
-                fullStandardError,
+                decisionStandardOutput,
+                decisionStandardError,
                 providerFailureKind);
             var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
                 task.LastDispatch,
                 processRecord,
-                fullStandardError,
+                decisionStandardError,
                 sandboxCommitBlocked);
             var successfulWorkerResult = HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
-                fullStandardOutput,
-                fullStandardError);
+                decisionStandardOutput,
+                decisionStandardError);
             if (TryFindFailedWorkerBuildCheck(
                     processRecord.WorkingDirectory,
-                    fullStandardOutput,
-                    fullStandardError,
+                    decisionStandardOutput,
+                    decisionStandardError,
                     out var failedBuildCheckDiagnostic))
             {
                 exitCode = 1;
@@ -986,7 +986,7 @@ public sealed class BackgroundDispatchRunner
             {
                 commitAttempt = TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
-                    BuildOrchestratorCommitSubject(task, fullStandardOutput, fullStandardError),
+                    BuildOrchestratorCommitSubject(task, decisionStandardOutput, decisionStandardError),
                     worktreeEvidence.DirtyPaths);
                 commitAttempted = true;
                 if (commitAttempt.Succeeded &&
@@ -1047,9 +1047,9 @@ public sealed class BackgroundDispatchRunner
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
                 var requiresCommitEvidence =
-                    RequiresPostDispatchCommitEvidence(task, fullStandardOutput, fullStandardError, workerResultPresent) &&
-                    !HasCompletedVerification(fullStandardOutput, fullStandardError) &&
-                    !AllowsNoChangeCompletion(task, fullStandardOutput, fullStandardError) &&
+                    RequiresPostDispatchCommitEvidence(task, decisionStandardOutput, decisionStandardError, workerResultPresent) &&
+                    !HasCompletedVerification(decisionStandardOutput, decisionStandardError) &&
+                    !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)
@@ -1090,8 +1090,8 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(fullStandardOutput)
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(fullStandardError);
+        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
         var standardOutput = ReadBoundedBestEffort(processRecord.StandardOutputPath);
         var standardError = AppendDiagnostic(
             ReadBoundedBestEffort(processRecord.StandardErrorPath),
@@ -1391,7 +1391,7 @@ public sealed class BackgroundDispatchRunner
 
             try
             {
-                if (WorkerResultParser.TryParseFields(File.ReadAllText(path), out _, out _))
+                if (WorkerResultParser.TryParseFields(ReadDecisionBestEffort(path), out _, out _))
                 {
                     return true;
                 }
@@ -1427,7 +1427,7 @@ public sealed class BackgroundDispatchRunner
 
             try
             {
-                if (WorkerResultParser.TryParseSuccessfulResult(File.ReadAllText(path), out _, out _))
+                if (WorkerResultParser.TryParseSuccessfulResult(ReadDecisionBestEffort(path), out _, out _))
                 {
                     return true;
                 }
@@ -1464,7 +1464,7 @@ public sealed class BackgroundDispatchRunner
 
             try
             {
-                if (TryFindFailedWorkerBuildCheckInText(File.ReadAllText(path), out diagnostic))
+                if (TryFindFailedWorkerBuildCheckInText(ReadDecisionBestEffort(path), out diagnostic))
                 {
                     return true;
                 }
@@ -2001,7 +2001,7 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
-    private static string ReadFullBestEffort(string path)
+    private static string ReadDecisionBestEffort(string path)
     {
         if (!File.Exists(path))
         {
@@ -2012,7 +2012,7 @@ public sealed class BackgroundDispatchRunner
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
+            return ReadDecisionText(reader);
         }
         catch (IOException)
         {
@@ -2022,6 +2022,143 @@ public sealed class BackgroundDispatchRunner
         {
             return $"[log unreadable at refresh — see {path}]";
         }
+    }
+
+    private static string ReadDecisionText(TextReader reader)
+    {
+        const int MaxDecisionChars = VerificationTextBounds.MaxRetainedChars;
+        var retained = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
+        var prefixRemaining = VerificationTextBounds.PreviewHeadChars;
+        var inWorkerResult = false;
+
+        while (true)
+        {
+            var line = reader.ReadLine();
+            if (line is null)
+            {
+                break;
+            }
+
+            if (prefixRemaining > 0)
+            {
+                var take = Math.Min(prefixRemaining, line.Length);
+                AppendDecisionLine(retained, line[..take], MaxDecisionChars);
+                prefixRemaining -= take;
+            }
+
+            var normalized = NormalizeWorkerResultMarker(line);
+            if (IsWorkerResultOpener(normalized))
+            {
+                inWorkerResult = true;
+                AppendDecisionLine(retained, line, MaxDecisionChars);
+                continue;
+            }
+
+            if (IsWorkerResultEndMarker(normalized))
+            {
+                AppendDecisionLine(retained, line, MaxDecisionChars);
+                inWorkerResult = false;
+                continue;
+            }
+
+            if (inWorkerResult || IsDecisionSignificantLine(line))
+            {
+                AppendDecisionLine(retained, line, MaxDecisionChars);
+            }
+        }
+
+        return retained.ToString().TrimEnd();
+    }
+
+    private static void AppendDecisionLine(StringBuilder target, string line, int maxChars)
+    {
+        if (string.IsNullOrEmpty(line) || target.Length >= maxChars)
+        {
+            return;
+        }
+
+        if (target.Length > 0)
+        {
+            if (target.Length + Environment.NewLine.Length >= maxChars)
+            {
+                return;
+            }
+
+            target.AppendLine();
+        }
+
+        var remaining = maxChars - target.Length;
+        target.Append(line, 0, Math.Min(line.Length, remaining));
+    }
+
+    private static bool IsDecisionSignificantLine(string line)
+    {
+        return DispatchFailureClassifier.HasVerificationEvidenceInOutput(line, string.Empty) ||
+            line.Contains("HUMAN_INPUT:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("HUMAN INPUT:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("NO_CHANGE:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("No-change rationale:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("No changes needed:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("1312", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
+            (line.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
+             line.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) ||
+            line.Contains("sandbox-prep", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("[dispatch-host] terminating worker tree:", StringComparison.Ordinal) ||
+            ContainsCodexFinalOutput(line) ||
+            IsProviderDecisionLine(line) ||
+            line.Contains("Model fit:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("Changed files:", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("Files changed:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsProviderDecisionLine(string line)
+    {
+        return line.Contains("usage limit", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("429", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("websocket", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("connection refused", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("ECONNREFUSED", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("Unable to connect", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("could not resolve host", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("temporary failure in name resolution", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("Forbidden", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("access token", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("invalid model", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("unknown model", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("model_not_found", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("not supported", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("unsupported", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("400", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWorkerResultOpener(string normalizedLine) =>
+        string.Equals(normalizedLine.TrimEnd(':').Trim(), "WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsWorkerResultEndMarker(string normalizedLine) =>
+        string.Equals(normalizedLine.Trim(), "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeWorkerResultMarker(string text)
+    {
+        var trimmed = text.Trim();
+        var buffer = new char[trimmed.Length];
+        var length = 0;
+        foreach (var ch in trimmed)
+        {
+            if (ch is not ('#' or '*' or '`'))
+            {
+                buffer[length++] = ch;
+            }
+        }
+
+        return new string(buffer, 0, length).Trim();
     }
 
     internal static string ReadBoundedBestEffort(string path)
@@ -2152,8 +2289,8 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var standardOutput = ReadFullBestEffort(processRecord.StandardOutputPath);
-        var standardError = ReadFullBestEffort(processRecord.StandardErrorPath);
+        var standardOutput = ReadDecisionBestEffort(processRecord.StandardOutputPath);
+        var standardError = ReadDecisionBestEffort(processRecord.StandardErrorPath);
         if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
         {
             return false;
