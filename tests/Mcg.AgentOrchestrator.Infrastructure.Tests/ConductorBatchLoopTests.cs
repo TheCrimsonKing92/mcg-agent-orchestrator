@@ -1197,7 +1197,10 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(1, attempts);
         Assert.Equal(1, summary.Advanced);
+        Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Null(goal.LatestAcceptanceFailure);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
         Assert.Contains("WorkerSandboxPreparer_second_round_reuses_prep_receipt", retryMessage!, StringComparison.Ordinal);
         Assert.Contains("acceptance failed checks", retryMessage!, StringComparison.Ordinal);
     }

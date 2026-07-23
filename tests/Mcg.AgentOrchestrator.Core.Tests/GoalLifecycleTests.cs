@@ -405,6 +405,28 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }
 
+    [Xunit.Fact(DisplayName = "RetryTask_on_an_AcceptanceFailed_goal_clears_gate_failure_and_redispatches")]
+    public void RetryTaskOnAcceptanceFailedGoalClearsGateFailureAndRedispatches()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry failed acceptance", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+    kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["TestClass.FailingCase"], "exit artifact failed");
+    Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+    Assert.NotNull(goal.LatestAcceptanceFailure);
+
+    kernel.RetryTask(goal.Id, task.Id, "acceptance failed; fix the named check");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Null(goal.LatestAcceptanceFailure);
+    Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+    Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+}
+
     [Xunit.Fact(DisplayName = "RetryTask_invalidates_downstream_completed_tasks_and_current_gate_evidence")]
     public void RetryTaskInvalidatesDownstreamCompletedTasksAndCurrentGateEvidence()
 {
