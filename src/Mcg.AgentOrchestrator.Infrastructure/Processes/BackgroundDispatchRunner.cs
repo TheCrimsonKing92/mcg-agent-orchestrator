@@ -1090,6 +1090,8 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
+        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(fullStandardOutput)
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(fullStandardError);
         var standardOutput = ReadBoundedBestEffort(processRecord.StandardOutputPath);
         var standardError = AppendDiagnostic(
             ReadBoundedBestEffort(processRecord.StandardErrorPath),
@@ -1128,7 +1130,8 @@ public sealed class BackgroundDispatchRunner
             WorkerResultPresent: workerResultPresent,
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
-            ProviderFailureKind: providerFailureKind);
+            ProviderFailureKind: providerFailureKind,
+            HumanInputQuestion: humanInputQuestion);
 
         return new DispatchRefreshOutcome(
             completed,

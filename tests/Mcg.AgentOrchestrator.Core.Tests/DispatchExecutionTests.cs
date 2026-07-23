@@ -450,13 +450,21 @@ public sealed class DispatchExecutionTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    var output = new string('A', VerificationTextBounds.PreviewHeadChars) +
+        "\n" +
+        new string('M', 2_000) +
+        "\nHUMAN_INPUT: Which branch should I modify?\n" +
+        new string('N', 2_000) +
+        "\n" +
+        new string('Z', VerificationTextBounds.PreviewTailChars);
     var verification = new TaskVerificationRecord(
         "agent run",
         "C:\\repo",
         0,
-        "Implemented setup.\nHUMAN_INPUT: Which branch should I modify?",
+        output,
         string.Empty,
-        clock.UtcNow);
+        clock.UtcNow,
+        HumanInputQuestion: AgentOutputDirectives.TryParseHumanInputRequest(output));
 
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
 
@@ -466,6 +474,8 @@ public sealed class DispatchExecutionTests
     Assert.Equal(task.Id, request.TaskId);
     Assert.Equal("Which branch should I modify?", request.Question);
     Assert.Equal(verification, task.LastVerification);
+    Assert.True(task.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
+    Assert.DoesNotContain("HUMAN_INPUT:", task.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));

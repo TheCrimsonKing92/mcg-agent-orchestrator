@@ -96,12 +96,14 @@ public sealed class AgentTaskRunner
             throw;
         }
 
+        var output = response.Text.Trim();
+        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(output);
         var execution = new TaskExecutionRecord(
             agent.Id,
             agent.Name,
             resolvedModel.ProviderName,
             resolvedModel.ModelName,
-            response.Text.Trim(),
+            output,
             response.StopReason,
             response.Usage,
             _clock.UtcNow,
@@ -112,7 +114,6 @@ public sealed class AgentTaskRunner
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
 
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(execution.Output);
         if (humanInputQuestion is not null)
         {
             _kernel.RequestHumanInput(goal.Id, task.Id, humanInputQuestion);

@@ -55,7 +55,8 @@ public sealed record TaskVerificationRecord(
     // Reliable even when the out.log file read races the exit flush (the empty-output flake bug): a worker
     // that streamed bytes per its heartbeat genuinely produced output and must not be re-dispatched as a flake.
     long? HeartbeatStandardOutputBytes = null,
-    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown)
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
+    string? HumanInputQuestion = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

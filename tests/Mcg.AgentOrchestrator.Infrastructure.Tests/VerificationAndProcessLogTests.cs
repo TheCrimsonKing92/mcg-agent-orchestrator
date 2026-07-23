@@ -248,6 +248,44 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(new FileInfo(stderrPath).Length > 1_000_000);
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_pauses_for_middle_log_human_input_before_retained_excerpt")]
+    public void RefreshLatestProcessPausesForMiddleLogHumanInputBeforeRetainedExcerpt()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Pause from full worker log", [reviewTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    var stdout =
+        new string('O', VerificationTextBounds.PreviewHeadChars) +
+        Environment.NewLine +
+        new string('M', 2_000) +
+        Environment.NewLine +
+        "HUMAN_INPUT: Which branch should I modify?" +
+        Environment.NewLine +
+        new string('N', 2_000) +
+        Environment.NewLine +
+        new string('T', VerificationTextBounds.PreviewTailChars);
+    File.WriteAllText(stdoutPath, stdout);
+    File.WriteAllText(stderrPath, string.Empty);
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+    var request = kernel.GetPendingHumanInput(goal.Id).Single();
+    Assert.Equal(WorkTaskStatus.WaitingForHuman, reviewTask.Status);
+    Assert.Equal("Which branch should I modify?", request.Question);
+    Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
+    Assert.DoesNotContain("HUMAN_INPUT:", reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_classifies_middle_log_verification_before_retained_excerpt")]
     public void RefreshLatestProcessClassifiesMiddleLogVerificationBeforeRetainedExcerpt()
 {
