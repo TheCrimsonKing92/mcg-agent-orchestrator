@@ -116,6 +116,12 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
+            if (_processGroupId is { } processGroupId)
+            {
+                processIds = UnixProcessGroups.ListLiveProcessGroupMembers(processGroupId);
+                return true;
+            }
+
             processIds = _processIds
                 .Where(IsProcessRunning)
                 .ToArray();
@@ -597,10 +603,72 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
         }
 
+        public static IReadOnlyList<int> ListLiveProcessGroupMembers(int processGroupId)
+        {
+            if (processGroupId <= 0)
+            {
+                return [];
+            }
+
+            var members = new List<int>();
+            foreach (var process in Process.GetProcesses())
+            {
+                using (process)
+                {
+                    int processId;
+                    try
+                    {
+                        processId = process.Id;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (!IsProcessRunning(processId) ||
+                        !TryGetProcessGroupId(processId, out var candidateProcessGroupId) ||
+                        candidateProcessGroupId != processGroupId)
+                    {
+                        continue;
+                    }
+
+                    members.Add(processId);
+                }
+            }
+
+            return members
+                .Distinct()
+                .OrderBy(processId => processId)
+                .ToArray();
+        }
+
+        private static bool TryGetProcessGroupId(int processId, out int processGroupId)
+        {
+            processGroupId = 0;
+            try
+            {
+                var result = getpgid(processId);
+                if (result <= 0)
+                {
+                    return false;
+                }
+
+                processGroupId = result;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         [DllImport("libc", SetLastError = true)]
         private static extern int setpgid(int pid, int pgid);
 
         [DllImport("libc", SetLastError = true)]
         private static extern int kill(int pid, int sig);
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern int getpgid(int pid);
     }
 }
