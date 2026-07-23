@@ -24,6 +24,7 @@ Prefer short, decision-changing output over comprehensive dumps. Show what chang
 Codex auto-reads this file. Claude Code auto-reads [`CLAUDE.md`](CLAUDE.md); keep Claude-harness idioms there and keep shared discipline here.
 
 > **Operating the orchestrator — driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the canonical conductor-first guide, including the stuck-goal playbook (symptom → command) and the state/store map. This file covers output/diagnosis/spec discipline and architecture invariants — read it alongside the runbook, not instead of it.
+> **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 
 <!-- shared-discipline:output-discipline -->
 ## Output Discipline
