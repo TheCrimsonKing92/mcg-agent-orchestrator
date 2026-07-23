@@ -98,6 +98,33 @@ internal sealed class OwnedProcessGroup : IDisposable
         return WindowsJob.TryReadAccounting(_jobHandle, out accounting);
     }
 
+    public bool TryGetActiveProcessIds(out IReadOnlyList<int> processIds)
+    {
+        processIds = [];
+        if (_disposed)
+        {
+            return false;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return _jobHandle is not null &&
+                !_jobHandle.IsClosed &&
+                !_jobHandle.IsInvalid &&
+                WindowsJob.TryGetActiveProcessIds(_jobHandle, out processIds);
+        }
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            processIds = _processIds
+                .Where(IsProcessRunning)
+                .ToArray();
+            return true;
+        }
+
+        return false;
+    }
+
     public bool TryDuplicateAccountingHandle(out SafeFileHandle duplicate)
     {
         duplicate = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
@@ -169,10 +196,12 @@ internal sealed class OwnedProcessGroup : IDisposable
     private static class WindowsJob
     {
         private const int JobObjectBasicAccountingInformation = 1;
+        private const int JobObjectBasicProcessIdList = 3;
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
         private const uint JobObjectLimitBreakawayOk = 0x00000800;
         private const uint DuplicateSameAccess = 0x00000002;
+        private const int ErrorMoreData = 234;
 
         public static SafeFileHandle CreateKillOnCloseJob()
         {
@@ -301,6 +330,34 @@ internal sealed class OwnedProcessGroup : IDisposable
             return true;
         }
 
+        public static bool TryGetActiveProcessIds(SafeFileHandle job, out IReadOnlyList<int> processIds)
+        {
+            processIds = [];
+            if (job.IsClosed || job.IsInvalid)
+            {
+                return false;
+            }
+
+            var capacity = 16;
+            while (capacity <= 4096)
+            {
+                var result = TryQueryProcessIdList(job, capacity, out processIds, out var error);
+                if (result)
+                {
+                    return true;
+                }
+
+                if (error != ErrorMoreData)
+                {
+                    return false;
+                }
+
+                capacity *= 2;
+            }
+
+            return false;
+        }
+
         public static bool TryReadAccounting(SafeFileHandle job, out WorkerProcessJobAccounting accounting)
         {
             accounting = WorkerProcessJobAccounting.Empty;
@@ -355,6 +412,66 @@ internal sealed class OwnedProcessGroup : IDisposable
                 }
 
                 value = Marshal.PtrToStructure<T>(buffer);
+                return true;
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        private static bool TryQueryProcessIdList(
+            SafeFileHandle job,
+            int capacity,
+            out IReadOnlyList<int> processIds,
+            out int error)
+        {
+            processIds = [];
+            error = 0;
+            var addedRef = false;
+            var length = 8 + (capacity * IntPtr.Size);
+            var buffer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (job.IsClosed || job.IsInvalid)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    job.DangerousAddRef(ref addedRef);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return false;
+                }
+
+                if (!QueryInformationJobObject(job.DangerousGetHandle(), JobObjectBasicProcessIdList, buffer, (uint)length, IntPtr.Zero))
+                {
+                    error = Marshal.GetLastWin32Error();
+                    return false;
+                }
+
+                var numberOfAssignedProcesses = Marshal.ReadInt32(buffer);
+                var numberOfProcessIdsInList = Marshal.ReadInt32(buffer, 4);
+                var count = Math.Min(Math.Min(numberOfAssignedProcesses, numberOfProcessIdsInList), capacity);
+                var ids = new List<int>(count);
+                for (var i = 0; i < count; i++)
+                {
+                    var rawPid = Marshal.ReadIntPtr(buffer, 8 + (i * IntPtr.Size)).ToInt64();
+                    if (rawPid > 0 && rawPid <= int.MaxValue)
+                    {
+                        ids.Add((int)rawPid);
+                    }
+                }
+
+                processIds = ids.Distinct().ToArray();
                 return true;
             }
             finally
@@ -435,6 +552,19 @@ internal sealed class OwnedProcessGroup : IDisposable
             public UIntPtr JobMemoryLimit;
             public UIntPtr PeakProcessMemoryUsed;
             public UIntPtr PeakJobMemoryUsed;
+        }
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
         }
     }
 

@@ -932,7 +932,8 @@ public static void DropToLow() {
 
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
-            var ownedCpuMs = SumOwnedCpuMs(workerGroup?.ProcessIds ?? []);
+            var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+            var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
             providerSessionId ??= TryCaptureProviderSessionId(parameters.Provider, parameters.StdoutPath, parameters.StderrPath);
 
             if (HasProgressed(lastStdoutBytes + lastStderrBytes, stdoutBytes + stderrBytes, lastCpuMs, ownedCpuMs, CpuProgressEpsilonMs))
@@ -952,8 +953,8 @@ public static void DropToLow() {
             {
                 kind = string.IsNullOrWhiteSpace(parameters.Kind) ? WorkerDispatchKind : parameters.Kind,
                 pid = Environment.ProcessId,
-                childPid = worker is { HasExited: false } ? worker.Id : (int?)null,
-                ownedPids = workerGroup?.ProcessIds ?? [],
+                childPid = SelectHeartbeatChildPid(worker, ownedPids),
+                ownedPids,
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
                 lastProgressAt = lastProgressAt.ToString("o"),
@@ -990,7 +991,7 @@ public static void DropToLow() {
             {
                 kind = PrepDispatchKind,
                 pid = Environment.ProcessId,
-                ownedPids = workerGroup?.ProcessIds ?? [],
+                ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker),
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
                 lastProgressAt = DateTimeOffset.UtcNow.ToString("o"),
@@ -1336,6 +1337,96 @@ public static void DropToLow() {
 
     internal static bool HasProgressed(long prevTotalBytes, long curTotalBytes, long prevCpuMs, long curCpuMs, long epsilonMs)
         => curTotalBytes != prevTotalBytes || curCpuMs - prevCpuMs > epsilonMs;
+
+    internal static IReadOnlyList<int> GetHeartbeatOwnedProcessIds(OwnedProcessGroup? workerGroup, Process? worker)
+    {
+        if (workerGroup?.TryGetActiveProcessIds(out var activeProcessIds) == true &&
+            activeProcessIds.Count > 0)
+        {
+            return activeProcessIds;
+        }
+
+        var processIds = workerGroup?.ProcessIds ?? [];
+        if (worker is null)
+        {
+            return processIds;
+        }
+
+        var workerId = worker.Id;
+        var descendants = WorkerProcessJobs.ListLiveDescendantProcessIds(workerId);
+        if (descendants.Count == 0)
+        {
+            return processIds;
+        }
+
+        return processIds
+            .Concat(descendants)
+            .Distinct()
+            .ToArray();
+    }
+
+    internal static long ReadHeartbeatOwnedCpuMs(OwnedProcessGroup? workerGroup, IReadOnlyList<int> ownedPids)
+    {
+        if (workerGroup?.TryReadAccounting(out var accounting) == true)
+        {
+            return accounting.CpuMilliseconds;
+        }
+
+        return SumOwnedCpuMs(ownedPids);
+    }
+
+    internal static int? SelectHeartbeatChildPid(Process? worker, IReadOnlyList<int> ownedPids)
+    {
+        int? workerId = null;
+        var workerRunning = false;
+        if (worker is not null)
+        {
+            workerId = worker.Id;
+            try
+            {
+                workerRunning = !worker.HasExited;
+            }
+            catch
+            {
+                workerRunning = false;
+            }
+        }
+
+        if (ownedPids.Count > 0)
+        {
+            if (workerId is { } hostPid)
+            {
+                var nonHostPids = ownedPids
+                    .Where(pid => pid != hostPid)
+                    .ToArray();
+                if (nonHostPids.Length > 0)
+                {
+                    return nonHostPids
+                        .OrderByDescending(ReadProcessCpuMs)
+                        .First();
+                }
+
+                return workerRunning ? hostPid : null;
+            }
+
+            return ownedPids[0];
+        }
+
+        return workerRunning ? workerId : null;
+    }
+
+    private static long ReadProcessCpuMs(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return (long)process.TotalProcessorTime.TotalMilliseconds;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
 
     private static long SumOwnedCpuMs(IReadOnlyList<int> processIds)
     {

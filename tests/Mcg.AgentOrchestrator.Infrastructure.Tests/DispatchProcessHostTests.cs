@@ -1162,6 +1162,91 @@ public sealed class DispatchProcessHostTests
         Assert.True(DispatchProcessHost.HasProgressed(0, 10, 0, 0, 50));
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_heartbeat_cpu_and_pids_reflect_wrapped_grandchild")]
+    public void DispatchProcessHostHeartbeatCpuAndPidsReflectWrappedGrandchild()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-grandchild-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var childScriptPath = Path.Combine(dir, "burn-cpu.ps1");
+        var childPidPath = Path.Combine(dir, "child.pid");
+        var startMarkerPath = Path.Combine(dir, "start.marker");
+        File.WriteAllText(
+            childScriptPath,
+            """
+            $deadline = [DateTime]::UtcNow.AddSeconds(6)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                for ($i = 0; $i -lt 50000; $i++) {
+                    [Math]::Sqrt($i) > $null
+                }
+            }
+            """,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        Process? wrapper = null;
+        OwnedProcessGroup? group = null;
+        try
+        {
+            var command =
+                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(startMarkerPath)}')) " +
+                "{ Start-Sleep -Milliseconds 25 }; " +
+                "$child = Start-Process " +
+                $"-FilePath '{EscapePowerShellSingleQuoted(WorkerShell.Executable)}' " +
+                "-ArgumentList @(" +
+                "'-NoProfile','-NonInteractive','-InputFormat','None'," +
+                "'-ExecutionPolicy','Bypass','-File'," +
+                $"'{EscapePowerShellSingleQuoted(childScriptPath)}') " +
+                "-PassThru; " +
+                $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(childPidPath)}' -Value $child.Id; " +
+                "Wait-Process -Id $child.Id";
+            wrapper = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(WorkerShell.BaseArguments().Concat([command])))
+                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+            group = OwnedProcessGroup.Attach(wrapper);
+            File.WriteAllText(startMarkerPath, "go");
+            var childPid = WaitForPidFile(childPidPath);
+            Assert.NotEqual(wrapper.Id, childPid);
+
+            IReadOnlyList<int> lastOwnedPids = [];
+            long lastOwnedCpuMs = 0;
+            int? lastSelectedChildPid = null;
+            var sawGrandchildCpu = WaitUntil(() =>
+            {
+                var ownedPids = DispatchProcessHost.GetHeartbeatOwnedProcessIds(group, wrapper);
+                var ownedCpuMs = DispatchProcessHost.ReadHeartbeatOwnedCpuMs(group, ownedPids);
+                lastOwnedPids = ownedPids;
+                lastOwnedCpuMs = ownedCpuMs;
+                lastSelectedChildPid = DispatchProcessHost.SelectHeartbeatChildPid(wrapper, ownedPids);
+                return ownedCpuMs > 100 &&
+                    ownedPids.Contains(wrapper.Id) &&
+                    ownedPids.Contains(childPid) &&
+                    lastSelectedChildPid == childPid;
+            }, TimeSpan.FromSeconds(5));
+
+            Assert.True(
+                sawGrandchildCpu,
+                $"Expected live job accounting and heartbeat PIDs to include the CPU-burning grandchild. wrapper={wrapper.Id} child={childPid} selected={lastSelectedChildPid?.ToString() ?? "null"} cpuMs={lastOwnedCpuMs} ownedPids=[{string.Join(",", lastOwnedPids)}]");
+        }
+        finally
+        {
+            try { group?.Kill(); } catch { }
+            try { wrapper?.Kill(entireProcessTree: true); } catch { }
+            try { wrapper?.Dispose(); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WaitForIntegrityLabeler_kills_helper_when_timeout_expires")]
     public void WaitForIntegrityLabelerKillsTimedOutHelper()
     {
@@ -1628,6 +1713,40 @@ public sealed class DispatchProcessHostTests
             .Where(line => line.Contains("\"event\":\"sandbox-prep\"", StringComparison.Ordinal))
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToArray();
+    }
+
+    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return condition();
+    }
+
+    private static int WaitForPidFile(string path)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(path) &&
+                int.TryParse(File.ReadAllText(path).Trim(), out var processId) &&
+                processId > 0)
+            {
+                return processId;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        throw new TimeoutException($"Timed out waiting for pid file '{path}'.");
     }
 
     private sealed record MeasuredDispatch(
