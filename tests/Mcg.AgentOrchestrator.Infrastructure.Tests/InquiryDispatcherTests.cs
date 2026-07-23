@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
+[Xunit.Collection(TestCollections.ChaosGateGit)]
 public sealed class InquiryDispatcherTests
 {
     private static readonly DateTimeOffset DispatchedAt = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
@@ -13,7 +14,7 @@ public sealed class InquiryDispatcherTests
     {
         using var temp = TempDirectory.Create();
         var fixture = CreateCompletedDispatch(temp.Path, ProviderKind.OpenAICodexCli, "codex-cli");
-        var dispatcher = new InquiryDispatcher(clock: new TestClock(Now));
+        var dispatcher = NewDispatcher(fixture.Task);
 
         var plan = dispatcher.Compose(CreateRequest(temp.Path, fixture.Goal, fixture.Task));
 
@@ -37,7 +38,7 @@ public sealed class InquiryDispatcherTests
     {
         using var temp = TempDirectory.Create();
         var fixture = CreateCompletedDispatch(temp.Path, ProviderKind.AnthropicClaudeCli, "claude-cli", modelName: "claude-sonnet-4-6");
-        var dispatcher = new InquiryDispatcher(clock: new TestClock(Now));
+        var dispatcher = NewDispatcher(fixture.Task);
 
         var plan = dispatcher.Compose(CreateRequest(temp.Path, fixture.Goal, fixture.Task));
 
@@ -53,7 +54,7 @@ public sealed class InquiryDispatcherTests
     {
         using var temp = TempDirectory.Create();
         var fixture = CreateCompletedDispatch(temp.Path, ProviderKind.OpenAICodexCli, "codex-cli", sessionId: null);
-        var dispatcher = new InquiryDispatcher(clock: new TestClock(Now));
+        var dispatcher = NewDispatcher(fixture.Task);
 
         var plan = dispatcher.Compose(CreateRequest(temp.Path, fixture.Goal, fixture.Task));
 
@@ -71,14 +72,16 @@ public sealed class InquiryDispatcherTests
         using var temp = TempDirectory.Create();
         var fixture = CreateCompletedDispatch(temp.Path, ProviderKind.AnthropicClaudeCli, "claude-cli", modelName: "claude-sonnet-4-6");
         WorkerProcessRunRequest? captured = null;
-        var dispatcher = new InquiryDispatcher((request, _) =>
-        {
-            captured = request;
-            return Task.FromResult(new WorkerProcessRunResult(
-                0,
-                "answer\ninput tokens: 10\ncached tokens: 7\noutput tokens: 3\nsession id: fork-session-1234",
-                ""));
-        }, new TestClock(Now));
+        var dispatcher = NewDispatcher(
+            fixture.Task,
+            (request, _) =>
+            {
+                captured = request;
+                return Task.FromResult(new WorkerProcessRunResult(
+                    0,
+                    "answer\ninput tokens: 10\ncached tokens: 7\noutput tokens: 3\nsession id: fork-session-1234",
+                    ""));
+            });
         var status = fixture.Task.Status;
         var lastVerification = fixture.Task.LastVerification;
         var lastProcess = fixture.Task.LastProcess;
@@ -106,7 +109,7 @@ public sealed class InquiryDispatcherTests
     {
         using var temp = TempDirectory.Create();
         var fixture = CreateCompletedDispatch(temp.Path, ProviderKind.OpenAICodexCli, "codex-cli");
-        var dispatcher = new InquiryDispatcher((_, _) => Task.FromResult(new WorkerProcessRunResult(0, "answer", "")), new TestClock(Now));
+        var dispatcher = NewDispatcher(fixture.Task, (_, _) => Task.FromResult(new WorkerProcessRunResult(0, "answer", "")));
         var request = CreateRequest(temp.Path, fixture.Goal, fixture.Task);
 
         var first = await dispatcher.DispatchAsync(request);
@@ -127,6 +130,18 @@ public sealed class InquiryDispatcherTests
             Path.Combine(root, "prompts"),
             Path.Combine(root, "inquiries"),
             Path.Combine(root, "goal-events"));
+
+    private static InquiryDispatcher NewDispatcher(
+        TaskSpec task,
+        Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null) =>
+        new(
+            runProcessAsync: runProcessAsync,
+            clock: new TestClock(Now),
+            headResolver: _ => task.LastDispatch!.WorktreeHeadSha,
+            capturedHeadIsAncestor: SameHead);
+
+    private static bool SameHead(string _, string? capturedHead, string? currentHead) =>
+        string.Equals(capturedHead?.Trim(), currentHead?.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static (Goal Goal, TaskSpec Task) CreateCompletedDispatch(
         string root,

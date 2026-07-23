@@ -3914,12 +3914,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         args.Add("--report-trx");
         args.Add("--report-trx-filename");
         args.Add(Path.GetFileName(telemetry.Paths[0]));
-        if (!args.Any(argument => argument.Equals("--timeout", StringComparison.OrdinalIgnoreCase)))
-        {
-            args.Add("--timeout");
-            args.Add("120s");
-        }
-
         if (!args.Any(argument => argument.Equals("--long-running", StringComparison.OrdinalIgnoreCase)))
         {
             args.Add("--long-running");
@@ -3994,7 +3988,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 yield return fullyQualifiedName.Groups["op"].Value == "!~"
                     ? "--filter-not-class"
                     : "--filter-class";
-                yield return fullyQualifiedName.Groups["value"].Value;
+                yield return $"*{fullyQualifiedName.Groups["value"].Value}*";
                 continue;
             }
 

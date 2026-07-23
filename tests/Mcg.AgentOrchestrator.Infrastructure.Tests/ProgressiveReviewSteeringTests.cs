@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Collection(TestCollections.ChaosGateGit)]
 public sealed class ProgressiveReviewSteeringTests
 {
     [Fact(DisplayName = "ProgressiveReviewSteering_cancels_confirms_dead_then_warm_resumes_with_guidance")]
@@ -48,7 +49,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 order.Add($"lineage:{process.ProcessId}");
                 return [];
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -125,7 +127,8 @@ public sealed class ProgressiveReviewSteeringTests
                     "OpenAI",
                     "gpt-5.5",
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, kernel.GetGoal(goal.Id));
 
@@ -187,7 +190,8 @@ public sealed class ProgressiveReviewSteeringTests
                         "gpt-5.5",
                         PromptPath: promptPath,
                         WorkerProviderKind: ProviderKind.OpenAICodexCli));
-                });
+                },
+                currentHead: head);
 
             var result = coordinator.ExecutePending(kernel, kernel.GetGoal(goal.Id));
 
@@ -214,7 +218,7 @@ public sealed class ProgressiveReviewSteeringTests
         var staleIntent = Intent(goal, task, now.AddMinutes(-10), "old-round guidance must not affect current dispatch");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(staleIntent).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
         var cancelCalled = false;
         var startCalled = false;
 
@@ -231,7 +235,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 startCalled = true;
                 throw new InvalidOperationException("start must not run for stale intent");
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -272,7 +277,8 @@ public sealed class ProgressiveReviewSteeringTests
                 var started = new TaskProcessRecord(7010, dispatch.Command, dispatch.WorkingDirectory, "out-produced.log", "err-produced.log", "exit-produced.txt", now.AddSeconds(2), null, null);
                 k.RecordTaskProcessStarted(goalId, taskId, started);
                 return started;
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -296,7 +302,7 @@ public sealed class ProgressiveReviewSteeringTests
         var secondIntent = Intent(goal, task, now, "second steer guidance suppressed");
         store.EnqueueIntentAsync(firstIntent).GetAwaiter().GetResult();
         store.EnqueueIntentAsync(secondIntent).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
         var cancelCount = 0;
         var startCount = 0;
 
@@ -330,7 +336,8 @@ public sealed class ProgressiveReviewSteeringTests
                     OwnedProcessIds: [7000 + startCount]);
                 k.RecordTaskProcessStarted(goalId, taskId, started);
                 return started;
-            });
+            },
+            currentHead: head);
 
         var firstResult = coordinator.ExecutePending(kernel, goal);
         var secondResult = coordinator.ExecutePending(kernel, goal);
@@ -393,7 +400,8 @@ public sealed class ProgressiveReviewSteeringTests
                     "OpenAI",
                     "gpt-5.5",
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -447,7 +455,8 @@ public sealed class ProgressiveReviewSteeringTests
                     "OpenAI",
                     "gpt-5.5",
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -508,7 +517,8 @@ public sealed class ProgressiveReviewSteeringTests
                     "OpenAI",
                     "gpt-5.5",
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -559,7 +569,8 @@ public sealed class ProgressiveReviewSteeringTests
                     "OpenAI",
                     "gpt-other",
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -608,7 +619,8 @@ public sealed class ProgressiveReviewSteeringTests
                     "OpenAI",
                     "gpt-5.5",
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -658,7 +670,7 @@ public sealed class ProgressiveReviewSteeringTests
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while pid is alive")).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
         var started = false;
 
         var coordinator = NewCoordinator(
@@ -677,7 +689,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 started = true;
                 throw new InvalidOperationException("start must not run");
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -699,7 +712,7 @@ public sealed class ProgressiveReviewSteeringTests
         WriteHeartbeat(task.LastProcess!, now, childPid: 6002, ownedPids: [6001, 6002, 6003], state: "running");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while child is alive")).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
         var started = false;
 
         var coordinator = NewCoordinator(
@@ -718,7 +731,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 started = true;
                 throw new InvalidOperationException("start must not run over a live heartbeat-owned child");
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -739,7 +753,7 @@ public sealed class ProgressiveReviewSteeringTests
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while lineage child is alive")).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
         var started = false;
 
         var coordinator = NewCoordinator(
@@ -760,7 +774,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 started = true;
                 throw new InvalidOperationException("start must not run over a live lineage descendant");
-            });
+            },
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -781,7 +796,7 @@ public sealed class ProgressiveReviewSteeringTests
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "do not start without terminal proof")).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
         var started = false;
 
         var coordinator = NewCoordinator(
@@ -800,7 +815,8 @@ public sealed class ProgressiveReviewSteeringTests
                 started = true;
                 throw new InvalidOperationException("start must not run without terminal proof");
             },
-            options: new ProgressiveReviewSteeringOptions(WriteTerminalCancelProofArtifacts: false));
+            options: new ProgressiveReviewSteeringOptions(WriteTerminalCancelProofArtifacts: false),
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -821,14 +837,23 @@ public sealed class ProgressiveReviewSteeringTests
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "start throws")).GetAwaiter().GetResult();
-        var attentionStore = new CollaborationItemStore(Path.Combine(root, ".orchestrator", "items.db"));
+        var attentionStore = new FakeCollaborationItemStore();
 
         var coordinator = NewCoordinator(
             root,
             store,
             attentionStore,
             cancelProcess: CancelWithTerminalProof(now),
-            startProcess: (_, _, _) => throw new InvalidOperationException("dispatch start failed"));
+            startProcess: (_, _, _) => throw new InvalidOperationException("dispatch start failed"),
+            prepareFreshDispatch: (k, g, t, _) => k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
+                "codex-cli",
+                "fresh-guided",
+                root,
+                now.AddSeconds(2),
+                "OpenAI",
+                "gpt-5.5",
+                WorkerProviderKind: ProviderKind.OpenAICodexCli)),
+            currentHead: head);
 
         var result = coordinator.ExecutePending(kernel, goal);
 
@@ -850,7 +875,8 @@ public sealed class ProgressiveReviewSteeringTests
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
         IReadOnlyList<AgentDefinition>? agents = null,
-        ProgressiveReviewSteeringOptions? options = null)
+        ProgressiveReviewSteeringOptions? options = null,
+        string? currentHead = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
@@ -866,8 +892,13 @@ public sealed class ProgressiveReviewSteeringTests
             getLineageDescendants: getLineageDescendants,
             cancelProcess: cancelProcess,
             startProcess: startProcess,
-            prepareFreshDispatch: prepareFreshDispatch);
+            prepareFreshDispatch: prepareFreshDispatch,
+            headResolver: currentHead is null ? null : _ => currentHead,
+            capturedHeadIsAncestor: currentHead is null ? null : SameHead);
     }
+
+    private static bool SameHead(string _, string? capturedHead, string? currentHead) =>
+        string.Equals(capturedHead?.Trim(), currentHead?.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> CancelWithTerminalProof(DateTimeOffset now) =>
         (k, goalId, taskId) =>
