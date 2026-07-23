@@ -62,7 +62,7 @@ public sealed class Goal
             throw new ArgumentException($"Status '{metadata.Status}' is not terminal.", nameof(metadata));
         }
 
-        var goal = new Goal(metadata.Id, metadata.Title, [], isMetadataOnly: true);
+        var goal = new Goal(metadata.Id, BuildMetadataTitle(metadata.Title), [], isMetadataOnly: true);
         goal.SetStatus(metadata.Status);
         goal.MetadataResultCommit = NormalizeSha(metadata.ResultCommit);
         goal.MetadataCreatedAt = metadata.CreatedAt;
@@ -75,6 +75,17 @@ public sealed class Goal
         if (!IsTerminalMetadataStatus(Status))
         {
             throw new InvalidOperationException($"Goal '{Id.Value}' is not terminal and cannot be represented as terminal metadata.");
+        }
+
+        if (IsMetadataOnly)
+        {
+            return new TerminalGoalMetadata(
+                Id,
+                Status,
+                BuildMetadataTitle(Objective),
+                MetadataResultCommit,
+                MetadataCreatedAt,
+                MetadataTerminatedAt);
         }
 
         var latestResultCommit = Tasks

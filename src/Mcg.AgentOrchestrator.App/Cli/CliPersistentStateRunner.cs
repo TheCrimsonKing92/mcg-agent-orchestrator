@@ -559,7 +559,8 @@ internal static class CliPersistentStateRunner
             EmitPreLoopJanitorialFailure(workspace, ex);
         }
 
-        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        var loopCurrentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        currentGoal = loopCurrentGoal;
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistGoals(checkpoint, checkpoint.Goals.Select(goal => goal.Id).ToArray());
@@ -586,14 +587,20 @@ internal static class CliPersistentStateRunner
 
             var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
             var persistedTerminalGoalIds = new List<GoalId>();
+            var persistedTerminalGoalIdValues = new HashSet<string>(StringComparer.Ordinal);
             foreach (var result in results)
             {
                 if (result.PersistedSnapshot is not null)
                 {
-                    tickBaselines[result.GoalId] = result.PersistedSnapshot;
                     if (IsConductLoopTerminalStatus(result.PersistedSnapshot.Status.ToString()))
                     {
                         persistedTerminalGoalIds.Add(new GoalId(result.GoalId));
+                        persistedTerminalGoalIdValues.Add(result.GoalId);
+                        tickBaselines.Remove(result.GoalId);
+                    }
+                    else
+                    {
+                        tickBaselines[result.GoalId] = result.PersistedSnapshot;
                     }
                 }
 
@@ -604,6 +611,10 @@ internal static class CliPersistentStateRunner
             }
 
             checkpoint.EvictTerminalGoalAggregates(persistedTerminalGoalIds);
+            if (loopCurrentGoal is not null && persistedTerminalGoalIdValues.Contains(loopCurrentGoal.Id.Value))
+            {
+                loopCurrentGoal = null;
+            }
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -613,7 +624,7 @@ internal static class CliPersistentStateRunner
             ref agents,
             providers,
             ref workerProfiles,
-            ref currentGoal,
+            ref loopCurrentGoal,
             channel,
             () => LoadConductLoopKernel(stateRepository),
             Persist,
@@ -624,6 +635,7 @@ internal static class CliPersistentStateRunner
 
         // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
         Persist(kernel);
+        currentGoal = loopCurrentGoal;
         return shouldSave;
     }
 

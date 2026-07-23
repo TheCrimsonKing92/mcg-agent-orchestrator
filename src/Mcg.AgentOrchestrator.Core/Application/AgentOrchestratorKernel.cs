@@ -113,6 +113,12 @@ public sealed partial class AgentOrchestratorKernel
         var ingested = 0;
         foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
         {
+            if (IsTerminalGoalStatus(goal.Status))
+            {
+                TrackTerminalGoalMetadata(goal.ToTerminalGoalMetadata());
+                continue;
+            }
+
             if (!_goals.TryAdd(goal.Id, goal))
             {
                 continue;
@@ -124,6 +130,11 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
         {
+            if (!_goals.ContainsKey(request.GoalId))
+            {
+                continue;
+            }
+
             _humanInputRequests.TryAdd(request.Id, request);
         }
 
@@ -136,17 +147,8 @@ public sealed partial class AgentOrchestratorKernel
         var changed = 0;
         foreach (var metadata in goals)
         {
-            var stub = Goal.CreateMetadataOnlyTerminal(metadata);
-            if (_goals.TryGetValue(stub.Id, out var existing) && !existing.IsMetadataOnly)
-            {
-                continue;
-            }
-
-            _goals[stub.Id] = stub;
-            _knownDependencyGoalStatuses[stub.Id] = stub.Status.ToString();
-            _knownCompletedDependencyGoals.Add(stub.Id);
-
-            changed++;
+            if (TrackTerminalGoalMetadata(metadata))
+                changed++;
         }
 
         return changed;
@@ -160,19 +162,16 @@ public sealed partial class AgentOrchestratorKernel
         var evicted = 0;
         foreach (var goal in _goals.Values.ToArray())
         {
-            if (goal.IsMetadataOnly ||
-                !IsTerminalGoalStatus(goal.Status) ||
+            if (!IsTerminalGoalStatus(goal.Status) ||
                 selected is not null && !selected.Contains(goal.Id.Value))
             {
                 continue;
             }
 
-            var stub = Goal.CreateMetadataOnlyTerminal(goal.ToTerminalGoalMetadata());
-            _goals[stub.Id] = stub;
-            _knownDependencyGoalStatuses[stub.Id] = stub.Status.ToString();
-            _knownCompletedDependencyGoals.Add(stub.Id);
-
-            evicted++;
+            var metadata = goal.ToTerminalGoalMetadata();
+            if (_goals.Remove(goal.Id))
+                evicted++;
+            TrackTerminalGoalMetadata(metadata);
         }
 
         return evicted;
@@ -191,6 +190,14 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
+            if (IsTerminalGoalStatus(goal.Status))
+            {
+                _goals.Remove(goal.Id);
+                TrackTerminalGoalMetadata(goal.ToTerminalGoalMetadata());
+                refreshed++;
+                continue;
+            }
+
             _goals[goal.Id] = goal;
             _knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
             refreshed++;
@@ -206,6 +213,32 @@ public sealed partial class AgentOrchestratorKernel
 
         SweepParkedGoalHumanWaits();
         return refreshed;
+    }
+
+    private bool TrackTerminalGoalMetadata(TerminalGoalMetadata metadata)
+    {
+        var stub = Goal.CreateMetadataOnlyTerminal(metadata);
+        var changed = false;
+        if (_goals.Remove(stub.Id))
+            changed = true;
+
+        foreach (var request in _humanInputRequests.Values.Where(request => request.GoalId == stub.Id).ToArray())
+        {
+            if (_humanInputRequests.Remove(request.Id))
+                changed = true;
+        }
+
+        if (!_knownDependencyGoalStatuses.TryGetValue(stub.Id, out var knownStatus) ||
+            !string.Equals(knownStatus, stub.Status.ToString(), StringComparison.Ordinal))
+        {
+            _knownDependencyGoalStatuses[stub.Id] = stub.Status.ToString();
+            changed = true;
+        }
+
+        if (_knownCompletedDependencyGoals.Add(stub.Id))
+            changed = true;
+
+        return changed;
     }
 
 
