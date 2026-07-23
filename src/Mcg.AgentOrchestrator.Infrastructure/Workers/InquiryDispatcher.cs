@@ -35,13 +35,19 @@ public sealed class InquiryDispatcher
 
     private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync;
     private readonly IClock _clock;
+    private readonly Func<string, string?> _headResolver;
+    private readonly Func<string, string?, string?, bool> _capturedHeadIsAncestor;
 
     public InquiryDispatcher(
         Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null,
-        IClock? clock = null)
+        IClock? clock = null,
+        Func<string, string?>? headResolver = null,
+        Func<string, string?, string?, bool>? capturedHeadIsAncestor = null)
     {
         _runProcessAsync = runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
         _clock = clock ?? new SystemClock();
+        _headResolver = headResolver ?? TryResolveHead;
+        _capturedHeadIsAncestor = capturedHeadIsAncestor ?? IsAncestor;
     }
 
     public InquiryCommandPlan Compose(InquiryDispatchRequest request)
@@ -50,8 +56,8 @@ public sealed class InquiryDispatcher
         var providerKind = ResolveProviderKind(dispatch);
         var worktree = dispatch.WorkingDirectory;
         var now = _clock.UtcNow;
-        var currentHead = TryReadGit(worktree, "rev-parse", "HEAD");
-        var capturedHeadIsAncestor = IsAncestor(worktree, dispatch.WorktreeHeadSha, currentHead);
+        var currentHead = _headResolver(worktree);
+        var capturedHeadIsAncestor = _capturedHeadIsAncestor(worktree, dispatch.WorktreeHeadSha, currentHead);
         var store = new InquiryReceiptStore(request.ReceiptDirectory);
         var parentDispatchId = BuildParentDispatchId(request.Goal.Id, request.Task.Id, dispatch);
         var parentSessionId = Normalize(dispatch.ProviderSessionId);
@@ -356,6 +362,9 @@ public sealed class InquiryDispatcher
             source.ValueKind == JsonValueKind.String &&
             source.GetString()?.Contains("integration", StringComparison.OrdinalIgnoreCase) == true;
     }
+
+    private static string? TryResolveHead(string workingDirectory) =>
+        TryReadGit(workingDirectory, "rev-parse", "HEAD");
 
     private static string? TryReadGit(string workingDirectory, params string[] args)
     {

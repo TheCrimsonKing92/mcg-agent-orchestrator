@@ -38,6 +38,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _cancelProcess;
     private readonly Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> _startProcess;
     private readonly Action<AgentOrchestratorKernel, Goal, TaskSpec, string> _prepareFreshDispatch;
+    private readonly Func<string, string?> _headResolver;
+    private readonly Func<string, string?, string?, bool> _capturedHeadIsAncestor;
 
     public ProgressiveReviewSteeringCoordinator(
         OrchestratorWorkspace workspace,
@@ -52,7 +54,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         Func<TaskProcessRecord, IReadOnlyList<int>>? getLineageDescendants = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? cancelProcess = null,
         Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord>? startProcess = null,
-        Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null)
+        Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
+        Func<string, string?>? headResolver = null,
+        Func<string, string?, string?, bool>? capturedHeadIsAncestor = null)
     {
         _workspace = workspace;
         _agents = agents;
@@ -67,6 +71,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
         _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory));
         _prepareFreshDispatch = prepareFreshDispatch ?? PrepareRawFreshSubscriptionDispatch;
+        _headResolver = headResolver ?? TryResolveHead;
+        _capturedHeadIsAncestor = capturedHeadIsAncestor ?? CapturedHeadIsAncestor;
     }
 
     public static ProgressiveReviewSteeringCoordinator CreateDefault(
@@ -237,7 +243,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         ProgressiveReviewSteerIntent intent)
     {
         var currentWorktree = _workspace.ResolveExecutionDirectory(goal.Id);
-        var currentHead = TryResolveHead(currentWorktree);
+        var currentHead = _headResolver(currentWorktree);
         var requestedProvider = ResolveCurrentProviderKind(task);
         var requestedModel = ResolveCurrentModelName(goal, task);
         var latestIntegrationChange = LatestIntegrationChangeAfter(_workspace.GoalLifecycleEventsDirectory, goal.Id, originalDispatch.DispatchedAt);
@@ -249,7 +255,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             requestedModel,
             currentWorktree,
             currentHead,
-            CapturedHeadIsAncestor(currentWorktree, originalDispatch.WorktreeHeadSha, currentHead),
+            _capturedHeadIsAncestor(currentWorktree, originalDispatch.WorktreeHeadSha, currentHead),
             _utcNow(),
             goal.EffectiveAcceptanceCriteriaCorrections
                 .Where(correction => correction.RecordedAt > originalDispatch.DispatchedAt)
@@ -378,7 +384,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             createdAt);
     }
 
-    private static string BuildCurrentSteeringGuidance(
+    private string BuildCurrentSteeringGuidance(
         Goal goal,
         TaskSpec task,
         TaskDispatchRecord originalDispatch,
@@ -394,7 +400,7 @@ ProgressiveReviewSteer guidance. Treat this message as authoritative over rememb
 Freshness envelope:
 - Goal id: {goal.Id.Value}
 - Task id: {task.Id.Value}
-- Worktree HEAD at steer time: {TryResolveHead(workingDirectory) ?? "(unknown)"}
+- Worktree HEAD at steer time: {_headResolver(workingDirectory) ?? "(unknown)"}
 - Worktree diff at steer time:
 {BoundBlock(TryReadDiff(workingDirectory, originalDispatch.BaseCommit), 8000)}
 
@@ -415,7 +421,7 @@ Corrective direction:
 """;
     }
 
-    private static string BuildCurrentSteeringInputsHash(
+    private string BuildCurrentSteeringInputsHash(
         Goal goal,
         TaskSpec task,
         TaskDispatchRecord originalDispatch,
@@ -426,7 +432,7 @@ Corrective direction:
             task.Id.Value,
             AgentRole.Developer.ToString(),
             originalDispatch.ProviderSessionId ?? "(no-session)",
-            TryResolveHead(originalDispatch.WorkingDirectory) ?? "(unknown-head)",
+            _headResolver(originalDispatch.WorkingDirectory) ?? "(unknown-head)",
             intent.GlanceVerdictTimestamp,
             $"sha256:{HashText(BuildAcceptanceSection(goal, task, int.MaxValue))}",
             $"sha256:{HashLines(FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections))}");
