@@ -1973,6 +1973,29 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken)
     {
+        if (UsesMicrosoftTestingPlatform(check))
+        {
+            return await RunMtpTestCheckAsync(
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                dotnetTestBuildPhase,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!UsesVstestRunner(check))
+        {
+            return (new AcceptanceCheckResult(
+                check.Name,
+                false,
+                1,
+                $"Acceptance check '{check.Name}' has unrecognized runner '{check.Runner}'.",
+                ResultSummary: $"unrecognized runner '{check.Runner}'",
+                Advisory: check.Advisory), false);
+        }
+
         var noBuild = GateUsesStableSlot(stableSlotIndex, stableSlotLease);
         var testArguments = BuildDotnetTestArguments(check, noBuild);
         if (!noBuild)
@@ -1999,6 +2022,124 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             dotnetTestBuildPhase,
             $"acceptance-{Slug(check.Name)}",
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunMtpTestCheckAsync(
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
+        CancellationToken cancellationToken)
+    {
+        var attemptName = $"acceptance-{Slug(check.Name)}";
+        var buildRun = dotnetTestBuildPhase is null
+            ? new DotnetTestBuildPhaseResult(
+                await RunManagedDotnetCheckAsync(
+                    check,
+                    BuildDotnetTestBuildArguments(check),
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    $"{attemptName}-build",
+                    cancellationToken).ConfigureAwait(false),
+                ContributesToCheck: true)
+            : await EnsureDotnetTestBuildPhaseAsync(
+                dotnetTestBuildPhase,
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                attemptName,
+                cancellationToken).ConfigureAwait(false);
+        if (!buildRun.Run.Result.Passed)
+        {
+            return (buildRun.Run.Result with
+            {
+                Name = check.Name,
+                ResultSummary = PrefixResultSummary("build phase failed", buildRun.Run.Result.ResultSummary)
+            }, buildRun.Run.Retried);
+        }
+
+        var testRun = await RunManagedMtpExecutableCheckAsync(
+            check,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            attemptName,
+            cancellationToken).ConfigureAwait(false);
+
+        var durationMilliseconds = (buildRun.ContributesToCheck ? buildRun.Run.Result.DurationMilliseconds ?? 0 : 0) +
+            (testRun.Result.DurationMilliseconds ?? 0);
+        var buildPhaseSummary = buildRun.ContributesToCheck &&
+            buildRun.Run.Result.ResultSummary?.StartsWith("base-build-cache ", StringComparison.Ordinal) == true
+                ? buildRun.Run.Result.ResultSummary
+                : null;
+        return (testRun.Result with
+        {
+            DurationMilliseconds = durationMilliseconds,
+            LockRemediationApplied = buildRun.Run.Result.LockRemediationApplied || testRun.Result.LockRemediationApplied,
+            ResultSummary = buildPhaseSummary is null
+                ? testRun.Result.ResultSummary
+                : PrefixResultSummary(buildPhaseSummary, testRun.Result.ResultSummary)
+        }, buildRun.Run.Retried || testRun.Retried);
+    }
+
+    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedMtpExecutableCheckAsync(
+        AcceptanceManifestCheck check,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        string attemptName,
+        CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName));
+        FileStream? leaseLock = null;
+        try
+        {
+            leaseLock = stableSlotLease is null
+                ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken)
+                : null;
+
+            var telemetry = ResolveTestTelemetry(check, environment);
+            var arguments = BuildMtpTestArguments(check, environment, telemetry);
+            ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
+            var result = await RunWithGateHeartbeatAsync(
+                arguments,
+                worktreePath,
+                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
+                cancellationToken).ConfigureAwait(false);
+
+            elapsed.Stop();
+            var passed = !result.TimedOut && result.ExitCode == 0;
+            EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            return (new AcceptanceCheckResult(
+                result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
+                passed,
+                result.ExitCode,
+                result.TimedOut
+                    ? BuildTimeoutOutput(result)
+                    : passed ? null : TailOutput(result.Output),
+                environment.ArtifactsPath,
+                "goal-acceptance-verifier",
+                environment.LeaseId,
+                (long)elapsed.Elapsed.TotalMilliseconds,
+                ResultSummary: BuildGenericCommandResultSummary(result),
+                TestResultPaths: telemetry.Paths), false);
+        }
+        finally
+        {
+            leaseLock?.Dispose();
+        }
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -3663,6 +3804,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
         stableSlotIndex.HasValue || stableSlotLease is not null;
 
+    private static bool UsesMicrosoftTestingPlatform(AcceptanceManifestCheck check) =>
+        check.Runner?.Equals("mtp", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool UsesVstestRunner(AcceptanceManifestCheck check) =>
+        string.IsNullOrWhiteSpace(check.Runner) ||
+        check.Runner.Equals("vstest", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsDotnetTestCommand(string[] arguments) =>
         arguments.Length >= 2 &&
         arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
@@ -3734,6 +3882,145 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return filter;
     }
 
+    private static string[] BuildMtpTestArguments(
+        AcceptanceManifestCheck check,
+        DotnetBuildEnvironment environment,
+        DotnetTestTelemetry telemetry)
+    {
+        var args = new List<string>
+        {
+            ResolveMtpExecutablePath(check, environment),
+            "--no-ansi",
+            "--progress",
+            "off"
+        };
+        var filter = ExtractMtpCompatibleArguments(check.Arguments, args);
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            args.AddRange(TranslateMtpFilter(filter));
+        }
+
+        args.Add("--results-directory");
+        args.Add(Path.GetDirectoryName(telemetry.Paths[0]) ?? Path.Combine(environment.ArtifactsPath, "TestResults"));
+        args.Add("--report-trx");
+        args.Add("--report-trx-filename");
+        args.Add(Path.GetFileName(telemetry.Paths[0]));
+        if (!args.Any(argument => argument.Equals("--timeout", StringComparison.OrdinalIgnoreCase)))
+        {
+            args.Add("--timeout");
+            args.Add("120s");
+        }
+
+        if (!args.Any(argument => argument.Equals("--long-running", StringComparison.OrdinalIgnoreCase)))
+        {
+            args.Add("--long-running");
+            args.Add("120");
+        }
+
+        return [.. args];
+    }
+
+    private static string? ExtractMtpCompatibleArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
+    {
+        string? filter = null;
+        for (var index = 0; index < sourceArguments.Count; index++)
+        {
+            var argument = sourceArguments[index];
+            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 < sourceArguments.Count)
+                {
+                    filter = sourceArguments[++index];
+                }
+
+                continue;
+            }
+
+            if (argument.Equals("--verbosity", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("-v", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--configuration", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--framework", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--logger", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--results-directory", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--blame-hang-timeout", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--blame-hang-dump-type", StringComparison.OrdinalIgnoreCase))
+            {
+                index++;
+                continue;
+            }
+
+            if (argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--no-restore", StringComparison.OrdinalIgnoreCase) ||
+                argument.Equals("--nologo", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("-p:", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("/p:", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            destinationArguments.Add(argument);
+        }
+
+        return filter;
+    }
+
+    private static IEnumerable<string> TranslateMtpFilter(string filter)
+    {
+        foreach (var rawToken in Regex.Split(filter, @"[&|]"))
+        {
+            var token = rawToken.Trim();
+            if (token.Length == 0)
+            {
+                continue;
+            }
+
+            var fullyQualifiedName = Regex.Match(
+                token,
+                @"^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+                RegexOptions.IgnoreCase);
+            if (fullyQualifiedName.Success)
+            {
+                yield return fullyQualifiedName.Groups["op"].Value == "!~"
+                    ? "--filter-not-class"
+                    : "--filter-class";
+                yield return fullyQualifiedName.Groups["value"].Value;
+                continue;
+            }
+
+            var categoryExclusion = Regex.Match(
+                token,
+                @"^Category\s*!=\s*(?<value>[A-Za-z_][A-Za-z0-9_.-]*)$",
+                RegexOptions.IgnoreCase);
+            if (categoryExclusion.Success)
+            {
+                yield return "--filter-not-trait";
+                yield return $"Category={categoryExclusion.Groups["value"].Value}";
+                continue;
+            }
+
+            throw new InvalidOperationException($"MTP test filter '{filter}' contains unsupported token '{token}'.");
+        }
+    }
+
+    private static string ResolveMtpExecutablePath(AcceptanceManifestCheck check, DotnetBuildEnvironment environment)
+    {
+        if (string.IsNullOrWhiteSpace(check.Project))
+        {
+            throw new InvalidOperationException($"Acceptance check '{check.Name}' uses MTP but has no project.");
+        }
+
+        var projectName = Path.GetFileNameWithoutExtension(check.Project);
+        var extension = OperatingSystem.IsWindows() ? ".exe" : string.Empty;
+        return Path.Combine(
+            environment.ArtifactsPath,
+            "bin",
+            projectName,
+            "debug",
+            $"{projectName}{extension}");
+    }
+
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment)
     {
         return [.. arguments, .. environment.Arguments];
@@ -3749,6 +4036,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
+        return ResolveTestTelemetry(check, environment) with
+        {
+            Arguments = AddVstestTelemetryArguments(arguments, check, environment)
+        };
+    }
+
+    private static DotnetTestTelemetry ResolveTestTelemetry(
+        AcceptanceManifestCheck check,
+        DotnetBuildEnvironment environment)
+    {
         var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
         var directory = string.IsNullOrWhiteSpace(attemptPrefix)
             ? Path.Combine(environment.ArtifactsPath, "TestResults")
@@ -3763,6 +4060,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}";
         var fileName = $"{SanitizeFileName(filePrefix)}.trx";
         var path = Path.Combine(directory, fileName);
+        return new DotnetTestTelemetry([path], []);
+    }
+
+    private static string[] AddVstestTelemetryArguments(
+        string[] arguments,
+        AcceptanceManifestCheck check,
+        DotnetBuildEnvironment environment)
+    {
+        var telemetry = ResolveTestTelemetry(check, environment);
+        var directory = Path.GetDirectoryName(telemetry.Paths[0]) ?? Path.Combine(environment.ArtifactsPath, "TestResults");
+        var fileName = Path.GetFileName(telemetry.Paths[0]);
         var effectiveArguments = new List<string>(arguments)
         {
             "--logger",
@@ -3771,7 +4079,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             directory
         };
 
-        return new DotnetTestTelemetry([path], [.. effectiveArguments]);
+        return [.. effectiveArguments];
     }
 
     private static void EmitMissingTrxReceiptIfNeeded(bool passed, DotnetTestTelemetry? telemetry)
@@ -4333,6 +4641,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string? FilePath { get; init; }
         public int? TimeoutMinutes { get; init; }
         public bool Advisory { get; init; }
+        public string? Runner { get; init; } = "vstest";
     }
 
     private sealed record InfrastructureTestLane(string Name, string Filter);

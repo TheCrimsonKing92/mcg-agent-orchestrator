@@ -21,9 +21,9 @@ public sealed class FirewallSetupCommandTests
 
             Xunit.Assert.Equal(FirewallSetupCommand.SuccessExitCode, firstExit);
             Xunit.Assert.Equal(FirewallSetupCommand.SuccessExitCode, secondExit);
-            Xunit.Assert.Contains("created 16 rule(s), already present 0, total 16", firstOutput.ToString());
-            Xunit.Assert.Contains("created 0 rule(s), already present 16, total 16", secondOutput.ToString());
-            Xunit.Assert.Equal(16, writer.Rules.Count);
+            Xunit.Assert.Contains("created 20 rule(s), already present 0, total 20", firstOutput.ToString());
+            Xunit.Assert.Contains("created 0 rule(s), already present 20, total 20", secondOutput.ToString());
+            Xunit.Assert.Equal(20, writer.Rules.Count);
 
             var expected = new List<FirewallRuleSpec>();
             for (var slot = 0; slot < 4; slot++)
@@ -32,6 +32,17 @@ public sealed class FirewallSetupCommandTests
                 expected.Add(Expected(slot, "Core", "Mcg.AgentOrchestrator.Core.Tests", "Release", root));
                 expected.Add(Expected(slot, "Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", root));
                 expected.Add(Expected(slot, "Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Release", root));
+                expected.Add(new FirewallRuleSpec(
+                    $"MCG-testhost-slot{slot}-Core-MTP-Debug",
+                    Path.Combine(
+                        root,
+                        "slots",
+                        $"slot-{slot}",
+                        "artifacts",
+                        "bin",
+                        "Mcg.AgentOrchestrator.Core.Tests",
+                        "debug",
+                        "Mcg.AgentOrchestrator.Core.Tests.exe")));
             }
 
             Xunit.Assert.Equal(expected, writer.Rules);

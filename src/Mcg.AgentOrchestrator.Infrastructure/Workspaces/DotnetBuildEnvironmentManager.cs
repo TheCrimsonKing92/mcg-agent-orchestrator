@@ -163,6 +163,29 @@ public static class DotnetBuildEnvironmentManager
         return paths;
     }
 
+    public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotMtpExecutableFirewallPaths()
+    {
+        DotnetTesthostFirewallPath[] paths = new DotnetTesthostFirewallPath[StableSlotCount];
+        for (var slot = 0; slot < StableSlotCount; slot++)
+        {
+            paths[slot] = new DotnetTesthostFirewallPath(
+                slot,
+                "Core-MTP",
+                "Debug",
+                Path.Combine(
+                    StableSlotArtifactsPath($"slot-{slot}"),
+                    "bin",
+                    "Mcg.AgentOrchestrator.Core.Tests",
+                    "debug",
+                    "Mcg.AgentOrchestrator.Core.Tests.exe"));
+        }
+
+        return paths;
+    }
+
+    public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTestExecutableFirewallPaths() =>
+        [.. StableSlotTesthostFirewallPaths(), .. StableSlotMtpExecutableFirewallPaths()];
+
     public static string StableSlotArtifactsPath(int slotIndex)
     {
         ValidateStableSlotIndex(slotIndex);
