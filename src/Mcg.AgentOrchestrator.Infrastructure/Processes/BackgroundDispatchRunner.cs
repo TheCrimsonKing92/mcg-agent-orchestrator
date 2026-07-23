@@ -268,21 +268,9 @@ public sealed class BackgroundDispatchRunner
             CodexEgressProxyIdleTimeoutMs: egressProxyOptions.IdleTimeoutMs,
             CodexEgressProxyConnectTimeoutMs: egressProxyOptions.ConnectTimeoutMs));
 
-        if (useSandbox && OperatingSystem.IsWindows())
-        {
-            var sandboxRoot = Path.Combine(dispatch.WorkingDirectory, ".mcg-sandbox");
-            var preparer = WorkerSandboxPreparer.CreateDefault();
-            var preparation = sandboxWorktreeWritable
-                ? preparer.Prepare(dispatch.WorkingDirectory, sandboxRoot)
-                : preparer.PrepareSandboxRootOnly(dispatch.WorkingDirectory, sandboxRoot);
-            if (preparation.RecoveryAction is { } action)
-            {
-                return DispatchProcessStartResult.RequiresRecovery(action);
-            }
-        }
-
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
-        // command through the resolved PowerShell host, and writes logs/heartbeat/exit natively.
+        // command through the resolved PowerShell host, performs sandbox prep off the conductor tick,
+        // and writes logs/heartbeat/exit natively.
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",

@@ -1269,15 +1269,27 @@ internal sealed class ConductorBatchLoop
         ConductorParallelAcceptanceRunResult run,
         ConductorParallelAcceptanceAttempt attempt)
     {
+        EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
         if (goal.Status != GoalStatus.Verifying)
         {
             return;
         }
 
         var disposition = AcceptanceRunDisposition(run);
-        kernel.ReconcileGoalAcceptanceVerified(
+        if (IsPassingAcceptanceRun(run) || IsRetryableAcceptanceRun(run))
+        {
+            kernel.ReconcileGoalAcceptanceVerified(
+                goal.Id,
+                $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal returned to Verified for deterministic landing classification.");
+            return;
+        }
+
+        kernel.ReconcileGoalAcceptanceFailed(
             goal.Id,
-            $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal returned to Verified for deterministic landing classification.");
+            BuildFailedAcceptanceChecks(run, attempt),
+            $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal moved to AcceptanceFailed.",
+            run.Candidate.BranchHeadSha ?? attempt.BranchHeadSha,
+            run.Candidate.MainHeadSha ?? attempt.MainHeadSha);
     }
 
     private static void ReconcileParallelAcceptanceTerminalState(
@@ -1285,14 +1297,87 @@ internal sealed class ConductorBatchLoop
         Goal goal,
         ConductorParallelAcceptanceAttempt attempt)
     {
+        EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
         if (goal.Status != GoalStatus.Verifying)
         {
             return;
         }
 
-        kernel.ReconcileGoalAcceptanceVerified(
+        if (IsRetryableTerminalAttempt(attempt))
+        {
+            kernel.ReconcileGoalAcceptanceVerified(
+                goal.Id,
+                $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({AcceptanceAttemptOutcomeToken(attempt.Outcome)}); goal returned to Verified for deterministic relaunch.");
+            return;
+        }
+
+        kernel.ReconcileGoalAcceptanceFailed(
             goal.Id,
-            $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({AcceptanceAttemptOutcomeToken(attempt.Outcome)}); goal returned to Verified for deterministic landing classification.");
+            [AcceptanceAttemptFailureCheck(attempt)],
+            $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({AcceptanceAttemptOutcomeToken(attempt.Outcome)}); goal moved to AcceptanceFailed.",
+            attempt.BranchHeadSha,
+            attempt.MainHeadSha);
+    }
+
+    private static bool IsPassingAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
+        run.Exception is null &&
+        (run.EarlyResult is not null
+            ? !run.EarlyResult.WasEscalated
+            : run.Acceptance is { Passed: true });
+
+    private static bool IsRetryableAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
+        run.EarlyResult is not null ||
+        run.Exception is DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException;
+
+    private static bool IsRetryableTerminalAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
+            or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
+            or ConductorParallelAcceptanceAttemptOutcome.Cancelled ||
+        ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(attempt) &&
+            attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap;
+
+    private static IReadOnlyList<string> BuildFailedAcceptanceChecks(
+        ConductorParallelAcceptanceRunResult run,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (run.Acceptance is { } acceptance)
+        {
+            var checks = acceptance.FailedChecks is { Count: > 0 }
+                ? acceptance.FailedChecks
+                : acceptance.RequiredUnmetCriteria.Select(criterion => criterion.Name).ToArray();
+            if (checks.Count > 0)
+            {
+                return checks;
+            }
+        }
+
+        if (run.Exception is not null)
+        {
+            return [$"background-acceptance-fault: {Sanitize(run.Exception.Message)}"];
+        }
+
+        if (run.EarlyOutcome is not null)
+        {
+            return [$"{run.EarlyOutcome.Kind}: {Sanitize(run.EarlyOutcome.Detail)}"];
+        }
+
+        return [AcceptanceAttemptFailureCheck(attempt)];
+    }
+
+    private static string AcceptanceAttemptFailureCheck(ConductorParallelAcceptanceAttempt attempt) =>
+        $"background-acceptance-{AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {Sanitize(attempt.Detail ?? attempt.AttemptId)}";
+
+    private static void EnsureParallelAcceptanceTerminalIsVerifying(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (goal.Status == GoalStatus.Verified)
+        {
+            kernel.BeginGoalAcceptanceVerification(
+                goal.Id,
+                $"Batch loop observed terminal background acceptance gate {attempt.AttemptId}; goal entered Verifying before terminal reconciliation.");
+        }
     }
 
     private static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>

@@ -1176,7 +1176,7 @@ internal sealed class ConductorDriver
             return null;
         }
 
-        if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) != GoalLifecycleState.Verified)
+        if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying))
         {
             return null;
         }

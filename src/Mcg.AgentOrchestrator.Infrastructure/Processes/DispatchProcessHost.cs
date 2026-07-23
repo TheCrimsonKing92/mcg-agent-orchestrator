@@ -80,8 +80,18 @@ public static class DispatchProcessHost
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
-        File.WriteAllText(path, JsonSerializer.Serialize(parameters, JsonOptions));
+        WriteAllTextDurable(path, JsonSerializer.Serialize(parameters, JsonOptions));
         return path;
+    }
+
+    private static void WriteAllTextDurable(string path, string payload)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+        using var writer = new StreamWriter(stream);
+        writer.Write(payload);
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
     }
 
     // OS worker sandbox via Mandatory Integrity Control. The worker runs at LOW integrity as the SAME
