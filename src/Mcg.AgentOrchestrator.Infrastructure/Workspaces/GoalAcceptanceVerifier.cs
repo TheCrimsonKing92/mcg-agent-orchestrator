@@ -116,7 +116,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         new("Goal worktree", "FullyQualifiedName~GoalWorktreeTests"),
         new("Goal acceptance verifier", "FullyQualifiedName~GoalAcceptanceVerifierTests"),
         new("Dashboard rendering", "FullyQualifiedName~DashboardRenderingTests"),
-        new("Dashboard host", "FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"),
         new("Dashboard validation", "FullyQualifiedName~DashboardValidationHarnessTests"),
         new("Advance loop", "FullyQualifiedName~AdvanceLoopTests"),
         new("Conductor batch loop", "FullyQualifiedName~ConductorBatchLoopTests"),
@@ -128,7 +127,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests" +
             "&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests" +
             "&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests" +
-            "&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardHostTests" +
+            "&FullyQualifiedName!~DashboardRenderingTests" +
             "&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests" +
             "&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests" +
             "&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration")
@@ -3594,8 +3593,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Exclude host-integration tests that spawn a real Kestrel dashboard server (binds a port,
         // needs an interactive firewall allow) — they hang in the unattended, relocated gate. Match
         // both by class name (works on a worktree built before the trait existed) and by the
-        // [Trait("Category","HostIntegration")] tag (covers any future such tests). They run in a
-        // dedicated lane instead.
+        // [Trait("Category","HostIntegration")] tag (covers any future such tests).
         if (string.IsNullOrWhiteSpace(explicitFilter) && NeedsUnattendedHostIntegrationExclusion(check))
         {
             args.Add("--filter");
