@@ -628,6 +628,51 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         return results;
     }
 
+    public async Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
+        IReadOnlyCollection<GoalId> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goalIds);
+        if (goalIds.Count == 0)
+        {
+            return [];
+        }
+
+        await using var conn = OpenConnection();
+        var results = new HashSet<string>(StringComparer.Ordinal);
+        var parameterNames = goalIds.Select((_, index) => $"$goal_id{index}").ToArray();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT goal_id, snapshot_json
+            FROM human_input_requests
+            WHERE goal_id IN ({string.Join(", ", parameterNames)})
+            """;
+        var index = 0;
+        foreach (var goalId in goalIds)
+        {
+            cmd.Parameters.AddWithValue(parameterNames[index], goalId.Value);
+            index++;
+        }
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var snapshot = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(reader.GetString(1), SerializerOptions);
+            if (snapshot?.IsCompleted == true &&
+                !IsSyntheticParkedHumanWaitCompletion(snapshot))
+            {
+                results.Add(reader.GetString(0));
+            }
+        }
+
+        return results.Select(id => new GoalId(id)).ToArray();
+    }
+
+    private static bool IsSyntheticParkedHumanWaitCompletion(HumanInputRequestSnapshot snapshot) =>
+        !snapshot.WasDismissed &&
+        snapshot.Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
+
     public async Task<IReadOnlyList<QuarantinedGoalSummary>> ListQuarantinedGoalRowsAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();

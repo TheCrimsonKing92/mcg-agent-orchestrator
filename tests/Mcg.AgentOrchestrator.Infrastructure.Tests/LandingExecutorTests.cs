@@ -1097,6 +1097,11 @@ public sealed class LandingExecutorTests
         public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             inner.ListConductLoopGoalMetadataAsync(cancellationToken);
 
+        public Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) =>
+            inner.ListGoalIdsWithCompletedHumanInputAsync(goalIds, cancellationToken);
+
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
             inner.ListModelFitHistoryAsync(cancellationToken);
 

@@ -379,6 +379,45 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.DoesNotContain(loaded.HumanInputRequests, item => item.Id == otherRequest.Id);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_lists_completed_human_input_goal_ids_without_goal_load")]
+    public async Task ListGoalIdsWithCompletedHumanInputAsyncReturnsCompletedGoalIdsOnly()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal("Target answered goal", [new TaskSpec(TaskId.New(), "Target task", AgentRole.Developer)]);
+        var other = kernel.CreateGoal("Other waiting goal", [new TaskSpec(TaskId.New(), "Other task", AgentRole.Developer)]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(target.Id, agents);
+        kernel.ActivateGoal(other.Id, agents);
+        var targetRequest = kernel.RequestHumanInput(target.Id, target.Tasks.Single().Id, "Target input?");
+        kernel.RequestHumanInput(other.Id, other.Tasks.Single().Id, "Other input?");
+        kernel.SubmitHumanInput(targetRequest.Id, "Use option A.");
+        await repo.SaveAsync(kernel);
+
+        var completed = await repo.ListGoalIdsWithCompletedHumanInputAsync([target.Id, other.Id]);
+
+        var id = Assert.Single(completed);
+        Assert.Equal(target.Id, id);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_ignores_synthetic_parked_human_input_completions")]
+    public async Task ListGoalIdsWithCompletedHumanInputAsyncIgnoresSyntheticParkedCompletions()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal("Synthetic parked completion", [new TaskSpec(TaskId.New(), "Target task", AgentRole.Developer)]);
+        kernel.ActivateGoal(target.Id, AgentCatalog.Default().Agents);
+        kernel.RequestHumanInput(target.Id, target.Tasks.Single().Id, "Need operator decision.");
+        kernel.ParkGoal(target.Id, "waiting for operator answer");
+        await repo.SaveAsync(kernel);
+
+        var completed = await repo.ListGoalIdsWithCompletedHumanInputAsync([target.Id]);
+
+        Assert.Empty(completed);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_LoadAsync_quarantines_malformed_goal_row_and_loads_remaining_state")]
     public async Task LoadAsyncQuarantinesMalformedGoalRowAndLoadsRemainingState()
     {

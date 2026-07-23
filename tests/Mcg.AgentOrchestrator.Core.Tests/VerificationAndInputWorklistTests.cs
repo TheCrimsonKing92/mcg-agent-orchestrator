@@ -622,6 +622,41 @@ public sealed class VerificationAndInputWorklistTests
         evt.Message == "Human input resolved; restored task status to Running.");
 }
 
+    [Xunit.Fact(DisplayName = "Refreshing_parked_goal_with_resolved_human_wait_promotes_after_park_decision")]
+    public void RefreshingParkedGoalWithResolvedHumanWaitPromotesAfterParkDecision()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Resume parked answered wait", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", clock.UtcNow));
+    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which option?");
+    goal.SetStatus(GoalStatus.Parked);
+    clock.Advance();
+    goal.Append(new ProgressEvent(
+        goal.Id,
+        null,
+        ProgressKind.GoalPolicyDecision,
+        "Goal parked: waiting for operator answer",
+        clock.UtcNow));
+    clock.Advance();
+
+    kernel.SubmitHumanInput(request.Id, "Use option A.");
+
+    Assert.Equal(GoalStatus.Parked, goal.Status);
+    Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+
+    var promoted = kernel.RefreshParkedGoalsWithResolvedHumanWaits();
+
+    Assert.Equal(1, promoted);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Running, goal.Tasks.Single().Status);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.GoalPolicyDecision &&
+        evt.Message == "Goal unparked: resolved parked human wait.");
+}
+
     [Xunit.Fact(DisplayName = "Answering_human_input_restores_completed_dispatch_without_verification_to_assigned")]
     public void AnsweringHumanInputRestoresCompletedDispatchWithoutVerificationToAssigned()
 {

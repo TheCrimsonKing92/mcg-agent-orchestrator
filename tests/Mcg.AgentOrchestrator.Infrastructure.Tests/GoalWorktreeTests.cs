@@ -742,6 +742,11 @@ public abstract class GoalWorktreeTestBase
         public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("repo-process command should not list conduct metadata");
 
+        public Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("repo-process command should not query human input metadata");
+
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("repo-process command should not list model fit history");
 

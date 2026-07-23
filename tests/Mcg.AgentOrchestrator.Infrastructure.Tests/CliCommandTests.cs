@@ -555,6 +555,10 @@ public abstract class CliCommandTestBase
 
         public int SaveGoalSnapshotsCount { get; private set; }
 
+        public int CompletedHumanInputQueryCount { get; private set; }
+
+        public long LoadedGoalSnapshotJsonBytes { get; private set; }
+
         public int LoadWhileInTransactionCount { get; private set; }
 
         public int TransactGoalDelegateCalls { get; private set; }
@@ -602,11 +606,20 @@ public abstract class CliCommandTestBase
                 .Where(request => goalIds.Any(id => id.Value == request.GoalId))
                 .ToList();
             LoadedGoalIds.AddRange(filtered.Select(goal => goal.Id));
+            LoadedGoalSnapshotJsonBytes += filtered.Sum(MeasureGoalSnapshotJsonBytes);
             return Task.FromResult(AgentOrchestratorKernel.FromSnapshot(snapshot with
             {
                 Goals = filtered,
                 HumanInputRequests = filteredHumanInput
             }));
+        }
+
+        public long EstimateGoalSnapshotJsonBytes(IReadOnlyCollection<GoalId> goalIds)
+        {
+            var ids = goalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            return _kernel.ExportSnapshot().Goals
+                .Where(goal => ids.Contains(goal.Id))
+                .Sum(MeasureGoalSnapshotJsonBytes);
         }
 
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
@@ -665,6 +678,26 @@ public abstract class CliCommandTestBase
                     goal.Objective,
                     DateTimeOffset.UtcNow.ToString("O")))
                 .ToList());
+
+        public Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default)
+        {
+            CompletedHumanInputQueryCount++;
+            var ids = goalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            return Task.FromResult<IReadOnlyList<GoalId>>(_kernel.ExportSnapshot().HumanInputRequests
+                .Where(request =>
+                    ids.Contains(request.GoalId) &&
+                    request.IsCompleted &&
+                    !IsSyntheticParkedHumanWaitCompletion(request))
+                .Select(request => new GoalId(request.GoalId))
+                .Distinct()
+                .ToArray());
+        }
+
+        private static bool IsSyntheticParkedHumanWaitCompletion(HumanInputRequestSnapshot request) =>
+            !request.WasDismissed &&
+            request.Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
 
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
@@ -763,6 +796,9 @@ public abstract class CliCommandTestBase
 
         private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+
+        private static long MeasureGoalSnapshotJsonBytes(GoalSnapshot goal) =>
+            JsonSerializer.SerializeToUtf8Bytes(goal).LongLength;
 
         private void RecordLoadBoundary()
         {

@@ -35,6 +35,48 @@ private static readonly Regex OpeningBacklogObjectiveReferenceRegex = new(
 
 private sealed record SourceBacklogItemLink(BacklogItem Item, bool FromExplicitFlag);
 
+private static int PersistResolvedParkedHumanWaitsForNextTick(
+    CliExecutionContext context,
+    AgentOrchestratorKernel parkedKernel)
+{
+    var promoted = parkedKernel.RefreshParkedGoalsWithResolvedHumanWaits();
+    if (promoted == 0)
+    {
+        return 0;
+    }
+
+    var changedGoalIds = parkedKernel.Goals
+        .Where(goal => goal.Status != GoalStatus.Parked)
+        .Select(goal => goal.Id)
+        .ToArray();
+    // Parked goals are persisted here but not ingested into the live loop kernel.
+    // The next conduct tick reloads them as normal non-Parked goals before prewalk.
+    try
+    {
+        context.PersistGoalCheckpoint(parkedKernel, changedGoalIds);
+    }
+    catch (Exception ex)
+    {
+        var goalPrefixes = string.Join(',', changedGoalIds.Select(id => id.Value[..Math.Min(8, id.Value.Length)]));
+        var detail = $"PARKED_UNPARK_PERSISTENCE_FAILED goals={goalPrefixes} count={changedGoalIds.Length} exception={ex.GetType().Name} message={FormatConductToken(ex.Message)}";
+        Console.WriteLine(detail);
+        Console.Out.Flush();
+        try
+        {
+            new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                .Append("parked-unpark-persistence-failure", changedGoalIds.Length == 1 ? goalPrefixes : null, detail);
+        }
+        catch
+        {
+            // Shared event streaming is advisory; stdout remains the primary conduct receipt.
+        }
+
+        throw;
+    }
+
+    return changedGoalIds.Length;
+}
+
 private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
     GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
 
@@ -857,6 +899,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
+                var parkedGoalSafetyNetTick = 0;
                 TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
                 {
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
@@ -864,11 +907,44 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // instead of stale loop-local objects.
                     try
                     {
-                        var snapshot = context.ReloadKernel().ExportSnapshot();
+                        var reloadedKernel = context.ReloadKernel();
+                        loopKernel.MarkKnownDependencyGoalStatuses(reloadedKernel.KnownDependencyGoalStatuses);
+                        loopKernel.MarkKnownCompletedDependencyGoals(reloadedKernel.KnownCompletedDependencyGoals);
+                        var snapshot = reloadedKernel.ExportSnapshot();
                         loopKernel.RefreshTrackedGoals(snapshot);
                         loopKernel.IngestNewGoals(snapshot);
                     }
                     catch { /* dynamic pickup is best-effort */ }
+
+                    AgentOrchestratorKernel? resolvedParkedHumanWaitKernel = null;
+                    try
+                    {
+                        // Fast path: every tick, query completed human-input rows for Parked goal ids,
+                        // hydrate only those candidates, and persist promotions for the next tick's prewalk.
+                        resolvedParkedHumanWaitKernel = context.ReloadResolvedParkedHumanWaitKernel();
+                    }
+                    catch { /* dynamic pickup is best-effort */ }
+
+                    if (resolvedParkedHumanWaitKernel is not null)
+                    {
+                        PersistResolvedParkedHumanWaitsForNextTick(context, resolvedParkedHumanWaitKernel);
+                    }
+
+                    AgentOrchestratorKernel? parkedGoalSafetyNetKernel = null;
+                    parkedGoalSafetyNetTick++;
+                    if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
+                    {
+                        try
+                        {
+                            parkedGoalSafetyNetKernel = context.ReloadParkedGoalSafetyNetKernel();
+                        }
+                        catch { /* dynamic pickup is best-effort */ }
+                    }
+
+                    if (parkedGoalSafetyNetKernel is not null)
+                    {
+                        PersistResolvedParkedHumanWaitsForNextTick(context, parkedGoalSafetyNetKernel);
+                    }
 
                     foreach (var resolved in loopKernel.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
                     {

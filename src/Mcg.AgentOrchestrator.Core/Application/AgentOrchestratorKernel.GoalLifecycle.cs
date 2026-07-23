@@ -467,6 +467,28 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
+    public int RefreshParkedGoalsWithResolvedHumanWaits()
+    {
+        var promoted = 0;
+        foreach (var goal in _goals.Values.Where(goal => goal.Status == GoalStatus.Parked).ToArray())
+        {
+            if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && !request.IsCompleted) ||
+                !HasHumanInputResolvedAfterLatestParkDecision(goal))
+            {
+                continue;
+            }
+
+            RefreshGoalStatus(goal, allowParkedRefresh: true);
+            if (goal.Status != GoalStatus.Parked)
+            {
+                promoted++;
+                Append(goal, null, ProgressKind.GoalPolicyDecision, "Goal unparked: resolved parked human wait.");
+            }
+        }
+
+        return promoted;
+    }
+
     public Goal CompleteGoal(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
@@ -815,6 +837,31 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return completed;
+    }
+
+    private static bool HasHumanInputResolvedAfterLatestParkDecision(Goal goal)
+    {
+        DateTimeOffset? latestParkDecisionAt = null;
+        DateTimeOffset? latestHumanInputReceivedAt = null;
+        foreach (var evt in goal.Timeline)
+        {
+            if (evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+            {
+                latestParkDecisionAt = evt.OccurredAt;
+            }
+            else if (evt.Kind == ProgressKind.HumanInputReceived)
+            {
+                if (evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                latestHumanInputReceivedAt = evt.OccurredAt;
+            }
+        }
+
+        return latestParkDecisionAt is not null && latestHumanInputReceivedAt > latestParkDecisionAt;
     }
 
     private string? ResolveParkResolution(Goal goal)

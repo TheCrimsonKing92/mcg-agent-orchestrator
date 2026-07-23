@@ -2,14 +2,14 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
-    private void RefreshGoalStatus(Goal goal)
+    private void RefreshGoalStatus(Goal goal, bool allowParkedRefresh = false)
     {
         if (IsTerminalGoalStatus(goal.Status))
         {
             return;
         }
 
-        if (goal.Status == GoalStatus.Parked)
+        if (goal.Status == GoalStatus.Parked && !allowParkedRefresh)
         {
             return;
         }
