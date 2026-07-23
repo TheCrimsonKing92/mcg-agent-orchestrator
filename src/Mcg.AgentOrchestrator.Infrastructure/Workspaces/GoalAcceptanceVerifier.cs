@@ -115,7 +115,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         new("Dispatch process host", "FullyQualifiedName~DispatchProcessHostTests"),
         new("Goal worktree", "FullyQualifiedName~GoalWorktreeTests"),
         new("Goal acceptance verifier", "FullyQualifiedName~GoalAcceptanceVerifierTests"),
-        new("Dashboard rendering", "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"),
+        new("Dashboard rendering", "FullyQualifiedName~DashboardRenderingTests"),
         new("Dashboard validation", "FullyQualifiedName~DashboardValidationHarnessTests"),
         new("Advance loop", "FullyQualifiedName~AdvanceLoopTests"),
         new("Conductor batch loop", "FullyQualifiedName~ConductorBatchLoopTests"),
