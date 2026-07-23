@@ -313,10 +313,11 @@ public sealed class TaskSpec
     {
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
-        // EmptyOutputRetryCount is the bounded-retry budget for transient empty-output startup flakes.
-        // Sandbox launch-preflight failures are classified separately and must not spend this budget.
+        // EmptyOutputRetryCount is the shared bounded-retry budget for transient dispatch startup flakes.
+        // Sandbox launch-preflight failures are classified separately, but the conductor deliberately spends
+        // the same retry budget because the worker never launched.
         var dispatchFlakeKind = DispatchFailureClassifier.Classify(this, verification).Kind;
-        EmptyOutputRetryCount = dispatchFlakeKind is DispatchOutcomeKind.EmptyOutputFlake
+        EmptyOutputRetryCount = dispatchFlakeKind is DispatchOutcomeKind.EmptyOutputFlake or DispatchOutcomeKind.PreflightFailure
             ? EmptyOutputRetryCount + 1
             : 0;
         if (verification.ModelFitNote is null)

@@ -2442,9 +2442,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
     kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
-    var stdoutHead = new string('a', 20000);
-    var stdoutTail = new string('b', 10000);
-    var fullStdout = stdoutHead + stdoutTail;
+    var fullStdout = new string('a', 20000) + new string('b', 10000);
     kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
         "dotnet test", workingDirectory, 0, fullStdout, string.Empty, DateTimeOffset.UtcNow));
     var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
@@ -2455,9 +2453,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(handoffPath));
     var content = File.ReadAllText(handoffPath);
     Assert.Contains("Developer: Fix the login bug.", content, StringComparison.Ordinal);
-    Assert.Contains(stdoutHead, content, StringComparison.Ordinal);
-    Assert.Contains("[truncated 10000 chars]", content, StringComparison.Ordinal);
-    Assert.True(!content.Contains(stdoutTail, StringComparison.Ordinal));
+    Assert.Contains(new string('a', VerificationTextBounds.PreviewHeadChars), content, StringComparison.Ordinal);
+    Assert.Contains("full output path not recorded", content, StringComparison.Ordinal);
+    Assert.Contains(new string('b', VerificationTextBounds.PreviewTailChars), content, StringComparison.Ordinal);
+    Assert.True(!content.Contains(new string('a', VerificationTextBounds.PreviewHeadChars + 1), StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_overwrites_handoff_file_on_each_dispatch")]
