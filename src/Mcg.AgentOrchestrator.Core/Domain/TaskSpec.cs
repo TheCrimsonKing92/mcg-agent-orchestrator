@@ -4,7 +4,7 @@ public sealed class TaskSpec
 {
     internal const int VerificationHistoryLimit = 20;
 
-    private readonly List<TaskVerificationRecord> _verificationHistory = [];
+    private readonly CappedVerificationHistory _verificationHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -313,9 +313,10 @@ public sealed class TaskSpec
     {
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
-        // EmptyOutputRetryCount is the shared bounded-retry budget for transient dispatch startup flakes.
-        // Sandbox launch-preflight failures are classified separately, but the conductor deliberately spends
-        // the same retry budget because the worker never launched.
+        // EmptyOutputRetryCount is the bounded-retry budget for TRANSIENT DISPATCH-STARTUP flakes:
+        // an empty-output flake (worker produced zero bytes) OR a sandbox launch-preflight failure
+        // (worker never launched). Both are re-dispatchable and clear on a fresh launch, so they share
+        // one budget; any genuine worker result (any other classification) resets it to zero.
         var dispatchFlakeKind = DispatchFailureClassifier.Classify(this, verification).Kind;
         EmptyOutputRetryCount = dispatchFlakeKind is DispatchOutcomeKind.EmptyOutputFlake or DispatchOutcomeKind.PreflightFailure
             ? EmptyOutputRetryCount + 1
@@ -329,22 +330,13 @@ public sealed class TaskSpec
             }
         }
 
-        AppendVerificationHistory(verification);
+        _verificationHistory.Add(verification);
         LastVerification = verification;
     }
 
-    internal void RestoreVerificationHistory(TaskVerificationRecord verification) => AppendVerificationHistory(verification);
+    internal void RestoreVerificationHistory(TaskVerificationRecord verification) => _verificationHistory.Add(verification);
 
     internal void ClearLatestVerification() => LastVerification = null;
-
-    private void AppendVerificationHistory(TaskVerificationRecord verification)
-    {
-        _verificationHistory.Add(verification);
-        if (_verificationHistory.Count > VerificationHistoryLimit)
-        {
-            _verificationHistory.RemoveRange(0, _verificationHistory.Count - VerificationHistoryLimit);
-        }
-    }
 
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 
@@ -453,5 +445,17 @@ public sealed class TaskSpec
         }
 
         return value.Trim();
+    }
+
+    private sealed class CappedVerificationHistory : List<TaskVerificationRecord>
+    {
+        public new void Add(TaskVerificationRecord item)
+        {
+            base.Add(item);
+            if (Count > VerificationHistoryLimit)
+            {
+                RemoveRange(0, Count - VerificationHistoryLimit);
+            }
+        }
     }
 }
