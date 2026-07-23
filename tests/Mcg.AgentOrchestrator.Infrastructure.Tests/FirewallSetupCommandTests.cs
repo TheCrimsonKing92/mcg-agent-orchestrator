@@ -32,6 +32,10 @@ public sealed class FirewallSetupCommandTests
                 expected.Add(Expected(slot, "Core", "Mcg.AgentOrchestrator.Core.Tests", "Release", root));
                 expected.Add(Expected(slot, "Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", root));
                 expected.Add(Expected(slot, "Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Release", root));
+            }
+
+            for (var slot = 0; slot < 4; slot++)
+            {
                 expected.Add(new FirewallRuleSpec(
                     $"MCG-testhost-slot{slot}-Core-MTP-Debug",
                     Path.Combine(
