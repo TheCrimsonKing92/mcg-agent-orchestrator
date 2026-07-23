@@ -915,6 +915,53 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_mtp_runner_omits_total_session_timeout")]
+    public async Task GoalAcceptanceVerifierMtpRunnerOmitsTotalSessionTimeout()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
+            Assert.DoesNotContain(mtpCall, argument => argument.Equals("--timeout", StringComparison.OrdinalIgnoreCase));
+            var longRunningIndex = Array.IndexOf(mtpCall, "--long-running");
+            Assert.True(longRunningIndex >= 0);
+            Assert.True(longRunningIndex + 1 < mtpCall.Length);
+            Assert.Equal("120", mtpCall[longRunningIndex + 1]);
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_mtp_runner_infrastructure_remainder_shard_uses_slot_executable")]
     public async Task GoalAcceptanceVerifierMtpRunnerInfrastructureRemainderShardUsesSlotExecutable()
     {
