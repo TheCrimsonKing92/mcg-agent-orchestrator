@@ -531,17 +531,18 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(logPath, restoredTask.LastVerification!.StandardOutputPath);
         Assert.Equal(0, restoredTask.LastVerification.ExitCode);
         // Bounded preview must begin with the head of the original text
-        Assert.StartsWith(new string('A', 4096), restoredTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+        Assert.StartsWith(new string('A', VerificationTextBounds.PreviewHeadChars), restoredTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+        Assert.True(restoredTask.LastVerification.StandardOutput.Length <= 20_000);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_preserves_full_inline_output_when_no_path_is_set")]
-    public async Task SqliteOrchestratorStateRepositoryPreservesFullInlineOutputWhenNoPathIsSet()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_bounds_inline_output_when_no_path_is_set")]
+    public async Task SqliteOrchestratorStateRepositoryBoundsInlineOutputWhenNoPathIsSet()
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
         var repository = new SqliteOrchestratorStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("No path keeps full text");
+        var goal = kernel.CreateGoal("No path bounds full text");
         var agent = new AgentDefinition(
             AgentId.New(), "Developer", AgentRole.Developer,
             new ModelProfile("Fake", "fake", ModelCapability.Text, SubscriptionMode.ApiKey),
@@ -549,7 +550,6 @@ public sealed class StatePersistenceAndPerformanceTests
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
 
-        // Large output but NO path — backward-compatible old-state form
         var largeOutput = new string('B', 220_000);
 
         kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
@@ -559,11 +559,12 @@ public sealed class StatePersistenceAndPerformanceTests
 
         await repository.SaveAsync(kernel);
 
-        // Full text must be round-tripped when no path reference exists
         var restored = await repository.LoadAsync();
         var restoredTask = restored.GetTask(goal.Id, task.Id);
         Xunit.Assert.NotNull(restoredTask.LastVerification);
-        Assert.Equal(largeOutput, restoredTask.LastVerification!.StandardOutput);
+        Assert.True(restoredTask.LastVerification!.StandardOutput.Length <= 20_000);
+        Assert.StartsWith(new string('B', VerificationTextBounds.PreviewHeadChars), restoredTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("full output path not recorded", restoredTask.LastVerification.StandardOutput, StringComparison.Ordinal);
         Xunit.Assert.Null(restoredTask.LastVerification.StandardOutputPath);
     }
 

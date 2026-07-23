@@ -176,6 +176,9 @@ public static class DispatchFailureClassifier
         !IsDirtyDispatchGuardFailure(verification) &&
         TryGetRecoverableSubscriptionLimitLine(verification, out _);
 
+    public static bool HasVerificationEvidenceInOutput(string standardOutput, string standardError) =>
+        HasVerificationEvidence(standardOutput, standardError);
+
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
         if (IsPreflightFailure(verification))
@@ -752,12 +755,10 @@ public static class DispatchFailureClassifier
         out string value)
     {
         value = string.Empty;
-        var combined = CombineOutputWithArtifacts(verification);
-        var lines = combined.Replace("\r\n", "\n").Split('\n');
         var inBlock = false;
         string? latestValue = null;
 
-        foreach (var rawLine in lines)
+        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
         {
             var line = rawLine.Trim();
             if (IsWorkerResultOpener(line))
@@ -806,37 +807,101 @@ public static class DispatchFailureClassifier
         return false;
     }
 
-    private static string CombineOutputWithArtifacts(TaskVerificationRecord verification)
+    private static IEnumerable<string> EnumerateEvidenceLines(
+        TaskVerificationRecord verification,
+        bool includeStandardOutput,
+        bool includeStandardError,
+        bool includeRetainedText = true,
+        bool includeArtifactText = true)
     {
-        var builder = new StringBuilder()
-            .AppendLine(verification.StandardOutput)
-            .AppendLine(verification.StandardError);
+        if (includeStandardOutput)
+        {
+            if (includeRetainedText)
+            {
+                foreach (var line in SplitEvidenceLines(verification.StandardOutput))
+                {
+                    yield return line;
+                }
+            }
 
-        AppendArtifactText(builder, verification.StandardOutputPath);
-        AppendArtifactText(builder, verification.StandardErrorPath);
-        return builder.ToString();
+            if (includeArtifactText)
+            {
+                foreach (var line in ReadEvidenceFileLines(verification.StandardOutputPath))
+                {
+                    yield return line;
+                }
+            }
+        }
+
+        if (includeStandardError)
+        {
+            if (includeRetainedText)
+            {
+                foreach (var line in SplitEvidenceLines(verification.StandardError))
+                {
+                    yield return line;
+                }
+            }
+
+            if (includeArtifactText)
+            {
+                foreach (var line in ReadEvidenceFileLines(verification.StandardErrorPath))
+                {
+                    yield return line;
+                }
+            }
+        }
     }
 
-    private static void AppendArtifactText(StringBuilder builder, string? path)
+    private static IEnumerable<string> ReadEvidenceFileLines(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            return;
+            yield break;
         }
 
+        StreamReader reader;
         try
         {
-            var text = File.ReadAllText(path);
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                builder.AppendLine(text);
-            }
+            reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         }
         catch (IOException)
         {
+            yield break;
         }
         catch (UnauthorizedAccessException)
         {
+            yield break;
+        }
+
+        using (reader)
+        {
+            while (true)
+            {
+                string? line;
+                try
+                {
+                    line = reader.ReadLine();
+                }
+                catch (IOException)
+                {
+                    yield break;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    yield break;
+                }
+
+                if (line is null)
+                {
+                    yield break;
+                }
+
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    yield return line.TrimEnd();
+                }
+            }
         }
     }
 
@@ -919,13 +984,12 @@ public static class DispatchFailureClassifier
             return TruncateEvidence(providerLimitLine);
         }
 
-        if (!HasVerificationEvidence(verification.StandardOutput, verification.StandardError))
+        if (!HasVerificationEvidence(verification))
         {
             return string.Empty;
         }
 
-        var combined = $"{verification.StandardOutput}\n{verification.StandardError}";
-        foreach (var rawLine in combined.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
         {
             if (HasVerificationEvidence(rawLine, string.Empty))
             {
@@ -968,12 +1032,7 @@ public static class DispatchFailureClassifier
 
     private static IEnumerable<string> GetStandardErrorEvidenceLines(TaskVerificationRecord verification)
     {
-        foreach (var line in SplitEvidenceLines(verification.StandardError))
-        {
-            yield return line;
-        }
-
-        foreach (var line in SplitEvidenceLines(ReadEvidenceFile(verification.StandardErrorPath)))
+        foreach (var line in EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true))
         {
             yield return line;
         }
@@ -1052,12 +1111,7 @@ public static class DispatchFailureClassifier
 
     private static IEnumerable<string> GetPreflightEvidenceLines(TaskVerificationRecord verification)
     {
-        foreach (var line in SplitEvidenceLines(verification.StandardError))
-        {
-            yield return line;
-        }
-
-        foreach (var line in SplitEvidenceLines(ReadEvidenceFile(verification.StandardErrorPath)))
+        foreach (var line in EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true))
         {
             yield return line;
         }
@@ -1070,30 +1124,12 @@ public static class DispatchFailureClassifier
             yield break;
         }
 
-        foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
-            yield return line;
-        }
-    }
-
-    private static string ReadEvidenceFile(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            return File.ReadAllText(path);
-        }
-        catch (IOException)
-        {
-            return string.Empty;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return string.Empty;
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                yield return line.TrimEnd();
+            }
         }
     }
 
@@ -1128,6 +1164,10 @@ public static class DispatchFailureClassifier
              FractionPattern.IsMatch(output) ||
              ExitCodeZeroPattern.IsMatch(output));
     }
+
+    private static bool HasVerificationEvidence(TaskVerificationRecord verification) =>
+        EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true)
+            .Any(line => HasVerificationEvidence(line, string.Empty));
 
     private static bool HasArtifactEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent || hasCommittedChanges;
@@ -1171,7 +1211,7 @@ public static class DispatchFailureClassifier
         };
 
     private static bool HasPassingVerificationEvidence(TaskVerificationRecord verification) =>
-        HasVerificationEvidence(verification.StandardOutput, verification.StandardError) &&
+        HasVerificationEvidence(verification) &&
         !HasFailingTestsForCompatibility(verification);
 
     private static bool HasPopulatedStandardOutput(TaskVerificationRecord verification) =>
@@ -1318,7 +1358,22 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        var output = $"{verification.StandardOutput}\n{verification.StandardError}";
+        if (HasSandboxCommitBlockedEvidence(verification.StandardOutput, verification.StandardError))
+        {
+            return true;
+        }
+
+        return HasSandboxCommitBlockedEvidence(
+            verification,
+            includeRetainedText: false);
+    }
+
+    public static bool IsSandboxCommitBlockedFailure(int exitCode, string standardOutput, string standardError) =>
+        exitCode != 0 && HasSandboxCommitBlockedEvidence(standardOutput, standardError);
+
+    private static bool HasSandboxCommitBlockedEvidence(string standardOutput, string standardError)
+    {
+        var output = $"{standardOutput}\n{standardError}";
         var commitBlocked =
             output.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
@@ -1332,10 +1387,43 @@ public static class DispatchFailureClassifier
         // other useful-output signal. The downstream auto-verify additionally requires committed
         // changes against main and the acceptance suite, so this is the lightest of several gates.
         var didUsefulWork =
-            verification.StandardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
-            HasUsefulPreWorkOutput(verification.StandardOutput);
+            standardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
+            HasUsefulPreWorkOutput(standardOutput);
 
         return commitBlocked && didUsefulWork;
+    }
+
+    private static bool HasSandboxCommitBlockedEvidence(TaskVerificationRecord verification, bool includeRetainedText)
+    {
+        var commitBlocked = false;
+        var didUsefulWork = false;
+        foreach (var line in EnumerateEvidenceLines(
+                     verification,
+                     includeStandardOutput: true,
+                     includeStandardError: true,
+                     includeRetainedText: includeRetainedText,
+                     includeArtifactText: true))
+        {
+            commitBlocked |=
+                line.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
+                (line.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) &&
+                 line.Contains("1312", StringComparison.OrdinalIgnoreCase)) ||
+                line.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
+                (line.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
+                 line.Contains("Permission denied", StringComparison.OrdinalIgnoreCase));
+
+            didUsefulWork |=
+                line.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
+                HasUsefulPreWorkOutput(line);
+
+            if (commitBlocked && didUsefulWork)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool HasProviderNeutralProgressStallFailure(TaskSpec task)
@@ -1580,7 +1668,7 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
+        foreach (var candidate in GetProviderSignalLines(verification))
         {
             if (IsRecoverableSubscriptionLimitText(candidate))
             {
@@ -1756,52 +1844,45 @@ public static class DispatchFailureClassifier
             output.Contains("Files changed:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IEnumerable<string> GetProviderSignalLines(params string[] outputs)
+    private static IEnumerable<string> GetProviderSignalLines(TaskVerificationRecord verification)
     {
-        foreach (var output in outputs)
+        var inWorkerResultBlock = false;
+        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
         {
-            var inWorkerResultBlock = false;
-            foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            var markerLine = rawLine.Trim();
+            if (markerLine.Length == 0)
             {
-                var markerLine = rawLine.Trim();
-                if (markerLine.Length == 0)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                if (IsWorkerResultOpener(markerLine))
-                {
-                    inWorkerResultBlock = true;
-                    continue;
-                }
+            if (IsWorkerResultOpener(markerLine))
+            {
+                inWorkerResultBlock = true;
+                continue;
+            }
 
-                if (IsWorkerResultEndMarker(markerLine))
-                {
-                    inWorkerResultBlock = false;
-                    continue;
-                }
+            if (IsWorkerResultEndMarker(markerLine))
+            {
+                inWorkerResultBlock = false;
+                continue;
+            }
 
-                if (inWorkerResultBlock)
-                {
-                    continue;
-                }
+            if (inWorkerResultBlock)
+            {
+                continue;
+            }
 
-                // Provider verdicts only trust the CLI diagnostic formats observed from Codex:
-                // a raw line-start "ERROR:" diagnostic or an ISO timestamped "ERROR codex_*" line.
-                // Do not trim leading whitespace here; indented worker-echoed source must stay inert.
-                var providerLine = rawLine.TrimEnd();
-                if (IsProviderErrorLine(providerLine) ||
-                    IsProviderLimitFooterLine(providerLine))
-                {
-                    yield return providerLine;
-                }
+            if (IsProviderErrorLine(rawLine) ||
+                IsProviderLimitFooterLine(rawLine))
+            {
+                yield return rawLine;
             }
         }
     }
 
     private static bool TryGetProviderAuthenticationLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
+        foreach (var candidate in GetProviderSignalLines(verification))
         {
             if (ContainsProviderAuthenticationText(candidate))
             {
@@ -1816,7 +1897,7 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetProviderConnectivityLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var candidate in GetProviderSignalLines(verification.StandardOutput, verification.StandardError))
+        foreach (var candidate in GetProviderSignalLines(verification))
         {
             if (ContainsRecoverableProviderConnectivityText(candidate))
             {
@@ -1831,7 +1912,7 @@ public static class DispatchFailureClassifier
 
     private static bool TryGetProviderModelRejectionLine(TaskVerificationRecord verification, out string line)
     {
-        foreach (var rawLine in $"{verification.StandardOutput}\n{verification.StandardError}".Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
         {
             var candidate = rawLine.Trim();
             if (ContainsProviderModelRejectionText(candidate))

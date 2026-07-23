@@ -205,6 +205,125 @@ public sealed class VerificationAndProcessLogTests
     Assert.Equal(stderrPath, task.LastVerification.StandardErrorPath);
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_bounds_large_worker_logs_in_verification_record")]
+    public void RefreshLatestProcessBoundsLargeWorkerLogsInVerificationRecord()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Refresh bounds large worker logs", [reviewTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    var stdoutHead = new string('O', VerificationTextBounds.PreviewHeadChars);
+    var stdoutMiddle = "STDOUT-MIDDLE-SHOULD-NOT-BE-RETAINED" + new string('M', 2_000_000);
+    var stdoutTail = new string('T', VerificationTextBounds.PreviewTailChars);
+    var stderrHead = new string('R', VerificationTextBounds.PreviewHeadChars);
+    var stderrMiddle = "STDERR-MIDDLE-SHOULD-NOT-BE-RETAINED" + new string('N', 2_000_000);
+    var stderrTail = new string('E', VerificationTextBounds.PreviewTailChars);
+    File.WriteAllText(stdoutPath, stdoutHead + stdoutMiddle + stdoutTail);
+    File.WriteAllText(stderrPath, stderrHead + stderrMiddle + stderrTail);
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+    Assert.True(reviewTask.LastVerification is not null);
+    Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= 20_000);
+    Assert.True(reviewTask.LastVerification.StandardError.Length <= 20_000);
+    Assert.Equal(BackgroundDispatchRunner.ReadBoundedBestEffort(stdoutPath), reviewTask.LastVerification.StandardOutput);
+    Assert.StartsWith(stdoutHead, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+    Assert.EndsWith(stdoutTail, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+    Assert.StartsWith(stderrHead, reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains(stderrTail, reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.DoesNotContain("STDOUT-MIDDLE-SHOULD-NOT-BE-RETAINED", reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+    Assert.DoesNotContain("STDERR-MIDDLE-SHOULD-NOT-BE-RETAINED", reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Contains(stdoutPath, reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+    Assert.Contains(stderrPath, reviewTask.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(new FileInfo(stdoutPath).Length > 1_000_000);
+    Assert.True(new FileInfo(stderrPath).Length > 1_000_000);
+}
+
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_pauses_for_middle_log_human_input_before_retained_excerpt")]
+    public void RefreshLatestProcessPausesForMiddleLogHumanInputBeforeRetainedExcerpt()
+{
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Pause from full worker log", [reviewTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+    var stdout =
+        new string('O', VerificationTextBounds.PreviewHeadChars) +
+        Environment.NewLine +
+        new string('M', 2_000) +
+        Environment.NewLine +
+        "HUMAN_INPUT: Which branch should I modify?" +
+        Environment.NewLine +
+        new string('N', 2_000) +
+        Environment.NewLine +
+        new string('T', VerificationTextBounds.PreviewTailChars);
+    File.WriteAllText(stdoutPath, stdout);
+    File.WriteAllText(stderrPath, string.Empty);
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+    var request = kernel.GetPendingHumanInput(goal.Id).Single();
+    Assert.Equal(WorkTaskStatus.WaitingForHuman, reviewTask.Status);
+    Assert.Equal("Which branch should I modify?", request.Question);
+    Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
+    Assert.DoesNotContain("HUMAN_INPUT:", reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_classifies_middle_log_verification_before_retained_excerpt")]
+    public void RefreshLatestProcessClassifiesMiddleLogVerificationBeforeRetainedExcerpt()
+{
+    var worktree = LandingExecutorTests.CreateGitRepository();
+    var logRoot = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var testerTask = new TaskSpec(TaskId.New(), "Verify existing behavior", AgentRole.Tester);
+    var goal = kernel.CreateGoal("Classify full log before bounding", [testerTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(logRoot, "tester.out.log");
+    var stderrPath = Path.Combine(logRoot, "tester.err.log");
+    var exitPath = Path.Combine(logRoot, "tester.exit.txt");
+    var middleEvidence = "test run successful";
+    var stdout =
+        new string('H', VerificationTextBounds.PreviewHeadChars) +
+        Environment.NewLine +
+        middleEvidence +
+        Environment.NewLine +
+        new string('M', 2_000_000) +
+        new string('T', VerificationTextBounds.PreviewTailChars);
+    File.WriteAllText(stdoutPath, stdout);
+    File.WriteAllText(stderrPath, string.Empty);
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, testerTask.Id, new TaskDispatchRecord("codex-cli", "codex exec", worktree, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "codex exec", worktree, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, testerTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        findBuildDaemons: _ => []);
+    var refreshed = runner.RefreshLatestProcess(kernel, goal.Id, testerTask.Id);
+
+    Assert.Equal(0, refreshed.ExitCode);
+    Assert.Equal(WorkTaskStatus.Completed, testerTask.Status);
+    Assert.True(testerTask.LastVerification!.StandardOutput.Length <= 20_000);
+    Assert.DoesNotContain(middleEvidence, testerTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "CreateVerificationLog_truncates_long_output_at_2000_chars")]
     public void CreateVerificationLogTruncatesLongOutputAt2000Chars()
 {
