@@ -67,6 +67,16 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendClarificationNeeded(GoalId goalId, string clarificationId) =>
         Append(goalId, "ClarificationNeeded", obj => { obj["clarificationId"] = clarificationId; });
 
+    public void AppendStaleClarificationDetected(
+        GoalId goalId,
+        IReadOnlyList<string> staleTopicKeys,
+        string recoveryCommand) =>
+        Append(goalId, "StaleClarificationDetected", obj =>
+        {
+            obj["staleTopicKeys"] = new JsonArray(staleTopicKeys.Select(key => JsonValue.Create(key)).ToArray<JsonNode?>());
+            obj["recoveryCommand"] = recoveryCommand;
+        });
+
     public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) =>
         Append(goalId, "TaskDispatched", obj =>
         {

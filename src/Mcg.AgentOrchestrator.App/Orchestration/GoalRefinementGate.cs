@@ -53,26 +53,55 @@ internal static class GoalRefinementGate
         return new GoalRefinementGateResult(result.Outcome, RanRefinement: true, result.Spec);
     }
 
-    public static void ThrowIfAwaitingClarification(OrchestratorWorkspace workspace, Goal goal)
+    public static void ThrowIfAwaitingClarification(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        IGoalLifecycleEventWriter? eventWriter = null)
+    {
+        if (TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+    }
+
+    public static bool TryBuildAwaitingClarificationEscalationReason(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        IGoalLifecycleEventWriter? eventWriter,
+        out string reason)
     {
         var items = ListGoalCollaborationItems(workspace, goal);
         if (!GoalRefinementService.HasOpenClarification(items))
         {
-            return;
+            reason = string.Empty;
+            return false;
         }
 
-        var questions = items
+        var openClarifications = items
             .Where(item =>
                 item.Type == CollaborationItemType.Clarification &&
                 !CollaborationItemLifecycle.IsTerminal(item.Status) &&
                 item.CorrelationKey?.StartsWith(GoalRefinementService.CorrelationKeyPrefix, StringComparison.Ordinal) == true)
+            .ToArray();
+        var staleTopicKeys = FindStaleClarificationTopicKeys(openClarifications, items);
+        if (staleTopicKeys.Count > 0)
+        {
+            var recoveryCommand = $"attention dismiss {goal.Id.Value[..8]}";
+            eventWriter?.AppendStaleClarificationDetected(goal.Id, staleTopicKeys, recoveryCommand);
+            reason =
+                $"Stale spec clarification detected for goal {goal.Id.Value[..8]}: {string.Join(", ", staleTopicKeys)}. " +
+                $"Recovery: run `{recoveryCommand}` to clear stale clarification attention, then retry dispatch.";
+            return true;
+        }
+
+        var questions = openClarifications
             .Select(item => item.Subject)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var detail = questions.Length == 0
+        reason = questions.Length == 0
             ? "Resolve the spec clarification item before dispatching planner work."
             : $"Resolve spec clarification before dispatching planner work: {string.Join("; ", questions)}";
-        throw new InvalidOperationException(detail);
+        return true;
     }
 
     public static bool HasOpenClarification(OrchestratorWorkspace workspace, Goal goal) =>
@@ -125,4 +154,64 @@ internal static class GoalRefinementGate
             .ListAsync(goal.Id.Value)
             .GetAwaiter()
             .GetResult();
+
+    private static IReadOnlyList<string> FindStaleClarificationTopicKeys(
+        IReadOnlyList<CollaborationItem> openClarifications,
+        IReadOnlyList<CollaborationItem> allItems)
+    {
+        var resolved = allItems
+            .Where(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.CorrelationKey?.StartsWith(GoalRefinementService.CorrelationKeyPrefix, StringComparison.Ordinal) == true)
+            .Select(ToResolvedClarification)
+            .ToArray();
+        if (resolved.Length == 0)
+            return [];
+
+        return openClarifications
+            .Select(ToOpenQuestion)
+            .Where(question => GoalRefinementService.MatchesResolvedIdentity(question, resolved))
+            .Select(GoalRefinementService.ResolveQuestionTopicKey)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static ResolvedSpecClarification ToResolvedClarification(CollaborationItem item)
+    {
+        var question = GoalRefinementService.ExtractQuestion(item);
+        var forkKind = GoalRefinementService.ExtractForkKindFromBody(item.Body) ??
+            GoalRefinementService.ExtractTopicKey(item.CorrelationKey!) ??
+            "other";
+        var topicKey = GoalRefinementService.NormalizeTopicKey(
+            GoalRefinementService.ExtractTopicKey(item.CorrelationKey!),
+            forkKind,
+            question);
+        var resolution = string.IsNullOrWhiteSpace(item.Resolution) ? "dismissed by operator" : item.Resolution!;
+        return new ResolvedSpecClarification(
+            topicKey,
+            GoalRefinementService.BuildNormalizedQuestionKey(forkKind, question),
+            question,
+            resolution,
+            resolution.Contains("dismiss", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static RefinedSpecOpenQuestion ToOpenQuestion(CollaborationItem item)
+    {
+        var question = GoalRefinementService.ExtractQuestion(item);
+        var forkKind = GoalRefinementService.ExtractForkKindFromBody(item.Body) ??
+            GoalRefinementService.ExtractTopicKey(item.CorrelationKey!) ??
+            "other";
+        var topicKey = GoalRefinementService.NormalizeTopicKey(
+            GoalRefinementService.ExtractTopicKey(item.CorrelationKey!),
+            forkKind,
+            question);
+        return new RefinedSpecOpenQuestion(
+            item.CorrelationKey!,
+            question,
+            forkKind,
+            "Open",
+            TopicKey: topicKey,
+            NormalizedQuestionKey: GoalRefinementService.BuildNormalizedQuestionKey(forkKind, question));
+    }
 }

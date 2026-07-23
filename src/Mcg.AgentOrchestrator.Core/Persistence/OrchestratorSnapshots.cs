@@ -44,7 +44,9 @@ public sealed record RefinedSpecOpenQuestionSnapshot(
     string Question,
     string ForkKind,
     string Status,
-    string? Answer = null);
+    string? Answer = null,
+    string? TopicKey = null,
+    string? NormalizedQuestionKey = null);
 
 public sealed record TaskSnapshot(
     string Id,
