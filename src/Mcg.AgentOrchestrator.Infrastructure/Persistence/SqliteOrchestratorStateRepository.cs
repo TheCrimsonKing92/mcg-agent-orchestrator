@@ -11,6 +11,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestratorStateRepository
 {
+    private const int GoalMetadataTitleMaxChars = 240;
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
@@ -609,8 +610,8 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         var results = new List<GoalSummary>();
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, status, objective, updated_at
+        cmd.CommandText = $"""
+            SELECT id, status, {GoalMetadataTitleSql()}, updated_at
             FROM goals
             ORDER BY updated_at DESC
             """;
@@ -1266,6 +1267,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         int? version = null,
         bool skipUnchanged = false)
     {
+        if (goal.IsMetadataOnly)
+        {
+            throw new InvalidOperationException($"Refusing to persist metadata-only goal snapshot '{ShortGoalId(goal.Id)}'. Hydrate the full aggregate before saving.");
+        }
+
         var json = JsonSerializer.Serialize(goal, SerializerOptions);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $$"""
@@ -1293,6 +1299,12 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
     }
+
+    private static string GoalMetadataTitleSql() =>
+        $"CASE WHEN instr(replace(objective, char(13), char(10)), char(10)) > 0 " +
+        $"THEN substr(replace(objective, char(13), char(10)), 1, instr(replace(objective, char(13), char(10)), char(10)) - 1) " +
+        $"WHEN length(objective) > {GoalMetadataTitleMaxChars} THEN substr(objective, 1, {GoalMetadataTitleMaxChars}) " +
+        "ELSE objective END";
 
     private static async Task<(int RowsWritten, long SerializedBytes)> UpsertModelFitHistoryRowAsync(
         SqliteConnection conn,
@@ -1399,6 +1411,13 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     }
 }
 
-public sealed record GoalSummary(string Id, string Status, string Objective, string UpdatedAt);
+public sealed record GoalSummary(
+    string Id,
+    string Status,
+    string Objective,
+    string UpdatedAt,
+    string? ResultCommit = null,
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? TerminatedAt = null);
 
 public sealed record QuarantinedGoalSummary(string Id, string Error);

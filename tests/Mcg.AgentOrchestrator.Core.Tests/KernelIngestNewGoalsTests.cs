@@ -81,4 +81,38 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Equal(WorkTaskStatus.Completed, goal.Tasks.Single(task => task.Id.Value == developerId).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single(task => task.Id.Value == testerId).Status);
     }
+
+    [Xunit.Fact(DisplayName = "EvictTerminalGoalAggregates_replaces_full_terminal_goal_with_metadata_stub")]
+    public void EvictTerminalGoalAggregatesReplacesFullTerminalGoalWithMetadataStub()
+    {
+        var goalId = GoalId.New();
+        var taskId = TaskId.New();
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    goalId.Value,
+                    "Terminal title\nFULL_OBJECTIVE_SENTINEL",
+                    GoalStatus.Completed,
+                    [new TaskSnapshot(taskId.Value, "TASK_SENTINEL", AgentRole.Developer, WorkTaskStatus.Completed, null, null, null, [], null, null)],
+                    [new ProgressEventSnapshot(goalId.Value, taskId.Value, ProgressKind.TaskCompleted, "TIMELINE_SENTINEL", DateTimeOffset.Parse("2026-07-23T00:00:00Z"))],
+                    RefinedSpec: new RefinedSpecSnapshot(
+                        "REFINED_SPEC_SENTINEL",
+                        ["ACCEPTANCE_SENTINEL"],
+                        VerificationClass.TestVerifiable.ToString(),
+                        [],
+                        []))
+            ],
+            []));
+
+        var evicted = kernel.EvictTerminalGoalAggregates([goalId]);
+
+        var goal = kernel.Goals.Single();
+        Xunit.Assert.Equal(1, evicted);
+        Xunit.Assert.True(goal.IsMetadataOnly);
+        Xunit.Assert.Equal("Terminal title", goal.Objective);
+        Xunit.Assert.Empty(goal.Tasks);
+        Xunit.Assert.Empty(goal.Timeline);
+        Xunit.Assert.Null(goal.RefinedSpec);
+        Xunit.Assert.Empty(kernel.ExportSnapshot().Goals);
+    }
 }

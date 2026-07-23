@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
@@ -1261,10 +1262,96 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(waiting.Id.Value, ids);
     }
 
+    [Xunit.Fact(DisplayName = "LoadConductLoopKernel_loads_terminal_goals_as_metadata_only_stubs")]
+    public async Task LoadConductLoopKernelLoadsTerminalGoalsAsMetadataOnlyStubs()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var snapshots = Enumerable.Range(0, 10)
+            .Select(index => BuildTerminalGoalSnapshot(index))
+            .ToArray();
+        await repo.SaveGoalSnapshotsAsync(snapshots);
+
+        var kernel = CliPersistentStateRunner.LoadConductLoopKernel(repo);
+
+        var goals = kernel.Goals.OrderBy(goal => goal.Objective, StringComparer.Ordinal).ToArray();
+        Assert.Equal(10, goals.Length);
+        Assert.All(goals, goal =>
+        {
+            Assert.True(goal.IsMetadataOnly);
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Empty(goal.Tasks);
+            Assert.Empty(goal.Timeline);
+            Assert.Null(goal.RefinedSpec);
+            Assert.DoesNotContain("FULL_OBJECTIVE_SENTINEL", goal.Objective, StringComparison.Ordinal);
+            Assert.DoesNotContain("REFINED_SPEC_SENTINEL", goal.Objective, StringComparison.Ordinal);
+            Assert.DoesNotContain("TIMELINE_SENTINEL", goal.Objective, StringComparison.Ordinal);
+        });
+        Assert.All(Enumerable.Range(0, 10), index =>
+            Assert.Contains(goals, goal => goal.Objective == $"Terminal {index} title"));
+        Assert.Empty(kernel.ExportSnapshot().Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "LoadGoalsAsync_hydrates_full_terminal_aggregate_on_demand")]
+    public async Task LoadGoalsAsyncHydratesFullTerminalAggregateOnDemand()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var snapshot = BuildTerminalGoalSnapshot(0);
+        await repo.SaveGoalSnapshotsAsync([snapshot]);
+        var goalId = new GoalId(snapshot.Id);
+
+        var conductKernel = CliPersistentStateRunner.LoadConductLoopKernel(repo);
+        Assert.True(conductKernel.Goals.Single().IsMetadataOnly);
+
+        var hydrated = await repo.LoadGoalsAsync([goalId]);
+        var goal = hydrated.Goals.Single();
+
+        Assert.False(goal.IsMetadataOnly);
+        Assert.Contains("FULL_OBJECTIVE_SENTINEL_0", goal.Objective, StringComparison.Ordinal);
+        Assert.Contains(goal.Timeline, evt => evt.Message == "TIMELINE_SENTINEL_0");
+        Assert.Equal("REFINED_SPEC_SENTINEL_0", goal.RefinedSpec?.BehavioralContract);
+        Assert.Contains(goal.Tasks, task => task.Description == "TASK_DESCRIPTION_SENTINEL_0");
+    }
+
     private static string TempDb()
     {
         var dir = CreateTempDirectory();
         return Path.Combine(dir, "state.db");
+    }
+
+    private static GoalSnapshot BuildTerminalGoalSnapshot(int index)
+    {
+        var goalId = $"terminal-{index:D2}-0000000000000000000000";
+        var taskId = $"task-{index:D2}";
+        var occurredAt = DateTimeOffset.Parse("2026-07-23T00:00:00Z").AddMinutes(index);
+        return new GoalSnapshot(
+            goalId,
+            $"Terminal {index} title\nFULL_OBJECTIVE_SENTINEL_{index}",
+            GoalStatus.Completed,
+            [
+                new TaskSnapshot(
+                    taskId,
+                    $"TASK_DESCRIPTION_SENTINEL_{index}",
+                    AgentRole.Developer,
+                    WorkTaskStatus.Completed,
+                    null,
+                    null,
+                    null,
+                    [],
+                    new TaskDispatchSnapshot(
+                        "worker",
+                        "cmd",
+                        "C:\\repo",
+                        occurredAt,
+                        ResultCommit: $"result-{index}"),
+                    null)
+            ],
+            [new ProgressEventSnapshot(goalId, taskId, ProgressKind.TaskCompleted, $"TIMELINE_SENTINEL_{index}", occurredAt)],
+            RefinedSpec: new RefinedSpecSnapshot(
+                $"REFINED_SPEC_SENTINEL_{index}",
+                [$"ACCEPTANCE_SENTINEL_{index}"],
+                VerificationClass.TestVerifiable.ToString(),
+                [],
+                []));
     }
 
     private static string DiagnosticsPath(string dbPath) =>

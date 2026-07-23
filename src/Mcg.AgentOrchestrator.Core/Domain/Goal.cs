@@ -8,12 +8,23 @@ public sealed class Goal
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
+        : this(id, objective, tasks, isMetadataOnly: false)
+    {
+    }
+
+    private Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks, bool isMetadataOnly)
     {
         Id = id;
         Objective = RequireText(objective, nameof(objective));
+        if (!isMetadataOnly && tasks.Count == 0)
+        {
+            throw new ArgumentException("A goal must have at least one task.", nameof(tasks));
+        }
+
         _tasks = tasks.Count == 0
-            ? throw new ArgumentException("A goal must have at least one task.", nameof(tasks))
+            ? []
             : [.. tasks];
+        IsMetadataOnly = isMetadataOnly;
     }
 
     public GoalId Id { get; }
@@ -35,6 +46,50 @@ public sealed class Goal
     public IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> EffectiveAcceptanceCriteriaCorrections => _effectiveAcceptanceCriteriaCorrections;
 
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
+
+    public bool IsMetadataOnly { get; }
+
+    public string? MetadataResultCommit { get; private set; }
+
+    public DateTimeOffset? MetadataCreatedAt { get; private set; }
+
+    public DateTimeOffset? MetadataTerminatedAt { get; private set; }
+
+    internal static Goal CreateMetadataOnlyTerminal(TerminalGoalMetadata metadata)
+    {
+        if (!IsTerminalMetadataStatus(metadata.Status))
+        {
+            throw new ArgumentException($"Status '{metadata.Status}' is not terminal.", nameof(metadata));
+        }
+
+        var goal = new Goal(metadata.Id, metadata.Title, [], isMetadataOnly: true);
+        goal.SetStatus(metadata.Status);
+        goal.MetadataResultCommit = NormalizeSha(metadata.ResultCommit);
+        goal.MetadataCreatedAt = metadata.CreatedAt;
+        goal.MetadataTerminatedAt = metadata.TerminatedAt;
+        return goal;
+    }
+
+    internal TerminalGoalMetadata ToTerminalGoalMetadata()
+    {
+        if (!IsTerminalMetadataStatus(Status))
+        {
+            throw new InvalidOperationException($"Goal '{Id.Value}' is not terminal and cannot be represented as terminal metadata.");
+        }
+
+        var latestResultCommit = Tasks
+            .Select(task => task.LastDispatch?.ResultCommit)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .LastOrDefault();
+        var orderedTimeline = Timeline.OrderBy(evt => evt.OccurredAt).ToArray();
+        return new TerminalGoalMetadata(
+            Id,
+            Status,
+            BuildMetadataTitle(Objective),
+            latestResultCommit,
+            orderedTimeline.FirstOrDefault()?.OccurredAt,
+            orderedTimeline.LastOrDefault()?.OccurredAt);
+    }
 
     internal void SetStatus(GoalStatus status) => Status = status;
 
@@ -95,6 +150,20 @@ public sealed class Goal
 
     internal GoalSnapshot ToSnapshot()
     {
+        if (IsMetadataOnly)
+        {
+            return new GoalSnapshot(
+                Id.Value,
+                Objective,
+                Status,
+                [],
+                [],
+                IsMetadataOnly: true,
+                ResultCommit: MetadataResultCommit,
+                CreatedAt: MetadataCreatedAt,
+                TerminatedAt: MetadataTerminatedAt);
+        }
+
         return new GoalSnapshot(
             Id.Value,
             Objective,
@@ -141,6 +210,17 @@ public sealed class Goal
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
     {
+        if (snapshot.IsMetadataOnly)
+        {
+            return CreateMetadataOnlyTerminal(new TerminalGoalMetadata(
+                new GoalId(snapshot.Id),
+                snapshot.Status,
+                snapshot.Objective,
+                snapshot.ResultCommit,
+                snapshot.CreatedAt,
+                snapshot.TerminatedAt));
+        }
+
         var goal = new Goal(new GoalId(snapshot.Id), snapshot.Objective, snapshot.Tasks.Select(TaskSpec.FromSnapshot).ToList());
         goal.SetStatus(snapshot.Status);
 
@@ -220,6 +300,23 @@ public sealed class Goal
 
     private static string? NormalizeSha(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string BuildMetadataTitle(string value)
+    {
+        var title = value
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            title = value.Trim();
+        }
+
+        return title.Length <= 240 ? title : title[..240];
+    }
+
+    private static bool IsTerminalMetadataStatus(GoalStatus status) =>
+        status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 }
 
 public sealed record AcceptanceFailureSummary(

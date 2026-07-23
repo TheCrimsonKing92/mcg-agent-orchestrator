@@ -585,11 +585,16 @@ internal static class CliPersistentStateRunner
             if (requests.Length == 0) return;
 
             var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            var persistedTerminalGoalIds = new List<GoalId>();
             foreach (var result in results)
             {
                 if (result.PersistedSnapshot is not null)
                 {
                     tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                    if (IsConductLoopTerminalStatus(result.PersistedSnapshot.Status.ToString()))
+                    {
+                        persistedTerminalGoalIds.Add(new GoalId(result.GoalId));
+                    }
                 }
 
                 if (result.Disposition is GoalSnapshotSaveDisposition.Merged or GoalSnapshotSaveDisposition.Skipped)
@@ -597,6 +602,8 @@ internal static class CliPersistentStateRunner
                     Console.WriteLine(FormatTickMergeReceipt(result));
                 }
             }
+
+            checkpoint.EvictTerminalGoalAggregates(persistedTerminalGoalIds);
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -653,6 +660,7 @@ internal static class CliPersistentStateRunner
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
+        kernel.AddTerminalGoalMetadataOnlyStubs(terminalSummaries.Select(ToTerminalGoalMetadata));
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
@@ -723,7 +731,7 @@ internal static class CliPersistentStateRunner
         GoalId? onlyGoalId)
     {
         var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, onlyGoalId)
-            .Where(id => !workingSetKernel.Goals.Any(goal => goal.Id == id))
+            .Where(id => workingSetKernel.Goals.FirstOrDefault(goal => goal.Id == id) is not { IsMetadataOnly: false })
             .ToArray();
         if (candidates.Length == 0)
         {
@@ -826,10 +834,32 @@ internal static class CliPersistentStateRunner
 
     private static bool IsConductLoopTerminalStatus(string status) =>
         status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
+
+    private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
+    {
+        var status = Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var parsed)
+            ? parsed
+            : GoalStatus.Completed;
+        var title = string.IsNullOrWhiteSpace(summary.Objective)
+            ? summary.Id
+            : summary.Objective;
+        var terminatedAt = summary.TerminatedAt ?? TryParseTimestamp(summary.UpdatedAt);
+        return new TerminalGoalMetadata(
+            new GoalId(summary.Id),
+            status,
+            title,
+            summary.ResultCommit,
+            summary.CreatedAt,
+            terminatedAt);
+    }
+
+    private static DateTimeOffset? TryParseTimestamp(string value) =>
+        DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     private static bool ExecuteCommandWithoutTransaction(
         IReadOnlyList<string> args,

@@ -58,7 +58,7 @@ public sealed partial class AgentOrchestratorKernel
     public OrchestratorSnapshot ExportSnapshot()
     {
         return new OrchestratorSnapshot(
-            _goals.Values.Select(goal => goal.ToSnapshot()).ToList(),
+            _goals.Values.Where(goal => !goal.IsMetadataOnly).Select(goal => goal.ToSnapshot()).ToList(),
             _humanInputRequests.Values.Select(request => request.ToSnapshot()).ToList());
     }
 
@@ -129,6 +129,53 @@ public sealed partial class AgentOrchestratorKernel
 
         SweepParkedGoalHumanWaits();
         return ingested;
+    }
+
+    public int AddTerminalGoalMetadataOnlyStubs(IEnumerable<TerminalGoalMetadata> goals)
+    {
+        var changed = 0;
+        foreach (var metadata in goals)
+        {
+            var stub = Goal.CreateMetadataOnlyTerminal(metadata);
+            if (_goals.TryGetValue(stub.Id, out var existing) && !existing.IsMetadataOnly)
+            {
+                continue;
+            }
+
+            _goals[stub.Id] = stub;
+            _knownDependencyGoalStatuses[stub.Id] = stub.Status.ToString();
+            _knownCompletedDependencyGoals.Add(stub.Id);
+
+            changed++;
+        }
+
+        return changed;
+    }
+
+    public int EvictTerminalGoalAggregates(IEnumerable<GoalId>? goalIds = null)
+    {
+        var selected = goalIds is null
+            ? null
+            : goalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var evicted = 0;
+        foreach (var goal in _goals.Values.ToArray())
+        {
+            if (goal.IsMetadataOnly ||
+                !IsTerminalGoalStatus(goal.Status) ||
+                selected is not null && !selected.Contains(goal.Id.Value))
+            {
+                continue;
+            }
+
+            var stub = Goal.CreateMetadataOnlyTerminal(goal.ToTerminalGoalMetadata());
+            _goals[stub.Id] = stub;
+            _knownDependencyGoalStatuses[stub.Id] = stub.Status.ToString();
+            _knownCompletedDependencyGoals.Add(stub.Id);
+
+            evicted++;
+        }
+
+        return evicted;
     }
 
     // Refreshes already-tracked goals from persisted state at a conductor tick boundary. Unlike

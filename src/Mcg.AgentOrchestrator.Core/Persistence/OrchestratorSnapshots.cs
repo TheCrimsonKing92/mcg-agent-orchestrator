@@ -14,7 +14,19 @@ public sealed record GoalSnapshot(
     string? SourceBacklogItemId = null,
     RefinedSpecSnapshot? RefinedSpec = null,
     AcceptanceFailureSnapshot? LatestAcceptanceFailure = null,
-    IReadOnlyList<EffectiveAcceptanceCriteriaCorrectionSnapshot>? EffectiveAcceptanceCriteriaCorrections = null);
+    IReadOnlyList<EffectiveAcceptanceCriteriaCorrectionSnapshot>? EffectiveAcceptanceCriteriaCorrections = null,
+    bool IsMetadataOnly = false,
+    string? ResultCommit = null,
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? TerminatedAt = null);
+
+public sealed record TerminalGoalMetadata(
+    GoalId Id,
+    GoalStatus Status,
+    string Title,
+    string? ResultCommit = null,
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? TerminatedAt = null);
 
 public sealed record EffectiveAcceptanceCriteriaCorrectionSnapshot(
     string SupersededCriterion,
