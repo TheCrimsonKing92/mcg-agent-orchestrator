@@ -896,10 +896,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
             Assert.Equal(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug", "Mcg.AgentOrchestrator.Core.Tests.exe"), mtpCall[0]);
-            Assert.Contains("--filter-class", mtpCall);
-            Assert.Contains("GoalLifecycleTests", mtpCall);
-            Assert.Contains("--filter-not-class", mtpCall);
-            Assert.Contains("SlowCoreTests", mtpCall);
+            AssertArgumentPair(mtpCall, "--filter-class", "*GoalLifecycleTests*");
+            AssertArgumentPair(mtpCall, "--filter-not-class", "*SlowCoreTests*");
             Assert.Contains("--filter-not-trait", mtpCall);
             Assert.Contains("Category=HostIntegration", mtpCall);
             Assert.Contains("--results-directory", mtpCall);
@@ -1007,11 +1005,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 .Where(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 .ToArray();
             Assert.Equal(shardChecks.Length, mtpCalls.Length);
-            Assert.Contains(mtpCalls, call => call.Contains("--filter-class") && call.Contains("CliCommandTests"));
+            Assert.Contains(mtpCalls, call => HasArgumentPair(call, "--filter-class", "*CliCommandTests*"));
             Assert.Contains(mtpCalls, call =>
-                call.Contains("--filter-not-class") &&
-                call.Contains("CliCommandTests") &&
-                call.Contains("GoalAcceptanceVerifierTests"));
+                HasArgumentPair(call, "--filter-not-class", "*CliCommandTests*") &&
+                HasArgumentPair(call, "--filter-not-class", "*GoalAcceptanceVerifierTests*"));
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&
@@ -3651,6 +3648,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     private static bool IsMtpExecutableCall(string[] args, string projectName) =>
         args.Length > 0 &&
         Path.GetFileNameWithoutExtension(args[0]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
+
+    private static void AssertArgumentPair(string[] args, string option, string value) =>
+        Assert.True(HasArgumentPair(args, option, value), $"Expected {option} {value}.");
+
+    private static bool HasArgumentPair(string[] args, string option, string value)
+    {
+        for (var index = 0; index < args.Length - 1; index++)
+        {
+            if (args[index].Equals(option, StringComparison.Ordinal) &&
+                args[index + 1].Equals(value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static void WriteMtpTrx(string[] args)
     {
