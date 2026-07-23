@@ -802,6 +802,49 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_process_died_acceptance_relaunches_without_exposing_verified")]
+    public void BatchLoopProcessDiedAcceptanceRelaunchesWithoutExposingVerified()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadRelaunch.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var now = new DateTimeOffset(2026, 7, 23, 4, 0, 0, TimeSpan.Zero);
+        var launches = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            utcNow: () => now,
+            isProcessAlive: _ => false,
+            recentHeartbeatGrace: TimeSpan.FromMinutes(5),
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(8100 + ++launches));
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/DeadRelaunch.cs"],
+            parallelAcceptanceAttemptCoordinator: coordinator);
+
+        try
+        {
+            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(1, launches);
+
+            now = now.AddMinutes(6);
+            var staleSummary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(1, staleSummary.Held);
+            Assert.Equal(1, launches);
+
+            var relaunchSummary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(1, relaunchSummary.Held);
+            Assert.Equal(2, launches);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_running_attempt_writes_periodic_heartbeat")]
     public void ParallelAcceptanceRunningAttemptWritesPeriodicHeartbeat()
     {

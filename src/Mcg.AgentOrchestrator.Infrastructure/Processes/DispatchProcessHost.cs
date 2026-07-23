@@ -20,6 +20,8 @@ public static class DispatchProcessHost
 {
     public const string SubcommandName = "__dispatch-run";
     public const string StartGatePathVariable = "MCG_DISPATCH_HOST_START_GATE";
+    public const string WorkerDispatchKind = "worker";
+    public const string PrepDispatchKind = "prep";
     internal const string LowIntegritySetupArtifactName = "low-integrity-setup.json";
     internal const string WorkerCaBundleFileName = "worker-ca-bundle.pem";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
@@ -76,11 +78,35 @@ public static class DispatchProcessHost
         bool CodexEgressProxyEnabled = false,
         bool CodexEgressProxyEnforce = false,
         int CodexEgressProxyIdleTimeoutMs = 120_000,
-        int CodexEgressProxyConnectTimeoutMs = 15_000);
+        int CodexEgressProxyConnectTimeoutMs = 15_000,
+        string Kind = WorkerDispatchKind,
+        string? PrepGoalId = null,
+        string? PrepTaskId = null,
+        string? PrepRecordPath = null,
+        string? PrepHeartbeatPath = null,
+        string? PrepExitCodePath = null);
+
+    public sealed record DispatchPrepRecord(
+        string Kind,
+        string GoalId,
+        string TaskId,
+        string WorkingDirectory,
+        string HeartbeatPath,
+        string ExitCodePath,
+        DateTimeOffset StartedAt,
+        WorkerSandboxProvider Provider,
+        bool SandboxWorktreeWritable,
+        DateTimeOffset? CompletedAt);
 
     public static string WriteParameters(string path, DispatchRunParameters parameters)
     {
         WriteAllTextDurable(path, JsonSerializer.Serialize(parameters, JsonOptions));
+        return path;
+    }
+
+    public static string WritePrepRecord(string path, DispatchPrepRecord record)
+    {
+        WriteAllTextDurable(path, JsonSerializer.Serialize(record, JsonOptions));
         return path;
     }
 
@@ -891,6 +917,8 @@ public static void DropToLow() {
         long lastCpuMs = 0L;
         var exitCode = 1;
         var providerSessionId = NormalizeProviderSessionId(parameters.ProviderSessionId);
+        var prepStarted = false;
+        var prepExitWritten = false;
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
         CodexEgressProxy? egressProxy = null;
@@ -922,6 +950,7 @@ public static void DropToLow() {
 
             var payload = new
             {
+                kind = string.IsNullOrWhiteSpace(parameters.Kind) ? WorkerDispatchKind : parameters.Kind,
                 pid = Environment.ProcessId,
                 childPid = worker is { HasExited: false } ? worker.Id : (int?)null,
                 ownedPids = workerGroup?.ProcessIds ?? [],
@@ -950,7 +979,73 @@ public static void DropToLow() {
             }
         }
 
+        void WritePrepHeartbeat(string state)
+        {
+            if (string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath))
+            {
+                return;
+            }
+
+            var payload = new
+            {
+                kind = PrepDispatchKind,
+                pid = Environment.ProcessId,
+                ownedPids = workerGroup?.ProcessIds ?? [],
+                startedAt = startedAt.ToString("o"),
+                lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
+                lastProgressAt = DateTimeOffset.UtcNow.ToString("o"),
+                state,
+                exitFileExists = !string.IsNullOrWhiteSpace(parameters.PrepExitCodePath) && File.Exists(parameters.PrepExitCodePath)
+            };
+
+            try
+            {
+                var tmp = parameters.PrepHeartbeatPath + ".tmp";
+                WriteAllTextDurable(tmp, JsonSerializer.Serialize(payload, JsonOptions));
+                File.Move(tmp, parameters.PrepHeartbeatPath, overwrite: true);
+            }
+            catch
+            {
+                // Prep heartbeat is best-effort; the exit artifact is the terminal signal.
+            }
+        }
+
+        void CompletePrep(int prepExitCode)
+        {
+            if (!prepStarted || prepExitWritten || string.IsNullOrWhiteSpace(parameters.PrepExitCodePath))
+            {
+                return;
+            }
+
+            TryWriteExitCode(parameters.PrepExitCodePath, prepExitCode);
+            prepExitWritten = true;
+            if (!string.IsNullOrWhiteSpace(parameters.PrepRecordPath))
+            {
+                try
+                {
+                    WritePrepRecord(parameters.PrepRecordPath, new DispatchPrepRecord(
+                        PrepDispatchKind,
+                        parameters.PrepGoalId ?? string.Empty,
+                        parameters.PrepTaskId ?? string.Empty,
+                        parameters.WorkingDirectory,
+                        parameters.PrepHeartbeatPath ?? string.Empty,
+                        parameters.PrepExitCodePath,
+                        startedAt,
+                        parameters.Provider,
+                        parameters.SandboxWorktreeWritable,
+                        DateTimeOffset.UtcNow));
+                }
+                catch
+                {
+                    // The already-persisted prep record remains recoverable through heartbeat/exit artifacts.
+                }
+            }
+
+            WritePrepHeartbeat(prepExitCode == 0 ? "exited" : "failed");
+        }
+
         using var heartbeatTimer = new Timer(_ => WriteHeartbeat("running"), null, Timeout.Infinite, Timeout.Infinite);
+        using var prepHeartbeatTimer = new Timer(_ => WritePrepHeartbeat("preparing-sandbox"), null, Timeout.Infinite, Timeout.Infinite);
 
         try
         {
@@ -967,6 +1062,13 @@ public static void DropToLow() {
             }
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preparing-sandbox" : "starting");
+            if (parameters.SandboxLowIntegrity && !string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath))
+            {
+                prepStarted = true;
+                WritePrepHeartbeat("preparing-sandbox");
+                prepHeartbeatTimer.Change(HeartbeatInterval, HeartbeatInterval);
+            }
+
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
             var sandboxPreparation = ApplyWorkerSandbox(
@@ -981,9 +1083,12 @@ public static void DropToLow() {
                 DateTimeOffset.UtcNow - sandboxPrepStartedAt);
 
             WriteHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
+            WritePrepHeartbeat(parameters.SandboxLowIntegrity ? "preflighting-sandbox" : "starting");
             var preflightStartedAt = DateTimeOffset.UtcNow;
             RunLowIntegrityLaunchPreflight(startInfo, parameters);
             WriteSandboxPrepEvent(parameters, "launch-preflight", preflightStartedAt, DateTimeOffset.UtcNow - preflightStartedAt);
+            prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            CompletePrep(0);
 
             WriteHeartbeat("starting");
             RequireStartGate();
@@ -1050,6 +1155,8 @@ public static void DropToLow() {
         catch (Exception ex)
         {
             exitCode = 1;
+            prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            CompletePrep(1);
             // Capture launch/setup failures (e.g. launch-as-user under the OS sandbox) — otherwise the
             // worker never starts and nothing explains why (no worker means no redirected stderr).
             try { File.AppendAllText(parameters.StderrPath, $"[dispatch-host] worker launch/run failed: {ex}\n"); }
@@ -1058,6 +1165,8 @@ public static void DropToLow() {
         finally
         {
             heartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            CompletePrep(exitCode == 0 ? 0 : 1);
             if (parameters.ShutdownBuildServerOnExit)
             {
                 TryShutdownBuildServer(parameters.WorkingDirectory);
@@ -1312,7 +1421,7 @@ public static void DropToLow() {
     {
         try
         {
-            File.WriteAllText(path, exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            WriteAllTextDurable(path, exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         catch
         {

@@ -1276,11 +1276,16 @@ internal sealed class ConductorBatchLoop
         }
 
         var disposition = AcceptanceRunDisposition(run);
-        if (IsPassingAcceptanceRun(run) || IsRetryableAcceptanceRun(run))
+        if (IsPassingAcceptanceRun(run))
         {
             kernel.ReconcileGoalAcceptanceVerified(
                 goal.Id,
                 $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal returned to Verified for deterministic landing classification.");
+            return;
+        }
+
+        if (IsRetryableAcceptanceRun(run))
+        {
             return;
         }
 
@@ -1305,9 +1310,6 @@ internal sealed class ConductorBatchLoop
 
         if (IsRetryableTerminalAttempt(attempt))
         {
-            kernel.ReconcileGoalAcceptanceVerified(
-                goal.Id,
-                $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({AcceptanceAttemptOutcomeToken(attempt.Outcome)}); goal returned to Verified for deterministic relaunch.");
             return;
         }
 

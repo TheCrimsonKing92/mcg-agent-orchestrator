@@ -243,9 +243,27 @@ public sealed class BackgroundDispatchRunner
             task.RequiredRole,
             sandboxProvider);
         kernel.RecordDispatchSandboxLowIntegrity(goalId, taskId, useSandbox);
+        var prepRecordPath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.json") : null;
+        var prepHeartbeatPath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.heartbeat.json") : null;
+        var prepExitCodePath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.exit.txt") : null;
 
         var dispatchHostCommand = RewriteRealWorkerCommandForTests(dispatch.Command, IsTestRealWorkerCommandRewriteEnabled());
         var egressProxyOptions = CodexEgressProxyOptions.FromEnvironment();
+
+        if (useSandbox)
+        {
+            DispatchProcessHost.WritePrepRecord(prepRecordPath!, new DispatchProcessHost.DispatchPrepRecord(
+                DispatchProcessHost.PrepDispatchKind,
+                goalId.Value,
+                taskId.Value,
+                dispatch.WorkingDirectory,
+                prepHeartbeatPath!,
+                prepExitCodePath!,
+                _clock.UtcNow,
+                sandboxProvider,
+                sandboxWorktreeWritable,
+                null));
+        }
 
         DispatchProcessHost.WriteParameters(parametersPath, new DispatchProcessHost.DispatchRunParameters(
             dispatchHostCommand,
@@ -266,7 +284,13 @@ public sealed class BackgroundDispatchRunner
             CodexEgressProxyEnabled: egressProxyOptions.Enabled,
             CodexEgressProxyEnforce: egressProxyOptions.Enforce,
             CodexEgressProxyIdleTimeoutMs: egressProxyOptions.IdleTimeoutMs,
-            CodexEgressProxyConnectTimeoutMs: egressProxyOptions.ConnectTimeoutMs));
+            CodexEgressProxyConnectTimeoutMs: egressProxyOptions.ConnectTimeoutMs,
+            Kind: DispatchProcessHost.WorkerDispatchKind,
+            PrepGoalId: useSandbox ? goalId.Value : null,
+            PrepTaskId: useSandbox ? taskId.Value : null,
+            PrepRecordPath: prepRecordPath,
+            PrepHeartbeatPath: prepHeartbeatPath,
+            PrepExitCodePath: prepExitCodePath));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, performs sandbox prep off the conductor tick,
