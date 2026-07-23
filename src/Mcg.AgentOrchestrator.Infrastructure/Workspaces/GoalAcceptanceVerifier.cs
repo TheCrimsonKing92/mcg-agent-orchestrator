@@ -3988,7 +3988,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 yield return fullyQualifiedName.Groups["op"].Value == "!~"
                     ? "--filter-not-class"
                     : "--filter-class";
-                yield return fullyQualifiedName.Groups["value"].Value;
+                yield return $"*{fullyQualifiedName.Groups["value"].Value}*";
                 continue;
             }
 
