@@ -706,13 +706,14 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     var priorTask = new TaskSpec(TaskId.New(), "Fix failed parser behavior.", AgentRole.Developer);
     var nextTask = new TaskSpec(TaskId.New(), "Fix another parser behavior.", AgentRole.Developer);
     var goal = kernel.CreateGoal("Avoid repeating underpowered model choice", [priorTask, nextTask]);
+    const string subscriptionAlias = "gpt-5-mini-codex";
     var agent = new AgentDefinition(
         new AgentId("cost-aware-developer"),
         "Cost-aware Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini", "low"),
+        Subscription: new SubscriptionLaunchProfile("codex-cli", subscriptionAlias, "low"),
         ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
     kernel.ActivateGoal(goal.Id, [agent]);
     kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
@@ -743,10 +744,12 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.True(item.UsesComplexModel);
     Assert.Equal("OpenAI", item.ProviderName);
     Assert.Equal("gpt-5.5", item.ModelName);
-    Assert.Equal("gpt-5.5", item.SubscriptionModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal(subscriptionAlias, item.SubscriptionModelName);
     Assert.Equal("high", item.SubscriptionReasoningEffort);
     Assert.True(summary.UsesComplexModel);
-    Assert.Equal("gpt-5.5", summary.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal(subscriptionAlias, summary.ModelName);
     Xunit.Assert.Null(plan.ReadyStartCostRisk);
     Xunit.Assert.Empty(plan.ReadyStartCostRiskDetails);
     Xunit.Assert.Null(thresholdRisk);
@@ -764,7 +767,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 
     Assert.True(nextTask.LastDispatch!.UsesComplexModel);
     Assert.Equal(TaskComplexity.Simple, nextTask.LastDispatch.TaskComplexity);
-    Assert.Equal("gpt-5.5", nextTask.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal(subscriptionAlias, nextTask.LastDispatch.ModelName);
     Xunit.Assert.Null(preparedRisk);
 }
 
