@@ -58,7 +58,7 @@ public sealed partial class AgentOrchestratorKernel
     public OrchestratorSnapshot ExportSnapshot()
     {
         return new OrchestratorSnapshot(
-            _goals.Values.Select(goal => goal.ToSnapshot()).ToList(),
+            _goals.Values.Where(goal => !goal.IsMetadataOnly).Select(goal => goal.ToSnapshot()).ToList(),
             _humanInputRequests.Values.Select(request => request.ToSnapshot()).ToList());
     }
 
@@ -113,6 +113,12 @@ public sealed partial class AgentOrchestratorKernel
         var ingested = 0;
         foreach (var goal in snapshot.Goals.Select(Goal.FromSnapshot))
         {
+            if (IsTerminalGoalStatus(goal.Status))
+            {
+                TrackTerminalGoalMetadata(goal.ToTerminalGoalMetadata());
+                continue;
+            }
+
             if (!_goals.TryAdd(goal.Id, goal))
             {
                 continue;
@@ -124,11 +130,51 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
         {
+            if (!_goals.ContainsKey(request.GoalId))
+            {
+                continue;
+            }
+
             _humanInputRequests.TryAdd(request.Id, request);
         }
 
         SweepParkedGoalHumanWaits();
         return ingested;
+    }
+
+    public int AddTerminalGoalMetadataOnlyStubs(IEnumerable<TerminalGoalMetadata> goals)
+    {
+        var changed = 0;
+        foreach (var metadata in goals)
+        {
+            if (TrackTerminalGoalMetadata(metadata))
+                changed++;
+        }
+
+        return changed;
+    }
+
+    public int EvictTerminalGoalAggregates(IEnumerable<GoalId>? goalIds = null)
+    {
+        var selected = goalIds is null
+            ? null
+            : goalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var evicted = 0;
+        foreach (var goal in _goals.Values.ToArray())
+        {
+            if (!IsTerminalGoalStatus(goal.Status) ||
+                selected is not null && !selected.Contains(goal.Id.Value))
+            {
+                continue;
+            }
+
+            var metadata = goal.ToTerminalGoalMetadata();
+            if (_goals.Remove(goal.Id))
+                evicted++;
+            TrackTerminalGoalMetadata(metadata);
+        }
+
+        return evicted;
     }
 
     // Refreshes already-tracked goals from persisted state at a conductor tick boundary. Unlike
@@ -141,6 +187,14 @@ public sealed partial class AgentOrchestratorKernel
         {
             if (!_goals.ContainsKey(goal.Id))
             {
+                continue;
+            }
+
+            if (IsTerminalGoalStatus(goal.Status))
+            {
+                _goals.Remove(goal.Id);
+                TrackTerminalGoalMetadata(goal.ToTerminalGoalMetadata());
+                refreshed++;
                 continue;
             }
 
@@ -159,6 +213,39 @@ public sealed partial class AgentOrchestratorKernel
 
         SweepParkedGoalHumanWaits();
         return refreshed;
+    }
+
+    private bool TrackTerminalGoalMetadata(TerminalGoalMetadata metadata)
+    {
+        var stub = Goal.CreateMetadataOnlyTerminal(metadata);
+        var changed = false;
+        if (_goals.Remove(stub.Id))
+            changed = true;
+
+        foreach (var request in _humanInputRequests.Values.Where(request => request.GoalId == stub.Id).ToArray())
+        {
+            if (_humanInputRequests.Remove(request.Id))
+                changed = true;
+        }
+
+        if (!_knownDependencyGoalStatuses.TryGetValue(stub.Id, out var knownStatus) ||
+            !string.Equals(knownStatus, stub.Status.ToString(), StringComparison.Ordinal))
+        {
+            _knownDependencyGoalStatuses[stub.Id] = stub.Status.ToString();
+            changed = true;
+        }
+
+        if (stub.Status == GoalStatus.Completed)
+        {
+            if (_knownCompletedDependencyGoals.Add(stub.Id))
+                changed = true;
+        }
+        else if (_knownCompletedDependencyGoals.Remove(stub.Id))
+        {
+            changed = true;
+        }
+
+        return changed;
     }
 
 

@@ -11,6 +11,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestratorStateRepository
 {
+    private const int GoalMetadataTitleMaxChars = 240;
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
@@ -609,8 +610,31 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         var results = new List<GoalSummary>();
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, status, objective, updated_at
+        cmd.CommandText = $"""
+            SELECT
+                id,
+                status,
+                {GoalMetadataTitleSql()},
+                updated_at,
+                (
+                    SELECT json_extract(task.value, '$.LastDispatch.ResultCommit')
+                    FROM json_each(goals.snapshot_json, '$.Tasks') AS task
+                    WHERE COALESCE(json_extract(task.value, '$.LastDispatch.ResultCommit'), '') <> ''
+                    ORDER BY CAST(task.key AS INTEGER) DESC
+                    LIMIT 1
+                ) AS result_commit,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) ASC
+                    LIMIT 1
+                ) AS created_at,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) DESC
+                    LIMIT 1
+                ) AS terminated_at
             FROM goals
             ORDER BY updated_at DESC
             """;
@@ -622,7 +646,10 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+                reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
         }
 
         return results;
@@ -1266,6 +1293,11 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         int? version = null,
         bool skipUnchanged = false)
     {
+        if (goal.IsMetadataOnly)
+        {
+            throw new InvalidOperationException($"Refusing to persist metadata-only goal snapshot '{ShortGoalId(goal.Id)}'. Hydrate the full aggregate before saving.");
+        }
+
         var json = JsonSerializer.Serialize(goal, SerializerOptions);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $$"""
@@ -1292,6 +1324,13 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         cmd.Parameters.AddWithValue("$skip_unchanged", skipUnchanged ? 1 : 0);
         var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
         return (rows, rows > 0 ? Encoding.UTF8.GetByteCount(json) : 0);
+    }
+
+    private static string GoalMetadataTitleSql()
+    {
+        var normalized = "replace(objective, char(13), char(10))";
+        var firstLine = $"CASE WHEN instr({normalized}, char(10)) > 0 THEN substr({normalized}, 1, instr({normalized}, char(10)) - 1) ELSE objective END";
+        return $"substr(({firstLine}), 1, {GoalMetadataTitleMaxChars})";
     }
 
     private static async Task<(int RowsWritten, long SerializedBytes)> UpsertModelFitHistoryRowAsync(
@@ -1399,6 +1438,13 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     }
 }
 
-public sealed record GoalSummary(string Id, string Status, string Objective, string UpdatedAt);
+public sealed record GoalSummary(
+    string Id,
+    string Status,
+    string Objective,
+    string UpdatedAt,
+    string? ResultCommit = null,
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? TerminatedAt = null);
 
 public sealed record QuarantinedGoalSummary(string Id, string Error);

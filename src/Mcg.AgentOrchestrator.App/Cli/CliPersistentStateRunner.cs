@@ -559,7 +559,8 @@ internal static class CliPersistentStateRunner
             EmitPreLoopJanitorialFailure(workspace, ex);
         }
 
-        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        var loopCurrentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        currentGoal = loopCurrentGoal;
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistGoals(checkpoint, checkpoint.Goals.Select(goal => goal.Id).ToArray());
@@ -585,17 +586,34 @@ internal static class CliPersistentStateRunner
             if (requests.Length == 0) return;
 
             var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            var persistedTerminalGoalIds = new List<GoalId>();
+            var persistedTerminalGoalIdValues = new HashSet<string>(StringComparer.Ordinal);
             foreach (var result in results)
             {
                 if (result.PersistedSnapshot is not null)
                 {
-                    tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                    if (IsConductLoopTerminalStatus(result.PersistedSnapshot.Status.ToString()))
+                    {
+                        persistedTerminalGoalIds.Add(new GoalId(result.GoalId));
+                        persistedTerminalGoalIdValues.Add(result.GoalId);
+                        tickBaselines.Remove(result.GoalId);
+                    }
+                    else
+                    {
+                        tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                    }
                 }
 
                 if (result.Disposition is GoalSnapshotSaveDisposition.Merged or GoalSnapshotSaveDisposition.Skipped)
                 {
                     Console.WriteLine(FormatTickMergeReceipt(result));
                 }
+            }
+
+            checkpoint.EvictTerminalGoalAggregates(persistedTerminalGoalIds);
+            if (loopCurrentGoal is not null && persistedTerminalGoalIdValues.Contains(loopCurrentGoal.Id.Value))
+            {
+                loopCurrentGoal = null;
             }
         }
 
@@ -606,7 +624,7 @@ internal static class CliPersistentStateRunner
             ref agents,
             providers,
             ref workerProfiles,
-            ref currentGoal,
+            ref loopCurrentGoal,
             channel,
             () => LoadConductLoopKernel(stateRepository),
             Persist,
@@ -617,6 +635,7 @@ internal static class CliPersistentStateRunner
 
         // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
         Persist(kernel);
+        currentGoal = loopCurrentGoal;
         return shouldSave;
     }
 
@@ -656,6 +675,7 @@ internal static class CliPersistentStateRunner
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
+            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id)));
 
         var loadedIds = hydratedIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
@@ -677,7 +697,7 @@ internal static class CliPersistentStateRunner
         kernel.MarkKnownDependencyGoalStatuses(missingDependencySummaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         var completedDependencyIds = missingDependencySummaries
-            .Where(summary => IsConductLoopTerminalStatus(summary.Status))
+            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
@@ -723,7 +743,7 @@ internal static class CliPersistentStateRunner
         GoalId? onlyGoalId)
     {
         var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, onlyGoalId)
-            .Where(id => !workingSetKernel.Goals.Any(goal => goal.Id == id))
+            .Where(id => workingSetKernel.Goals.FirstOrDefault(goal => goal.Id == id) is not { IsMetadataOnly: false })
             .ToArray();
         if (candidates.Length == 0)
         {
@@ -826,10 +846,35 @@ internal static class CliPersistentStateRunner
 
     private static bool IsConductLoopTerminalStatus(string status) =>
         status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsConductLoopCompletedDependencyStatus(string status) =>
+        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
+    {
+        var status = Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var parsed)
+            ? parsed
+            : GoalStatus.Completed;
+        var title = string.IsNullOrWhiteSpace(summary.Objective)
+            ? summary.Id
+            : summary.Objective;
+        var terminatedAt = summary.TerminatedAt ?? TryParseTimestamp(summary.UpdatedAt);
+        return new TerminalGoalMetadata(
+            new GoalId(summary.Id),
+            status,
+            title,
+            summary.ResultCommit,
+            summary.CreatedAt,
+            terminatedAt);
+    }
+
+    private static DateTimeOffset? TryParseTimestamp(string value) =>
+        DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     private static bool ExecuteCommandWithoutTransaction(
         IReadOnlyList<string> args,
