@@ -38,7 +38,7 @@ public sealed class FirewallSetupCommand
 
         var created = 0;
         var existing = 0;
-        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTesthostFirewallPaths())
+        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTestExecutableFirewallPaths())
         {
             var ruleName = $"MCG-testhost-slot{path.SlotIndex}-{path.Project}-{path.Configuration}";
             if (_ruleWriter.CreateInboundAllowRule(new FirewallRuleSpec(ruleName, path.Path)))

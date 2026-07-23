@@ -845,6 +845,207 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_mtp_runner_uses_slot_executable_trx_filters_and_coexists_with_vstest")]
+    public async Task GoalAcceptanceVerifierMtpRunnerUsesSlotExecutableTrxFiltersAndCoexistsWithVstest()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter", "FullyQualifiedName~GoalLifecycleTests&FullyQualifiedName!~SlowCoreTests&Category!=HostIntegration"] },
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3."));
+                }
+
+                return Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
+                    ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.")
+                    : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            var artifactsPath = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0).ArtifactsPath;
+            Assert.Contains(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build");
+            Assert.Contains(calls, call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+            Assert.DoesNotContain(calls, call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2].Contains("Mcg.AgentOrchestrator.Core.Tests", StringComparison.Ordinal));
+
+            var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
+            Assert.Equal(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug", "Mcg.AgentOrchestrator.Core.Tests.exe"), mtpCall[0]);
+            Assert.Contains("--filter-class", mtpCall);
+            Assert.Contains("GoalLifecycleTests", mtpCall);
+            Assert.Contains("--filter-not-class", mtpCall);
+            Assert.Contains("SlowCoreTests", mtpCall);
+            Assert.Contains("--filter-not-trait", mtpCall);
+            Assert.Contains("Category=HostIntegration", mtpCall);
+            Assert.Contains("--results-directory", mtpCall);
+            Assert.Contains("--report-trx", mtpCall);
+            Assert.Contains("--report-trx-filename", mtpCall);
+            Assert.Single(result.Checks!.Single(check => check.Name == "core tests").TestResultPaths!);
+            Assert.True(File.Exists(result.Checks!.Single(check => check.Name == "core tests").TestResultPaths!.Single()));
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dotnet_test_without_runner_uses_vstest")]
+    public async Task GoalAcceptanceVerifierDotnetTestWithoutRunnerUsesVstest()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
+                    ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
+                    : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed);
+            Assert.Contains(calls, call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" &&
+                call.Contains("--no-build"));
+            Assert.DoesNotContain(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dotnet_test_unknown_runner_fails_loudly")]
+    public async Task GoalAcceptanceVerifierDotnetTestUnknownRunnerFailsLoudly()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "runner": "typo", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "should not run tests"));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
+                stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            var check = Assert.Single(result.Checks!);
+            Assert.False(check.Passed);
+            Assert.Contains("unrecognized runner 'typo'", check.OutputTail);
+            Assert.DoesNotContain(calls, call => call.Length > 1 && call[0] == "dotnet" && call[1] == "test");
+            Assert.DoesNotContain(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_mtp_runner_without_build_phase_builds_project_before_executable")]
+    public async Task GoalAcceptanceVerifierMtpRunnerWithoutBuildPhaseBuildsProjectBeforeExecutable()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var goalId = new GoalId("cccccccccccccccccccccccccccccccc");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root, goalId);
+
+            Assert.True(result.Passed);
+            var buildIndex = calls.FindIndex(call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "build" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj");
+            var mtpIndex = calls.FindIndex(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
+            Assert.True(buildIndex >= 0);
+            Assert.True(mtpIndex > buildIndex);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
     {
@@ -1495,6 +1696,63 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         {
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_rerun_tolerates_flaky_mtp_partition")]
+    public async Task GoalAcceptanceVerifierWithinAttemptRerunToleratesFlakyMtpPartition()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests: Cli", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter", "FullyQualifiedName~CliCommandTests"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var goalId = new GoalId("dddddddddddddddddddddddddddddddd");
+        var calls = new List<string[]>();
+        var mtpRuns = 0;
+        SetPartitionVerdictKeyHooks("tree-mtp", "main-mtp", "commit-mtp");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    mtpRuns++;
+                    if (mtpRuns == 1)
+                    {
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                    }
+
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root, goalId);
+
+            Assert.True(result.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(2, mtpRuns);
+            Assert.DoesNotContain(calls, call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -3279,6 +3537,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         args[1] == "test" &&
         args[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj" &&
         args.Contains("--filter");
+
+    private static bool IsMtpExecutableCall(string[] args, string projectName) =>
+        args.Length > 0 &&
+        Path.GetFileNameWithoutExtension(args[0]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
+
+    private static void WriteMtpTrx(string[] args)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+        var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
+        Assert.True(resultsDirectoryIndex >= 0);
+        Assert.True(resultsDirectoryIndex + 1 < args.Length);
+        Assert.True(trxFileIndex >= 0);
+        Assert.True(trxFileIndex + 1 < args.Length);
+        Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
+        File.WriteAllText(Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]), "<TestRun />");
+    }
 
     private static void CorruptPartitionCacheKey(string root, string partitionId)
     {
