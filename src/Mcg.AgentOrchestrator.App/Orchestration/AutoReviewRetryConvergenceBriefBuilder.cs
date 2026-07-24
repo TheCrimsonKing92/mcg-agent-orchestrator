@@ -15,8 +15,8 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         "The following findings are accepted — do not rewrite these sections; close ONLY the residual findings listed below.";
 
     private static readonly Regex WhitespacePattern = new(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex FocusedTestClassPattern = new(
-        @"(?:FullyQualifiedName~|tests[/\\][A-Za-z0-9_.-]+[/\\])?(?<class>[A-Z][A-Za-z0-9_]*(?:Tests|Test))(?:\.cs)?\b",
+    private static readonly Regex ExplicitFocusedTestClassPattern = new(
+        @"(?:FullyQualifiedName~|tests[/\\][A-Za-z0-9_.-]+[/\\])(?<class>[A-Z][A-Za-z0-9_]*(?:Tests|Test))(?:\.cs)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal static string BuildConvergenceBrief(
@@ -154,7 +154,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         var classes = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var finding in findings)
         {
-            foreach (Match match in FocusedTestClassPattern.Matches(finding))
+            foreach (Match match in ExplicitFocusedTestClassPattern.Matches(finding))
             {
                 classes.Add(match.Groups["class"].Value);
             }
@@ -237,7 +237,11 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             state = ReviewFindingConvergence.ApplyRound(state, nextRound);
         }
 
-        return state;
+        return state
+            .Where(finding => !WorkerResultBlockers.IsSuppressedByCriteriaCorrection(
+                finding.Description,
+                goal.EffectiveAcceptanceCriteriaCorrections))
+            .ToArray();
     }
 
     private static IReadOnlyList<string> DeduplicateConvergenceFindings(IEnumerable<string> findings)

@@ -17,4 +17,19 @@ public sealed class StableSlotMtpFilterTests
             ],
             arguments);
     }
+
+    [Xunit.Theory(DisplayName = "Stable_slot_MTP_no_build_cache_miss_builds_before_discovery")]
+    [Xunit.InlineData(false, false, true)]
+    [Xunit.InlineData(false, true, true)]
+    [Xunit.InlineData(true, false, true)]
+    [Xunit.InlineData(true, true, false)]
+    public void MtpBuildDecisionPreventsNoBuildDiscoveryFailure(
+        bool noBuild,
+        bool executableExists,
+        bool expectedBuild)
+    {
+        Assert.Equal(
+            expectedBuild,
+            CliCommandHandlers.ShouldBuildStableSlotMtpProject(noBuild, executableExists));
+    }
 }

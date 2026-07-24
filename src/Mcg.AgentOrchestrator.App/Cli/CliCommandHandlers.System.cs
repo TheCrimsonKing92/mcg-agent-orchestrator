@@ -1128,7 +1128,14 @@ internal static partial class CliCommandHandlers
 
         var project = Path.GetFullPath(parts[2], context.Workspace.RootDirectory);
         var noBuild = parts.Any(part => part.Equals("--no-build", StringComparison.OrdinalIgnoreCase));
-        if (!noBuild)
+        var projectName = Path.GetFileNameWithoutExtension(project);
+        var executable = Path.Combine(
+            environment.ArtifactsPath,
+            "bin",
+            projectName,
+            "debug",
+            $"{projectName}{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
+        if (ShouldBuildStableSlotMtpProject(noBuild, File.Exists(executable)))
         {
             var buildExit = RunStableSlotProcess(
                 "dotnet",
@@ -1141,13 +1148,6 @@ internal static partial class CliCommandHandlers
             }
         }
 
-        var projectName = Path.GetFileNameWithoutExtension(project);
-        var executable = Path.Combine(
-            environment.ArtifactsPath,
-            "bin",
-            projectName,
-            "debug",
-            $"{projectName}{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
         if (!File.Exists(executable))
         {
             throw new InvalidOperationException($"MTP test executable was not produced: {executable}");
@@ -1183,6 +1183,9 @@ internal static partial class CliCommandHandlers
             throw new CliExitException(testExit);
         }
     }
+
+    internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool executableExists) =>
+        !noBuild || !executableExists;
 
     private static string? ReadStableSlotOption(IReadOnlyList<string> parts, string option)
     {

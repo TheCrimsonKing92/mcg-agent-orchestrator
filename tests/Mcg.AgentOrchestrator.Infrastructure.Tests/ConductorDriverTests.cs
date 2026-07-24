@@ -79,7 +79,7 @@ public sealed class ConductorDriverTests
             "commands: review",
             "tests: pass - inspected evidence",
             $"blockers: {blocker}",
-            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding("finding-a", ReviewFindingState.Open, new ReviewFindingLocation("src/Test.cs", "Test.Run"), blocker) })}",
+            $"findings: {JsonSerializer.Serialize(blocker.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select((finding, index) => new ReviewFinding($"finding-{index + 1}", ReviewFindingState.Open, new ReviewFindingLocation("src/Test.cs", $"Test.Run{index + 1}"), finding)))}",
             "touched_anchors: []"
         };
         if (!string.IsNullOrWhiteSpace(evidenceRequest))
@@ -1514,7 +1514,11 @@ public sealed class ConductorDriverTests
                 "  ConductorDriverTests   still expects the raw findings passthrough.  ",
                 "Reviewer still needs InquiryDispatcherTests coverage."
             ],
-            ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+            [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProgressiveReviewGlanceTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InquiryDispatcherTests.cs"
+            ]);
 
         Assert.Contains("auto-review-retry round 3 convergence brief", brief);
         Assert.Contains("Existing implementation shape is accepted", brief);

@@ -130,6 +130,14 @@ public static class WorkerResultBlockers
         return !string.IsNullOrWhiteSpace(blocker);
     }
 
+    public static bool IsSuppressedByCriteriaCorrection(
+        string finding,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
+        EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
+            finding,
+            criteriaCorrections,
+            out _);
+
     public static bool TryFindEvidenceRequest(TaskVerificationRecord? verification, out string request)
     {
         request = string.Empty;

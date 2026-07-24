@@ -291,7 +291,11 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 "  ConductorDriverTests   still expects the raw findings passthrough.  ",
                 "Reviewer still needs InquiryDispatcherTests coverage."
             ],
-            ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+            [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProgressiveReviewGlanceTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InquiryDispatcherTests.cs"
+            ]);
 
         Xunit.Assert.Contains("auto-review-retry round 3 convergence brief", brief);
         Xunit.Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.AcceptedShapePreamble, brief);
@@ -304,6 +308,19 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Xunit.Assert.Contains("ProgressiveReviewGlanceTests", brief);
         Xunit.Assert.Contains("InquiryDispatcherTests", brief);
         Xunit.Assert.Contains(@"C:\tmp\reviewer.out.log", brief);
+    }
+
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_does_not_request_unverified_bare_test_classes")]
+    public void BareTestClassNamesAreNotPromotedToFocusedReceipts()
+    {
+        var classes = AutoReviewRetryConvergenceBriefBuilder.InferFocusedTestClasses(
+            [
+                "requested absent ReviewFindingsTests and ReviewerWorkerResultBlockersTests",
+                "rerun FullyQualifiedName~WorkerResultBlockersTests"
+            ],
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs"]);
+
+        Xunit.Assert.Equal(["ConductorDriverTests", "WorkerResultBlockersTests"], classes);
     }
 
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_keeps_single_round_findings")]
