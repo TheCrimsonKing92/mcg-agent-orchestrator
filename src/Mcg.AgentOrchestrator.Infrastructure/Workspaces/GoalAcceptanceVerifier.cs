@@ -2133,6 +2133,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 : null;
 
             var telemetry = ResolveTestTelemetry(check, environment);
+            PrepareTestTelemetryForRun(telemetry);
             var arguments = BuildMtpTestArguments(check, environment, telemetry);
             ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
             var result = await RunWithGateHeartbeatAsync(
@@ -4081,6 +4082,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var fileName = $"{SanitizeFileName(filePrefix)}.trx";
         var path = Path.Combine(directory, fileName);
         return new DotnetTestTelemetry([path], []);
+    }
+
+    private static void PrepareTestTelemetryForRun(DotnetTestTelemetry telemetry)
+    {
+        foreach (var path in telemetry.Paths)
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException($"Unable to clear stale TRX before the test run: {path}", ex);
+            }
+
+            if (File.Exists(path))
+            {
+                throw new IOException($"Unable to clear stale TRX before the test run: {path}");
+            }
+        }
     }
 
     private static string[] AddVstestTelemetryArguments(

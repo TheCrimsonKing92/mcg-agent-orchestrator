@@ -1039,6 +1039,59 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_does_not_reuse_stale_trx")]
+    public async Task GoalAcceptanceVerifierFailedMtpShardDoesNotReuseStaleTrx()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests: Cli", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter", "FullyQualifiedName~CliCommandTests"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        try
+        {
+            var attemptPrefix = Path.Combine(root, "TestResults", "reused-stable-slot");
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                attemptPrefix);
+            var staleTrxPath = $"{attemptPrefix}.infrastructure-tests-cli.trx";
+            Directory.CreateDirectory(Path.GetDirectoryName(staleTrxPath)!);
+            File.Copy(MtpFailureFixturePath(), staleTrxPath);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Test process exited before the reporter flushed."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root, stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            var output = Assert.Single(result.Checks!).OutputTail;
+            Assert.Contains(
+                "[FAIL] infrastructure tests: Cli: failed — no TRX produced (shard was killed or crashed before reporter flushed)",
+                output,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("Retry evidence includes failed test names", output, StringComparison.Ordinal);
+            Assert.False(File.Exists(staleTrxPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_vstest_failure_stdout_remains_unchanged")]
     public async Task GoalAcceptanceVerifierVstestFailureStdoutRemainsUnchanged()
     {
