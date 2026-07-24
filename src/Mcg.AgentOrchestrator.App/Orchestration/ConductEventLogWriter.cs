@@ -28,14 +28,59 @@ internal sealed class ConductEventLogWriter
         lock (_lock)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
+            DrainRequiredEvents();
             RotateIfNeeded();
 
-            var record = new ConductEventRecord(
-                timestamp ?? _utcNow(),
-                eventKind,
-                string.IsNullOrWhiteSpace(goalId) ? null : goalId,
-                detail);
-            File.AppendAllText(_path, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
+            File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
+        }
+    }
+
+    public bool AppendRequired(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null)
+    {
+        lock (_lock)
+        {
+            var directory = Path.GetDirectoryName(_path) ?? ".";
+            Directory.CreateDirectory(directory);
+            var pendingPath = Path.Combine(
+                directory,
+                $"{Path.GetFileName(_path)}.pending-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp));
+
+            try
+            {
+                DrainRequiredEvents();
+                return !File.Exists(pendingPath);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+    }
+
+    private string Serialize(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp)
+    {
+        var record = new ConductEventRecord(
+            timestamp ?? _utcNow(),
+            eventKind,
+            string.IsNullOrWhiteSpace(goalId) ? null : goalId,
+            detail);
+        return JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
+    }
+
+    private void DrainRequiredEvents()
+    {
+        var directory = Path.GetDirectoryName(_path) ?? ".";
+        var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
+        foreach (var pendingPath in Directory.GetFiles(directory, pattern).Order(StringComparer.Ordinal))
+        {
+            RotateIfNeeded();
+            File.AppendAllText(_path, File.ReadAllText(pendingPath));
+            File.Delete(pendingPath);
         }
     }
 

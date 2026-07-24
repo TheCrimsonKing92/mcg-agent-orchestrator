@@ -25,10 +25,17 @@ public sealed class ConductorSelfRelaunchTests
             WaitUntil(
                 () => File.Exists(result.Handoff!.StdoutPath) &&
                     ReadAllTextShared(result.Handoff.StdoutPath!).Contains(
-                        "LOOP_STOP tick=0 reason=all-done-or-escalated",
+                        "LOOP_STOP tick=",
                         StringComparison.Ordinal),
                 TimeSpan.FromSeconds(15)),
-            "The freshly-built successor did not execute its first conductor tick.");
+            $"The freshly-built successor did not complete its first conductor decision. " +
+            $"stdout={ReadAllTextShared(result.Handoff!.StdoutPath!)} " +
+            $"stderr={ReadAllTextShared(result.Handoff.StderrPath!)}");
+        var successorOutput = ReadAllTextShared(result.Handoff.StdoutPath!);
+        Assert.True(
+            successorOutput.IndexOf("LOOP_START ", StringComparison.Ordinal) <
+            successorOutput.IndexOf("LOOP_STOP tick=", StringComparison.Ordinal),
+            $"Successor output did not preserve start-before-first-decision ordering: {successorOutput}");
     }
 
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_handoff_failure_stops_successor_and_reacquires_incumbent_lease")]

@@ -803,11 +803,26 @@ internal sealed class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
+        var required = kind == "loop-relaunch-rollback" ||
+            line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
-            writer.Append(kind, goalId, line);
+            if (required)
+            {
+                if (!writer.AppendRequired(kind, goalId, line))
+                {
+                    Console.Error.WriteLine(
+                        $"LOOP_EVENT_STREAM_WRITE_PENDING eventKind={kind} goal={goalId ?? "none"} " +
+                        $"pending=true detail={SanitizeHandoffDetail(line)}");
+                    Console.Error.Flush();
+                }
+            }
+            else
+            {
+                writer.Append(kind, goalId, line);
+            }
         }
-        catch
+        catch when (!required)
         {
             // Shared operator event streaming is advisory; stdout remains the primary conduct log.
         }

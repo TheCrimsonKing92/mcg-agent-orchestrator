@@ -5929,6 +5929,49 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(records, record => record.EventKind == "goal" && record.GoalId is not null);
     }
 
+    [Xunit.Fact(DisplayName = "ConductEvents_required_rollback_survives_transient_stream_write_failure")]
+    public void ConductEventsRequiredRollbackSurvivesTransientStreamWriteFailure()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-required");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        var writer = new ConductEventLogWriter(logPath);
+
+        bool appendedImmediately;
+        using (var streamLock = new FileStream(
+            logPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.Read))
+        {
+            appendedImmediately = writer.AppendRequired(
+                "loop-relaunch-rollback",
+                "goal1234",
+                "LOOP_RELAUNCH_ROLLBACK goal=goal1234 phase=self-check rolledBack=true continuing=true");
+        }
+
+        Assert.False(appendedImmediately);
+        Assert.Single(Directory.GetFiles(
+            Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+
+        writer.Append("loop-stop", null, "LOOP_STOP tick=2 reason=test");
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Contains(records, record =>
+            record.EventKind == "loop-relaunch-rollback" &&
+            record.GoalId == "goal1234" &&
+            record.Detail.Contains("continuing=true", StringComparison.Ordinal));
+        Assert.Contains(records, record => record.EventKind == "loop-stop");
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_skips_janitorial_phase_failure_and_journals_event")]
     public void BatchLoopSkipsJanitorialPhaseFailureAndJournalsEvent()
     {
