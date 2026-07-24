@@ -355,13 +355,25 @@ internal sealed class WorkerGitContext
                 .ToList();
         }
 
-        if (matches.Count == 0 && !string.IsNullOrWhiteSpace(anchor.Hunk))
+        var regionScopes = matches
+            .Select(line => FindBraceScope(lines, line))
+            .Distinct()
+            .ToArray();
+        if (string.IsNullOrWhiteSpace(anchor.Hunk))
         {
-            matches = FindTokenLines(lines, anchor.Hunk, requireDeclaration: false);
+            return regionScopes;
         }
 
-        return matches
-            .Select(line => FindBraceScope(lines, line))
+        var hunkMatches = FindTokenLines(lines, anchor.Hunk, requireDeclaration: false);
+        if (regionScopes.Length > 0)
+        {
+            hunkMatches = hunkMatches
+                .Where(line => regionScopes.Any(scope => scope.Contains(line + 1)))
+                .ToList();
+        }
+
+        return hunkMatches
+            .Select(line => new SourceLineRange(line + 1, line + 1))
             .Distinct()
             .ToArray();
     }

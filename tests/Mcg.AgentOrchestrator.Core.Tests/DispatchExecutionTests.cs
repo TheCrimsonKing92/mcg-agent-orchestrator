@@ -1038,7 +1038,8 @@ public sealed class DispatchExecutionTests
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed &&
-        evt.Message.Contains("Reviewer WORKER_RESULT reported blocker", StringComparison.Ordinal));
+        evt.Message.Contains("Reviewer WORKER_RESULT verdict rejected", StringComparison.Ordinal) &&
+        evt.Message.Contains("test-review-finding", StringComparison.Ordinal));
     Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
 }
 
@@ -1072,8 +1073,39 @@ public sealed class DispatchExecutionTests
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskFailed &&
-            evt.Message.Contains("pass verdict rejected", StringComparison.Ordinal) &&
+            evt.Message.Contains("verdict rejected", StringComparison.Ordinal) &&
             evt.Message.Contains("F-1", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_reviewer_nonpass_open_findings_cannot_complete_without_text_blocker")]
+    [Xunit.InlineData("needs-work")]
+    [Xunit.InlineData("fail")]
+    public void RecordDispatchExecutionResultReviewerNonPassOpenFindingsCannotCompleteWithoutTextBlocker(
+        string verdict)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep structured residual findings authoritative", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var result = StructuredReviewerResult(
+            verdict,
+            """[{"stable_id":"F-open","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("verdict rejected", StringComparison.Ordinal) &&
+            evt.Message.Contains("F-open", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskCompleted);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]

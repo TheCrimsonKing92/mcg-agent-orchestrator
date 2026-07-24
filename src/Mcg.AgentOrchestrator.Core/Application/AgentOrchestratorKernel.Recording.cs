@@ -240,7 +240,6 @@ public sealed partial class AgentOrchestratorKernel
 
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindPassVerdict(verification) &&
             ReviewFindingConvergence.CountOpen(mergedFindings) > 0)
         {
             var openIds = string.Join(
@@ -252,7 +251,7 @@ public sealed partial class AgentOrchestratorKernel
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
-                $"Reviewer WORKER_RESULT pass verdict rejected: merged structured finding state still has open stable_id(s): {openIds}.");
+                $"Reviewer WORKER_RESULT verdict rejected: merged structured finding state still has open stable_id(s): {openIds}.");
             return true;
         }
 

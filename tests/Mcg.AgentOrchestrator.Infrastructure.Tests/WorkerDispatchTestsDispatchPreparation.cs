@@ -84,6 +84,64 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
     }
 
+    [Xunit.Fact(DisplayName = "Reviewer_round_diff_does_not_touch_unrelated_hunk_in_same_region")]
+    public void ReviewerRoundDiffDoesNotTouchUnrelatedHunkInSameRegion()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var sourcePath = Path.Combine(root, "src", "Example.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class Example
+                {
+                    public void Run()
+                    {
+                        var acceptedGuard = false;
+                        var residualGuard = false;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class Example
+                {
+                    public void Run()
+                    {
+                        var acceptedGuard = false;
+                        var residualGuard = true;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            RunGit(root, ["commit", "-m", "Fix residual guard"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var acceptedAnchor = new ReviewFindingLocation(
+                "src/Example.cs",
+                "Example.Run",
+                "acceptedGuard");
+
+            var touched = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                root,
+                previous,
+                current,
+                [acceptedAnchor]);
+
+            Assert.Empty(touched);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Reviewer_round_diff_failure_is_loud")]
     public void ReviewerRoundDiffFailureIsLoud()
     {
