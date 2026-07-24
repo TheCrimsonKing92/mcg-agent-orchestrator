@@ -128,7 +128,7 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-if (RunsStartupCleanup(startupArgs))
+if (RunsStartupCleanup(startupArgs) && !ConductorLoopHandoff.IsAuthorityTransferRequested)
 {
     WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
     WorkerProcessJobs.SweepStartupOrphans();
@@ -205,6 +205,12 @@ try
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
+    if (CliPersistentStateRunner.IsConductLoop(startupArgs))
+    {
+        // A handoff successor completes normal startup and state/config loading while the
+        // incumbent retains exclusive authority, then waits for the explicit lease transfer.
+        ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
+    }
 }
 catch (Exception ex)
 {

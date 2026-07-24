@@ -2016,13 +2016,16 @@ internal sealed class ConductorDriver
 
         if (landResult.MainAdvanced)
         {
+            // Schedule any required generation handoff before fallible advisory/post-landing work.
+            // Main has already advanced, so losing this receipt would permanently miss the relaunch.
+            SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
+                goal.Id.Value,
+                landingFileScopes));
+
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
             // successful landing. It records judge receipts for observability but never gates landing.
             _runAdvisorySemanticAcceptance(goal, acceptance);
             _afterSuccessfulLanding(goal, landResult);
-            SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
-                goal.Id.Value,
-                landingFileScopes));
         }
 
         return MakeResult(goal.Id.Value, goalPrefix, policy,

@@ -1,9 +1,63 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.EnvMutation)]
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ConductorSelfRelaunchTests
 {
+    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_binary_build_self_check_and_handoff")]
+    public void RealBinaryBuildSelfCheckAndHandoff()
+    {
+        using var fixture = RealRelaunchFixture.Create();
+
+        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+            new ConductorSelfRelaunchRequest("goal-real-success", 7));
+        fixture.SuccessorProcessId = result.Handoff?.ProcessId;
+
+        Assert.True(result.HandedOff, result.Reason);
+        Assert.NotNull(result.Successor);
+        Assert.Contains("schemaVersion=", result.Successor!.SelfCheckDetail, StringComparison.Ordinal);
+        Assert.Contains("manifestChecks=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
+        Assert.Contains("lanes=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
+        Assert.Contains("modelFunctions=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
+        Assert.False(fixture.Lease.IsHeld);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_handoff_failure_stops_successor_and_reacquires_incumbent_lease")]
+    public void RealHandoffFailureStopsSuccessorAndReacquiresIncumbentLease()
+    {
+        using var fixture = RealRelaunchFixture.Create(
+            loopStartProbe: (_, _) => false,
+            verificationTimeout: TimeSpan.FromMilliseconds(100),
+            verificationHardTimeout: TimeSpan.FromSeconds(1),
+            loopArgs: ["conduct", "--loop", "--daemon", "--watch", "1", "--max-duration", "30"]);
+
+        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+            new ConductorSelfRelaunchRequest("goal-real-handoff-failure", 8));
+        fixture.SuccessorProcessId = result.Handoff?.ProcessId;
+
+        Assert.False(result.HandedOff);
+        Assert.Equal("handoff", result.FailedPhase);
+        Assert.True(fixture.Lease.IsHeld);
+        Assert.Contains("rollbackSucceeded=true", result.Handoff!.VerificationOutcome, StringComparison.Ordinal);
+        Assert.False(IsProcessAlive(result.Handoff.ProcessId));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_self_check_failure_keeps_incumbent_authority")]
+    public void RealSelfCheckFailureKeepsIncumbentAuthority()
+    {
+        using var fixture = RealRelaunchFixture.Create();
+        File.WriteAllText(fixture.Options.StateStorePath, "not-a-sqlite-database");
+
+        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+            new ConductorSelfRelaunchRequest("goal-real-self-check-failure", 9));
+
+        Assert.False(result.HandedOff);
+        Assert.Equal("self-check", result.FailedPhase);
+        Assert.True(fixture.Lease.IsHeld);
+        Assert.Null(result.Handoff);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_launches_prepared_content_addressed_successor")]
     public void LaunchesPreparedContentAddressedSuccessor()
     {
@@ -125,6 +179,114 @@ public sealed class ConductorSelfRelaunchTests
         }
         catch
         {
+        }
+    }
+
+    private static bool IsProcessAlive(int? processId)
+    {
+        if (processId is null)
+            return false;
+
+        try
+        {
+            using var process = Process.GetProcessById(processId.Value);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private sealed class RealRelaunchFixture : IDisposable
+    {
+        private RealRelaunchFixture(
+            string root,
+            ConductorLoopLeaseController lease,
+            ConductorSelfRelaunchOptions options)
+        {
+            Root = root;
+            Lease = lease;
+            Options = options;
+        }
+
+        public string Root { get; }
+        public ConductorLoopLeaseController Lease { get; }
+        public ConductorSelfRelaunchOptions Options { get; }
+        public int? SuccessorProcessId { get; set; }
+
+        public static RealRelaunchFixture Create(
+            Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
+            TimeSpan verificationTimeout = default,
+            TimeSpan verificationHardTimeout = default,
+            IReadOnlyList<string>? loopArgs = null)
+        {
+            var root = CreateTempDirectory();
+            var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var stateStorePath = Path.Combine(orchestratorDirectory, "state.db");
+            _ = new SqliteOrchestratorStateRepository(stateStorePath)
+                .LoadAsync()
+                .GetAwaiter()
+                .GetResult();
+            var lease = ConductorLoopLeaseController.Acquire(orchestratorDirectory);
+            var appOutputDirectory = Path.Combine(
+                repositoryRoot,
+                "src",
+                "Mcg.AgentOrchestrator.App",
+                "bin",
+                "Debug",
+                "net10.0");
+            var handoffOptions = new ConductLoopHandoffOptions(
+                Args: loopArgs ?? ["conduct", "--loop", "--max-iterations", "1"],
+                ExecutionDirectory: root,
+                OrchestratorDirectory: orchestratorDirectory,
+                LogDirectory: Path.Combine(orchestratorDirectory, "logs"),
+                RunEventStorePath: Path.Combine(orchestratorDirectory, "run-events.db"),
+                StopFilePath: Path.Combine(root, ConductorBatchLoop.StopFileName),
+                RenewalCount: 0,
+                MaxRenewals: ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
+                ReleaseCurrentLease: lease.Release,
+                VerificationTimeout: verificationTimeout,
+                VerificationHardTimeout: verificationHardTimeout,
+                LoopStartProbe: loopStartProbe,
+                ReacquireCurrentLease: lease.Reacquire,
+                StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
+            var options = new ConductorSelfRelaunchOptions(
+                RepositoryRoot: repositoryRoot,
+                AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+                AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
+                AppHeadMarkerPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll.git-head"),
+                UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
+                ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
+                StateStorePath: stateStorePath,
+                AgentCatalogPath: Path.Combine(orchestratorDirectory, "agents.json"),
+                WorkerProfilePath: Path.Combine(orchestratorDirectory, "worker-profiles.json"),
+                ModelFunctionCatalogPath: Path.Combine(orchestratorDirectory, "model-functions.json"),
+                DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
+                PowerShellPath: "powershell",
+                HandoffOptions: handoffOptions,
+                BuildTimeout: TimeSpan.FromMinutes(3),
+                SelfCheckTimeout: TimeSpan.FromSeconds(30));
+            return new RealRelaunchFixture(root, lease, options);
+        }
+
+        public void Dispose()
+        {
+            if (SuccessorProcessId is { } processId)
+            {
+                try
+                {
+                    ConductorLoopHandoff.StopFailedSuccessor(processId);
+                }
+                catch
+                {
+                }
+            }
+
+            Lease.Dispose();
+            TryDeleteDirectory(Root);
         }
     }
 }

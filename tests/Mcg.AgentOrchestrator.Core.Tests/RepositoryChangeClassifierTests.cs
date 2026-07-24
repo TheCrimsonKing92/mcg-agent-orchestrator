@@ -52,6 +52,9 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunctionCatalogStore.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Providers/ProviderRegistryFactory.cs")]
     [Xunit.InlineData("config/acceptance-manifest.json")]
     [Xunit.InlineData("Directory.Build.props")]
     public void RepositoryChangeClassifierIdentifiesConductorRelaunchChanges(string path)
@@ -59,6 +62,17 @@ public sealed class RepositoryChangeClassifierTests
         var summary = RepositoryChangeClassifier.Classify([path]);
 
         Assert.True(summary.RequiresConductorRelaunch);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryChangeClassifier_does_not_infer_relaunch_from_similar_non_runtime_paths")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderRegistryFactoryTests.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/BuildStatusRenderer.cs")]
+    public void RepositoryChangeClassifierDoesNotInferRelaunchFromSimilarNonRuntimePaths(string path)
+    {
+        var summary = RepositoryChangeClassifier.Classify([path]);
+
+        Assert.False(summary.RequiresConductorRelaunch);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_does_not_relaunch_for_non_infrastructure_changes")]

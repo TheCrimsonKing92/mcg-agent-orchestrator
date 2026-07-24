@@ -114,6 +114,8 @@ public sealed class ConductorBatchLoopTests
         var landed = false;
         var order = new List<string>();
         Process? successor = null;
+        var handoffRoot = CreateTempDirectory("mcg-conduct-loop-drain-real-handoff");
+        var loopStartedPath = Path.Combine(handoffRoot, "loop-started");
         var driver = MakeDriver(
             getFacts: goal => goal.Id == infraGoal.Id && landed
                 ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
@@ -134,26 +136,41 @@ public sealed class ConductorBatchLoopTests
                     selfRelaunch: request =>
                     {
                         order.Add("handoff");
-                        successor = Process.Start(new ProcessStartInfo("powershell")
-                        {
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                            ArgumentList =
+                        var handoff = ConductorLoopHandoff.TryStartSuccessor(
+                            HandoffOptions(
+                                handoffRoot,
+                                release: () => order.Add("authority-release"),
+                                verificationTimeout: TimeSpan.FromMilliseconds(50),
+                                loopStartProbe: (_, _) => File.Exists(loopStartedPath),
+                                useProtocolReady: true),
+                            new ConductorLoopHandoffRequest(request.Tick, TimeSpan.Zero, 0, 1),
+                            launchRequest =>
                             {
-                                "-NoProfile",
-                                "-Command",
-                                "Start-Sleep -Seconds 10"
-                            }
-                        })!;
+                                successor = Process.Start(new ProcessStartInfo("powershell")
+                                {
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true,
+                                    ArgumentList =
+                                    {
+                                        "-NoProfile",
+                                        "-Command",
+                                        $"Set-Content -LiteralPath '{launchRequest.ReadyFilePath!.Replace("'", "''", StringComparison.Ordinal)}' " +
+                                        $"-Value ('LOOP_HANDOFF_READY token={launchRequest.HandoffToken} pid=' + $PID); " +
+                                        $"while (-not (Test-Path -LiteralPath '{launchRequest.ActivationFilePath!.Replace("'", "''", StringComparison.Ordinal)}')) {{ Start-Sleep -Milliseconds 25 }}; " +
+                                        $"Set-Content -LiteralPath '{loopStartedPath.Replace("'", "''", StringComparison.Ordinal)}' -Value started; Start-Sleep -Seconds 10"
+                                    }
+                                })!;
+                                return new ConductLoopLaunchResult(
+                                    successor.Id,
+                                    launchRequest.StdoutPath,
+                                    launchRequest.StderrPath,
+                                    "spawnPath=test-real-process");
+                            });
                         return new ConductorSelfRelaunchResult(
-                            true,
-                            null,
-                            null,
-                            ConductorLoopHandoffResult.StartedProcess(
-                                successor.Id,
-                                "out.log",
-                                "err.log",
-                                "LOOP_START"));
+                            handoff.Started,
+                            handoff.Started ? null : "handoff",
+                            handoff.Reason,
+                            handoff);
                     }).Run(
                         kernel,
                         driver,
@@ -171,7 +188,8 @@ public sealed class ConductorBatchLoopTests
                 Assert.True(summary.Handoff?.Started);
             });
 
-            Assert.Equal(["terminal-receipt", "handoff"], order);
+            Assert.True(order.IndexOf("terminal-receipt") < order.IndexOf("handoff"));
+            Assert.True(order.IndexOf("handoff") < order.IndexOf("authority-release"));
             Assert.Contains("LOOP_RELAUNCH_DRAIN", output, StringComparison.Ordinal);
             Assert.Contains("active=1 admitting=false", output, StringComparison.Ordinal);
             Assert.Contains("LOOP_HANDOFF", output, StringComparison.Ordinal);
@@ -185,6 +203,7 @@ public sealed class ConductorBatchLoopTests
                 successor.WaitForExit(5000);
             }
             successor?.Dispose();
+            TryDeleteDirectory(handoffRoot);
         }
     }
 
@@ -2365,7 +2384,8 @@ public sealed class ConductorBatchLoopTests
         int maxRenewals = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
         Action? release = null,
         TimeSpan verificationTimeout = default,
-        Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null) =>
+        Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
+        bool useProtocolReady = false) =>
         new(
             Args: args ?? ["conduct", "--loop", "--watch", "--max-duration", "14400"],
             ExecutionDirectory: root,
@@ -2377,7 +2397,8 @@ public sealed class ConductorBatchLoopTests
             MaxRenewals: maxRenewals,
             ReleaseCurrentLease: release ?? (() => { }),
             VerificationTimeout: verificationTimeout,
-            LoopStartProbe: loopStartProbe);
+            LoopStartProbe: loopStartProbe,
+            SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true);
 
     private static void RunGit(string workingDirectory, params string[] args)
     {
@@ -2599,7 +2620,7 @@ public sealed class ConductorBatchLoopTests
             Assert.DoesNotContain(ConductorLoopHandoff.RenewalCountFlag, launchRequest.Args);
             Assert.Equal(5, launchRequest.RenewalCount);
             Assert.Equal(4567, result.ProcessId);
-            Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
 
@@ -2611,7 +2632,7 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal("Started", handoffEvent.Status);
             Assert.Contains(Path.GetFullPath(launchRequest.StdoutPath), handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains(Path.GetFullPath(launchRequest.StderrPath), handoffEvent.Detail, StringComparison.Ordinal);
-            Assert.Contains("guard=lease-released-before-launch", handoffEvent.Detail, StringComparison.Ordinal);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains("spawnPath=injected", handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=true", handoffEvent.Detail, StringComparison.Ordinal);
         }
@@ -2842,7 +2863,7 @@ public sealed class ConductorBatchLoopTests
                     Assert.Equal("successor-child-dead", result.Reason);
                     Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains($"pid={int.MaxValue}", result.VerificationOutcome, StringComparison.Ordinal);
-                    Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("guard=incumbent-held-until-successor-ready", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains("terminalReason=child-dead", result.VerificationOutcome, StringComparison.Ordinal);
@@ -3039,7 +3060,7 @@ public sealed class ConductorBatchLoopTests
             successorPid = ParseHandoffProcessId(stdout);
 
             Assert.True(IsProcessRunning(successorPid.Value), $"Successor pid {successorPid.Value} did not survive parent job close. stdout={stdout} stderr={stderr}");
-            Assert.Contains("guard=lease-released-before-launch", stdout, StringComparison.Ordinal);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", stdout, StringComparison.Ordinal);
             Assert.Contains("spawnPath=windows-createprocess", stdout, StringComparison.Ordinal);
             Assert.Contains("breakawayRequested=true", stdout, StringComparison.Ordinal);
             Assert.Contains("breakawaySucceeded=true", stdout, StringComparison.Ordinal);

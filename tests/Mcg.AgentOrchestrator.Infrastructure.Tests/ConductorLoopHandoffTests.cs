@@ -20,6 +20,7 @@ public sealed class ConductorLoopHandoffTests
                     verificationTimeout: TimeSpan.FromMilliseconds(50),
                     verificationHardTimeout: TimeSpan.FromSeconds(5),
                     loopStartProbe: (_, _) => File.Exists(readyPath),
+                    useProtocolReady: true,
                     releaseCurrentLease: () => released = true),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
@@ -32,7 +33,10 @@ public sealed class ConductorLoopHandoffTests
                     startInfo.ArgumentList.Add("-NoProfile");
                     startInfo.ArgumentList.Add("-Command");
                     startInfo.ArgumentList.Add(
-                        $"Start-Sleep -Milliseconds 150; Set-Content -LiteralPath '{readyPath.Replace("'", "''", StringComparison.Ordinal)}' -Value ready; Start-Sleep -Seconds 10");
+                        $"Set-Content -LiteralPath '{request.ReadyFilePath!.Replace("'", "''", StringComparison.Ordinal)}' " +
+                        $"-Value ('LOOP_HANDOFF_READY token={request.HandoffToken} pid=' + $PID); " +
+                        $"while (-not (Test-Path -LiteralPath '{request.ActivationFilePath!.Replace("'", "''", StringComparison.Ordinal)}')) {{ Start-Sleep -Milliseconds 25 }}; " +
+                        $"Set-Content -LiteralPath '{readyPath.Replace("'", "''", StringComparison.Ordinal)}' -Value ready; Start-Sleep -Seconds 10");
                     successor = Process.Start(startInfo)!;
                     return new ConductLoopLaunchResult(
                         successor.Id,
@@ -45,6 +49,7 @@ public sealed class ConductorLoopHandoffTests
             Assert.True(result.Started);
             Assert.True(File.Exists(readyPath));
             Assert.False(successor!.HasExited);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", result.VerificationOutcome, StringComparison.Ordinal);
         }
         finally
         {
@@ -115,6 +120,7 @@ public sealed class ConductorLoopHandoffTests
             var result = ConductorLoopHandoff.TryStartSuccessor(
                 HandoffOptions(
                     root,
+                    useProtocolReady: true,
                     releaseCurrentLease: () => transitions.Add("release"),
                     reacquireCurrentLease: () => transitions.Add("reacquire"),
                     stopFailedSuccessor: pid =>
@@ -148,7 +154,7 @@ public sealed class ConductorLoopHandoffTests
             Assert.True(result.Failed);
             Assert.Equal("successor-child-dead", result.Reason);
             Assert.Contains("terminalReason=child-dead", result.VerificationOutcome, StringComparison.Ordinal);
-            Assert.Equal(["release", "stop-failed-successor", "reacquire"], transitions);
+            Assert.Equal(["stop-failed-successor"], transitions);
         }
         finally
         {
@@ -194,11 +200,64 @@ public sealed class ConductorLoopHandoffTests
         }
     }
 
+    [Fact(DisplayName = "ConductorLoopHandoff_verification_exception_stops_exact_successor_before_reacquiring")]
+    public void VerificationExceptionStopsExactSuccessorBeforeReacquiring()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-handoff-verify-throws");
+        Process? successor = null;
+        var transitions = new List<string>();
+        try
+        {
+            var result = ConductorLoopHandoff.TryStartSuccessor(
+                HandoffOptions(
+                    root,
+                    releaseCurrentLease: () => transitions.Add("release"),
+                    reacquireCurrentLease: () => transitions.Add("reacquire"),
+                    stopFailedSuccessor: pid =>
+                    {
+                        Assert.Equal(successor!.Id, pid);
+                        transitions.Add("stop");
+                        ConductorLoopHandoff.StopFailedSuccessor(pid);
+                    }),
+                new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                request =>
+                {
+                    successor = Process.Start(new ProcessStartInfo("powershell")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        ArgumentList = { "-NoProfile", "-Command", "Start-Sleep -Seconds 30" }
+                    })!;
+                    return new ConductLoopLaunchResult(
+                        successor.Id,
+                        request.StdoutPath,
+                        request.StderrPath);
+                },
+                (_, _) => throw new InvalidOperationException("verification exploded"));
+
+            Assert.False(result.Started);
+            Assert.Equal(["release", "stop", "reacquire"], transitions);
+            Assert.True(successor!.HasExited);
+            Assert.Contains("rollbackSucceeded=true", result.VerificationOutcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (successor is { HasExited: false })
+            {
+                successor.Kill(entireProcessTree: true);
+                successor.WaitForExit(5000);
+            }
+            successor?.Dispose();
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static ConductLoopHandoffOptions HandoffOptions(
         string root,
         TimeSpan verificationTimeout = default,
         TimeSpan verificationHardTimeout = default,
         Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
+        bool useProtocolReady = false,
         Action? releaseCurrentLease = null,
         Action? reacquireCurrentLease = null,
         Action<int>? stopFailedSuccessor = null) =>
@@ -215,6 +274,7 @@ public sealed class ConductorLoopHandoffTests
             VerificationTimeout: verificationTimeout,
             VerificationHardTimeout: verificationHardTimeout,
             LoopStartProbe: loopStartProbe,
+            SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true,
             ReacquireCurrentLease: reacquireCurrentLease,
             StopFailedSuccessor: stopFailedSuccessor);
 

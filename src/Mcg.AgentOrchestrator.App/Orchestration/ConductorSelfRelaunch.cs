@@ -121,7 +121,7 @@ internal static class ConductorSelfRelaunch
                 successor);
     }
 
-    private static ConductorPreparedSuccessor PrepareSuccessor(ConductorSelfRelaunchOptions options)
+    internal static ConductorPreparedSuccessor PrepareSuccessor(ConductorSelfRelaunchOptions options)
     {
         var buildTimeout = options.BuildTimeout <= TimeSpan.Zero
             ? DefaultBuildTimeout

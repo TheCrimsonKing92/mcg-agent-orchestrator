@@ -67,13 +67,16 @@ public static class RepositoryChangeClassifier
     private static readonly string[] ConductorRelaunchPathPrefixes =
     [
         "src/Mcg.AgentOrchestrator.App/Orchestration/Conductor",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs",
         "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals",
         "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner",
+        "src/Mcg.AgentOrchestrator.App/Providers/ProviderRegistryFactory.cs",
         "src/Mcg.AgentOrchestrator.App/Program.cs",
         "src/Mcg.AgentOrchestrator.Core/Conductor/",
         "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier",
         "src/Mcg.AgentOrchestrator.Core/Application/LandingDecision",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
+        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workers/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Processes/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunction",

@@ -47,8 +47,16 @@ function Get-OutputContentHashPrefix {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $payload = [System.Text.StringBuilder]::new()
+    $rootPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar.ToString(), [System.StringComparison]::Ordinal)) {
+        $rootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
     foreach ($file in (Get-ChildItem -LiteralPath $Path -Recurse -File | Sort-Object FullName)) {
-        $relativePath = [System.IO.Path]::GetRelativePath($Path, $file.FullName).Replace('\', '/')
+        if (-not $file.FullName.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Cannot hash file outside output directory: $($file.FullName)"
+        }
+        # Windows PowerShell runs on .NET Framework, which does not expose Path.GetRelativePath.
+        $relativePath = $file.FullName.Substring($rootPath.Length).Replace('\', '/')
         $fileHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
         [void]$payload.Append($relativePath)
         [void]$payload.Append(':')
