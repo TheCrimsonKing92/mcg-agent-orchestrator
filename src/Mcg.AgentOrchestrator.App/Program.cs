@@ -128,12 +128,11 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-if (RunsStartupCleanup(startupArgs) && !ConductorLoopHandoff.IsAuthorityTransferRequested)
-{
-    WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
-    WorkerProcessJobs.SweepStartupOrphans();
-    GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
-}
+ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+    RunsStartupCleanup(startupArgs),
+    ConductorLoopHandoff.IsAuthorityTransferRequested,
+    workspace.SqliteStatePath,
+    workspace.ExecutionDirectory);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
@@ -387,4 +386,28 @@ static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
     return startupArgs.Count >= 3 &&
         startupArgs[0].Equals("goal-events", StringComparison.OrdinalIgnoreCase) &&
         startupArgs.Any(arg => arg.Equals("--follow", StringComparison.OrdinalIgnoreCase));
+}
+
+internal static class ProgramStartupLifecycle
+{
+    internal static void InitializeWorkerProcessTracking(
+        bool runsStartupCleanup,
+        bool authorityTransferRequested,
+        string stateStorePath,
+        string executionDirectory)
+    {
+        if (!runsStartupCleanup)
+        {
+            return;
+        }
+
+        WorkerProcessJobs.ConfigureRegistry(stateStorePath);
+        if (authorityTransferRequested)
+        {
+            return;
+        }
+
+        WorkerProcessJobs.SweepStartupOrphans();
+        GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+    }
 }
