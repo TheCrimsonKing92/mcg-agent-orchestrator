@@ -24,7 +24,9 @@ public sealed class ConductorSelfRelaunchTests
         Assert.True(
             WaitUntil(
                 () => File.Exists(result.Handoff!.StdoutPath) &&
-                    ReadAllTextShared(result.Handoff.StdoutPath!).Contains("TICK tick=1", StringComparison.Ordinal),
+                    ReadAllTextShared(result.Handoff.StdoutPath!).Contains(
+                        "LOOP_STOP tick=1 reason=no-progress-no-watch",
+                        StringComparison.Ordinal),
                 TimeSpan.FromSeconds(15)),
             "The freshly-built successor did not execute its first conductor tick.");
     }
