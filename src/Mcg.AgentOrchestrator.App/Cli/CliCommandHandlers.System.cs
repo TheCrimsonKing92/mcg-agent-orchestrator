@@ -1197,8 +1197,9 @@ internal static partial class CliCommandHandlers
         return null;
     }
 
-    private static IEnumerable<string> TranslateStableSlotMtpFilter(string filter)
+    internal static IReadOnlyList<string> TranslateStableSlotMtpFilter(string filter)
     {
+        var arguments = new List<string>();
         foreach (var rawToken in System.Text.RegularExpressions.Regex.Split(filter, @"[&|]"))
         {
             var token = rawToken.Trim();
@@ -1208,14 +1209,22 @@ internal static partial class CliCommandHandlers
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (!match.Success)
             {
-                throw new ArgumentException($"Unsupported stable-slot MTP filter token '{token}'.");
+                match = System.Text.RegularExpressions.Regex.Match(
+                    token,
+                    @"^(?<value>[A-Za-z_][A-Za-z0-9_.]*)$");
+                if (!match.Success)
+                {
+                    throw new ArgumentException($"Unsupported stable-slot MTP filter token '{token}'.");
+                }
             }
 
-            yield return match.Groups["op"].Value == "!~"
+            arguments.Add(match.Groups["op"].Value == "!~"
                 ? "--filter-not-class"
-                : "--filter-class";
-            yield return $"*{match.Groups["value"].Value}*";
+                : "--filter-class");
+            arguments.Add($"*{match.Groups["value"].Value}*");
         }
+
+        return arguments;
     }
 
     private static int RunStableSlotProcess(

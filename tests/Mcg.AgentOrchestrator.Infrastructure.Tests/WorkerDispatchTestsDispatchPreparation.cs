@@ -25,14 +25,17 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             File.WriteAllText(
                 sourcePath,
                 """
-                public sealed class Example
+                public sealed class A
                 {
-                    public void A()
+                    public void Run()
                     {
                         var guard = false;
                     }
+                }
 
-                    public void B()
+                public sealed class B
+                {
+                    public void Run()
                     {
                         var guard = false;
                     }
@@ -45,24 +48,27 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             File.WriteAllText(
                 sourcePath,
                 """
-                public sealed class Example
+                public sealed class A
                 {
-                    public void A()
-                    {
-                        var guard = true;
-                    }
-
-                    public void B()
+                    public void Run()
                     {
                         var guard = false;
                     }
                 }
+
+                public sealed class B
+                {
+                    public void Run()
+                    {
+                        var guard = true;
+                    }
+                }
                 """);
             RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
-            RunGit(root, ["commit", "-m", "Fix A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            RunGit(root, ["commit", "-m", "Fix B"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
             var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
-            var anchorA = new ReviewFindingLocation("src/Example.cs", "Example.A", "guard");
-            var anchorB = new ReviewFindingLocation("src/Example.cs", "Example.B", "guard");
+            var anchorA = new ReviewFindingLocation("src/Example.cs", "A.Run", "guard");
+            var anchorB = new ReviewFindingLocation("src/Example.cs", "B.Run", "guard");
 
             var touched = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
                 root,
@@ -70,7 +76,32 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 current,
                 [anchorA, anchorB]);
 
-            Assert.Equal(anchorA, Assert.Single(touched));
+            Assert.Equal(anchorB, Assert.Single(touched));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Reviewer_round_diff_failure_is_loud")]
+    public void ReviewerRoundDiffFailureIsLoud()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var anchor = new ReviewFindingLocation("README.md", "README", "heading");
+
+            var ex = Assert.Throws<ReviewerRoundTouchScopeException>(() =>
+                new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                    root,
+                    "not-a-commit",
+                    current,
+                    [anchor]));
+
+            Assert.Equal(WorkerGitContext.ReviewerRoundTouchScopeUnavailableErrorCode, ex.ErrorCode);
+            Assert.Contains("git diff failed", ex.Message);
         }
         finally
         {

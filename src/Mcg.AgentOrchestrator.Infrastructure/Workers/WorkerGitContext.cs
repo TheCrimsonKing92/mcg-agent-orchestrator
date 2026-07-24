@@ -9,6 +9,7 @@ internal sealed class WorkerGitContext
     internal const string ReviewerScopeUnavailableErrorCode = "ERR_REVIEWER_SCOPE_UNAVAILABLE";
     internal const string ReviewerMergeBaseUnavailableErrorCode = "ERR_REVIEWER_MERGE_BASE_UNAVAILABLE";
     internal const string ReviewerMergeTreeUnavailableErrorCode = "ERR_REVIEWER_MERGE_TREE_UNAVAILABLE";
+    internal const string ReviewerRoundTouchScopeUnavailableErrorCode = "ERR_REVIEWER_ROUND_TOUCH_SCOPE_UNAVAILABLE";
     internal const int DiffSummaryRetrievalMaxChars = DiffSummaryMaxChars;
 
     internal string[] ReadChangedFilesForTestImpact(string workingDirectory)
@@ -96,11 +97,27 @@ internal sealed class WorkerGitContext
         string? currentCommit,
         IReadOnlyList<ReviewFindingLocation> anchors)
     {
-        if (!LooksLikeGitWorkspace(workingDirectory) ||
-            string.IsNullOrWhiteSpace(previousReviewedCommit) ||
-            string.IsNullOrWhiteSpace(currentCommit) ||
-            anchors.Count == 0 ||
-            previousReviewedCommit.Equals(currentCommit, StringComparison.OrdinalIgnoreCase))
+        if (anchors.Count == 0)
+        {
+            return [];
+        }
+
+        if (!LooksLikeGitWorkspace(workingDirectory))
+        {
+            throw new ReviewerRoundTouchScopeException(
+                ReviewerRoundTouchScopeUnavailableErrorCode,
+                "Reviewer round touched-anchor scope unavailable because the working directory is not a git workspace.");
+        }
+
+        if (string.IsNullOrWhiteSpace(previousReviewedCommit) ||
+            string.IsNullOrWhiteSpace(currentCommit))
+        {
+            throw new ReviewerRoundTouchScopeException(
+                ReviewerRoundTouchScopeUnavailableErrorCode,
+                "Reviewer round touched-anchor scope unavailable because the previous or current reviewed commit is missing.");
+        }
+
+        if (string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
         {
             return [];
         }
@@ -118,14 +135,30 @@ internal sealed class WorkerGitContext
                 currentCommit,
                 "--",
                 path);
-            if (!diff.Succeeded || string.IsNullOrWhiteSpace(diff.Output))
+            if (!diff.Succeeded)
+            {
+                throw new ReviewerRoundTouchScopeException(
+                    ReviewerRoundTouchScopeUnavailableErrorCode,
+                    $"Reviewer round touched-anchor scope unavailable because git diff failed for '{path}'.",
+                    diff.Error);
+            }
+
+            if (string.IsNullOrWhiteSpace(diff.Output))
             {
                 continue;
             }
 
             var ranges = ParseChangedLineRanges(diff.Output);
-            var oldSource = ReadCommitFile(workingDirectory, previousReviewedCommit, path);
-            var newSource = ReadCommitFile(workingDirectory, currentCommit, path);
+            var oldSource = ReadCommitFile(
+                workingDirectory,
+                previousReviewedCommit,
+                path,
+                allowMissing: diff.Output.Contains("--- /dev/null", StringComparison.Ordinal));
+            var newSource = ReadCommitFile(
+                workingDirectory,
+                currentCommit,
+                path,
+                allowMissing: diff.Output.Contains("+++ /dev/null", StringComparison.Ordinal));
             foreach (var anchor in fileGroup)
             {
                 if (AnchorScopeWasTouched(anchor, oldSource, newSource, ranges))
@@ -211,10 +244,27 @@ internal sealed class WorkerGitContext
             .ReplaceLineEndings("\n")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    private static string ReadCommitFile(string workingDirectory, string commit, string path)
+    private static string ReadCommitFile(
+        string workingDirectory,
+        string commit,
+        string path,
+        bool allowMissing)
     {
+        if (allowMissing)
+        {
+            return string.Empty;
+        }
+
         var result = GitCli.Run(workingDirectory, 5_000, "show", $"{commit}:{path}");
-        return result.Succeeded ? result.Output : string.Empty;
+        if (result.Succeeded)
+        {
+            return result.Output;
+        }
+
+        throw new ReviewerRoundTouchScopeException(
+            ReviewerRoundTouchScopeUnavailableErrorCode,
+            $"Reviewer round touched-anchor scope unavailable because '{path}' could not be read at commit '{commit}'.",
+            result.Error);
     }
 
     private static IReadOnlyList<ChangedLineRange> ParseChangedLineRanges(string diff)
@@ -290,10 +340,21 @@ internal sealed class WorkerGitContext
         }
 
         var lines = source.ReplaceLineEndings("\n").Split('\n');
-        var regionToken = anchor.Region
-            .Split(['.', ':', '#', '/', '\\', ' ', '(', ')'], StringSplitOptions.RemoveEmptyEntries)
-            .LastOrDefault();
+        var regionPath = anchor.Region
+            .Split(['.', ':', '#', '/', '\\', ' ', '(', ')'], StringSplitOptions.RemoveEmptyEntries);
+        var regionToken = regionPath.LastOrDefault();
         var matches = FindTokenLines(lines, regionToken, requireDeclaration: true);
+        if (matches.Count > 0 && regionPath.Length > 1)
+        {
+            var ownerTokens = regionPath[..^1];
+            matches = matches
+                .Where(line => ownerTokens.All(owner =>
+                    FindTokenLines(lines, owner, requireDeclaration: true)
+                        .Select(ownerLine => FindBraceScope(lines, ownerLine))
+                        .Any(scope => scope.Contains(line + 1))))
+                .ToList();
+        }
+
         if (matches.Count == 0 && !string.IsNullOrWhiteSpace(anchor.Hunk))
         {
             matches = FindTokenLines(lines, anchor.Hunk, requireDeclaration: false);
@@ -316,7 +377,7 @@ internal sealed class WorkerGitContext
         for (var index = 0; index < lines.Length; index++)
         {
             var line = lines[index];
-            var tokenIndex = line.IndexOf(token, StringComparison.Ordinal);
+            var tokenIndex = IndexOfIdentifier(line, token);
             if (tokenIndex < 0)
             {
                 continue;
@@ -330,6 +391,7 @@ internal sealed class WorkerGitContext
                     prefix.Contains("record ", StringComparison.Ordinal) ||
                     prefix.Contains("struct ", StringComparison.Ordinal) ||
                     prefix.Contains("interface ", StringComparison.Ordinal) ||
+                    prefix.Contains("namespace ", StringComparison.Ordinal) ||
                     prefix.Contains("public ", StringComparison.Ordinal) ||
                     prefix.Contains("private ", StringComparison.Ordinal) ||
                     prefix.Contains("protected ", StringComparison.Ordinal) ||
@@ -345,6 +407,34 @@ internal sealed class WorkerGitContext
 
         return matches;
     }
+
+    private static int IndexOfIdentifier(string line, string token)
+    {
+        var searchStart = 0;
+        while (searchStart < line.Length)
+        {
+            var index = line.IndexOf(token, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return -1;
+            }
+
+            var beforeIsIdentifier = index > 0 && IsIdentifierCharacter(line[index - 1]);
+            var afterIndex = index + token.Length;
+            var afterIsIdentifier = afterIndex < line.Length && IsIdentifierCharacter(line[afterIndex]);
+            if (!beforeIsIdentifier && !afterIsIdentifier)
+            {
+                return index;
+            }
+
+            searchStart = index + token.Length;
+        }
+
+        return -1;
+    }
+
+    private static bool IsIdentifierCharacter(char value) =>
+        char.IsLetterOrDigit(value) || value == '_';
 
     private static SourceLineRange FindBraceScope(string[] lines, int anchorLine)
     {
@@ -446,6 +536,8 @@ internal sealed record ChangedLineRange(int OldStart, int OldCount, int NewStart
 
 internal sealed record SourceLineRange(int Start, int End)
 {
+    public bool Contains(int line) => line >= Start && line <= End;
+
     public bool Overlaps(int changedStart, int changedCount)
     {
         if (changedCount <= 0)
@@ -488,6 +580,17 @@ internal sealed class ReviewerChangedFileScopeException : InvalidOperationExcept
 internal sealed class ReviewerMergeTreeStatusException : InvalidOperationException
 {
     public ReviewerMergeTreeStatusException(string errorCode, string message, string? detail = null)
+        : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
+    {
+        ErrorCode = errorCode;
+    }
+
+    public string ErrorCode { get; }
+}
+
+internal sealed class ReviewerRoundTouchScopeException : InvalidOperationException
+{
+    public ReviewerRoundTouchScopeException(string errorCode, string message, string? detail = null)
         : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
     {
         ErrorCode = errorCode;

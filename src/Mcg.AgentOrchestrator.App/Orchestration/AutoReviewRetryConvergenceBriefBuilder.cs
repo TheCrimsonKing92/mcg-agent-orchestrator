@@ -44,8 +44,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 targetRole,
                 outputArtifact,
                 findings,
-                changedFileScopes,
-                currentFinding);
+                changedFileScopes);
         }
 
         var accumulatedFindings = CollectAccumulatedTesterFindings(goal, targetTask, triggeringTask, currentFinding);
@@ -67,36 +66,13 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         AgentRole targetRole,
         string outputArtifact,
         IReadOnlyList<ReviewFinding> findings,
-        IEnumerable<string> changedFileScopes,
-        string currentFinding)
+        IEnumerable<string> changedFileScopes)
     {
-        var residualFragments = currentFinding
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var allOpen = findings
+        var open = findings
             .Where(finding => finding.State == ReviewFindingState.Open)
             .ToArray();
-        var residualOpen = allOpen
-            .Where(finding => finding.State == ReviewFindingState.Open)
-            .Select(finding =>
-            {
-                var matchingFragments = residualFragments
-                    .Where(fragment =>
-                        finding.Description.Contains(fragment, StringComparison.OrdinalIgnoreCase) ||
-                        fragment.Contains(finding.Description, StringComparison.OrdinalIgnoreCase))
-                    .ToArray();
-                return matchingFragments.Length == 0
-                    ? null
-                    : finding with { Description = string.Join("; ", matchingFragments) };
-            })
-            .Where(finding => finding is not null)
-            .Cast<ReviewFinding>()
-            .ToArray();
-        var open = residualOpen.Length > 0 ? residualOpen : allOpen;
-        var openIds = open.Select(finding => finding.StableId).ToHashSet(StringComparer.Ordinal);
         var accepted = findings
-            .Where(finding =>
-                finding.State == ReviewFindingState.Resolved ||
-                !openIds.Contains(finding.StableId))
+            .Where(finding => finding.State == ReviewFindingState.Resolved)
             .ToArray();
         if (open.Length == 0)
         {
@@ -202,10 +178,6 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 name.EndsWith("Tests", StringComparison.Ordinal))
             {
                 classes.Add(name);
-            }
-            else if (normalized.StartsWith("src/", StringComparison.OrdinalIgnoreCase))
-            {
-                classes.Add(name.EndsWith("Tests", StringComparison.Ordinal) ? name : $"{name}Tests");
             }
         }
 

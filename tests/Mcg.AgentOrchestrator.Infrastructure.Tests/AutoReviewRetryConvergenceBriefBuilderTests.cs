@@ -119,6 +119,46 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_structured_open_set_is_authoritative")]
+    public void StructuredOpenSetIsNotFilteredByFreeTextBlockerFragments()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Structured findings stay authoritative");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var findingA = new ReviewFinding(
+            "F-A",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a"),
+            "A is missing its guard.");
+        var findingB = new ReviewFinding(
+            "F-B",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/B.cs", "B.Run", "guard-b"),
+            "B is missing its guard.");
+        RecordReviewerRound(kernel, goal, reviewer, "needs-work", [findingA, findingB], []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            reviewer,
+            findingA.Description,
+            "verdict=needs-work",
+            AgentRole.Developer,
+            1,
+            "round1.out",
+            ["src/A.cs", "src/B.cs"]);
+        var actionItems = brief[..brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+
+        Assert.Contains("open_count: 2", actionItems);
+        Assert.Contains("stable_id: F-A", actionItems);
+        Assert.Contains("stable_id: F-B", actionItems);
+        Assert.Contains("accepted_count: 0", brief);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_deduplicates_multi_round_findings")]
     public void BuildConvergenceBriefDeduplicatesMultiRoundFindings()
     {
@@ -224,7 +264,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
 
         Xunit.Assert.Equal(1, CountOccurrences(brief, "- Shared blocker stays open."));
         Xunit.Assert.Contains("- New tester blocker surfaced.", brief);
-        Xunit.Assert.Contains("ConductorDriverTests", brief);
+        Xunit.Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.GenericRerunMandate, brief);
+        Xunit.Assert.DoesNotContain("ConductorDriverTests", brief);
     }
 
     private static void DispatchTask(
