@@ -1593,7 +1593,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Contains("Cost note: paid subscription handoff prepared", dispatchOutput);
         Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration when the task is routine", dispatchOutput);
         Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
-        Xunit.Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+        // Subscription launch profiles pin the configured alias; complex tasks still use the API complex model only for effort selection.
+        Xunit.Assert.Equal("gpt-5-mini-codex", task.LastDispatch.ModelName);
         Xunit.Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
         Xunit.Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
         Xunit.Assert.Null(risk);
