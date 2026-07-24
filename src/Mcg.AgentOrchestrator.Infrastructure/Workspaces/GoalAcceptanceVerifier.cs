@@ -4174,6 +4174,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
     {
         var document = XDocument.Load(trxPath, LoadOptions.None);
+        var definitionsByTestId = document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
+            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         return document
             .Descendants()
             .Where(element =>
@@ -4184,7 +4191,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     StringComparison.OrdinalIgnoreCase))
             .Select(result =>
             {
-                var testName = ResolveTrxTestName(result);
+                definitionsByTestId.TryGetValue(
+                    result.Attribute("testId")?.Value ?? string.Empty,
+                    out var definition);
+                var testName = ResolveTrxTestName(result, definition);
                 var message = result
                     .Descendants()
                     .FirstOrDefault(element =>
@@ -4197,27 +4207,45 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .ToArray();
     }
 
-    private static string ResolveTrxTestName(XElement result)
+    private static string ResolveTrxTestName(XElement result, XElement? definition)
     {
         var testName = result.Attribute("testName")?.Value?.Trim();
-        var displayName = result
-            .Descendants()
+        var displayName = result.Descendants()
+            .Concat(definition?.Descendants() ?? [])
             .Where(element =>
                 element.Name.LocalName.Equals("DisplayName", StringComparison.Ordinal) ||
                 element.Name.LocalName.Equals("Description", StringComparison.Ordinal))
             .Select(element => element.Value.Trim())
             .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        displayName ??= definition?.Attribute("name")?.Value?.Trim();
 
         if (!string.IsNullOrWhiteSpace(displayName) &&
-            (string.IsNullOrWhiteSpace(testName) || displayName.Length < testName.Length))
+            (string.IsNullOrWhiteSpace(testName) ||
+                (LooksLikeQualifiedTestName(testName) && displayName.Length < testName.Length)))
         {
             return displayName;
         }
 
-        return string.IsNullOrWhiteSpace(testName)
-            ? result.Attribute("testId")?.Value?.Trim() ?? "unknown test"
-            : testName;
+        if (!string.IsNullOrWhiteSpace(testName))
+        {
+            return testName;
+        }
+
+        var testMethod = definition?.Descendants()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
+        var className = testMethod?.Attribute("className")?.Value?.Trim();
+        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
+        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
+        {
+            return $"{className}.{methodName}";
+        }
+
+        return result.Attribute("testId")?.Value?.Trim() ?? "unknown test";
     }
+
+    private static bool LooksLikeQualifiedTestName(string value) =>
+        value.Contains('+', StringComparison.Ordinal) ||
+        value.Count(ch => ch == '.') >= 2;
 
     private static string? FirstNonEmptyLine(string? value) =>
         value?

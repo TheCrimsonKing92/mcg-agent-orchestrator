@@ -5,7 +5,7 @@
     <Deployment runDeploymentRoot="runner_2026-07-24_03_10_12" />
   </TestSettings>
   <Results>
-    <UnitTestResult executionId="c75085a1-9cac-46e6-8f07-c29c88df3760" testId="1e2df56f-a654-49d1-9247-750546ad4ee1" testName="Retry evidence includes failed test names" computerName="BUILD-01" duration="00:00:00.0540000" startTime="2026-07-24T03:10:12.1000000+00:00" endTime="2026-07-24T03:10:12.1540000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c75085a1-9cac-46e6-8f07-c29c88df3760">
+    <UnitTestResult executionId="c75085a1-9cac-46e6-8f07-c29c88df3760" testId="1e2df56f-a654-49d1-9247-750546ad4ee1" testName="Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures" computerName="BUILD-01" duration="00:00:00.0540000" startTime="2026-07-24T03:10:12.1000000+00:00" endTime="2026-07-24T03:10:12.1540000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c75085a1-9cac-46e6-8f07-c29c88df3760">
       <Output>
         <ErrorInfo>
           <Message>Assert.Contains() Failure: Sub-string not found
