@@ -19,11 +19,16 @@ public sealed class FirewallSetupCommand
 
     private readonly IFirewallRuleWriter _ruleWriter;
     private readonly Func<bool> _isAdministrator;
+    private readonly string _manifestRoot;
 
-    public FirewallSetupCommand(IFirewallRuleWriter ruleWriter, Func<bool>? isAdministrator = null)
+    public FirewallSetupCommand(
+        IFirewallRuleWriter ruleWriter,
+        Func<bool>? isAdministrator = null,
+        string? manifestRoot = null)
     {
         _ruleWriter = ruleWriter;
         _isAdministrator = isAdministrator ?? IsAdministrator;
+        _manifestRoot = manifestRoot ?? Directory.GetCurrentDirectory();
     }
 
     public int Execute(TextWriter output)
@@ -38,7 +43,10 @@ public sealed class FirewallSetupCommand
 
         var created = 0;
         var existing = 0;
-        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTestExecutableFirewallPaths())
+        var engineSettings = AcceptanceGateEngineSettings.Load(_manifestRoot);
+        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTestExecutableFirewallPaths(
+            engineSettings.SlotCount,
+            engineSettings.MtpInvocations))
         {
             var ruleName = $"MCG-testhost-slot{path.SlotIndex}-{path.Project}-{path.Configuration}";
             if (_ruleWriter.CreateInboundAllowRule(new FirewallRuleSpec(ruleName, path.Path)))

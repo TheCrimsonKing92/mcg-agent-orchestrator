@@ -2,6 +2,70 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 
 public sealed class RepositoryChangeClassifierTests
 {
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_allows_candidate_lane_timeout_and_invocation_argument_changes")]
+    public void RepositoryChangeClassifierAllowsCandidateLaneTimeoutAndInvocationArgumentChanges()
+    {
+        const string trusted = """
+            {
+              "engine": {
+                "infrastructureTestLanes": [{ "name": "one", "filter": "A" }],
+                "timeouts": { "defaultMinutes": 25 },
+                "mtpInvocations": [{
+                  "project": "tests/A.csproj",
+                  "executablePathTemplate": "bin/{projectName}.exe",
+                  "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+                  "arguments": ["{executable}", "--old"]
+                }]
+              }
+            }
+            """;
+        const string candidate = """
+            {
+              "engine": {
+                "infrastructureTestLanes": [{ "name": "two", "filter": "B" }],
+                "timeouts": { "defaultMinutes": 5 },
+                "mtpInvocations": [{
+                  "project": "tests/A.csproj",
+                  "executablePathTemplate": "bin/{projectName}.exe",
+                  "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+                  "arguments": ["{executable}", "--new"]
+                }]
+              }
+            }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.False(decision.RequiresTrustedReview);
+        Assert.Empty(decision.SecurityCriticalChanges);
+        Assert.StartsWith("positive evidence:", decision.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_manifest_executable_or_firewall_path_changes_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesManifestExecutableOrFirewallPathChangesToTrustedReview()
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/A.exe",
+              "firewallExecutablePathTemplate": "bin/A.exe"
+            }] } }
+            """;
+        const string candidate = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "../candidate.exe",
+              "firewallExecutablePathTemplate": "../candidate.exe"
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Equal(2, decision.SecurityCriticalChanges.Count);
+        Assert.Contains("trusted review required", decision.Evidence, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_identifies_docs_only_changes")]
     public void RepositoryChangeClassifierIdentifiesDocsOnlyChanges()
     {

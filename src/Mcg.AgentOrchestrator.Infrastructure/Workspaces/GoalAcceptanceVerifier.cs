@@ -108,36 +108,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         [InfrastructureTestsProject] = []
     };
 
-    private static readonly InfrastructureTestLane[] InfrastructureTestLanes =
-    [
-        new("Cli", "FullyQualifiedName~CliCommandTests"),
-        new("Cli help", "FullyQualifiedName~CliHelpTests"),
-        new("Worker dispatch", "FullyQualifiedName~WorkerDispatchTests"),
-        new("Worker profiles", "FullyQualifiedName~WorkerProfileTests"),
-        new("Worker processes", "FullyQualifiedName~WorkerProcessJobsTests"),
-        new("Worker shell", "FullyQualifiedName~WorkerShellTests"),
-        new("Worker sandbox planner", "FullyQualifiedName~WorkerSandboxCapabilityPlannerTests"),
-        new("Dispatch process host", "FullyQualifiedName~DispatchProcessHostTests"),
-        new("Goal worktree", "FullyQualifiedName~GoalWorktreeTests"),
-        new("Goal acceptance verifier", "FullyQualifiedName~GoalAcceptanceVerifierTests"),
-        new("Dashboard rendering", "FullyQualifiedName~DashboardRenderingTests"),
-        new("Dashboard validation", "FullyQualifiedName~DashboardValidationHarnessTests"),
-        new("Advance loop", "FullyQualifiedName~AdvanceLoopTests"),
-        new("Conductor batch loop", "FullyQualifiedName~ConductorBatchLoopTests"),
-        new("Conductor driver", "FullyQualifiedName~ConductorDriverTests"),
-        new("Conduct watch sweep scoping", "FullyQualifiedName~ConductWatchSweepScopingTests"),
-        new("Remainder",
-            "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests" +
-            "&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests" +
-            "&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests" +
-            "&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests" +
-            "&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests" +
-            "&FullyQualifiedName!~DashboardRenderingTests" +
-            "&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests" +
-            "&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests" +
-            "&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration")
-    ];
-
     public static StartupContract ValidateStartupContract(string repositoryRoot)
     {
         var manifest = AcceptanceManifest.Load(repositoryRoot, changedFiles: null);
@@ -164,7 +134,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        var laneNames = InfrastructureTestLanes.Select(lane => lane.Name).ToArray();
+        var laneNames = AcceptanceGateEngineSettings.Load(repositoryRoot)
+            .InfrastructureTestLanes
+            .Select(lane => lane.Name)
+            .ToArray();
         if (laneNames.Length == 0 || laneNames.Any(string.IsNullOrWhiteSpace))
         {
             throw new InvalidOperationException("Acceptance infrastructure lanes could not be enumerated.");
@@ -172,13 +145,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return new StartupContract(manifest.Checks.Count, laneNames);
     }
-
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
     private static readonly AsyncLocal<GateHeartbeatContext?> CurrentGateHeartbeatContext = new();
     private static readonly AsyncLocal<Action<AcceptanceGateProgress>?> CurrentGateProgressSink = new();
     private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
+    private static readonly AsyncLocal<AcceptanceGateEngineSettings?> CurrentGateEngineSettings = new();
     private static readonly JsonSerializerOptions PartitionVerdictJournalJsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
@@ -193,6 +166,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static Func<string, string?>? ResolvePartitionVerdictCandidateTreeShaForTests { get; set; }
     internal static Func<string, string?>? ResolvePartitionVerdictMainShaForTests { get; set; }
     internal static Func<string, string?>? ResolvePartitionVerdictVerifyingCommitShaForTests { get; set; }
+    internal static Func<string, string?>? ResolveMainWorktreePathForTests { get; set; }
+    internal static Func<string, string[]>? ResolveDeletedTestFilesForTests { get; set; }
     internal static int PartitionVerdictFullRerunEveryN { get; set; } = DefaultPartitionVerdictFullRerunEveryN;
     // When true (default), a failed infrastructure-test PARTITION is re-run ONCE within the same
     // acceptance attempt; if the re-run passes, the failure was an intermittent flake and the partition
@@ -255,6 +230,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new RestoreAction(() => CurrentGateCancellationProbe.Value = previous);
     }
 
+    private static IDisposable PushEngineSettings(AcceptanceGateEngineSettings settings)
+    {
+        var previous = CurrentGateEngineSettings.Value;
+        CurrentGateEngineSettings.Value = settings;
+        return new RestoreAction(() => CurrentGateEngineSettings.Value = previous);
+    }
+
+    private static AcceptanceGateEngineSettings EngineSettings =>
+        CurrentGateEngineSettings.Value ?? new AcceptanceGateEngineSettings();
+
     public async Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -263,11 +248,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         CancellationToken cancellationToken = default)
     {
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
+        using var engineScope = PushEngineSettings(engineSettings);
+        if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure)
+        {
+            return new AcceptanceVerificationResult(
+                Passed: false,
+                Skipped: false,
+                ExitCode: manifestTrustFailure.ExitCode,
+                OutputTail: manifestTrustFailure.OutputTail,
+                Checks: [manifestTrustFailure]);
+        }
+
         // Shut down build servers to release file locks before running tests.
         await _runner(
             ["dotnet", "build-server", "shutdown"],
             worktreePath,
-            AcceptanceCheckTimeouts.DefaultTimeout,
+            engineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
 
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
@@ -426,6 +423,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(await RunForbiddenChangedPathsCheckAsync(manifest.ForbiddenChangedPathGlobs, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
+        if (checks.All(check => check.Passed) && engineSettings.EnforceStructuralCoverage)
+        {
+            checks.Add(await RunStructuralCoverageCheckAsync(
+                manifest.Checks,
+                checks,
+                worktreePath,
+                changedFiles,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken).ConfigureAwait(false));
+        }
+
         if (checks.All(check => check.Passed) && ProposalValidationApplies(worktreePath, changedFiles))
         {
             checks.Add(RunStateEffectProposalSchemaCheck(worktreePath, changedFiles));
@@ -467,6 +476,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         CancellationToken cancellationToken = default)
     {
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
+        using var engineScope = PushEngineSettings(engineSettings);
+
         if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
         {
             return new FocusedEvidenceRunResult(
@@ -480,7 +492,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         await _runner(
             ["dotnet", "build-server", "shutdown"],
             worktreePath,
-            AcceptanceCheckTimeouts.DefaultTimeout,
+            engineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
 
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
@@ -540,7 +552,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (cacheContext is not null &&
             TryBuildPartitionCacheKey(cacheContext, check, out var partitionId, out var filterHash, out var cacheKey) &&
             !cacheContext.ForceFullRerun &&
-            cacheContext.TryGetGreen(cacheKey) is { } cached)
+            cacheContext.TryGetGreen(cacheKey) is { } cached &&
+            HasReusableStructuralCoverageEvidence(cached))
         {
             var reused = new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey);
             cacheContext.Reused.Add(reused);
@@ -1104,7 +1117,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             yield break;
         }
 
-        foreach (var lane in InfrastructureTestLanes)
+        foreach (var lane in EngineSettings.InfrastructureTestLanes)
         {
             yield return BuildInfrastructureShardCheck(check, lane);
         }
@@ -1112,7 +1125,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static AcceptanceManifestCheck BuildInfrastructureShardCheck(
         AcceptanceManifestCheck check,
-        InfrastructureTestLane lane) =>
+        AcceptanceTestLane lane) =>
         new()
         {
             Name = $"{check.Name}: {lane.Name}",
@@ -1297,7 +1310,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            if (shardResults.Length != InfrastructureTestLanes.Length)
+            if (shardResults.Length != EngineSettings.InfrastructureTestLanes.Count)
                 continue;
 
             var lastShard = shardResults[^1];
@@ -1920,7 +1933,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(
             ["git", "grep", "-q", "--", check.Pattern],
             worktreePath,
-            AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+            EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
             cancellationToken).ConfigureAwait(false);
 
         // git grep exit 0 = pattern found, exit 1 = not found
@@ -2003,7 +2016,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await RunWithGateHeartbeatAsync(
             arguments,
             worktreePath,
-            AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+            EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
             CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
             cancellationToken).ConfigureAwait(false);
         if (result.TimedOut)
@@ -2178,7 +2191,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var result = await RunWithGateHeartbeatAsync(
                 arguments,
                 worktreePath,
-                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
                 CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
                 cancellationToken).ConfigureAwait(false);
 
@@ -2523,7 +2536,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
-                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
 
             if (IsBuildLockFailure(result, environment, out var attribution))
@@ -2685,7 +2698,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         await _runner(
             ["dotnet", "build-server", "shutdown"],
             worktreePath,
-            AcceptanceCheckTimeouts.DefaultTimeout,
+            EngineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
 
         if (IsTransientNoHolderBuildArtifactLock(attribution, currentEnvironment))
@@ -2718,7 +2731,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
-                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
@@ -2776,7 +2789,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
-                AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
@@ -2844,7 +2857,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     goalId,
                     stableSlotIndex,
-                    AcceptanceCheckTimeouts.Resolve(check.TimeoutMinutes),
+                    EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
                     cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsBuildArtifactIoException(ex))
@@ -3460,7 +3473,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(
             ["git", "diff", "--name-only", "main...HEAD"],
             worktreePath,
-            AcceptanceCheckTimeouts.DefaultTimeout,
+            EngineSettings.ResolveCheckTimeout(null),
             cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
@@ -3477,6 +3490,242 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : new AcceptanceCheckResult("forbidden changed paths", false, 1, string.Join(Environment.NewLine, forbidden));
     }
 
+    private static bool HasReusableStructuralCoverageEvidence(PartitionVerdictRecord cached) =>
+        !EngineSettings.EnforceStructuralCoverage ||
+        cached.TestResultPaths is { Count: > 0 } &&
+        cached.TestResultPaths.All(path => TryGetFileLength(path) > 0);
+
+    private async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
+        IReadOnlyList<AcceptanceCheckResult> completedChecks,
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken)
+    {
+        var broadChecks = manifestChecks.Where(IsBroadInfrastructureTestCheck).ToArray();
+        if (broadChecks.Length == 0)
+        {
+            return new AcceptanceCheckResult(
+                "structural test coverage",
+                false,
+                1,
+                "Structural coverage is enabled but the manifest has no broad infrastructure test check.",
+                ResultSummary: "no broad test project");
+        }
+
+        var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            : DotnetBuildEnvironmentManager.CreateAttempt(null, "acceptance-coverage-discovery"));
+        var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
+        if (string.IsNullOrWhiteSpace(mainWorktreePath))
+        {
+            return new AcceptanceCheckResult(
+                "structural test coverage",
+                false,
+                1,
+                "Trusted main worktree could not be resolved for cross-generation discovery.",
+                ResultSummary: "main discovery unavailable");
+        }
+
+        var deletedTestFiles = ResolveDeletedTestFiles(worktreePath);
+        var allSummaries = new List<string>();
+        foreach (var broadCheck in broadChecks)
+        {
+            var candidateDiscoveryArguments = WithBuildEnvironmentArguments(
+                BuildDiscoveryArguments(broadCheck),
+                environment);
+            var candidateDiscovery = await _runner(
+                candidateDiscoveryArguments,
+                worktreePath,
+                EngineSettings.ResolveDiscoveryTimeout(),
+                cancellationToken).ConfigureAwait(false);
+            if (candidateDiscovery.ExitCode != 0)
+            {
+                return new AcceptanceCheckResult(
+                    $"structural test coverage: {broadCheck.Name}",
+                    false,
+                    candidateDiscovery.ExitCode,
+                    TailOutput(candidateDiscovery.Output),
+                    ResultSummary: "candidate trusted discovery failed");
+            }
+
+            var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
+            var mainBuildArguments = new[]
+            {
+                "dotnet",
+                "build",
+                broadCheck.Project!,
+                "--artifacts-path",
+                mainArtifactsPath,
+                "--verbosity",
+                "minimal"
+            };
+            var mainBuild = await _runner(
+                mainBuildArguments,
+                mainWorktreePath,
+                EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
+                cancellationToken).ConfigureAwait(false);
+            if (mainBuild.ExitCode != 0)
+            {
+                return new AcceptanceCheckResult(
+                    $"structural test coverage: {broadCheck.Name}",
+                    false,
+                    mainBuild.ExitCode,
+                    TailOutput(mainBuild.Output),
+                    ResultSummary: "trusted main baseline build failed");
+            }
+
+            var mainDiscoveryArguments = new[]
+            {
+                "dotnet",
+                "test",
+                broadCheck.Project!,
+                "--no-build",
+                "--list-tests",
+                "--artifacts-path",
+                mainArtifactsPath,
+                "--verbosity",
+                "minimal"
+            };
+            var mainDiscovery = await _runner(
+                mainDiscoveryArguments,
+                mainWorktreePath,
+                EngineSettings.ResolveDiscoveryTimeout(),
+                cancellationToken).ConfigureAwait(false);
+            if (mainDiscovery.ExitCode != 0)
+            {
+                return new AcceptanceCheckResult(
+                    $"structural test coverage: {broadCheck.Name}",
+                    false,
+                    mainDiscovery.ExitCode,
+                    TailOutput(mainDiscovery.Output),
+                    ResultSummary: "trusted main discovery failed");
+            }
+
+            var partitions = ExpandBroadInfrastructureCheck(broadCheck)
+                .Select(shard =>
+                {
+                    var result = completedChecks.FirstOrDefault(candidate =>
+                        candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
+                    return new TestPartitionCoverage(
+                        shard.Name,
+                        result?.Passed == true,
+                        result?.TestResultPaths ?? []);
+                })
+                .ToArray();
+            var coverage = TestCoverageInvariant.Evaluate(
+                TestCoverageInvariant.ParseDiscoveredTests(candidateDiscovery.Output),
+                partitions,
+                TestCoverageInvariant.ParseDiscoveredTests(mainDiscovery.Output),
+                deletedTestFiles);
+            if (!coverage.Passed)
+            {
+                var details = new List<string> { coverage.Summary };
+                details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
+                details.AddRange(coverage.MissingTests.Take(10).Select(name => $"missing test: {name}"));
+                return new AcceptanceCheckResult(
+                    $"structural test coverage: {broadCheck.Name}",
+                    false,
+                    1,
+                    string.Join(Environment.NewLine, details),
+                    ResultSummary: coverage.Summary);
+            }
+
+            allSummaries.Add(coverage.Summary);
+        }
+
+        return new AcceptanceCheckResult(
+            "structural test coverage",
+            true,
+            0,
+            null,
+            ResultSummary: string.Join("; ", allSummaries));
+    }
+
+    private static string[] BuildDiscoveryArguments(AcceptanceManifestCheck check)
+    {
+        if (string.IsNullOrWhiteSpace(check.Project))
+        {
+            throw new InvalidDataException($"Acceptance check '{check.Name}' has no discovery project.");
+        }
+
+        var arguments = new List<string>
+        {
+            "dotnet",
+            "test",
+            check.Project,
+            "--no-build",
+            "--list-tests"
+        };
+        for (var index = 0; index < check.Arguments.Count; index++)
+        {
+            var argument = check.Arguments[index];
+            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
+            {
+                index++;
+                continue;
+            }
+
+            arguments.Add(argument);
+        }
+
+        return [.. arguments];
+    }
+
+    private static string? ResolveMainWorktreePath(string worktreePath)
+    {
+        if (ResolveMainWorktreePathForTests is not null)
+        {
+            return ResolveMainWorktreePathForTests(worktreePath);
+        }
+
+        var output = ResolveGitText(worktreePath, "worktree", "list", "--porcelain");
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        string? currentPath = null;
+        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (line.StartsWith("worktree ", StringComparison.Ordinal))
+            {
+                currentPath = line["worktree ".Length..].Trim();
+            }
+            else if (line.Equals("branch refs/heads/main", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(currentPath))
+            {
+                return currentPath;
+            }
+        }
+
+        return null;
+    }
+
+    private static string[] ResolveDeletedTestFiles(string worktreePath)
+    {
+        if (ResolveDeletedTestFilesForTests is not null)
+        {
+            return ResolveDeletedTestFilesForTests(worktreePath);
+        }
+
+        var output = ResolveGitText(worktreePath, "diff", "--name-status", "main...HEAD", "--");
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return [];
+        }
+
+        return output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Split('\t', StringSplitOptions.RemoveEmptyEntries))
+            .Where(parts => parts.Length >= 2 &&
+                parts[0].Equals("D", StringComparison.OrdinalIgnoreCase) &&
+                IsTestFile(parts[1]))
+            .Select(parts => NormalizePath(parts[1]))
+            .ToArray();
+    }
+
     private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
         string[] testFiles,
         string worktreePath,
@@ -3489,7 +3738,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var result = await _runner(
             diffArgs,
             worktreePath,
-            AcceptanceCheckTimeouts.DefaultTimeout,
+            EngineSettings.ResolveCheckTimeout(null),
             cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != 0)
@@ -3742,6 +3991,42 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
     }
 
+    private static AcceptanceCheckResult? TryClassifyManifestTrust(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles)
+    {
+        if (changedFiles is null ||
+            !changedFiles.Any(path =>
+                NormalizePath(path).Equals("config/acceptance-manifest.json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        var candidatePath = Path.Combine(worktreePath, "config", "acceptance-manifest.json");
+        var trustedJson = ResolveGitText(worktreePath, "show", "main:config/acceptance-manifest.json");
+        if (!File.Exists(candidatePath) || string.IsNullOrWhiteSpace(trustedJson))
+        {
+            return new AcceptanceCheckResult(
+                "acceptance manifest trusted dimensions",
+                false,
+                1,
+                "Trusted main acceptance manifest could not be compared; refusing candidate engine settings.",
+                ResultSummary: "trusted manifest comparison unavailable");
+        }
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(
+            trustedJson,
+            File.ReadAllText(candidatePath));
+        return decision.RequiresTrustedReview
+            ? new AcceptanceCheckResult(
+                "acceptance manifest trusted dimensions",
+                false,
+                1,
+                decision.Evidence,
+                ResultSummary: "operator review required")
+            : null;
+    }
+
     private static string? ResolveGitScalar(string worktreePath, params string[] arguments)
     {
         try
@@ -3947,31 +4232,62 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironment environment,
         DotnetTestTelemetry telemetry)
     {
-        var args = new List<string>
+        if (string.IsNullOrWhiteSpace(check.Project))
         {
-            ResolveMtpExecutablePath(check, environment),
-            "--no-ansi",
-            "--progress",
-            "off"
-        };
+            throw new InvalidDataException($"Acceptance check '{check.Name}' uses MTP but has no project.");
+        }
+
+        var invocation = EngineSettings.ResolveMtpInvocation(check.Project);
+        var executablePath = invocation.ResolveExecutablePath(environment);
+        var resultsDirectory = Path.GetDirectoryName(telemetry.Paths[0])
+            ?? Path.Combine(environment.ArtifactsPath, "TestResults");
+        var trxFileName = Path.GetFileName(telemetry.Paths[0]);
+        var args = invocation.Arguments
+            .Select(argument => argument
+                .Replace("{executable}", executablePath, StringComparison.Ordinal)
+                .Replace("{resultsDirectory}", resultsDirectory, StringComparison.Ordinal)
+                .Replace("{trxFileName}", trxFileName, StringComparison.Ordinal))
+            .ToList();
         var filter = ExtractMtpCompatibleArguments(check.Arguments, args);
         if (!string.IsNullOrWhiteSpace(filter))
         {
             args.AddRange(TranslateMtpFilter(filter));
         }
 
-        args.Add("--results-directory");
-        args.Add(Path.GetDirectoryName(telemetry.Paths[0]) ?? Path.Combine(environment.ArtifactsPath, "TestResults"));
-        args.Add("--report-trx");
-        args.Add("--report-trx-filename");
-        args.Add(Path.GetFileName(telemetry.Paths[0]));
-        if (!args.Any(argument => argument.Equals("--long-running", StringComparison.OrdinalIgnoreCase)))
-        {
-            args.Add("--long-running");
-            args.Add("120");
-        }
-
         return [.. args];
+    }
+
+    private static string? ResolveGitText(string worktreePath, params string[] arguments)
+    {
+        try
+        {
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = worktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var argument in arguments)
+            {
+                process.StartInfo.ArgumentList.Add(argument);
+            }
+
+            if (!process.Start() || !process.WaitForExit(5000) || process.ExitCode != 0)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+
+            return process.StandardOutput.ReadToEnd();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static string? ExtractMtpCompatibleArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
@@ -4062,23 +4378,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             throw new InvalidOperationException($"MTP test filter '{filter}' contains unsupported token '{token}'.");
         }
-    }
-
-    private static string ResolveMtpExecutablePath(AcceptanceManifestCheck check, DotnetBuildEnvironment environment)
-    {
-        if (string.IsNullOrWhiteSpace(check.Project))
-        {
-            throw new InvalidOperationException($"Acceptance check '{check.Name}' uses MTP but has no project.");
-        }
-
-        var projectName = Path.GetFileNameWithoutExtension(check.Project);
-        var extension = OperatingSystem.IsWindows() ? ".exe" : string.Empty;
-        return Path.Combine(
-            environment.ArtifactsPath,
-            "bin",
-            projectName,
-            "debug",
-            $"{projectName}{extension}");
     }
 
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment)
@@ -4385,7 +4684,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static string BuildTimeoutSummary(CommandResult result) =>
-        $"elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? AcceptanceCheckTimeouts.DefaultTimeout)} budget={FormatTimeout(result.Timeout ?? AcceptanceCheckTimeouts.DefaultTimeout)}";
+        $"elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? EngineSettings.ResolveCheckTimeout(null))} budget={FormatTimeout(result.Timeout ?? EngineSettings.ResolveCheckTimeout(null))}";
 
     private static string BuildTimeoutFailureName(AcceptanceManifestCheck check, CommandResult result) =>
         $"acceptance-check-timeout: {Slug(check.Name)} {BuildTimeoutSummary(result)}";
@@ -4860,8 +5159,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public bool Advisory { get; init; }
         public string? Runner { get; init; } = "vstest";
     }
-
-    private sealed record InfrastructureTestLane(string Name, string Filter);
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 

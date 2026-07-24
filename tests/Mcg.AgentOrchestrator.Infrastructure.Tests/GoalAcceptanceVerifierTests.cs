@@ -575,7 +575,9 @@ public abstract class GoalAcceptanceVerifierTestBase
         var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
         var manifestDirectory = Path.Combine(root, "config");
         Directory.CreateDirectory(manifestDirectory);
-        File.WriteAllText(Path.Combine(manifestDirectory, "acceptance-manifest.json"), manifest);
+        File.WriteAllText(
+            Path.Combine(manifestDirectory, "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine(manifest));
         return root;
     }
 
@@ -1889,7 +1891,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 Path.Combine(root, ".orchestrator", "attempt-one"));
             var first = await verifier.RunAsync(root, goalId);
             Assert.False(first.Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "acceptance-partition-verdicts.json")));
             var sharedJournal = GoalOperationJournal.Read(root, goalId);
             Assert.Contains(sharedJournal.Entries, entry =>
@@ -1902,7 +1904,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 Path.Combine(root, ".orchestrator", "attempt-two"));
             var second = await verifier.RunAsync(root, goalId);
             Assert.False(second.Passed);
-            Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 1, CountInfrastructurePartitionTestCalls(calls));
             var secondReceipt = Assert.Single(second.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("source_attempt_id=attempt-one", secondReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("{partition_id=remainder,verdict=RED}", secondReceipt.ResultSummary, StringComparison.Ordinal);
@@ -1961,7 +1963,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var result = await verifier.RunAsync(root, goalId);
 
             Assert.False(result.Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             var receipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("{partition_id=cli,verdict=RED}", receipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("{partition_id=remainder,verdict=GREEN}", receipt.ResultSummary, StringComparison.Ordinal);
@@ -2113,7 +2115,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var result = await verifier.RunAsync(root, goalId);
 
             Assert.False(result.Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             var receipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("aggregate_verdict=GREEN", receipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("{partition_id=cli,verdict=GREEN}", receipt.ResultSummary, StringComparison.Ordinal);
@@ -2148,7 +2150,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-a", "commit-b");
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -2187,12 +2189,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             CorruptPartitionCacheKey(root, "cli");
 
             var second = await verifier.RunAsync(root, goalId);
             Assert.True(second.Passed);
-            Assert.Equal(18, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 1, CountInfrastructurePartitionTestCalls(calls));
             var receipt = Assert.Single(second.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("{partition_id=cli,verdict=GREEN}", receipt.ResultSummary, StringComparison.Ordinal);
             Assert.DoesNotContain("{partition_id=goal-acceptance-verifier,verdict=GREEN}", receipt.ResultSummary, StringComparison.Ordinal);
@@ -2239,11 +2241,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
 
             var second = await verifier.RunAsync(root, goalId);
             Assert.True(second.Passed);
-            Assert.Equal(17, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             Assert.Contains("reroll_attempt_count=1", second.Checks!.Single(check => check.Name == "infrastructure partition verdict cache").ResultSummary, StringComparison.Ordinal);
 
             failFirstPartitionOnForcedRerun = true;
@@ -3018,6 +3020,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierSelectsInfrastructureTestsFromDefaultPlan()
     {
         var calls = new List<string[]>();
+        var root = CreatePartitionedInfrastructureManifestWorkspace();
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
@@ -3036,14 +3039,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         });
 
         var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
+            root,
             changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"]);
 
         Assert.True(result.Passed);
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        Assert.Equal(17, infrastructureCalls.Length);
+        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        Assert.Equal(laneCount, infrastructureCalls.Length);
         Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.Ordinal));
         foreach (var call in infrastructureCalls)
         {
@@ -3058,7 +3062,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == "covered by 17 partitioned checks");
+            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+        DeleteDirectoryWithRetry(root);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_focused_infrastructure_filter_for_cli_only_changes")]
@@ -3241,7 +3246,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     call[1] == "test" &&
                     call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
                 .ToArray();
-            Assert.Equal(17, infrastructureCalls.Length);
+            var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+            Assert.Equal(laneCount, infrastructureCalls.Length);
             foreach (var call in infrastructureCalls)
                 Assert.Contains("--filter", call);
             Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
@@ -3250,7 +3256,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains(result.Checks!, check =>
                 check.Name == "infrastructure tests" &&
                 check.Passed &&
-                check.ResultSummary == "covered by 17 partitioned checks");
+                check.ResultSummary == $"covered by {laneCount} partitioned checks");
             Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
         }
 
@@ -3557,7 +3563,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call[1] == "test" &&
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
-        Assert.Equal(17, infrastructureCalls.Length);
+        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        Assert.Equal(laneCount, infrastructureCalls.Length);
         foreach (var call in infrastructureCalls)
             Assert.Contains("--filter", call);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
@@ -3565,7 +3572,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == "covered by 17 partitioned checks");
+            check.ResultSummary == $"covered by {laneCount} partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_partitioned_infrastructure_checks_for_infra_scope")]
@@ -3598,7 +3605,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        Assert.Equal(17, infrastructureCalls.Length);
+        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        Assert.Equal(laneCount, infrastructureCalls.Length);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         foreach (var call in infrastructureCalls)
             Assert.True(
@@ -3609,7 +3617,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == "covered by 17 partitioned checks");
+            check.ResultSummary == $"covered by {laneCount} partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_union_for_core_and_infra_scope")]
@@ -3658,7 +3666,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        Assert.Equal(17, infrastructureCalls.Length);
+        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        Assert.Equal(laneCount, infrastructureCalls.Length);
         // The substituted infrastructure shards are MTP, so every shard carries a translated class filter.
         foreach (var call in infrastructureCalls)
             Assert.True(
@@ -3671,7 +3680,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == "covered by 17 partitioned checks");
+            check.ResultSummary == $"covered by {laneCount} partitioned checks");
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_keeps_solution_check_for_build_security_broad_or_disabled_scopes")]
@@ -3764,7 +3773,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     call[1] == "test" &&
                     call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
                 .ToArray();
-            Assert.Equal(17, infrastructureCalls.Length);
+            Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, infrastructureCalls.Length);
             Assert.DoesNotContain(result.Checks!, check =>
                 check.ResultSummary?.Contains("skipped: no changed file in dependency closure", StringComparison.Ordinal) == true);
         }
@@ -4598,6 +4607,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierTestTamperGuardAbsentWhenNoTestFilesInDiff()
     {
         var calls = new List<string[]>();
+        var root = CreatePartitionedInfrastructureManifestWorkspace();
 
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
@@ -4617,7 +4627,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         });
 
         var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
+            root,
             changedFiles: [
                 "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs",
                 "README.md"
@@ -4628,15 +4638,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        Assert.Equal(17, infrastructureCalls.Length);
+        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+        Assert.Equal(laneCount, infrastructureCalls.Length);
         foreach (var call in infrastructureCalls)
             Assert.True(
                 call.Contains("--filter-class") || call.Contains("--filter-not-class"),
                 "Each infrastructure shard must carry a translated MTP class filter.");
         // Each MTP shard runs a `dotnet build` before its executable, and there is no git diff
-        // call because no test files changed: shutdown + 17 * (build + executable).
-        Assert.Equal(1 + (17 * 2), calls.Count);
+        // call because no test files changed: shutdown + lane count * (build + executable).
+        Assert.Equal(1 + (laneCount * 2), calls.Count);
         Assert.DoesNotContain(calls, call => call.Length >= 2 && call[0] == "git" && call[1] == "diff");
+        DeleteDirectoryWithRetry(root);
     }
 
     private static string CreateManifestWorkspace(string manifest)
@@ -4644,7 +4656,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
         var manifestDirectory = Path.Combine(root, "config");
         Directory.CreateDirectory(manifestDirectory);
-        File.WriteAllText(Path.Combine(manifestDirectory, "acceptance-manifest.json"), manifest);
+        File.WriteAllText(
+            Path.Combine(manifestDirectory, "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine(manifest));
         return root;
     }
 
@@ -4689,6 +4703,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             }
             """);
 
+    private static string CreatePartitionedInfrastructureManifestWorkspace() =>
+        CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+
     private static string CreateAdvisoryWorkspace(string criteriaJson)
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
@@ -4698,6 +4723,40 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Path.Combine(orchestratorDir, "goal-acceptance-criteria.json"),
             criteriaJson);
         return root;
+    }
+}
+
+internal static class AcceptanceManifestTestDefaults
+{
+    public static string WithEngine(string manifest)
+    {
+        var candidate = JsonNode.Parse(manifest)?.AsObject()
+            ?? throw new InvalidOperationException("Expected acceptance manifest JSON object.");
+        if (candidate.ContainsKey("engine"))
+        {
+            return candidate.ToJsonString();
+        }
+
+        var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (directory is not null)
+        {
+            var trackedManifest = Path.Combine(directory.FullName, "config", "acceptance-manifest.json");
+            if (File.Exists(trackedManifest))
+            {
+                var tracked = JsonNode.Parse(File.ReadAllText(trackedManifest))?.AsObject()
+                    ?? throw new InvalidOperationException("Expected tracked acceptance manifest JSON object.");
+                var engine = tracked["engine"]?.DeepClone()?.AsObject()
+                    ?? throw new InvalidOperationException("Tracked acceptance manifest has no engine settings.");
+                engine["enforceStructuralCoverage"] = false;
+                engine["timeouts"] = new JsonObject();
+                candidate["engine"] = engine;
+                return candidate.ToJsonString();
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate tracked acceptance manifest for test defaults.");
     }
 }
 

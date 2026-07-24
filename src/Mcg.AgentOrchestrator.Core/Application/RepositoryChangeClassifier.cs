@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public enum RepositoryChangeCategory
@@ -29,6 +31,11 @@ public sealed record RepositoryChangeSummary(
     bool HasSecuritySensitiveChanges,
     bool RequiresBroadVerification,
     string RecommendedVerification);
+
+public sealed record AcceptanceManifestTrustDecision(
+    bool RequiresTrustedReview,
+    IReadOnlyList<string> SecurityCriticalChanges,
+    string Evidence);
 
 public static class RepositoryChangeClassifier
 {
@@ -133,6 +140,37 @@ public static class RepositoryChangeClassifier
             BuildRecommendation(isDocsOnly, hasGenerated, hasBuild, hasSecurity, requiresBroad, hasBehavior));
     }
 
+    public static AcceptanceManifestTrustDecision ClassifyAcceptanceManifestChange(
+        string trustedManifestJson,
+        string candidateManifestJson)
+    {
+        using var trusted = JsonDocument.Parse(trustedManifestJson);
+        using var candidate = JsonDocument.Parse(candidateManifestJson);
+        var changed = new List<string>();
+        CompareSecurityCriticalField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "engine.mtpInvocations[].executablePathTemplate",
+            invocation => invocation.TryGetProperty("executablePathTemplate", out var value) ? value.GetString() : null,
+            changed);
+        CompareSecurityCriticalField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "engine.mtpInvocations[].firewallExecutablePathTemplate",
+            invocation => invocation.TryGetProperty("firewallExecutablePathTemplate", out var value) ? value.GetString() : null,
+            changed);
+
+        return changed.Count == 0
+            ? new AcceptanceManifestTrustDecision(
+                false,
+                [],
+                "positive evidence: security-critical MTP executable and firewall path templates are unchanged")
+            : new AcceptanceManifestTrustDecision(
+                true,
+                changed,
+                $"trusted review required for changed field(s): {string.Join(", ", changed)}");
+    }
+
     private static RepositoryChangedFile ClassifyFile(string rawPath)
     {
         var path = Normalize(rawPath);
@@ -195,6 +233,44 @@ public static class RepositoryChangeClassifier
             generated,
             securitySensitive,
             broad);
+    }
+
+    private static void CompareSecurityCriticalField(
+        JsonElement trustedRoot,
+        JsonElement candidateRoot,
+        string fieldName,
+        Func<JsonElement, string?> selector,
+        ICollection<string> changed)
+    {
+        var trustedValues = ReadMtpInvocationValues(trustedRoot, selector);
+        var candidateValues = ReadMtpInvocationValues(candidateRoot, selector);
+        if (!trustedValues.SequenceEqual(candidateValues, StringComparer.Ordinal))
+        {
+            changed.Add(fieldName);
+        }
+    }
+
+    private static string[] ReadMtpInvocationValues(
+        JsonElement root,
+        Func<JsonElement, string?> selector)
+    {
+        if (!root.TryGetProperty("engine", out var engine) ||
+            !engine.TryGetProperty("mtpInvocations", out var invocations) ||
+            invocations.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return invocations.EnumerateArray()
+            .Select(invocation =>
+            {
+                var project = invocation.TryGetProperty("project", out var projectValue)
+                    ? projectValue.GetString()
+                    : null;
+                return $"{project}\u001f{selector(invocation)}";
+            })
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string BuildRecommendation(

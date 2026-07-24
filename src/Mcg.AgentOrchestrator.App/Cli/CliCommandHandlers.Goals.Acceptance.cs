@@ -121,10 +121,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             DotnetBuildEnvironmentLease? stableSlotLease = null;
             try
             {
-                var stableSlotSelector = context.StableSlotSelector ?? SelectFirstAvailableStableSlot;
-                stableSlotLease = stableSlotSelector(
-                    context.StableSlotAcquisitionTimeout,
-                    wait => Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
+                var onSlotWait = (DotnetBuildStableSlotWait wait) =>
+                    Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
+                stableSlotLease = context.StableSlotSelector is { } stableSlotSelector
+                    ? stableSlotSelector(context.StableSlotAcquisitionTimeout, onSlotWait)
+                    : DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                        context.StableSlotAcquisitionTimeout,
+                        onSlotWait,
+                        slotCount: AcceptanceGateEngineSettings.Load(worktreePath).SlotCount);
                 stableSlotIndex = ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
                     ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
             }
