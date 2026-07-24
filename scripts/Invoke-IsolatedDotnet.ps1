@@ -1,3 +1,22 @@
+<#
+.SYNOPSIS
+Runs dotnet with stable isolated build artifacts, including reusable no-build timing passes.
+
+.DESCRIPTION
+Use the same -GoalPrefix for both timing passes. The first invocation builds and tests into
+the goal's stable artifact slot. The second invocation adds -ReuseArtifacts and --no-build;
+it verifies the slot owner and test assembly before running xUnit without rebuilding.
+
+.EXAMPLE
+Measure-Command { .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal }
+
+Measures total build plus test time and leaves the output in the goal's stable artifact slot.
+
+.EXAMPLE
+Measure-Command { .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 -ReuseArtifacts test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --verbosity minimal }
+
+Reuses the first pass's output and measures xUnit execution time without invoking MSBuild.
+#>
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -8,6 +27,7 @@ $ErrorActionPreference = "Stop"
 
 $GoalPrefix = $null
 $AttemptName = "manual"
+$ReuseArtifacts = $false
 $remainingArguments = [System.Collections.Generic.List[string]]::new()
 for ($i = 0; $i -lt $Arguments.Count; $i++) {
     if ($Arguments[$i].Equals("-GoalPrefix", [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -27,6 +47,11 @@ for ($i = 0; $i -lt $Arguments.Count; $i++) {
 
         $AttemptName = $Arguments[$i + 1]
         $i++
+        continue
+    }
+
+    if ($Arguments[$i].Equals("-ReuseArtifacts", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $ReuseArtifacts = $true
         continue
     }
 
@@ -136,6 +161,176 @@ function Test-OwnerMarkerMatches {
     catch {
         return $false
     }
+}
+
+function Get-OwnerMarkerToken {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return "<missing>"
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        if ([string]::IsNullOrWhiteSpace([string]$marker.ownerToken)) {
+            return "<invalid>"
+        }
+
+        return [string]$marker.ownerToken
+    }
+    catch {
+        return "<invalid>"
+    }
+}
+
+function Get-DotnetOptionValue {
+    param(
+        [string[]]$Values,
+        [string[]]$Names
+    )
+
+    for ($i = 0; $i -lt $Values.Count; $i++) {
+        foreach ($name in $Names) {
+            if ($Values[$i].Equals($name, [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ($i + 1 -lt $Values.Count) {
+                    return $Values[$i + 1]
+                }
+
+                return $null
+            }
+
+            $prefix = "$name="
+            if ($Values[$i].StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $Values[$i].Substring($prefix.Length)
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-TestProjectPath {
+    param([string[]]$Values)
+
+    for ($i = 0; $i -lt $Values.Count - 1; $i++) {
+        if (-not $Values[$i].Equals("test", [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        for ($candidateIndex = $i + 1; $candidateIndex -lt $Values.Count; $candidateIndex++) {
+            $candidate = $Values[$candidateIndex]
+            if ($candidate.StartsWith("-", [System.StringComparison]::Ordinal)) {
+                continue
+            }
+
+            $extension = [System.IO.Path]::GetExtension($candidate)
+            if ($extension -in @(".csproj", ".fsproj", ".vbproj")) {
+                return $candidate
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-ReusableTestArtifacts {
+    param(
+        [string]$ArtifactsPath,
+        [string]$OwnerToken,
+        [string[]]$DotnetArguments
+    )
+
+    $projectPath = Get-TestProjectPath -Values $DotnetArguments
+    if ([string]::IsNullOrWhiteSpace($projectPath)) {
+        return [pscustomobject]@{
+            Success = $false
+            Reason = "Reuse requires 'dotnet test' with an explicit .csproj, .fsproj, or .vbproj path."
+            ExpectedArtifactPath = (Join-Path $ArtifactsPath "bin\<project>\<configuration>_<target-framework>\<project>.dll")
+            FoundOwnerToken = Get-OwnerMarkerToken -Path (Join-Path $ArtifactsPath ".mcg-artifacts-owner.json")
+        }
+    }
+
+    $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
+    $configuration = Get-DotnetOptionValue -Values $DotnetArguments -Names @("--configuration", "-c")
+    $targetFramework = Get-DotnetOptionValue -Values $DotnetArguments -Names @("--framework", "-f")
+    $layoutName = if (-not [string]::IsNullOrWhiteSpace($configuration) -and -not [string]::IsNullOrWhiteSpace($targetFramework)) {
+        "${configuration}_${targetFramework}"
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($configuration)) {
+        "${configuration}_<target-framework>"
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($targetFramework)) {
+        "<configuration>_${targetFramework}"
+    }
+    else {
+        "<configuration>_<target-framework>"
+    }
+    $projectArtifactsPath = Join-Path (Join-Path $ArtifactsPath "bin") $projectName
+    $expectedArtifactPath = Join-Path (Join-Path $projectArtifactsPath $layoutName) "$projectName.dll"
+    $ownerPath = Join-Path $ArtifactsPath ".mcg-artifacts-owner.json"
+    $foundOwnerToken = Get-OwnerMarkerToken -Path $ownerPath
+
+    if (-not [string]::Equals($foundOwnerToken, $OwnerToken, [System.StringComparison]::Ordinal)) {
+        return [pscustomobject]@{
+            Success = $false
+            Reason = "The artifact slot is not owned by this invocation."
+            ExpectedArtifactPath = $expectedArtifactPath
+            FoundOwnerToken = $foundOwnerToken
+        }
+    }
+
+    $candidateDirectories = if (Test-Path -LiteralPath $projectArtifactsPath -PathType Container) {
+        @(Get-ChildItem -LiteralPath $projectArtifactsPath -Directory -ErrorAction SilentlyContinue | Where-Object {
+            ([string]::IsNullOrWhiteSpace($configuration) -or $_.Name.StartsWith("${configuration}_", [System.StringComparison]::OrdinalIgnoreCase)) -and
+            ([string]::IsNullOrWhiteSpace($targetFramework) -or $_.Name.EndsWith("_${targetFramework}", [System.StringComparison]::OrdinalIgnoreCase))
+        })
+    }
+    else {
+        @()
+    }
+
+    $assemblyPaths = @($candidateDirectories | ForEach-Object {
+        $candidatePath = Join-Path $_.FullName "$projectName.dll"
+        if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+            $candidatePath
+        }
+    })
+
+    if ($assemblyPaths.Count -ne 1) {
+        $reason = if ($assemblyPaths.Count -eq 0) {
+            "The reusable test assembly was not found."
+        }
+        else {
+            "More than one reusable test assembly matched; pass --configuration and --framework to select one."
+        }
+        return [pscustomobject]@{
+            Success = $false
+            Reason = $reason
+            ExpectedArtifactPath = $expectedArtifactPath
+            FoundOwnerToken = $foundOwnerToken
+        }
+    }
+
+    return [pscustomobject]@{
+        Success = $true
+        AssemblyPath = $assemblyPaths[0]
+        DependencyDirectory = Split-Path -Parent $assemblyPaths[0]
+        ExpectedArtifactPath = $expectedArtifactPath
+        FoundOwnerToken = $foundOwnerToken
+    }
+}
+
+function ConvertTo-CommandText {
+    param([string[]]$Values)
+
+    return ($Values | ForEach-Object {
+        if ($_ -match '[\s'']') {
+            "'$($_.Replace("'", "''"))'"
+        }
+        else {
+            $_
+        }
+    }) -join " "
 }
 
 function Initialize-ArtifactsDirectory {
@@ -288,6 +483,7 @@ Remove-Item Env:MCG_ORCHESTRATOR_WORKER_DISPATCH -ErrorAction SilentlyContinue
 
 $lockStream = $null
 $lockHeld = $false
+$exitCode = 1
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
@@ -297,7 +493,9 @@ try {
         try {
             $lockStream.Lock(0, 1)
             $lockHeld = $true
-            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $ownerToken -ForceClean $staleLockCleared
+            if (-not $ReuseArtifacts) {
+                Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $ownerToken -ForceClean $staleLockCleared
+            }
         }
         catch [System.IO.IOException] {
             $lockStream.Dispose()
@@ -310,11 +508,37 @@ try {
         }
     }
 
-    $appDllBeforeDotnet = Get-AppDllSnapshot
-    & dotnet @DotnetArguments @isolatedArguments
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0 -and (Test-AppDllChangedSinceSnapshot -Snapshot $appDllBeforeDotnet)) {
-        Update-AppDllGitHeadMarker
+    if ($ReuseArtifacts) {
+        $reuse = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $DotnetArguments
+        if (-not $reuse.Success) {
+            $buildArguments = @($DotnetArguments | Where-Object {
+                -not $_.Equals("--no-build", [System.StringComparison]::OrdinalIgnoreCase)
+            })
+            $goalArgument = if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
+                ""
+            }
+            else {
+                " -GoalPrefix $(ConvertTo-CommandText -Values @($GoalPrefix))"
+            }
+            $buildCommand = ".\scripts\Invoke-IsolatedDotnet.ps1$goalArgument $(ConvertTo-CommandText -Values $buildArguments)"
+            [Console]::Error.WriteLine(
+                "Artifact reuse precondition failed: $($reuse.Reason) Probed artifact path: '$($reuse.ExpectedArtifactPath)'. " +
+                "Expected owner token: '$ownerToken'; found owner token: '$($reuse.FoundOwnerToken)'. " +
+                "Produce the artifacts with: $buildCommand")
+            $exitCode = 86
+        }
+        else {
+            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' with dependency directory '$($reuse.DependencyDirectory)'."
+        }
+    }
+
+    if ($exitCode -ne 86) {
+        $appDllBeforeDotnet = Get-AppDllSnapshot
+        & dotnet @DotnetArguments @isolatedArguments
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0 -and (Test-AppDllChangedSinceSnapshot -Snapshot $appDllBeforeDotnet)) {
+            Update-AppDllGitHeadMarker
+        }
     }
 }
 finally {

@@ -801,3 +801,193 @@ public abstract class GoalWorktreeTestBase
         public DateTimeOffset UtcNow { get; } = utcNow;
     }
 }
+
+public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
+{
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuses_prebuilt_test_assembly_and_dependency_directory")]
+    public void InvokeIsolatedDotnetReusesPrebuiltTestAssemblyAndDependencyDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = CreateReuseFixture(includeAssembly: true);
+        try
+        {
+            var result = RunReusePass(fixture);
+
+            Assert.True(
+                result.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}");
+            Assert.Contains(fixture.AssemblyPath, result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(fixture.DependencyDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(fixture.AssemblyPath), "The reuse pass must preserve the pre-built test assembly.");
+            Assert.True(
+                File.Exists(Path.Combine(fixture.DependencyDirectory, "Fake.Tests.deps.json")),
+                "The reuse pass must preserve the test assembly dependency directory.");
+
+            var log = File.ReadAllText(fixture.DotnetLogPath);
+            Assert.Contains("args=test Fake.Tests.csproj --no-build --configuration Release --framework net10.0 --verbosity minimal --artifacts-path ", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("args=build ", log, StringComparison.Ordinal);
+
+            var source = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+            Assert.Contains(".SYNOPSIS", source, StringComparison.Ordinal);
+            Assert.Contains(".DESCRIPTION", source, StringComparison.Ordinal);
+            Assert.True(source.Split(".EXAMPLE", StringSplitOptions.None).Length >= 3);
+            Assert.Contains("-ReuseArtifacts", source, StringComparison.Ordinal);
+            Assert.Contains("--no-build", source, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(fixture.Root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuse_fails_loudly_when_test_assembly_is_missing")]
+    public void InvokeIsolatedDotnetReuseFailsLoudlyWhenTestAssemblyIsMissing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = CreateReuseFixture(includeAssembly: false);
+        try
+        {
+            var result = RunReusePass(fixture);
+
+            Assert.Equal(86, result.ExitCode);
+            Assert.Contains("Artifact reuse precondition failed", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains(fixture.AssemblyPath, result.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Expected owner token: 'goal-reuse-goal'", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("found owner token: 'goal-reuse-goal'", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains(
+                @".\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix reuse-goal test Fake.Tests.csproj --configuration Release --framework net10.0 --verbosity minimal",
+                result.Stderr,
+                StringComparison.Ordinal);
+
+            var log = File.ReadAllText(fixture.DotnetLogPath);
+            Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
+            Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(fixture.Root);
+        }
+    }
+
+    private static ReuseFixture CreateReuseFixture(bool includeAssembly)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-isolated-dotnet-reuse-tests", Guid.NewGuid().ToString("N"));
+        var isolatedRoot = Path.Combine(root, "isolated");
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        var artifactsPath = Path.Combine(isolatedRoot, "slots", StableSlotName("reuse-goal"), "artifacts");
+        var dependencyDirectory = Path.Combine(artifactsPath, "bin", "Fake.Tests", "Release_net10.0");
+        var assemblyPath = Path.Combine(dependencyDirectory, "Fake.Tests.dll");
+        var dotnetLogPath = Path.Combine(root, "dotnet.log");
+
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        Directory.CreateDirectory(dependencyDirectory);
+        File.WriteAllText(
+            Path.Combine(artifactsPath, ".mcg-artifacts-owner.json"),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                ownerToken = "goal-reuse-goal",
+                ownerProcessId = 123456789,
+                machineName = Environment.MachineName,
+                lastAcquiredAt = DateTimeOffset.UtcNow
+            }));
+        if (includeAssembly)
+        {
+            File.WriteAllText(assemblyPath, "pre-built test assembly");
+            File.WriteAllText(Path.Combine(dependencyDirectory, "Fake.Tests.deps.json"), "pre-built dependencies");
+        }
+
+        File.WriteAllText(
+            Path.Combine(shimDirectory, "dotnet.cmd"),
+            """
+            @echo off
+            >> "%DOTNET_SHIM_LOG%" echo args=%*
+            exit /b 0
+            """);
+
+        return new ReuseFixture(
+            root,
+            isolatedRoot,
+            shimDirectory,
+            workDirectory,
+            artifactsPath,
+            dependencyDirectory,
+            assemblyPath,
+            dotnetLogPath);
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) RunReusePass(ReuseFixture fixture)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            WorkingDirectory = fixture.WorkDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-InputFormat");
+        startInfo.ArgumentList.Add("None");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+        startInfo.ArgumentList.Add("-GoalPrefix");
+        startInfo.ArgumentList.Add("reuse-goal");
+        startInfo.ArgumentList.Add("-ReuseArtifacts");
+        startInfo.ArgumentList.Add("test");
+        startInfo.ArgumentList.Add("Fake.Tests.csproj");
+        startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--configuration");
+        startInfo.ArgumentList.Add("Release");
+        startInfo.ArgumentList.Add("--framework");
+        startInfo.ArgumentList.Add("net10.0");
+        startInfo.ArgumentList.Add("--verbosity");
+        startInfo.ArgumentList.Add("minimal");
+        startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        startInfo.Environment["DOTNET_SHIM_LOG"] = fixture.DotnetLogPath;
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = fixture.IsolatedRoot;
+        startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start PowerShell.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+        return (process.ExitCode, stdout, stderr);
+    }
+
+    private static string StableSlotName(string value)
+    {
+        long hash = 0;
+        foreach (var character in value.ToLowerInvariant())
+        {
+            hash = ((hash * 31) + character) % 2147483647;
+        }
+
+        return $"slot-{Math.Abs(hash % 4)}";
+    }
+
+    private sealed record ReuseFixture(
+        string Root,
+        string IsolatedRoot,
+        string ShimDirectory,
+        string WorkDirectory,
+        string ArtifactsPath,
+        string DependencyDirectory,
+        string AssemblyPath,
+        string DotnetLogPath);
+}
