@@ -142,6 +142,29 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_does_not_allow_case_alias_to_override_trusted_field")]
+    public void AcceptanceGateEngineDoesNotAllowCaseAliasToOverrideTrustedField()
+    {
+        var root = CreateWorkspace("""
+            {
+              "engine": {
+                "enforceStructuralCoverage": true,
+                "EnforceStructuralCoverage": false
+              }
+            }
+            """);
+        try
+        {
+            var settings = AcceptanceGateEngineSettings.Load(root);
+
+            Xunit.Assert.True(settings.EnforceStructuralCoverage);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_discovers_Core_through_direct_MTP")]
     public async Task GoalAcceptanceVerifierStructuralCoverageDiscoversCoreThroughDirectMtp()
     {

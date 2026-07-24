@@ -6,7 +6,7 @@ internal sealed class AcceptanceGateEngineSettings
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
     public IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes { get; init; } = [];
