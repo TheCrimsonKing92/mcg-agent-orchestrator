@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -654,6 +655,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 Name = $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
                 Type = "dotnet-test",
+                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
+                // without this the check defaults to the VSTest runner and fails on .NET 10 with
+                // "VSTest target is no longer supported", making every reviewer evidence run fail.
+                Runner = "mtp",
                 Project = project,
                 Arguments = ["--verbosity", "minimal", "--filter", filter],
                 TimeoutMinutes = 10
@@ -1197,9 +1202,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Name = name,
             Type = "dotnet-test",
             Project = project,
-            Arguments = arguments
+            Arguments = arguments,
+            Runner = ResolveDotnetTestRunner(project)
         };
     }
+
+    // Core.Tests and Infrastructure.Tests are Microsoft.Testing.Platform projects; synthesized
+    // dotnet-test checks for them must carry runner=mtp or they default to the VSTest runner and
+    // fail on .NET 10 with "VSTest target is no longer supported".
+    private static string ResolveDotnetTestRunner(string? project) =>
+        !string.IsNullOrWhiteSpace(project) &&
+        (IsCoreTestProject(project) || IsInfrastructureTestProject(project))
+            ? "mtp"
+            : "vstest";
 
     private static string[] SplitCommandLine(string commandLine) =>
         commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -2118,6 +2133,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 : null;
 
             var telemetry = ResolveTestTelemetry(check, environment);
+            PrepareTestTelemetryForRun(telemetry);
             var arguments = BuildMtpTestArguments(check, environment, telemetry);
             ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
             var result = await RunWithGateHeartbeatAsync(
@@ -2134,9 +2150,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
-                result.TimedOut
-                    ? BuildTimeoutOutput(result)
-                    : passed ? null : TailOutput(result.Output),
+                passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry),
                 environment.ArtifactsPath,
                 "goal-acceptance-verifier",
                 environment.LeaseId,
@@ -3971,7 +3985,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         foreach (var rawToken in Regex.Split(filter, @"[&|]"))
         {
-            var token = rawToken.Trim();
+            // A focused filter can be a parenthesized disjunction such as
+            // "(FullyQualifiedName~A|FullyQualifiedName~B)|(FullyQualifiedName~C&Category!=X)".
+            // MTP unions repeated --filter-class and intersects --filter-not-class/--filter-not-trait
+            // exclusions, so the grouping parens carry no additional meaning at the token level and
+            // are stripped before matching. (A per-group Category!= therefore widens to the whole
+            // union, which is harmless because such traits are unique to a single mapped class.)
+            var token = rawToken.Trim().Trim('(', ')').Trim();
             if (token.Length == 0)
             {
                 continue;
@@ -4064,6 +4084,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new DotnetTestTelemetry([path], []);
     }
 
+    private static void PrepareTestTelemetryForRun(DotnetTestTelemetry telemetry)
+    {
+        foreach (var path in telemetry.Paths)
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException($"Unable to clear stale TRX before the test run: {path}", ex);
+            }
+
+            if (File.Exists(path))
+            {
+                throw new IOException($"Unable to clear stale TRX before the test run: {path}");
+            }
+        }
+    }
+
     private static string[] AddVstestTelemetryArguments(
         string[] arguments,
         AcceptanceManifestCheck check,
@@ -4101,6 +4146,137 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Console.WriteLine($"TRX_TELEMETRY_UNAVAILABLE paths={QuoteProgressToken(string.Join(";", missing))}");
         Console.Out.Flush();
     }
+
+    private static string BuildMtpFailureOutput(
+        string checkName,
+        CommandResult result,
+        DotnetTestTelemetry telemetry)
+    {
+        var details = new List<string>();
+        var commandOutput = result.TimedOut
+            ? BuildTimeoutOutput(result)
+            : TailOutput(result.Output);
+        if (!string.IsNullOrWhiteSpace(commandOutput))
+        {
+            details.Add(commandOutput);
+        }
+
+        var trxPaths = telemetry.Paths.Where(File.Exists).ToArray();
+        if (trxPaths.Length == 0)
+        {
+            details.Add(
+                $"[FAIL] {checkName}: failed — no TRX produced (shard was killed or crashed before reporter flushed)");
+            return string.Join(Environment.NewLine, details);
+        }
+
+        var failures = new List<string>();
+        foreach (var trxPath in trxPaths)
+        {
+            try
+            {
+                failures.AddRange(ExtractTrxFailureEvidence(trxPath));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                details.Add(
+                    $"[FAIL] {checkName}: failed — TRX found but could not be read ({FirstNonEmptyLine(ex.Message)})");
+                return string.Join(Environment.NewLine, details);
+            }
+        }
+
+        if (failures.Count == 0)
+        {
+            details.Add(
+                $"[FAIL] {checkName}: failed — TRX found but contained no failure records (process may have exited before tests ran)");
+        }
+        else
+        {
+            details.AddRange(failures);
+        }
+
+        return string.Join(Environment.NewLine, details);
+    }
+
+    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
+    {
+        var document = XDocument.Load(trxPath, LoadOptions.None);
+        var definitionsByTestId = document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
+            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        return document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                string.Equals(
+                    element.Attribute("outcome")?.Value,
+                    "Failed",
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(result =>
+            {
+                definitionsByTestId.TryGetValue(
+                    result.Attribute("testId")?.Value ?? string.Empty,
+                    out var definition);
+                var testName = ResolveTrxTestName(result, definition);
+                var message = result
+                    .Descendants()
+                    .FirstOrDefault(element =>
+                        element.Name.LocalName.Equals("Message", StringComparison.Ordinal) &&
+                        element.Ancestors().Any(ancestor =>
+                            ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
+                    ?.Value;
+                return $"[FAIL] {testName}: {FirstNonEmptyLine(message) ?? "failure message unavailable"}";
+            })
+            .ToArray();
+    }
+
+    private static string ResolveTrxTestName(XElement result, XElement? definition)
+    {
+        var testName = result.Attribute("testName")?.Value?.Trim();
+        var displayName = result.Descendants()
+            .Concat(definition?.Descendants() ?? [])
+            .Where(element =>
+                element.Name.LocalName.Equals("DisplayName", StringComparison.Ordinal) ||
+                element.Name.LocalName.Equals("Description", StringComparison.Ordinal))
+            .Select(element => element.Value.Trim())
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        displayName ??= definition?.Attribute("name")?.Value?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(displayName) &&
+            (string.IsNullOrWhiteSpace(testName) ||
+                (LooksLikeQualifiedTestName(testName) && displayName.Length < testName.Length)))
+        {
+            return displayName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(testName))
+        {
+            return testName;
+        }
+
+        var testMethod = definition?.Descendants()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
+        var className = testMethod?.Attribute("className")?.Value?.Trim();
+        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
+        if (!string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName))
+        {
+            return $"{className}.{methodName}";
+        }
+
+        return result.Attribute("testId")?.Value?.Trim() ?? "unknown test";
+    }
+
+    private static bool LooksLikeQualifiedTestName(string value) =>
+        value.Contains('+', StringComparison.Ordinal) ||
+        value.Count(ch => ch == '.') >= 2;
+
+    private static string? FirstNonEmptyLine(string? value) =>
+        value?
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));
 
     private static string SanitizeFileName(string value)
     {
@@ -4594,7 +4770,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     Name = check.Name,
                     Type = "dotnet-test",
                     Project = project,
-                    Arguments = arguments
+                    Arguments = arguments,
+                    Runner = ResolveDotnetTestRunner(project)
                 };
             }
 

@@ -11,6 +11,20 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
+
+    // Reviewer evidence-on-demand is bounded per review round to break request loops while still
+    // letting a reviewer legitimately request focused receipts for more than one changed area
+    // (multi-file infra goals commonly need 2-3 suites). The guard previously allowed exactly one
+    // request across the whole reviewer phase, which escalated a legitimate second suite as a
+    // "repeat" (the mechanical evidence re-dispatch retries the reviewer task itself, so it never
+    // advances the round boundary). Requests beyond this bound escalate normally.
+    private const int MaxReviewerEvidenceRequestsPerRound = 3;
+
+    // Prefix of the message the conductor writes when it mechanically re-dispatches the reviewer
+    // task to attach evidence-on-demand receipts within the SAME round. Retries carrying this prefix
+    // must NOT advance the evidence-round boundary (otherwise the per-round bound would never apply);
+    // any other reviewer retry (operator recover, fresh review) begins a new evidence round.
+    private const string ReviewerEvidenceRetryMessagePrefix = "reviewer evidence-on-demand:";
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -875,16 +889,16 @@ internal sealed class ConductorDriver
         if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
             WorkerResultBlockers.TryFindEvidenceRequest(triggeringTask.LastVerification, out var evidenceRequest))
         {
-            var hadPriorEvidenceRequest = HasPriorReviewerEvidenceRequestInCurrentRound(goal, triggeringTask);
+            var priorEvidenceRequests = CountReviewerEvidenceRequestsInCurrentRound(goal, triggeringTask);
             _recordReviewerEvidenceRequestReceived(
                 goal.Id,
                 triggeringTask.Id,
                 $"Reviewer evidence request received: {evidenceRequest}. Full reviewer output: {outputArtifact}");
 
-            if (hadPriorEvidenceRequest)
+            if (priorEvidenceRequests >= MaxReviewerEvidenceRequestsPerRound)
             {
                 decision = VerifyingFindingAutoRetryDecision.Escalate(
-                    $"Reviewer evidence request repeated in the same review round for task {triggeringTask.Id.Value[..8]}; " +
+                    $"Reviewer exceeded the evidence-on-demand limit ({MaxReviewerEvidenceRequestsPerRound} focused runs) in the same review round for task {triggeringTask.Id.Value[..8]}; " +
                     $"normal escalation required. Request: {TrimForConductorMessage(evidenceRequest)}. Full reviewer output: {outputArtifact}");
                 return true;
             }
@@ -910,7 +924,7 @@ internal sealed class ConductorDriver
             }
 
             var evidenceRetryMessage =
-                $"reviewer evidence-on-demand: Reviewer task {triggeringTask.Id.Value[..8]} requested focused test evidence; " +
+                $"{ReviewerEvidenceRetryMessagePrefix} Reviewer task {triggeringTask.Id.Value[..8]} requested focused test evidence; " +
                 $"conductor ran it without reopening upstream Developer/Tester work. {evidenceMessage}. " +
                 $"Re-review the same round using these receipts.";
             decision = VerifyingFindingAutoRetryDecision.Retry(
@@ -1083,18 +1097,23 @@ internal sealed class ConductorDriver
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
 
-    private static bool HasPriorReviewerEvidenceRequestInCurrentRound(Goal goal, TaskSpec reviewerTask)
+    private static int CountReviewerEvidenceRequestsInCurrentRound(Goal goal, TaskSpec reviewerTask)
     {
+        // The current evidence round starts at the most recent retry that begins a FRESH review:
+        // any non-reviewer (Developer/Tester) retry, or a non-mechanical retry of the reviewer task
+        // itself (operator recover / fresh review). The mechanical evidence re-dispatch retries the
+        // reviewer task only to attach receipts within the SAME round, so it must not advance the boundary.
         var currentRoundStartedAt = goal.Timeline
             .Where(evt =>
                 evt.Kind == ProgressKind.TaskRetried &&
                 evt.TaskId is not null &&
-                evt.TaskId != reviewerTask.Id)
+                (evt.TaskId != reviewerTask.Id ||
+                    !evt.Message.StartsWith(ReviewerEvidenceRetryMessagePrefix, StringComparison.Ordinal)))
             .Select(evt => evt.OccurredAt)
             .DefaultIfEmpty(DateTimeOffset.MinValue)
             .Max();
 
-        return goal.Timeline.Any(evt =>
+        return goal.Timeline.Count(evt =>
             evt.TaskId == reviewerTask.Id &&
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.OccurredAt >= currentRoundStartedAt);

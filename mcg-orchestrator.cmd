@@ -10,6 +10,15 @@ set "APP_HEAD=%ROOT%src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrc
 set "DOTNET_HOST=dotnet"
 if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNET_PATH%"
 
+:: Run the CLI/loop with Workstation GC + conserve-memory. The App is Microsoft.NET.Sdk.Web, so Server GC is
+:: on by default (System.GC.Server=true in runtimeconfig); on a many-core box that commits hundreds of MB for
+:: a live set well under 100 MB. These env vars override the runtimeconfig. MSBUILDDISABLENODEREUSE stops
+:: MSBuild worker nodes from staying resident after the on-demand build. (memory-efficiency expert dance 2026-07-22)
+set "DOTNET_gcServer=0"
+set "DOTNET_gcConcurrent=0"
+set "DOTNET_GCConserveMemory=7"
+set "MSBUILDDISABLENODEREUSE=1"
+
 :: Reclaim a dead-owner or age-stale lock left by a prior crashed invocation.
 :: A lock older than LOCK_STALE_SECONDS is stale even if owner.pid is present.
 :: A younger lock is also reclaimed when owner.pid is missing after a short recheck or its owner is gone.
@@ -42,7 +51,7 @@ for /f "delims=" %%a in ('powershell -NoProfile -Command "(Get-Process -Id $PID)
 if defined MYPID echo %MYPID%>"%LOCK_DIR%\owner.pid"
 
 set "BUILD_LOG=%TEMP%\mcg-build-%RANDOM%.log"
-call "%DOTNET_HOST%" build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly >"%BUILD_LOG%" 2>&1
+call "%DOTNET_HOST%" build "%APP_PROJECT%" --nologo -v quiet -clp:ErrorsOnly -p:UseSharedCompilation=false >"%BUILD_LOG%" 2>&1
 set BUILD_EXIT=%ERRORLEVEL%
 rmdir /s /q "%LOCK_DIR%" 2>nul
 

@@ -1879,8 +1879,8 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_second_reviewer_evidence_request_same_round_escalates")]
-    public void ConductorDriverSecondReviewerEvidenceRequestSameRoundEscalates()
+    [Xunit.Fact(DisplayName = "ConductorDriver_second_reviewer_evidence_request_within_bound_runs")]
+    public void ConductorDriverSecondReviewerEvidenceRequestWithinBoundRuns()
     {
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
@@ -1889,7 +1889,58 @@ public sealed class ConductorDriverTests
             PassVerification(kernel, goal, task);
         }
 
+        // One prior evidence request already served this round; a legitimate second suite must
+        // still run (multi-file goals commonly need receipts for more than one changed area),
+        // not escalate as a "repeat".
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "prior reviewer evidence request");
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "still missing focused conductor evidence",
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+        var focusedRuns = 0;
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runFocusedEvidence: (_, _) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult("", true, true, "focused evidence passed", []);
+            },
+            retryTask: (gid, tid, msg) =>
+            {
+                retried = true;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
+            recordReviewerEvidenceRunRecorded: (gid, tid, msg) => kernel.RecordReviewerEvidenceRunRecorded(gid, tid, msg),
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.True(retried);
+        Assert.Null(escalation);
+        Assert.False(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_requests_over_bound_escalate")]
+    public void ConductorDriverReviewerEvidenceRequestsOverBoundEscalate()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        // Three focused evidence requests already served this round; the fourth exceeds the
+        // per-round bound and must escalate normally (loop protection is preserved).
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "prior evidence request 1");
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "prior evidence request 2");
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "prior evidence request 3");
         FailReviewerNeedsWork(
             kernel,
             goal,
@@ -1918,8 +1969,57 @@ public sealed class ConductorDriverTests
 
         Assert.Equal(0, focusedRuns);
         Assert.False(retried);
-        Assert.Contains("repeated in the same review round", escalation);
+        Assert.Contains("exceeded the evidence-on-demand limit", escalation);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_recover_style_reviewer_retry_resets_evidence_round")]
+    public void ConductorDriverRecoverStyleReviewerRetryResetsEvidenceRound()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        // Three evidence requests from a prior review round would exceed the per-round bound.
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 1");
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 2");
+        kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 3");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "prior round needs evidence", "Infrastructure.Tests: prior");
+
+        // Operator recover retries the reviewer task with a NON-mechanical message, starting a fresh
+        // evidence round; the three stale requests above must no longer count toward the bound.
+        kernel.RetryTask(goal.Id, reviewer.Id, "operator recover reset the review round", invalidateDownstream: false);
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "fresh round needs evidence", "Infrastructure.Tests: fresh");
+        goal = kernel.GetGoal(goal.Id);
+        var focusedRuns = 0;
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runFocusedEvidence: (_, _) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult("", true, true, "focused evidence passed", []);
+            },
+            retryTask: (gid, tid, msg) =>
+            {
+                retried = true;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordReviewerEvidenceRequestReceived: (gid, tid, msg) => kernel.RecordReviewerEvidenceRequestReceived(gid, tid, msg),
+            recordReviewerEvidenceRunRecorded: (gid, tid, msg) => kernel.RecordReviewerEvidenceRunRecorded(gid, tid, msg),
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.True(retried);
+        Assert.Null(escalation);
+        Assert.False(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_unbounded_reviewer_evidence_request_escalates")]

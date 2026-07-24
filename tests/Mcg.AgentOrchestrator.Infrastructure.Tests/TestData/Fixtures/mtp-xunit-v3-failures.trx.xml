@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="f17de213-07a8-4ac0-880d-bd443b76e968" name="MTP xUnit.net v3 fixture" runUser="runner" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-07-24T03:10:12.0000000+00:00" queuing="2026-07-24T03:10:12.0000000+00:00" start="2026-07-24T03:10:12.0000000+00:00" finish="2026-07-24T03:10:12.4820000+00:00" />
+  <TestSettings name="default" id="5b7c3350-fdd6-45b7-b5af-5f56a99bf591">
+    <Deployment runDeploymentRoot="runner_2026-07-24_03_10_12" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="c75085a1-9cac-46e6-8f07-c29c88df3760" testId="1e2df56f-a654-49d1-9247-750546ad4ee1" testName="Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures" computerName="BUILD-01" duration="00:00:00.0540000" startTime="2026-07-24T03:10:12.1000000+00:00" endTime="2026-07-24T03:10:12.1540000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c75085a1-9cac-46e6-8f07-c29c88df3760">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Contains() Failure: Sub-string not found
+String:    "infrastructure tests: Cli: failed: 1"
+Not found: "RetryEvidenceTests.IncludesFailures"</Message>
+          <StackTrace>at Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures() in D:\a\mcg-agent-orchestrator\RetryEvidenceTests.cs:line 42</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="427da96e-0604-4c98-b554-b45b04d808ec" testId="cf58efdf-ad60-49cd-9c77-fd56ed171990" testName="MTP shard preserves theory display name(value: 42)" computerName="BUILD-01" duration="00:00:00.0070000" startTime="2026-07-24T03:10:12.1600000+00:00" endTime="2026-07-24T03:10:12.1670000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="427da96e-0604-4c98-b554-b45b04d808ec">
+      <Output>
+        <ErrorInfo>
+          <Message>
+            Expected shard count to be 2, but found 1
+            The second line is intentionally excluded from retry evidence.
+          </Message>
+          <StackTrace>at Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(Int32 value) in D:\a\mcg-agent-orchestrator\MtpShardTests.cs:line 73</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="613b681d-4d45-452d-ab94-361304ad4edf" testId="ecf2db12-b91b-456a-b138-f8fbb3b2cfdf" testName="Passing MTP test is not surfaced" computerName="BUILD-01" duration="00:00:00.0030000" startTime="2026-07-24T03:10:12.1700000+00:00" endTime="2026-07-24T03:10:12.1730000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="613b681d-4d45-452d-ab94-361304ad4edf" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Retry evidence includes failed test names" storage="mcg.agentorchestrator.infrastructure.tests.dll" id="1e2df56f-a654-49d1-9247-750546ad4ee1">
+      <Execution id="c75085a1-9cac-46e6-8f07-c29c88df3760" />
+      <TestMethod codeBase="Mcg.AgentOrchestrator.Infrastructure.Tests.dll" adapterTypeName="executor://xunit/V3" className="Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests" name="IncludesFailures" />
+    </UnitTest>
+    <UnitTest name="MTP shard preserves theory display name(value: 42)" storage="mcg.agentorchestrator.infrastructure.tests.dll" id="cf58efdf-ad60-49cd-9c77-fd56ed171990">
+      <Execution id="427da96e-0604-4c98-b554-b45b04d808ec" />
+      <TestMethod codeBase="Mcg.AgentOrchestrator.Infrastructure.Tests.dll" adapterTypeName="executor://xunit/V3" className="Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests" name="PreservesTheoryDisplayName" />
+    </UnitTest>
+    <UnitTest name="Passing MTP test is not surfaced" storage="mcg.agentorchestrator.infrastructure.tests.dll" id="ecf2db12-b91b-456a-b138-f8fbb3b2cfdf">
+      <Execution id="613b681d-4d45-452d-ab94-361304ad4edf" />
+      <TestMethod codeBase="Mcg.AgentOrchestrator.Infrastructure.Tests.dll" adapterTypeName="executor://xunit/V3" className="Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests" name="PassingTest" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="1e2df56f-a654-49d1-9247-750546ad4ee1" executionId="c75085a1-9cac-46e6-8f07-c29c88df3760" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="cf58efdf-ad60-49cd-9c77-fd56ed171990" executionId="427da96e-0604-4c98-b554-b45b04d808ec" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ecf2db12-b91b-456a-b138-f8fbb3b2cfdf" executionId="613b681d-4d45-452d-ab94-361304ad4edf" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="3" executed="3" passed="1" failed="2" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="3" inProgress="0" pending="0" />
+  </ResultSummary>
+</TestRun>
