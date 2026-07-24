@@ -1593,7 +1593,7 @@ public sealed class ConductorDriverTests
         kernel.RetryTask(goal.Id, developer.Id, "auto-review-retry round 1 convergence brief: prior retry");
         PassVerification(kernel, goal, developer);
         PassVerification(kernel, goal, tester);
-        FailReviewerNeedsWork(kernel, goal, reviewer, "  Shared   blocker stays open.  ; New blocker surfaced.");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Shared blocker remains open after focused recheck.");
         string? retryMessage = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -1609,7 +1609,7 @@ public sealed class ConductorDriverTests
         Assert.Contains("auto-review-retry round 2 convergence brief", retryMessage);
         Assert.Contains("## RESIDUAL_OPEN_ACTION_ITEMS", retryMessage);
         Assert.Equal(1, CountOccurrences(retryMessage!, "- stable_id: finding-1"));
-        Assert.Contains("New blocker surfaced.", retryMessage);
+        Assert.Contains("Shared blocker remains open after focused recheck.", retryMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
