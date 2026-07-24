@@ -8,6 +8,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
+        verification = AttachAuthoritativeReviewFindingContext(task, verification);
         task.RecordVerification(verification);
 
         var status = verification.Succeeded ? "passed" : "failed";
@@ -89,6 +90,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        verification = AttachAuthoritativeReviewFindingContext(task, verification);
         task.RecordVerification(verification);
 
         var status = verification.Succeeded ? "passed" : "failed";
@@ -219,6 +221,52 @@ public sealed partial class AgentOrchestratorKernel
         TaskVerificationRecord verification,
         bool enforceFailureEvidenceRule)
     {
+        IReadOnlyList<ReviewFinding> mergedFindings = [];
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            !TryBuildMergedReviewFindingState(
+                GetGoal(goalId),
+                verification,
+                out mergedFindings,
+                out var findingDiagnostic))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Reviewer WORKER_RESULT structured findings invalid: {findingDiagnostic}");
+            return true;
+        }
+
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            ReviewFindingConvergence.CountOpen(mergedFindings) > 0)
+        {
+            var openIds = string.Join(
+                ", ",
+                mergedFindings
+                    .Where(finding => finding.State == ReviewFindingState.Open)
+                    .Select(finding => finding.StableId));
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Reviewer WORKER_RESULT verdict rejected: merged structured finding state still has open stable_id(s): {openIds}.");
+            return true;
+        }
+
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            !WorkerResultBlockers.TryFindPassVerdict(verification))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                "Reviewer WORKER_RESULT verdict rejected: zero open structured findings requires verdict: pass.");
+            return true;
+        }
+
         if (verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
@@ -257,6 +305,61 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return false;
+    }
+
+    private static TaskVerificationRecord AttachAuthoritativeReviewFindingContext(
+        TaskSpec task,
+        TaskVerificationRecord verification)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer || !verification.WorkerResultPresent)
+        {
+            return verification;
+        }
+
+        return verification with
+        {
+            ReviewFindingTouchedAnchors = task.LastDispatch?.ReviewFindingTouchedAnchors ?? [],
+            ReviewedCommit = task.LastDispatch?.BaseCommit
+        };
+    }
+
+    private static bool TryBuildMergedReviewFindingState(
+        Goal goal,
+        TaskVerificationRecord currentVerification,
+        out IReadOnlyList<ReviewFinding> state,
+        out string diagnostic)
+    {
+        state = [];
+        diagnostic = string.Empty;
+        try
+        {
+            foreach (var verification in goal.Tasks
+                .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+                .SelectMany(candidate => candidate.VerificationHistory)
+                .OrderBy(candidate => candidate.CompletedAt))
+            {
+                if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
+                {
+                    if (ReferenceEquals(verification, currentVerification) ||
+                        verification.CompletedAt == currentVerification.CompletedAt)
+                    {
+                        diagnostic = parseDiagnostic;
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                state = ReviewFindingConvergence.ApplyRound(state, round);
+            }
+
+            return true;
+        }
+        catch (ReviewFindingConvergenceException ex)
+        {
+            diagnostic = $"{ex.Code}: {ex.Message}";
+            return false;
+        }
     }
 
     private static string BuildCompletionMessageWithAdvisoryBlocker(

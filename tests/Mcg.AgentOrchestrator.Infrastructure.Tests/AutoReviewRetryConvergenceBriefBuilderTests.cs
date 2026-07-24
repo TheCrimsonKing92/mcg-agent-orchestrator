@@ -1,9 +1,280 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
-public sealed class AutoReviewRetryConvergenceBriefBuilderTests
+public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_SQLite_rounds_shrink_A_B_to_accept")]
+    public async Task SqliteRoundsShrinkFindingsMonotonicallyToAccept()
+    {
+        // Parallel-safe: the real database has a per-test GUID path and is deleted in finally.
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-review-convergence-{Guid.NewGuid():N}.db");
+        var repositoryRoot = CreateSeededDispatchRepository();
+        try
+        {
+            var sourceA = Path.Combine(repositoryRoot, "src", "A.cs");
+            var sourceB = Path.Combine(repositoryRoot, "src", "B.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourceA)!);
+            File.WriteAllText(sourceA, GuardSource("A", enabled: false));
+            File.WriteAllText(sourceB, GuardSource("B", enabled: false));
+            CommitAll(repositoryRoot, "Add review targets", "2026-01-01T00:01:00Z");
+            var round1Commit = ReadHead(repositoryRoot);
+            var repository = new SqliteOrchestratorStateRepository(db);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Structured review finding convergence");
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            var anchorA = new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a");
+            var anchorB = new ReviewFindingLocation("src/B.cs", "B.Run", "guard-b");
+
+            RecordReviewerRoundFromGitDiff(
+                kernel,
+                goal,
+                reviewer,
+                repositoryRoot,
+                previousReviewedCommit: null,
+                round1Commit,
+                "needs-work",
+                [
+                    new ReviewFinding("F-A", ReviewFindingState.Open, anchorA, "A is missing its guard."),
+                    new ReviewFinding("F-B", ReviewFindingState.Open, anchorB, "B is missing its guard.")
+                ]);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            var round1State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+            Assert.Equal(2, ReviewFindingConvergence.CountOpen(round1State));
+            var round1Brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal, developer, reviewer, "A and B remain open.", "verdict=needs-work",
+                AgentRole.Developer, 1, "round1.out", ["src/A.cs", "src/B.cs"]);
+            Assert.Contains("open_count: 2", round1Brief);
+
+            kernel.RetryTask(goal.Id, reviewer.Id, "round 2");
+            File.WriteAllText(sourceA, GuardSource("A", enabled: true));
+            CommitAll(repositoryRoot, "Fix A", "2026-01-01T00:02:00Z");
+            var round2Commit = ReadHead(repositoryRoot);
+            RecordReviewerRoundFromGitDiff(
+                kernel,
+                goal,
+                reviewer,
+                repositoryRoot,
+                round1Commit,
+                round2Commit,
+                "needs-work",
+                [
+                    new ReviewFinding("F-A", ReviewFindingState.Resolved, anchorA, "A is missing its guard."),
+                    new ReviewFinding("F-B", ReviewFindingState.Open, anchorB, "B is missing its guard.")
+                ]);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            var round2State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+            Assert.Equal(1, ReviewFindingConvergence.CountOpen(round2State));
+            var round2Brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal, developer, reviewer, "Only B remains open.", "verdict=needs-work",
+                AgentRole.Developer, 2, "round2.out", ["src/B.cs"]);
+            var actionItems = round2Brief[..round2Brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+            Assert.Contains("stable_id: F-B", actionItems);
+            Assert.DoesNotContain("stable_id: F-A", actionItems);
+            Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.PreserveAcceptedDirective, round2Brief);
+            Assert.Contains("stable_id: F-A", round2Brief);
+
+            kernel.RetryTask(goal.Id, reviewer.Id, "round 3");
+            File.WriteAllText(sourceB, GuardSource("B", enabled: true));
+            CommitAll(repositoryRoot, "Fix B", "2026-01-01T00:03:00Z");
+            var round3Commit = ReadHead(repositoryRoot);
+            var round3Touched = PrepareReviewerRoundFromGitDiff(
+                kernel,
+                goal,
+                reviewer,
+                repositoryRoot,
+                round2Commit,
+                round3Commit);
+            Assert.Empty(round3Touched);
+            Assert.Empty(reviewer.LastDispatch!.ReviewFindingTouchedAnchors!);
+            var reviewerBrief = kernel.BuildTaskBrief(
+                goal.Id,
+                reviewer.Id,
+                reviewerScopeChangedFiles: ["src/B.cs"],
+                reviewerRoundTouchedAnchors: reviewer.LastDispatch.ReviewFindingTouchedAnchors);
+            Assert.Contains("OPEN_ACTIVE_RECHECK count=1", reviewerBrief.Content);
+            Assert.Contains($"- F-B | {anchorB}", reviewerBrief.Content);
+            Assert.Contains("RESOLVED_CARRIED count=1", reviewerBrief.Content);
+            var openScope = reviewerBrief.Content[
+                reviewerBrief.Content.IndexOf("OPEN_ACTIVE_RECHECK", StringComparison.Ordinal)..
+                reviewerBrief.Content.IndexOf("RESOLVED_CARRIED", StringComparison.Ordinal)];
+            Assert.DoesNotContain("F-A", openScope);
+
+            RecordPreparedReviewerRound(
+                kernel,
+                goal,
+                reviewer,
+                "pass",
+                [
+                    new ReviewFinding("F-A", ReviewFindingState.Resolved, anchorA, "A is missing its guard."),
+                    new ReviewFinding("F-B", ReviewFindingState.Resolved, anchorB, "B is missing its guard.")
+                ]);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            var round3State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+            Assert.Equal(0, ReviewFindingConvergence.CountOpen(round3State));
+            Assert.All(round3State, finding => Assert.Equal(ReviewFindingState.Resolved, finding.State));
+            Assert.Contains("verdict: pass", reviewer.LastVerification!.StandardOutput);
+            Assert.Equal(round3Commit, reviewer.LastVerification.ReviewedCommit);
+            Assert.Empty(reviewer.LastVerification.ReviewFindingTouchedAnchors!);
+        }
+        finally
+        {
+            foreach (var path in new[] { db, $"{db}-shm", $"{db}-wal" })
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+
+            try { Directory.Delete(repositoryRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_SQLite_round_diff_reopens_exact_regressed_anchor")]
+    public async Task SqliteRoundDiffReopensExactRegressedAnchor()
+    {
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-review-regression-{Guid.NewGuid():N}.db");
+        var repositoryRoot = CreateSeededDispatchRepository();
+        try
+        {
+            var source = Path.Combine(repositoryRoot, "src", "A.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+            File.WriteAllText(source, GuardSource("A", enabled: false));
+            CommitAll(repositoryRoot, "Add review target", "2026-01-01T00:01:00Z");
+            var round1Commit = ReadHead(repositoryRoot);
+            var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+            var repository = new SqliteOrchestratorStateRepository(db);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Structured review regression");
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            RecordReviewerRoundFromGitDiff(
+                kernel,
+                goal,
+                reviewer,
+                repositoryRoot,
+                previousReviewedCommit: null,
+                round1Commit,
+                "needs-work",
+                [new ReviewFinding("F-A", ReviewFindingState.Open, anchor, "A is missing its guard.")]);
+            kernel.RetryTask(goal.Id, reviewer.Id, "round 2");
+            File.WriteAllText(source, GuardSource("A", enabled: true));
+            CommitAll(repositoryRoot, "Fix A", "2026-01-01T00:02:00Z");
+            var round2Commit = ReadHead(repositoryRoot);
+            RecordReviewerRoundFromGitDiff(
+                kernel,
+                goal,
+                reviewer,
+                repositoryRoot,
+                round1Commit,
+                round2Commit,
+                "pass",
+                [new ReviewFinding("F-A", ReviewFindingState.Resolved, anchor, "A is missing its guard.")]);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            kernel.RetryTask(goal.Id, reviewer.Id, "round 3 regression");
+            File.WriteAllText(source, GuardSource("A", enabled: false));
+            CommitAll(repositoryRoot, "Regress A", "2026-01-01T00:03:00Z");
+            var round3Commit = ReadHead(repositoryRoot);
+            var touched = RecordReviewerRoundFromGitDiff(
+                kernel,
+                goal,
+                reviewer,
+                repositoryRoot,
+                round2Commit,
+                round3Commit,
+                "needs-work",
+                [new ReviewFinding("F-A", ReviewFindingState.Open, anchor, "A guard regressed.")]);
+            Assert.Equal(anchor, Assert.Single(touched));
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+
+            var state = kernel.GetReviewFindingState(goal.Id);
+            Assert.Equal(ReviewFindingState.Open, Assert.Single(state).State);
+            var persistedReviewer = kernel.GetGoal(goal.Id).Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            Assert.Equal(anchor, Assert.Single(persistedReviewer.LastVerification!.ReviewFindingTouchedAnchors!));
+            Assert.Equal(round3Commit, persistedReviewer.LastVerification.ReviewedCommit);
+        }
+        finally
+        {
+            foreach (var path in new[] { db, $"{db}-shm", $"{db}-wal" })
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+
+            try { Directory.Delete(repositoryRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_structured_open_set_is_authoritative")]
+    public void StructuredOpenSetIsNotFilteredByFreeTextBlockerFragments()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Structured findings stay authoritative");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var findingA = new ReviewFinding(
+            "F-A",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a"),
+            "A is missing its guard.");
+        var findingB = new ReviewFinding(
+            "F-B",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/B.cs", "B.Run", "guard-b"),
+            "B is missing its guard.");
+        RecordReviewerRound(kernel, goal, reviewer, "needs-work", [findingA, findingB], []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            reviewer,
+            findingA.Description,
+            "verdict=needs-work",
+            AgentRole.Developer,
+            1,
+            "round1.out",
+            ["src/A.cs", "src/B.cs"]);
+        var actionItems = brief[..brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+
+        Assert.Contains("open_count: 2", actionItems);
+        Assert.Contains("stable_id: F-A", actionItems);
+        Assert.Contains("stable_id: F-B", actionItems);
+        Assert.Contains("accepted_count: 0", brief);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_deduplicates_multi_round_findings")]
     public void BuildConvergenceBriefDeduplicatesMultiRoundFindings()
     {
@@ -20,7 +291,11 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
                 "  ConductorDriverTests   still expects the raw findings passthrough.  ",
                 "Reviewer still needs InquiryDispatcherTests coverage."
             ],
-            ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+            [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProgressiveReviewGlanceTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InquiryDispatcherTests.cs"
+            ]);
 
         Xunit.Assert.Contains("auto-review-retry round 3 convergence brief", brief);
         Xunit.Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.AcceptedShapePreamble, brief);
@@ -33,6 +308,19 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
         Xunit.Assert.Contains("ProgressiveReviewGlanceTests", brief);
         Xunit.Assert.Contains("InquiryDispatcherTests", brief);
         Xunit.Assert.Contains(@"C:\tmp\reviewer.out.log", brief);
+    }
+
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_does_not_request_unverified_bare_test_classes")]
+    public void BareTestClassNamesAreNotPromotedToFocusedReceipts()
+    {
+        var classes = AutoReviewRetryConvergenceBriefBuilder.InferFocusedTestClasses(
+            [
+                "requested absent ReviewFindingsTests and ReviewerWorkerResultBlockersTests",
+                "rerun FullyQualifiedName~WorkerResultBlockersTests"
+            ],
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs"]);
+
+        Xunit.Assert.Equal(["ConductorDriverTests", "WorkerResultBlockersTests"], classes);
     }
 
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_keeps_single_round_findings")]
@@ -109,16 +397,25 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
 
         Xunit.Assert.Equal(1, CountOccurrences(brief, "- Shared blocker stays open."));
         Xunit.Assert.Contains("- New tester blocker surfaced.", brief);
-        Xunit.Assert.Contains("ConductorDriverTests", brief);
+        Xunit.Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.GenericRerunMandate, brief);
+        Xunit.Assert.DoesNotContain("ConductorDriverTests", brief);
     }
 
     private static void DispatchTask(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
-        string command = "test.exe")
+        string command = "test.exe",
+        string? reviewedCommit = null,
+        IReadOnlyList<ReviewFindingLocation>? touchedAnchors = null)
     {
-        var dispatch = new TaskDispatchRecord("test-worker", command, @"C:\tmp", DateTimeOffset.UtcNow);
+        var dispatch = new TaskDispatchRecord(
+            "test-worker",
+            command,
+            @"C:\tmp",
+            DateTimeOffset.UtcNow,
+            BaseCommit: reviewedCommit,
+            ReviewFindingTouchedAnchors: touchedAnchors);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -155,6 +452,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
             "commands: review",
             "tests: pass - inspected evidence",
             $"blockers: {blocker}",
+            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding("finding-a", ReviewFindingState.Open, new ReviewFindingLocation("src/Test.cs", "Test.Run"), blocker) })}",
+            "touched_anchors: []",
             "verdict: needs-work",
             "END_WORKER_RESULT");
         var verification = new TaskVerificationRecord(
@@ -200,6 +499,124 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
             WorkerResultPresent: true);
         kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, verification);
     }
+
+    private static void RecordReviewerRound(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string verdict,
+        IReadOnlyList<ReviewFinding> findings,
+        IReadOnlyList<ReviewFindingLocation> touchedAnchors)
+    {
+        DispatchTask(kernel, goal, reviewer, "review", touchedAnchors: touchedAnchors);
+        RecordPreparedReviewerRound(kernel, goal, reviewer, verdict, findings);
+    }
+
+    private static IReadOnlyList<ReviewFindingLocation> RecordReviewerRoundFromGitDiff(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string repositoryRoot,
+        string? previousReviewedCommit,
+        string currentCommit,
+        string verdict,
+        IReadOnlyList<ReviewFinding> findings)
+    {
+        var touchedAnchors = PrepareReviewerRoundFromGitDiff(
+            kernel,
+            goal,
+            reviewer,
+            repositoryRoot,
+            previousReviewedCommit,
+            currentCommit);
+        RecordPreparedReviewerRound(kernel, goal, reviewer, verdict, findings);
+        return touchedAnchors;
+    }
+
+    private static IReadOnlyList<ReviewFindingLocation> PrepareReviewerRoundFromGitDiff(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string repositoryRoot,
+        string? previousReviewedCommit,
+        string currentCommit)
+    {
+        var resolvedAnchors = kernel.GetReviewFindingState(goal.Id)
+            .Where(finding => finding.State == ReviewFindingState.Resolved)
+            .Select(finding => finding.Location)
+            .ToArray();
+        var touchedAnchors = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+            repositoryRoot,
+            previousReviewedCommit,
+            currentCommit,
+            resolvedAnchors);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            reviewedCommit: currentCommit,
+            touchedAnchors: touchedAnchors);
+        return touchedAnchors;
+    }
+
+    private static void RecordPreparedReviewerRound(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string verdict,
+        IReadOnlyList<ReviewFinding> findings)
+    {
+        var blockers = findings.Any(finding => finding.State == ReviewFindingState.Open)
+            ? string.Join("; ", findings.Where(finding => finding.State == ReviewFindingState.Open).Select(finding => finding.Description))
+            : "none";
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - deterministic reviewer fixture",
+            "commit: none",
+            $"blockers: {blockers}",
+            $"findings: {JsonSerializer.Serialize(findings)}",
+            "touched_anchors: []",
+            $"verdict: {verdict}",
+            "model_fit: fixture/model - adequate - deterministic review - test seam",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "review",
+            @"C:\tmp",
+            verdict == "pass" ? 0 : 1,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: @"C:\tmp\reviewer.out.log",
+            WorkerResultPresent: true);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
+    }
+
+    private static string GuardSource(string typeName, bool enabled) =>
+        $$"""
+        public sealed class {{typeName}}
+        {
+            public void Run()
+            {
+                var guard = {{enabled.ToString().ToLowerInvariant()}};
+            }
+        }
+        """;
+
+    private static void CommitAll(string repositoryRoot, string message, string timestamp)
+    {
+        var committedAt = DateTimeOffset.Parse(timestamp);
+        RunGit(repositoryRoot, ["add", "-A"], committedAt);
+        RunGit(repositoryRoot, ["commit", "-m", message], committedAt);
+    }
+
+    private static string ReadHead(string repositoryRoot) =>
+        ReadGit(repositoryRoot, ["rev-parse", "HEAD"]).Trim();
 
     private static int CountOccurrences(string text, string value)
     {

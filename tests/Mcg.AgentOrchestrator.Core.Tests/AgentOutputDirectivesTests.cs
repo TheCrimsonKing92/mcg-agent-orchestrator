@@ -10,6 +10,12 @@ public sealed class AgentOutputDirectivesTests
         Assert.Contains(
             "evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>",
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer));
+        Assert.Contains(
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line => line.StartsWith("findings:", StringComparison.Ordinal));
+        Assert.Contains(
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line => line.StartsWith("touched_anchors:", StringComparison.Ordinal));
     }
 
     [Xunit.Theory(DisplayName = "TryParseHumanInputRequest_ignores_explicit_no_input_directives")]

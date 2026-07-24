@@ -64,7 +64,27 @@ public static class WorkerResultBlockers
             }
         }
 
-        return hasNeedsWorkVerdict && !string.IsNullOrWhiteSpace(blocker);
+        if (!hasNeedsWorkVerdict)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(blocker))
+        {
+            return true;
+        }
+
+        if (!TryFindReviewFindingRound(verification, out var round, out _))
+        {
+            return false;
+        }
+
+        blocker = string.Join(
+            "; ",
+            round.Findings
+                .Where(finding => finding.State == ReviewFindingState.Open)
+                .Select(finding => finding.Description));
+        return !string.IsNullOrWhiteSpace(blocker);
     }
 
     public static bool TryFindUnsuppressedNeedsWorkVerdict(
@@ -110,6 +130,14 @@ public static class WorkerResultBlockers
         return !string.IsNullOrWhiteSpace(blocker);
     }
 
+    public static bool IsSuppressedByCriteriaCorrection(
+        string finding,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
+        EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
+            finding,
+            criteriaCorrections,
+            out _);
+
     public static bool TryFindEvidenceRequest(TaskVerificationRecord? verification, out string request)
     {
         request = string.Empty;
@@ -125,6 +153,73 @@ public static class WorkerResultBlockers
                 !IsNoBlockerValue(value))
             {
                 request = value;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool TryFindReviewFindingRound(
+        TaskVerificationRecord? verification,
+        out ReviewFindingRound round,
+        out string diagnostic)
+    {
+        round = new ReviewFindingRound([], []);
+        diagnostic = string.Empty;
+        if (verification is null)
+        {
+            diagnostic = "reviewer verification is missing.";
+            return false;
+        }
+
+        string? findingsJson = null;
+        string? touchedAnchorsJson = null;
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "findings", out var findings))
+            {
+                findingsJson = findings;
+            }
+            else if (TryFindField(line, "touched_anchors", out var touchedAnchors))
+            {
+                touchedAnchorsJson = touchedAnchors;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(findingsJson) || string.IsNullOrWhiteSpace(touchedAnchorsJson))
+        {
+            diagnostic = "reviewer WORKER_RESULT must contain one-line findings and touched_anchors JSON arrays.";
+            return false;
+        }
+
+        if (!ReviewFindingConvergence.TryParseJson(findingsJson, touchedAnchorsJson, out var reportedRound, out diagnostic))
+        {
+            return false;
+        }
+
+        round = reportedRound with
+        {
+            // Reviewer-authored touched_anchors remains a required, validated receipt, but is not
+            // authoritative for regression reopening. Only dispatch-preparation's round diff may
+            // prove that a resolved structural anchor was touched.
+            TouchedAnchors = verification.ReviewFindingTouchedAnchors ?? []
+        };
+        return true;
+    }
+
+    public static bool TryFindPassVerdict(TaskVerificationRecord? verification)
+    {
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "verdict", out var verdict) &&
+                verdict.Trim().Equals("pass", StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
             }
         }

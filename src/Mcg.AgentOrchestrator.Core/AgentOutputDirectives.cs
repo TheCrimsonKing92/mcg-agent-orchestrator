@@ -22,7 +22,7 @@ public static class AgentOutputDirectives
         role switch
         {
             AgentRole.Researcher => [.. BaseWorkerResultFields, "citations"],
-            AgentRole.Reviewer => [.. BaseWorkerResultFields, "verdict"],
+            AgentRole.Reviewer => [.. BaseWorkerResultFields, "findings", "touched_anchors", "verdict"],
             _ => BaseWorkerResultFields
         };
 
@@ -44,6 +44,8 @@ public static class AgentOutputDirectives
         else if (role == AgentRole.Reviewer)
         {
             lines.Add("evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>");
+            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,location:{file,region,hunk?},description}; [] when none>");
+            lines.Add("touched_anchors: <one-line JSON array of {file,region,hunk?} for prior finding anchors touched by this round's diff; [] when none>");
             lines.Add("verdict: <pass|needs-work|fail>");
         }
 

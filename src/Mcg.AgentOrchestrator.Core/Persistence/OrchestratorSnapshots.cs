@@ -109,7 +109,9 @@ public sealed record TaskVerificationSnapshot(
     string? ModelFitNote = null,
     string? StandardOutputPath = null,
     string? StandardErrorPath = null,
-    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown)
+    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
+    IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
+    string? ReviewedCommit = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -138,7 +140,8 @@ public sealed record TaskDispatchSnapshot(
     string? ProviderSessionId = null,
     string? WorktreeHeadSha = null,
     string? DirtyStateHash = null,
-    DateTimeOffset? ProviderSessionRetiredAt = null);
+    DateTimeOffset? ProviderSessionRetiredAt = null,
+    IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

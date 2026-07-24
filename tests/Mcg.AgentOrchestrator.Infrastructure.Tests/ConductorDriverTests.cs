@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ConductorDriverTests
@@ -77,7 +78,9 @@ public sealed class ConductorDriverTests
             "files: none",
             "commands: review",
             "tests: pass - inspected evidence",
-            $"blockers: {blocker}"
+            $"blockers: {blocker}",
+            $"findings: {JsonSerializer.Serialize(blocker.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select((finding, index) => new ReviewFinding($"finding-{index + 1}", ReviewFindingState.Open, new ReviewFindingLocation("src/Test.cs", $"Test.Run{index + 1}"), finding)))}",
+            "touched_anchors: []"
         };
         if (!string.IsNullOrWhiteSpace(evidenceRequest))
         {
@@ -1511,7 +1514,11 @@ public sealed class ConductorDriverTests
                 "  ConductorDriverTests   still expects the raw findings passthrough.  ",
                 "Reviewer still needs InquiryDispatcherTests coverage."
             ],
-            ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+            [
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProgressiveReviewGlanceTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InquiryDispatcherTests.cs"
+            ]);
 
         Assert.Contains("auto-review-retry round 3 convergence brief", brief);
         Assert.Contains("Existing implementation shape is accepted", brief);
@@ -1570,8 +1577,8 @@ public sealed class ConductorDriverTests
         Assert.Contains("ConductorDriverTests", brief);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_convergence_brief_accumulates_prior_round_findings")]
-    public void ConductorDriverReviewerRetryConvergenceBriefAccumulatesPriorRoundFindings()
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_convergence_brief_uses_latest_stable_finding_state")]
+    public void ConductorDriverReviewerRetryConvergenceBriefUsesLatestStableFindingState()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
@@ -1586,7 +1593,7 @@ public sealed class ConductorDriverTests
         kernel.RetryTask(goal.Id, developer.Id, "auto-review-retry round 1 convergence brief: prior retry");
         PassVerification(kernel, goal, developer);
         PassVerification(kernel, goal, tester);
-        FailReviewerNeedsWork(kernel, goal, reviewer, "  Shared   blocker stays open.  ; New blocker surfaced.");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Shared blocker remains open after focused recheck.");
         string? retryMessage = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -1600,8 +1607,9 @@ public sealed class ConductorDriverTests
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Contains("auto-review-retry round 2 convergence brief", retryMessage);
-        Assert.Equal(1, CountOccurrences(retryMessage!, "- Shared blocker stays open."));
-        Assert.Contains("- New blocker surfaced.", retryMessage);
+        Assert.Contains("## RESIDUAL_OPEN_ACTION_ITEMS", retryMessage);
+        Assert.Equal(1, CountOccurrences(retryMessage!, "- stable_id: finding-1"));
+        Assert.Contains("Shared blocker remains open after focused recheck.", retryMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -1653,6 +1661,57 @@ public sealed class ConductorDriverTests
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_structured_open_findings_retry_when_blockers_is_none")]
+    public void ConductorDriverStructuredOpenFindingsRetryWhenBlockersIsNone()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        DispatchTask(kernel, goal, reviewer, "review");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            "blockers: none",
+            """findings: [{"stable_id":"F-OPEN","state":"open","location":{"file":"src/Test.cs","region":"Test.Run","hunk":"guard"},"description":"Developer must restore the guard."}]""",
+            "touched_anchors: []",
+            "verdict: needs-work",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            0,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            WorkerResultPresent: true));
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) =>
+            {
+                retryMessage = msg;
+                return kernel.RetryTask(gid, tid, msg);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Contains("- stable_id: F-OPEN", retryMessage);
+        Assert.Contains("Developer must restore the guard.", retryMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 

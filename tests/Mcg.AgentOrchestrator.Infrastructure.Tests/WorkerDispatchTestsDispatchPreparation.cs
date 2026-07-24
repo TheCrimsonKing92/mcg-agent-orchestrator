@@ -14,6 +14,159 @@ using System.Text.Json;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "Reviewer_round_diff_resolves_only_touched_structural_anchor")]
+    public void ReviewerRoundDiffResolvesOnlyTouchedStructuralAnchor()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var sourcePath = Path.Combine(root, "src", "Example.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class A
+                {
+                    public void Run()
+                    {
+                        var guard = false;
+                    }
+                }
+
+                public sealed class B
+                {
+                    public void Run()
+                    {
+                        var guard = false;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class A
+                {
+                    public void Run()
+                    {
+                        var guard = false;
+                    }
+                }
+
+                public sealed class B
+                {
+                    public void Run()
+                    {
+                        var guard = true;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            RunGit(root, ["commit", "-m", "Fix B"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var anchorA = new ReviewFindingLocation("src/Example.cs", "A.Run", "guard");
+            var anchorB = new ReviewFindingLocation("src/Example.cs", "B.Run", "guard");
+
+            var touched = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                root,
+                previous,
+                current,
+                [anchorA, anchorB]);
+
+            Assert.Equal(anchorB, Assert.Single(touched));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Reviewer_round_diff_does_not_touch_unrelated_hunk_in_same_region")]
+    public void ReviewerRoundDiffDoesNotTouchUnrelatedHunkInSameRegion()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var sourcePath = Path.Combine(root, "src", "Example.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class Example
+                {
+                    public void Run()
+                    {
+                        var acceptedGuard = false;
+                        var residualGuard = false;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class Example
+                {
+                    public void Run()
+                    {
+                        var acceptedGuard = false;
+                        var residualGuard = true;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            RunGit(root, ["commit", "-m", "Fix residual guard"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var acceptedAnchor = new ReviewFindingLocation(
+                "src/Example.cs",
+                "Example.Run",
+                "acceptedGuard");
+
+            var touched = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                root,
+                previous,
+                current,
+                [acceptedAnchor]);
+
+            Assert.Empty(touched);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Reviewer_round_diff_failure_is_loud")]
+    public void ReviewerRoundDiffFailureIsLoud()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var anchor = new ReviewFindingLocation("README.md", "README", "heading");
+
+            var ex = Assert.Throws<ReviewerRoundTouchScopeException>(() =>
+                new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                    root,
+                    "not-a-commit",
+                    current,
+                    [anchor]));
+
+            Assert.Equal(WorkerGitContext.ReviewerRoundTouchScopeUnavailableErrorCode, ex.ErrorCode);
+            Assert.Contains("git diff failed", ex.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "StartDispatches_refreshes_recorded_prompt_before_worker_start")]
     public void StartDispatchesRefreshesRecordedPromptBeforeWorkerStart()
 {
