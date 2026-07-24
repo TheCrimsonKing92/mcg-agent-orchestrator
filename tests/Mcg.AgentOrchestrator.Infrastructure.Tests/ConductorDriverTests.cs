@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ConductorDriverTests
 {
     // ── Helpers ──────────────────────────────────────────────────────────────

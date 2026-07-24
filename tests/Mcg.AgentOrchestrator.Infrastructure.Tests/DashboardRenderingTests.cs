@@ -11,6 +11,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class DashboardRenderingTests
 {
     [Xunit.Fact(DisplayName = "DashboardRenderer_emits_mobile_responsive_shell")]

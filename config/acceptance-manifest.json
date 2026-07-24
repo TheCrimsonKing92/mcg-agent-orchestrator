@@ -17,6 +17,7 @@
     {
       "name": "infrastructure tests",
       "type": "dotnet-test",
+      "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
       "arguments": [ "--verbosity", "minimal" ]
     }

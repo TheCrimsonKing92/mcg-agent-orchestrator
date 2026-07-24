@@ -2,7 +2,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
-using Xunit.Abstractions;
 
 public sealed class ConductorDriverTestsOperatorDispositionSnapshots
 {
