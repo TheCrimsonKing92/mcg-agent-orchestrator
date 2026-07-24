@@ -1201,9 +1201,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Name = name,
             Type = "dotnet-test",
             Project = project,
-            Arguments = arguments
+            Arguments = arguments,
+            Runner = ResolveDotnetTestRunner(project)
         };
     }
+
+    // Core.Tests and Infrastructure.Tests are Microsoft.Testing.Platform projects; synthesized
+    // dotnet-test checks for them must carry runner=mtp or they default to the VSTest runner and
+    // fail on .NET 10 with "VSTest target is no longer supported".
+    private static string ResolveDotnetTestRunner(string? project) =>
+        !string.IsNullOrWhiteSpace(project) &&
+        (IsCoreTestProject(project) || IsInfrastructureTestProject(project))
+            ? "mtp"
+            : "vstest";
 
     private static string[] SplitCommandLine(string commandLine) =>
         commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -3975,7 +3985,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         foreach (var rawToken in Regex.Split(filter, @"[&|]"))
         {
-            var token = rawToken.Trim();
+            // A focused filter can be a parenthesized disjunction such as
+            // "(FullyQualifiedName~A|FullyQualifiedName~B)|(FullyQualifiedName~C&Category!=X)".
+            // MTP unions repeated --filter-class and intersects --filter-not-class/--filter-not-trait
+            // exclusions, so the grouping parens carry no additional meaning at the token level and
+            // are stripped before matching. (A per-group Category!= therefore widens to the whole
+            // union, which is harmless because such traits are unique to a single mapped class.)
+            var token = rawToken.Trim().Trim('(', ')').Trim();
             if (token.Length == 0)
             {
                 continue;
@@ -4598,7 +4614,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     Name = check.Name,
                     Type = "dotnet-test",
                     Project = project,
-                    Arguments = arguments
+                    Arguments = arguments,
+                    Runner = ResolveDotnetTestRunner(project)
                 };
             }
 
