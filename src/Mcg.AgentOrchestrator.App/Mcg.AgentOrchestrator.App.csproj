@@ -5,6 +5,12 @@
     <UseAppHost>true</UseAppHost>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Sdk.Web defaults to Server GC (per-core heaps), which commits hundreds of MB for the CLI/loop's
+         small live set on a many-core box. The mostly-sequential conduct loop wants Workstation GC.
+         Set here (not just DOTNET_gcServer env var) because runtimeconfig.json wins over the env var.
+         (memory-efficiency expert dance 2026-07-22) -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;artifacts/**;.scratch/**</DefaultItemExcludes>
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**/obj/**;**/artifacts/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
