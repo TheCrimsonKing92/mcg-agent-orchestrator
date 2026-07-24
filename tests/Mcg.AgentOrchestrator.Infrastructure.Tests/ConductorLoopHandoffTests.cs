@@ -252,6 +252,34 @@ public sealed class ConductorLoopHandoffTests
         }
     }
 
+    [Fact(DisplayName = "ConductorLoopHandoff_windows_native_launch_resolves_exe_past_cmd_shim")]
+    public void WindowsNativeLaunchResolvesExePastCmdShim()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-handoff-host");
+        try
+        {
+            var shimDirectory = Path.Combine(root, "shim");
+            var nativeDirectory = Path.Combine(root, "native");
+            Directory.CreateDirectory(shimDirectory);
+            Directory.CreateDirectory(nativeDirectory);
+            File.WriteAllText(Path.Combine(shimDirectory, "dotnet.cmd"), "@exit /b 0");
+            var nativeHost = Path.Combine(nativeDirectory, "dotnet.exe");
+            File.WriteAllBytes(nativeHost, []);
+
+            var resolved = ConductorLoopHandoff.ResolveWindowsNativeCommand(
+                ["dotnet", "successor.dll", "conduct", "--loop"],
+                root,
+                string.Join(Path.PathSeparator, shimDirectory, nativeDirectory));
+
+            Assert.Equal(nativeHost, resolved[0], ignoreCase: true);
+            Assert.Equal(["successor.dll", "conduct", "--loop"], resolved.Skip(1));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static ConductLoopHandoffOptions HandoffOptions(
         string root,
         TimeSpan verificationTimeout = default,

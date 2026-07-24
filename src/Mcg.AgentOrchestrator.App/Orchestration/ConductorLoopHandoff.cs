@@ -694,7 +694,8 @@ internal static partial class ConductorLoopHandoff
 
     internal static ConductLoopLaunchResult LaunchDetachedWindows(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
     {
-        var commandLine = new StringBuilder(BuildWindowsProcessCommandLine(command));
+        var nativeCommand = ResolveWindowsNativeCommand(command, request.WorkingDirectory);
+        var commandLine = new StringBuilder(BuildWindowsProcessCommandLine(nativeCommand));
         var environment = BuildWindowsEnvironmentBlock(request);
         var stdoutHandle = IntPtr.Zero;
         var stderrHandle = IntPtr.Zero;
@@ -716,7 +717,7 @@ internal static partial class ConductorLoopHandoff
             try
             {
                 if (!CreateProcessW(
-                        lpApplicationName: command[0],
+                        lpApplicationName: nativeCommand[0],
                         lpCommandLine: commandLine,
                         lpProcessAttributes: IntPtr.Zero,
                         lpThreadAttributes: IntPtr.Zero,
@@ -746,7 +747,7 @@ internal static partial class ConductorLoopHandoff
                         (int)processInformation.dwProcessId,
                         request.StdoutPath,
                         request.StderrPath,
-                        "spawnPath=windows-createprocess breakawayRequested=true breakawaySucceeded=true");
+                        "spawnPath=windows-createprocess hostResolution=native-executable breakawayRequested=true breakawaySucceeded=true");
                 }
                 finally
                 {
@@ -811,6 +812,67 @@ internal static partial class ConductorLoopHandoff
 
     internal static string BuildWindowsProcessCommandLine(IReadOnlyList<string> command) =>
         string.Join(" ", command.Select(QuoteCommandArgument));
+
+    internal static IReadOnlyList<string> ResolveWindowsNativeCommand(
+        IReadOnlyList<string> command,
+        string workingDirectory,
+        string? path = null)
+    {
+        if (command.Count == 0 || string.IsNullOrWhiteSpace(command[0]))
+            throw new InvalidOperationException("Conduct loop successor command was empty.");
+
+        var configuredHost = command[0];
+        var extension = Path.GetExtension(configuredHost);
+        if (extension.Equals(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return command;
+        }
+
+        var executableName = string.IsNullOrEmpty(extension)
+            ? Path.GetFileName(configuredHost)
+            : Path.GetFileNameWithoutExtension(configuredHost);
+        var searchDirectories = new List<string>();
+        var configuredDirectory = Path.GetDirectoryName(configuredHost);
+        if (!string.IsNullOrWhiteSpace(configuredDirectory))
+        {
+            searchDirectories.Add(Path.GetFullPath(configuredDirectory, workingDirectory));
+        }
+        else
+        {
+            searchDirectories.Add(workingDirectory);
+        }
+
+        foreach (var entry in (path ?? Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var directory = entry.Trim('"');
+            if (!string.IsNullOrWhiteSpace(directory))
+                searchDirectories.Add(directory);
+        }
+
+        foreach (var directory in searchDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string candidate;
+            try
+            {
+                candidate = Path.GetFullPath(Path.Combine(directory, executableName + ".exe"));
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (!File.Exists(candidate))
+                continue;
+
+            var resolved = command.ToArray();
+            resolved[0] = candidate;
+            return resolved;
+        }
+
+        throw new InvalidOperationException(
+            $"Windows native successor launch requires an executable host; no {executableName}.exe was found for configured host '{configuredHost}'.");
+    }
 
     internal static string BuildWindowsBreakawayCommandLine(
         string cmdPath,
