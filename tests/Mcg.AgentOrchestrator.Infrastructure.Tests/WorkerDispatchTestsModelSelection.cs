@@ -1735,7 +1735,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         commands: git diff --stat
         tests: fail - retry requested for unrelated operator feedback
         commit: none
-        blockers: none
+        blockers: retry requested for unrelated operator feedback
+        findings: [{"stable_id":"F-RETRY","state":"open","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Retry requested for unrelated operator feedback."}]
+        touched_anchors: []
         verdict: needs-work
         model_fit: Anthropic/claude-haiku-4-5 - adequate - review shape - returned verdict and blocker status
         skills: none

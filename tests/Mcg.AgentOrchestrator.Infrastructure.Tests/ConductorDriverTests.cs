@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ConductorDriverTests
@@ -77,7 +78,9 @@ public sealed class ConductorDriverTests
             "files: none",
             "commands: review",
             "tests: pass - inspected evidence",
-            $"blockers: {blocker}"
+            $"blockers: {blocker}",
+            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding("finding-a", ReviewFindingState.Open, new ReviewFindingLocation("src/Test.cs", "Test.Run"), blocker) })}",
+            "touched_anchors: []"
         };
         if (!string.IsNullOrWhiteSpace(evidenceRequest))
         {
@@ -1570,8 +1573,8 @@ public sealed class ConductorDriverTests
         Assert.Contains("ConductorDriverTests", brief);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_convergence_brief_accumulates_prior_round_findings")]
-    public void ConductorDriverReviewerRetryConvergenceBriefAccumulatesPriorRoundFindings()
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_convergence_brief_uses_latest_stable_finding_state")]
+    public void ConductorDriverReviewerRetryConvergenceBriefUsesLatestStableFindingState()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
@@ -1600,8 +1603,9 @@ public sealed class ConductorDriverTests
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Contains("auto-review-retry round 2 convergence brief", retryMessage);
-        Assert.Equal(1, CountOccurrences(retryMessage!, "- Shared blocker stays open."));
-        Assert.Contains("- New blocker surfaced.", retryMessage);
+        Assert.Contains("## RESIDUAL_OPEN_ACTION_ITEMS", retryMessage);
+        Assert.Equal(1, CountOccurrences(retryMessage!, "- stable_id: finding-a"));
+        Assert.Contains("New blocker surfaced.", retryMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 

@@ -132,6 +132,42 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryFindReviewFindingRound(
+        TaskVerificationRecord? verification,
+        out ReviewFindingRound round,
+        out string diagnostic)
+    {
+        round = new ReviewFindingRound([], []);
+        diagnostic = string.Empty;
+        if (verification is null)
+        {
+            diagnostic = "reviewer verification is missing.";
+            return false;
+        }
+
+        string? findingsJson = null;
+        string? touchedAnchorsJson = null;
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "findings", out var findings))
+            {
+                findingsJson = findings;
+            }
+            else if (TryFindField(line, "touched_anchors", out var touchedAnchors))
+            {
+                touchedAnchorsJson = touchedAnchors;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(findingsJson) || string.IsNullOrWhiteSpace(touchedAnchorsJson))
+        {
+            diagnostic = "reviewer WORKER_RESULT must contain one-line findings and touched_anchors JSON arrays.";
+            return false;
+        }
+
+        return ReviewFindingConvergence.TryParseJson(findingsJson, touchedAnchorsJson, out round, out diagnostic);
+    }
+
     public static bool TryFindHardFailureBlocker(TaskVerificationRecord? verification, out string blocker)
     {
         blocker = string.Empty;

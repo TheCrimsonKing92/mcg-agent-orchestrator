@@ -11,6 +11,9 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
     internal const string GenericRerunMandate =
         "Rerun the focused test classes covering your changed files at your final commit and quote receipts.";
 
+    internal const string PreserveAcceptedDirective =
+        "The following findings are accepted — do not rewrite these sections; close ONLY the residual findings listed below.";
+
     private static readonly Regex WhitespacePattern = new(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FocusedTestClassPattern = new(
         @"(?:FullyQualifiedName~|tests[/\\][A-Za-z0-9_.-]+[/\\])?(?<class>[A-Z][A-Za-z0-9_]*(?:Tests|Test))(?:\.cs)?\b",
@@ -31,7 +34,20 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         ArgumentNullException.ThrowIfNull(targetTask);
         ArgumentNullException.ThrowIfNull(triggeringTask);
 
-        var accumulatedFindings = CollectAccumulatedVerifyingFindings(goal, targetTask, triggeringTask, currentFinding);
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer)
+        {
+            var findings = ReadStructuredReviewFindingState(goal, triggeringTask);
+            return BuildStructuredConvergenceBrief(
+                round,
+                triggeringTask,
+                triggerLabel,
+                targetRole,
+                outputArtifact,
+                findings,
+                changedFileScopes);
+        }
+
+        var accumulatedFindings = CollectAccumulatedTesterFindings(goal, targetTask, triggeringTask, currentFinding);
         return BuildConvergenceBrief(
             round,
             triggeringTask.RequiredRole,
@@ -41,6 +57,55 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             outputArtifact,
             accumulatedFindings,
             changedFileScopes);
+    }
+
+    private static string BuildStructuredConvergenceBrief(
+        int round,
+        TaskSpec triggeringTask,
+        string triggerLabel,
+        AgentRole targetRole,
+        string outputArtifact,
+        IReadOnlyList<ReviewFinding> findings,
+        IEnumerable<string> changedFileScopes)
+    {
+        var open = findings.Where(finding => finding.State == ReviewFindingState.Open).ToArray();
+        var accepted = findings.Where(finding => finding.State == ReviewFindingState.Resolved).ToArray();
+        if (open.Length == 0)
+        {
+            throw new ReviewFindingConvergenceException(
+                "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS",
+                0,
+                0,
+                "Reviewer verdict=needs-work contained no structured open findings.");
+        }
+
+        var lines = new List<string>
+        {
+            $"auto-review-retry round {round} convergence brief: Reviewer task {triggeringTask.Id.Value[..8]} {triggerLabel}; retry upstream {targetRole} task.",
+            AcceptedShapePreamble,
+            "## RESIDUAL_OPEN_ACTION_ITEMS",
+            $"open_count: {open.Length}"
+        };
+
+        foreach (var finding in open)
+        {
+            lines.Add($"- stable_id: {finding.StableId}");
+            lines.Add($"  location: {finding.Location}");
+            lines.Add($"  description: {finding.Description}");
+        }
+
+        lines.Add("## PRESERVE_ACCEPTED");
+        lines.Add(PreserveAcceptedDirective);
+        lines.Add($"accepted_count: {accepted.Length}");
+        foreach (var finding in accepted)
+        {
+            lines.Add($"- stable_id: {finding.StableId}");
+            lines.Add($"  location: {finding.Location}");
+        }
+
+        lines.Add(BuildFocusedTestReceiptMandate(open.Select(finding => finding.Description).ToArray(), changedFileScopes));
+        lines.Add($"Full reviewer output: {outputArtifact}");
+        return string.Join(Environment.NewLine, lines);
     }
 
     internal static string BuildConvergenceBrief(
@@ -119,7 +184,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         return classes.ToArray();
     }
 
-    private static IReadOnlyList<string> CollectAccumulatedVerifyingFindings(
+    private static IReadOnlyList<string> CollectAccumulatedTesterFindings(
         Goal goal,
         TaskSpec targetTask,
         TaskSpec triggeringTask,
@@ -128,23 +193,13 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         var findings = new List<string>();
         var relevantTasks = goal.Tasks
             .SkipWhile(task => task.Id != targetTask.Id)
-            .Where(task => task.Id == triggeringTask.Id ||
-                task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester);
+            .Where(task => task.Id == triggeringTask.Id || task.RequiredRole == AgentRole.Tester);
 
         foreach (var task in relevantTasks)
         {
             foreach (var verification in task.VerificationHistory)
             {
-                if (task.RequiredRole == AgentRole.Reviewer &&
-                    WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
-                        verification,
-                        goal.EffectiveAcceptanceCriteriaCorrections,
-                        out var reviewerBlocker,
-                        out _))
-                {
-                    findings.AddRange(SplitConvergenceFindings(reviewerBlocker));
-                }
-                else if (task.RequiredRole == AgentRole.Tester &&
+                if (task.RequiredRole == AgentRole.Tester &&
                     WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var testerBlocker))
                 {
                     findings.AddRange(SplitConvergenceFindings(testerBlocker));
@@ -154,6 +209,35 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
 
         findings.AddRange(SplitConvergenceFindings(currentFinding));
         return findings;
+    }
+
+    internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
+        Goal goal,
+        TaskSpec triggeringTask)
+    {
+        IReadOnlyList<ReviewFinding> state = [];
+        var verifications = goal.Tasks
+            .Where(task => task.RequiredRole == AgentRole.Reviewer)
+            .SelectMany(task => task.VerificationHistory)
+            .Where(verification => verification.CompletedAt <= triggeringTask.LastVerification!.CompletedAt)
+            .OrderBy(verification => verification.CompletedAt)
+            .ToArray();
+
+        foreach (var verification in verifications)
+        {
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var nextRound, out var diagnostic))
+            {
+                throw new ReviewFindingConvergenceException(
+                    "ERR_REVIEW_FINDINGS_INVALID",
+                    ReviewFindingConvergence.CountOpen(state),
+                    ReviewFindingConvergence.CountOpen(state),
+                    $"Reviewer structured findings are missing or invalid: {diagnostic}");
+            }
+
+            state = ReviewFindingConvergence.ApplyRound(state, nextRound);
+        }
+
+        return state;
     }
 
     private static IReadOnlyList<string> DeduplicateConvergenceFindings(IEnumerable<string> findings)

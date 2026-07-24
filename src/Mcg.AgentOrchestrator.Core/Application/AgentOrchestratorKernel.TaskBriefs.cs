@@ -159,6 +159,15 @@ public sealed partial class AgentOrchestratorKernel
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
 
+        var reviewerConvergenceScope = BuildReviewerConvergenceScopeBriefBlock(
+            goal,
+            task,
+            reviewerScopeChangedFiles);
+        if (reviewerConvergenceScope.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(reviewerConvergenceScope));
+        }
+
         var practiceLines = EngineeringPracticePromptRenderer.RenderBriefSection(
             task.RequiredRole,
             MatchEngineeringPractices(goal, task, reviewerScopeChangedFiles));
@@ -685,6 +694,64 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
+        lines.Add(string.Empty);
+        return lines;
+    }
+
+    private static IReadOnlyList<string> BuildReviewerConvergenceScopeBriefBlock(
+        Goal goal,
+        TaskSpec task,
+        IReadOnlyList<string>? changedFiles)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            return [];
+        }
+
+        IReadOnlyList<ReviewFinding> state = [];
+        foreach (var verification in goal.Tasks
+            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+            .SelectMany(candidate => candidate.VerificationHistory)
+            .OrderBy(verification => verification.CompletedAt))
+        {
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
+            {
+                continue;
+            }
+
+            state = ReviewFindingConvergence.ApplyRound(state, round);
+        }
+
+        if (state.Count == 0)
+        {
+            return [];
+        }
+
+        var open = state.Where(finding => finding.State == ReviewFindingState.Open).ToArray();
+        var resolved = state.Where(finding => finding.State == ReviewFindingState.Resolved).ToArray();
+        var lines = new List<string>
+        {
+            "## Review Convergence Scope (structured source of truth)",
+            $"OPEN_ACTIVE_RECHECK count={open.Length}"
+        };
+        foreach (var finding in open)
+        {
+            lines.Add($"- {finding.StableId} | {finding.Location} | {finding.Description}");
+        }
+
+        lines.Add($"RESOLVED_CARRIED count={resolved.Length}");
+        foreach (var finding in resolved)
+        {
+            lines.Add($"- {finding.StableId} | {finding.Location} | carry forward; do not re-review unless this exact anchor was touched.");
+        }
+
+        lines.Add("DIFF_TOUCHED_FILE_CANDIDATES (file membership alone does not prove a structural anchor was touched):");
+        foreach (var file in changedFiles ?? [])
+        {
+            lines.Add($"- {file}");
+        }
+
+        lines.Add("Actively check only OPEN_ACTIVE_RECHECK, exact RESOLVED_CARRIED anchors actually touched by this round, and net-new code. Carry every untouched resolved finding forward as resolved.");
         lines.Add(string.Empty);
         return lines;
     }

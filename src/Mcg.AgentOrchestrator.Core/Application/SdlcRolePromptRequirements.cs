@@ -70,6 +70,8 @@ internal static class SdlcRolePromptRequirements
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
                 "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
+                "- Treat the structured Review Convergence Scope as authoritative: actively re-check OPEN findings and net-new diff code; carry RESOLVED findings forward without re-review unless this round's diff touched that finding's exact structural anchor.",
+                "- Emit every finding in the one-line `findings` JSON field with stable_id, open|resolved state, structural location (file + region + optional hunk), and description. Emit exact prior anchors touched by this round in `touched_anchors`; similar defects on newly introduced code get new stable IDs.",
                 "- State residual risk, test gaps, and whether acceptance is justified.",
                 "- Do not approve based only on a summary from another role.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
@@ -174,6 +176,7 @@ internal static class SdlcRolePromptRequirements
                 "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
                 "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
+                "- Treat structured Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings without re-review unless their exact anchor was touched. Emit one-line `findings` and `touched_anchors` JSON fields; similar defects on new code get new stable IDs.",
                 "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."

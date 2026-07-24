@@ -1,9 +1,121 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 public sealed class AutoReviewRetryConvergenceBriefBuilderTests
 {
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_SQLite_rounds_shrink_A_B_to_accept")]
+    public async Task SqliteRoundsShrinkFindingsMonotonicallyToAccept()
+    {
+        // Parallel-safe: the real database has a per-test GUID path and is deleted in finally.
+        var db = Path.Combine(Path.GetTempPath(), $"mcg-review-convergence-{Guid.NewGuid():N}.db");
+        try
+        {
+            var repository = new SqliteOrchestratorStateRepository(db);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Structured review finding convergence");
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            var anchorA = new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a");
+            var anchorB = new ReviewFindingLocation("src/B.cs", "B.Run", "guard-b");
+
+            RecordReviewerRound(
+                kernel,
+                goal,
+                reviewer,
+                "needs-work",
+                [
+                    new ReviewFinding("F-A", ReviewFindingState.Open, anchorA, "A is missing its guard."),
+                    new ReviewFinding("F-B", ReviewFindingState.Open, anchorB, "B is missing its guard.")
+                ],
+                []);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            var round1State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+            Assert.Equal(2, ReviewFindingConvergence.CountOpen(round1State));
+            var round1Brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal, developer, reviewer, "A and B remain open.", "verdict=needs-work",
+                AgentRole.Developer, 1, "round1.out", ["src/A.cs", "src/B.cs"]);
+            Assert.Contains("open_count: 2", round1Brief);
+
+            kernel.RetryTask(goal.Id, reviewer.Id, "round 2");
+            RecordReviewerRound(
+                kernel,
+                goal,
+                reviewer,
+                "needs-work",
+                [
+                    new ReviewFinding("F-A", ReviewFindingState.Resolved, anchorA, "A is missing its guard."),
+                    new ReviewFinding("F-B", ReviewFindingState.Open, anchorB, "B is missing its guard.")
+                ],
+                [anchorA]);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            var round2State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+            Assert.Equal(1, ReviewFindingConvergence.CountOpen(round2State));
+            var round2Brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal, developer, reviewer, "Only B remains open.", "verdict=needs-work",
+                AgentRole.Developer, 2, "round2.out", ["src/B.cs"]);
+            var actionItems = round2Brief[..round2Brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+            Assert.Contains("stable_id: F-B", actionItems);
+            Assert.DoesNotContain("stable_id: F-A", actionItems);
+            Assert.Contains(AutoReviewRetryConvergenceBriefBuilder.PreserveAcceptedDirective, round2Brief);
+            Assert.Contains("stable_id: F-A", round2Brief);
+
+            kernel.RetryTask(goal.Id, reviewer.Id, "round 3");
+            RecordReviewerRound(
+                kernel,
+                goal,
+                reviewer,
+                "pass",
+                [
+                    new ReviewFinding("F-A", ReviewFindingState.Resolved, anchorA, "A is missing its guard."),
+                    new ReviewFinding("F-B", ReviewFindingState.Resolved, anchorB, "B is missing its guard.")
+                ],
+                [anchorB]);
+            await repository.SaveAsync(kernel);
+            kernel = await repository.LoadAsync();
+            goal = kernel.GetGoal(goal.Id);
+            reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+            var round3State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+            Assert.Equal(0, ReviewFindingConvergence.CountOpen(round3State));
+            Assert.All(round3State, finding => Assert.Equal(ReviewFindingState.Resolved, finding.State));
+            Assert.Contains("verdict: pass", reviewer.LastVerification!.StandardOutput);
+            var reviewerBrief = kernel.BuildTaskBrief(
+                goal.Id,
+                reviewer.Id,
+                reviewerScopeChangedFiles: ["src/B.cs"]);
+            Assert.Contains("OPEN_ACTIVE_RECHECK count=0", reviewerBrief.Content);
+            var openScope = reviewerBrief.Content[
+                reviewerBrief.Content.IndexOf("OPEN_ACTIVE_RECHECK", StringComparison.Ordinal)..
+                reviewerBrief.Content.IndexOf("RESOLVED_CARRIED", StringComparison.Ordinal)];
+            Assert.DoesNotContain("F-A", openScope);
+        }
+        finally
+        {
+            foreach (var path in new[] { db, $"{db}-shm", $"{db}-wal" })
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_deduplicates_multi_round_findings")]
     public void BuildConvergenceBriefDeduplicatesMultiRoundFindings()
     {
@@ -155,6 +267,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
             "commands: review",
             "tests: pass - inspected evidence",
             $"blockers: {blocker}",
+            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding("finding-a", ReviewFindingState.Open, new ReviewFindingLocation("src/Test.cs", "Test.Run"), blocker) })}",
+            "touched_anchors: []",
             "verdict: needs-work",
             "END_WORKER_RESULT");
         var verification = new TaskVerificationRecord(
@@ -199,6 +313,45 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
             StandardOutputPath: @"C:\tmp\tester.out.log",
             WorkerResultPresent: true);
         kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, verification);
+    }
+
+    private static void RecordReviewerRound(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string verdict,
+        IReadOnlyList<ReviewFinding> findings,
+        IReadOnlyList<ReviewFindingLocation> touchedAnchors)
+    {
+        DispatchTask(kernel, goal, reviewer, "review");
+        var blockers = findings.Any(finding => finding.State == ReviewFindingState.Open)
+            ? string.Join("; ", findings.Where(finding => finding.State == ReviewFindingState.Open).Select(finding => finding.Description))
+            : "none";
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - deterministic reviewer fixture",
+            "commit: none",
+            $"blockers: {blockers}",
+            $"findings: {JsonSerializer.Serialize(findings)}",
+            $"touched_anchors: {JsonSerializer.Serialize(touchedAnchors)}",
+            $"verdict: {verdict}",
+            "model_fit: fixture/model - adequate - deterministic review - test seam",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(
+            "review",
+            @"C:\tmp",
+            verdict == "pass" ? 0 : 1,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: @"C:\tmp\reviewer.out.log",
+            WorkerResultPresent: true);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
     }
 
     private static int CountOccurrences(string text, string value)

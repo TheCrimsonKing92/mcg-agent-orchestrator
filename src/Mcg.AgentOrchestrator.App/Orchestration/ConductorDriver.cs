@@ -979,16 +979,28 @@ internal sealed class ConductorDriver
         var triggerLabel = triggeringTask.RequiredRole == AgentRole.Reviewer
             ? "verdict=needs-work"
             : "WORKER_RESULT blocker";
-        var message = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
-            goal,
-            targetTask,
-            triggeringTask,
-            trigger.Finding,
-            triggerLabel,
-            targetRole,
-            round,
-            outputArtifact,
-            _getLandingFileScopes(goal));
+        string message;
+        try
+        {
+            message = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal,
+                targetTask,
+                triggeringTask,
+                trigger.Finding,
+                triggerLabel,
+                targetRole,
+                round,
+                outputArtifact,
+                _getLandingFileScopes(goal));
+        }
+        catch (ReviewFindingConvergenceException ex)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"review finding convergence violation code={ex.Code} previous_open={ex.PreviousOpenCount} next_open={ex.NextOpenCount}; " +
+                $"{ex.Message} Loop stopped before another retry brief was issued. Full reviewer output: {outputArtifact}");
+            return true;
+        }
+
         var warning = round >= policy.ReviewAutoRetryWarningRound
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."

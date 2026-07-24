@@ -219,6 +219,18 @@ public sealed partial class AgentOrchestratorKernel
         TaskVerificationRecord verification,
         bool enforceFailureEvidenceRule)
     {
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out var findingDiagnostic))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Reviewer WORKER_RESULT structured findings invalid: {findingDiagnostic}");
+            return true;
+        }
+
         if (verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
