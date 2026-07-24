@@ -27,6 +27,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $results = Join-Path $repoRoot ".test-results"
 $orchestrator = Join-Path $repoRoot "mcg-orchestrator.cmd"
+$appDll = Join-Path $repoRoot "src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 
 # CS2012/VBCSCompiler lock hygiene before a fresh run.
 dotnet build-server shutdown | Out-Null
@@ -41,8 +42,53 @@ $testArgs = @($Target, '--logger', 'trx', '--results-directory', $results, '-clp
 if ($NoBuild) { $testArgs += '--no-build' }
 if ($Filter)  { $testArgs += @('--filter', $Filter) }
 
-& $orchestrator stable-slot-dotnet test @testArgs *>&1 | Tee-Object -FilePath $rawLog | Out-Null
-$testExit = $LASTEXITCODE
+$hasFilterMetacharacters = $Filter.IndexOfAny([char[]]'&|<>()') -ge 0
+$resolvedTarget = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $Target))
+$usesMtp = (Test-Path -LiteralPath $resolvedTarget -PathType Leaf) -and
+    (Select-String -LiteralPath $resolvedTarget -SimpleMatch '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>' -Quiet)
+$requiresExactArguments = $usesMtp -or $hasFilterMetacharacters
+if ($requiresExactArguments) {
+    & $orchestrator gate-status | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
+        throw "Unable to prepare orchestrator app DLL for stable-slot-dotnet: $appDll"
+    }
+
+    $stableArguments = if ($usesMtp) {
+        $arguments = @('mtp-test', $Target, '--results-directory', $results)
+        if ($NoBuild) { $arguments += '--no-build' }
+        if ($Filter) { $arguments += @('--filter', $Filter) }
+        $arguments
+    }
+    else {
+        @('test') + $testArgs
+    }
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "dotnet"
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = $repoRoot
+    foreach ($argument in @($appDll, 'stable-slot-dotnet') + $stableArguments) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    @($stdout, $stderr) | Set-Content -LiteralPath $rawLog
+    $testExit = $process.ExitCode
+    $process.Dispose()
+}
+else {
+    & $orchestrator stable-slot-dotnet test @testArgs *>&1 | Tee-Object -FilePath $rawLog | Out-Null
+    $testExit = $LASTEXITCODE
+}
 
 $trxFiles = Get-ChildItem $results -Filter *.trx -ErrorAction SilentlyContinue
 if (-not $trxFiles) {

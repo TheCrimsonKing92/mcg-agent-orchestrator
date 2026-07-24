@@ -44,7 +44,8 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 targetRole,
                 outputArtifact,
                 findings,
-                changedFileScopes);
+                changedFileScopes,
+                currentFinding);
         }
 
         var accumulatedFindings = CollectAccumulatedTesterFindings(goal, targetTask, triggeringTask, currentFinding);
@@ -66,10 +67,37 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         AgentRole targetRole,
         string outputArtifact,
         IReadOnlyList<ReviewFinding> findings,
-        IEnumerable<string> changedFileScopes)
+        IEnumerable<string> changedFileScopes,
+        string currentFinding)
     {
-        var open = findings.Where(finding => finding.State == ReviewFindingState.Open).ToArray();
-        var accepted = findings.Where(finding => finding.State == ReviewFindingState.Resolved).ToArray();
+        var residualFragments = currentFinding
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var allOpen = findings
+            .Where(finding => finding.State == ReviewFindingState.Open)
+            .ToArray();
+        var residualOpen = allOpen
+            .Where(finding => finding.State == ReviewFindingState.Open)
+            .Select(finding =>
+            {
+                var matchingFragments = residualFragments
+                    .Where(fragment =>
+                        finding.Description.Contains(fragment, StringComparison.OrdinalIgnoreCase) ||
+                        fragment.Contains(finding.Description, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                return matchingFragments.Length == 0
+                    ? null
+                    : finding with { Description = string.Join("; ", matchingFragments) };
+            })
+            .Where(finding => finding is not null)
+            .Cast<ReviewFinding>()
+            .ToArray();
+        var open = residualOpen.Length > 0 ? residualOpen : allOpen;
+        var openIds = open.Select(finding => finding.StableId).ToHashSet(StringComparer.Ordinal);
+        var accepted = findings
+            .Where(finding =>
+                finding.State == ReviewFindingState.Resolved ||
+                !openIds.Contains(finding.StableId))
+            .ToArray();
         if (open.Length == 0)
         {
             throw new ReviewFindingConvergenceException(

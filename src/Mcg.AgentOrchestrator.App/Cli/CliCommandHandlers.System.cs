@@ -1099,35 +1099,161 @@ internal static partial class CliCommandHandlers
         }
 
         using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
-        var startInfo = new ProcessStartInfo
+        if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
-            FileName = "dotnet",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = context.Workspace.RootDirectory
-        };
-        startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        startInfo.Environment["UseSharedCompilation"] = "false";
-        startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = context.Workspace.RootDirectory;
-
-        foreach (var part in parts.Skip(1))
-        {
-            startInfo.ArgumentList.Add(part);
+            RunStableSlotMtpTest(parts, context, lease.Environment);
+            return;
         }
 
-        foreach (var argument in lease.Environment.Arguments)
+        var exitCode = RunStableSlotProcess(
+            "dotnet",
+            [.. parts.Skip(1), .. lease.Environment.Arguments],
+            context.Workspace.RootDirectory,
+            configureDotnetEnvironment: true);
+        if (exitCode != 0)
+        {
+            throw new CliExitException(exitCode);
+        }
+    }
+
+    private static void RunStableSlotMtpTest(
+        IReadOnlyList<string> parts,
+        CliExecutionContext context,
+        DotnetBuildEnvironment environment)
+    {
+        if (parts.Count < 3)
+        {
+            throw new ArgumentException("Usage: stable-slot-dotnet mtp-test <project> [--filter <filter>] [--results-directory <path>] [--no-build]");
+        }
+
+        var project = Path.GetFullPath(parts[2], context.Workspace.RootDirectory);
+        var noBuild = parts.Any(part => part.Equals("--no-build", StringComparison.OrdinalIgnoreCase));
+        if (!noBuild)
+        {
+            var buildExit = RunStableSlotProcess(
+                "dotnet",
+                ["build", project, "--nologo", "-v", "quiet", "-clp:ErrorsOnly", .. environment.Arguments],
+                context.Workspace.RootDirectory,
+                configureDotnetEnvironment: true);
+            if (buildExit != 0)
+            {
+                throw new CliExitException(buildExit);
+            }
+        }
+
+        var projectName = Path.GetFileNameWithoutExtension(project);
+        var executable = Path.Combine(
+            environment.ArtifactsPath,
+            "bin",
+            projectName,
+            "debug",
+            $"{projectName}{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
+        if (!File.Exists(executable))
+        {
+            throw new InvalidOperationException($"MTP test executable was not produced: {executable}");
+        }
+
+        var resultsDirectory = ReadStableSlotOption(parts, "--results-directory")
+            ?? Path.Combine(environment.ArtifactsPath, "TestResults");
+        Directory.CreateDirectory(resultsDirectory);
+        var mtpArguments = new List<string>
+        {
+            "--no-ansi",
+            "--progress",
+            "off",
+            "--results-directory",
+            resultsDirectory,
+            "--report-trx",
+            "--report-trx-filename",
+            $"{projectName}.trx"
+        };
+        var filter = ReadStableSlotOption(parts, "--filter");
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            mtpArguments.AddRange(TranslateStableSlotMtpFilter(filter));
+        }
+
+        var testExit = RunStableSlotProcess(
+            executable,
+            mtpArguments,
+            context.Workspace.RootDirectory,
+            configureDotnetEnvironment: false);
+        if (testExit != 0)
+        {
+            throw new CliExitException(testExit);
+        }
+    }
+
+    private static string? ReadStableSlotOption(IReadOnlyList<string> parts, string option)
+    {
+        for (var index = 3; index < parts.Count - 1; index++)
+        {
+            if (parts[index].Equals(option, StringComparison.OrdinalIgnoreCase))
+            {
+                return parts[index + 1];
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> TranslateStableSlotMtpFilter(string filter)
+    {
+        foreach (var rawToken in System.Text.RegularExpressions.Regex.Split(filter, @"[&|]"))
+        {
+            var token = rawToken.Trim();
+            var match = System.Text.RegularExpressions.Regex.Match(
+                token,
+                @"^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                throw new ArgumentException($"Unsupported stable-slot MTP filter token '{token}'.");
+            }
+
+            yield return match.Groups["op"].Value == "!~"
+                ? "--filter-not-class"
+                : "--filter-class";
+            yield return $"*{match.Groups["value"].Value}*";
+        }
+    }
+
+    private static int RunStableSlotProcess(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        bool configureDotnetEnvironment)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = workingDirectory
+        };
+        if (configureDotnetEnvironment)
+        {
+            startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+            startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+            startInfo.Environment["UseSharedCompilation"] = "false";
+            startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
+        }
+
+        foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start dotnet process.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
-        if (process.ExitCode != 0)
-        {
-            throw new CliExitException(process.ExitCode);
-        }
+        Console.Out.Write(standardOutput.GetAwaiter().GetResult());
+        Console.Error.Write(standardError.GetAwaiter().GetResult());
+        return process.ExitCode;
     }
 
     private static void PrintCleanupStatus(string executionDirectory)

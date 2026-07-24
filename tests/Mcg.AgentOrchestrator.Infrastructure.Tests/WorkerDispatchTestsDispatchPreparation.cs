@@ -14,6 +14,70 @@ using System.Text.Json;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "Reviewer_round_diff_resolves_only_touched_structural_anchor")]
+    public void ReviewerRoundDiffResolvesOnlyTouchedStructuralAnchor()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var sourcePath = Path.Combine(root, "src", "Example.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class Example
+                {
+                    public void A()
+                    {
+                        var guard = false;
+                    }
+
+                    public void B()
+                    {
+                        var guard = false;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
+            var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+
+            File.WriteAllText(
+                sourcePath,
+                """
+                public sealed class Example
+                {
+                    public void A()
+                    {
+                        var guard = true;
+                    }
+
+                    public void B()
+                    {
+                        var guard = false;
+                    }
+                }
+                """);
+            RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            RunGit(root, ["commit", "-m", "Fix A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var anchorA = new ReviewFindingLocation("src/Example.cs", "Example.A", "guard");
+            var anchorB = new ReviewFindingLocation("src/Example.cs", "Example.B", "guard");
+
+            var touched = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                root,
+                previous,
+                current,
+                [anchorA, anchorB]);
+
+            Assert.Equal(anchorA, Assert.Single(touched));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "StartDispatches_refreshes_recorded_prompt_before_worker_start")]
     public void StartDispatchesRefreshesRecordedPromptBeforeWorkerStart()
 {

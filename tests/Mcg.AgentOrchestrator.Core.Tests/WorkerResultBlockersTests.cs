@@ -5,6 +5,32 @@ public sealed class WorkerResultBlockersTests
     [Xunit.Fact(DisplayName = "TryFindReviewFindingRound_parses_structured_findings_and_touched_anchors")]
     public void TryFindReviewFindingRoundParsesStructuredFindingsAndTouchedAnchors()
     {
+        var authoritativeAnchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var verification = new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            1,
+            """
+            WORKER_RESULT:
+            findings: [{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
+            touched_anchors: [{"file":"src/A.cs","region":"A.Run","hunk":"guard"}]
+            verdict: needs-work
+            END_WORKER_RESULT
+            """,
+            "",
+            DateTimeOffset.UtcNow,
+            ReviewFindingTouchedAnchors: [authoritativeAnchor]);
+
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var diagnostic), diagnostic);
+        var finding = Assert.Single(round.Findings);
+        Assert.Equal("F-1", finding.StableId);
+        Assert.Equal(ReviewFindingState.Open, finding.State);
+        Assert.Equal("A.Run", Assert.Single(round.TouchedAnchors).Region);
+    }
+
+    [Xunit.Fact(DisplayName = "TryFindReviewFindingRound_ignores_reviewer_authored_touched_anchors")]
+    public void TryFindReviewFindingRoundIgnoresReviewerAuthoredTouchedAnchors()
+    {
         var verification = new TaskVerificationRecord(
             "review",
             "C:\\tmp",
@@ -20,10 +46,7 @@ public sealed class WorkerResultBlockersTests
             DateTimeOffset.UtcNow);
 
         Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var diagnostic), diagnostic);
-        var finding = Assert.Single(round.Findings);
-        Assert.Equal("F-1", finding.StableId);
-        Assert.Equal(ReviewFindingState.Open, finding.State);
-        Assert.Equal("A.Run", Assert.Single(round.TouchedAnchors).Region);
+        Assert.Empty(round.TouchedAnchors);
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_untouched_resolved_reopen")]
@@ -104,6 +127,24 @@ public sealed class WorkerResultBlockersTests
 
         Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
         Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-NEW").State);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_recycled_stable_id_at_existing_anchor")]
+    public void ReviewFindingConvergenceRejectsRecycledStableIdAtExistingAnchor()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Resolved, anchor, "Original issue.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-RECYCLED", ReviewFindingState.Open, anchor, "Same anchor, new identity.")],
+            [anchor]);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
     }
 
     [Xunit.Fact(DisplayName = "TryFindEvidenceRequest_reads_latest_worker_result_field")]

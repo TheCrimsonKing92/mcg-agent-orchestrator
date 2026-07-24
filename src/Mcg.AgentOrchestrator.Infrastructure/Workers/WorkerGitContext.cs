@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class WorkerGitContext
@@ -88,6 +90,54 @@ internal sealed class WorkerGitContext
             changedFiles.Length);
     }
 
+    internal IReadOnlyList<ReviewFindingLocation> ReadReviewerRoundTouchedAnchors(
+        string workingDirectory,
+        string? previousReviewedCommit,
+        string? currentCommit,
+        IReadOnlyList<ReviewFindingLocation> anchors)
+    {
+        if (!LooksLikeGitWorkspace(workingDirectory) ||
+            string.IsNullOrWhiteSpace(previousReviewedCommit) ||
+            string.IsNullOrWhiteSpace(currentCommit) ||
+            anchors.Count == 0 ||
+            previousReviewedCommit.Equals(currentCommit, StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var touched = new List<ReviewFindingLocation>();
+        foreach (var fileGroup in anchors.GroupBy(anchor => anchor.File, StringComparer.OrdinalIgnoreCase))
+        {
+            var path = fileGroup.Key.Replace('\\', '/');
+            var diff = GitCli.Run(
+                workingDirectory,
+                5_000,
+                "diff",
+                "--unified=0",
+                previousReviewedCommit,
+                currentCommit,
+                "--",
+                path);
+            if (!diff.Succeeded || string.IsNullOrWhiteSpace(diff.Output))
+            {
+                continue;
+            }
+
+            var ranges = ParseChangedLineRanges(diff.Output);
+            var oldSource = ReadCommitFile(workingDirectory, previousReviewedCommit, path);
+            var newSource = ReadCommitFile(workingDirectory, currentCommit, path);
+            foreach (var anchor in fileGroup)
+            {
+                if (AnchorScopeWasTouched(anchor, oldSource, newSource, ranges))
+                {
+                    touched.Add(anchor);
+                }
+            }
+        }
+
+        return touched;
+    }
+
     internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(string workingDirectory)
     {
         if (!LooksLikeGitWorkspace(workingDirectory))
@@ -161,6 +211,172 @@ internal sealed class WorkerGitContext
             .ReplaceLineEndings("\n")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+    private static string ReadCommitFile(string workingDirectory, string commit, string path)
+    {
+        var result = GitCli.Run(workingDirectory, 5_000, "show", $"{commit}:{path}");
+        return result.Succeeded ? result.Output : string.Empty;
+    }
+
+    private static IReadOnlyList<ChangedLineRange> ParseChangedLineRanges(string diff)
+    {
+        var ranges = new List<ChangedLineRange>();
+        foreach (var rawLine in diff.ReplaceLineEndings("\n").Split('\n'))
+        {
+            if (!rawLine.StartsWith("@@ ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var secondMarker = rawLine.IndexOf(" @@", 3, StringComparison.Ordinal);
+            var header = secondMarker < 0 ? rawLine : rawLine[..secondMarker];
+            var parts = header.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3 ||
+                !TryParseRange(parts[1], '-', out var oldStart, out var oldCount) ||
+                !TryParseRange(parts[2], '+', out var newStart, out var newCount))
+            {
+                continue;
+            }
+
+            ranges.Add(new ChangedLineRange(oldStart, oldCount, newStart, newCount));
+        }
+
+        return ranges;
+    }
+
+    private static bool TryParseRange(string value, char prefix, out int start, out int count)
+    {
+        start = 0;
+        count = 0;
+        if (value.Length < 2 || value[0] != prefix)
+        {
+            return false;
+        }
+
+        var parts = value[1..].Split(',', 2);
+        if (!int.TryParse(parts[0], out start))
+        {
+            return false;
+        }
+
+        if (parts.Length == 1)
+        {
+            count = 1;
+            return true;
+        }
+
+        return int.TryParse(parts[1], out count);
+    }
+
+    private static bool AnchorScopeWasTouched(
+        ReviewFindingLocation anchor,
+        string oldSource,
+        string newSource,
+        IReadOnlyList<ChangedLineRange> changedRanges)
+    {
+        var oldScopes = FindStructuralScopes(oldSource, anchor);
+        var newScopes = FindStructuralScopes(newSource, anchor);
+        return changedRanges.Any(change =>
+            oldScopes.Any(scope => scope.Overlaps(change.OldStart, change.OldCount)) ||
+            newScopes.Any(scope => scope.Overlaps(change.NewStart, change.NewCount)));
+    }
+
+    private static IReadOnlyList<SourceLineRange> FindStructuralScopes(
+        string source,
+        ReviewFindingLocation anchor)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return [];
+        }
+
+        var lines = source.ReplaceLineEndings("\n").Split('\n');
+        var regionToken = anchor.Region
+            .Split(['.', ':', '#', '/', '\\', ' ', '(', ')'], StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault();
+        var matches = FindTokenLines(lines, regionToken, requireDeclaration: true);
+        if (matches.Count == 0 && !string.IsNullOrWhiteSpace(anchor.Hunk))
+        {
+            matches = FindTokenLines(lines, anchor.Hunk, requireDeclaration: false);
+        }
+
+        return matches
+            .Select(line => FindBraceScope(lines, line))
+            .Distinct()
+            .ToArray();
+    }
+
+    private static List<int> FindTokenLines(string[] lines, string? token, bool requireDeclaration)
+    {
+        var matches = new List<int>();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return matches;
+        }
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            var tokenIndex = line.IndexOf(token, StringComparison.Ordinal);
+            if (tokenIndex < 0)
+            {
+                continue;
+            }
+
+            if (requireDeclaration)
+            {
+                var prefix = line[..tokenIndex];
+                var declarationLike =
+                    prefix.Contains("class ", StringComparison.Ordinal) ||
+                    prefix.Contains("record ", StringComparison.Ordinal) ||
+                    prefix.Contains("struct ", StringComparison.Ordinal) ||
+                    prefix.Contains("interface ", StringComparison.Ordinal) ||
+                    prefix.Contains("public ", StringComparison.Ordinal) ||
+                    prefix.Contains("private ", StringComparison.Ordinal) ||
+                    prefix.Contains("protected ", StringComparison.Ordinal) ||
+                    prefix.Contains("internal ", StringComparison.Ordinal);
+                if (!declarationLike)
+                {
+                    continue;
+                }
+            }
+
+            matches.Add(index);
+        }
+
+        return matches;
+    }
+
+    private static SourceLineRange FindBraceScope(string[] lines, int anchorLine)
+    {
+        var openLine = -1;
+        for (var index = anchorLine; index < Math.Min(lines.Length, anchorLine + 8); index++)
+        {
+            if (lines[index].Contains('{'))
+            {
+                openLine = index;
+                break;
+            }
+        }
+
+        if (openLine < 0)
+        {
+            return new SourceLineRange(anchorLine + 1, anchorLine + 1);
+        }
+
+        var depth = 0;
+        for (var index = openLine; index < lines.Length; index++)
+        {
+            depth += lines[index].Count(ch => ch == '{');
+            depth -= lines[index].Count(ch => ch == '}');
+            if (depth <= 0)
+            {
+                return new SourceLineRange(anchorLine + 1, index + 1);
+            }
+        }
+
+        return new SourceLineRange(anchorLine + 1, lines.Length);
+    }
+
     internal string BuildDiffSummary(string workingDirectory)
     {
         var lines = new List<string>
@@ -223,6 +439,22 @@ internal sealed class WorkerGitContext
         var result = GitCli.Run(workingDirectory, 5_000, arguments);
         output = result.Output;
         return result.Succeeded;
+    }
+}
+
+internal sealed record ChangedLineRange(int OldStart, int OldCount, int NewStart, int NewCount);
+
+internal sealed record SourceLineRange(int Start, int End)
+{
+    public bool Overlaps(int changedStart, int changedCount)
+    {
+        if (changedCount <= 0)
+        {
+            return false;
+        }
+
+        var changedEnd = changedStart + changedCount - 1;
+        return changedStart <= End && changedEnd >= Start;
     }
 }
 

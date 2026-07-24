@@ -97,8 +97,11 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests
             var reviewerBrief = kernel.BuildTaskBrief(
                 goal.Id,
                 reviewer.Id,
-                reviewerScopeChangedFiles: ["src/B.cs"]);
+                reviewerScopeChangedFiles: ["src/B.cs"],
+                reviewerRoundTouchedAnchors: [anchorB]);
             Assert.Contains("OPEN_ACTIVE_RECHECK count=0", reviewerBrief.Content);
+            Assert.Contains("ROUND_DIFF_TOUCHED_ANCHORS", reviewerBrief.Content);
+            Assert.Contains(anchorB.ToString(), reviewerBrief.Content);
             var openScope = reviewerBrief.Content[
                 reviewerBrief.Content.IndexOf("OPEN_ACTIVE_RECHECK", StringComparison.Ordinal)..
                 reviewerBrief.Content.IndexOf("RESOLVED_CARRIED", StringComparison.Ordinal)];

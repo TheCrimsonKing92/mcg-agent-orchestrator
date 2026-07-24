@@ -1042,6 +1042,40 @@ public sealed class DispatchExecutionTests
     Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_requires_zero_merged_open_findings")]
+    public void RecordDispatchExecutionResultReviewerPassRequiresZeroMergedOpenFindings()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Gate reviewer pass on residual findings", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
+        var round1 = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
+            "Missing guard.");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 1, round1, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
+        var round2 = StructuredReviewerResult("pass", "[]", "none");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("pass verdict rejected", StringComparison.Ordinal) &&
+            evt.Message.Contains("F-1", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
     public void RecordDispatchExecutionResultFailsNonzeroWorkerResultBlockerBeforeSubscriptionRetry()
 {
@@ -1320,6 +1354,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(string co
 
 private static string WorkerResultStdout(string files, string tests, string blockers)
 {
+    var hasBlocker = !blockers.Equals("none", StringComparison.OrdinalIgnoreCase);
     return string.Join(Environment.NewLine,
         "WORKER_RESULT:",
         $"files: {files}",
@@ -1327,8 +1362,31 @@ private static string WorkerResultStdout(string files, string tests, string bloc
         $"tests: {tests}",
         "commit: none",
         $"blockers: {blockers}",
+        hasBlocker
+            ? """findings: [{"stable_id":"test-review-finding","state":"open","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Reviewer blocker."}]"""
+            : "findings: []",
+        "touched_anchors: []",
+        $"verdict: {(hasBlocker ? "needs-work" : "pass")}",
         "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
         "skills: dotnet-windows-build-hygiene",
+        "confidence: high",
+        "END_WORKER_RESULT");
+}
+
+private static string StructuredReviewerResult(string verdict, string findingsJson, string blockers)
+{
+    return string.Join(Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: review",
+        "tests: pass - deterministic fixture",
+        "commit: none",
+        $"blockers: {blockers}",
+        $"findings: {findingsJson}",
+        "touched_anchors: []",
+        $"verdict: {verdict}",
+        "model_fit: fixture/model - adequate - deterministic review",
+        "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");
 }

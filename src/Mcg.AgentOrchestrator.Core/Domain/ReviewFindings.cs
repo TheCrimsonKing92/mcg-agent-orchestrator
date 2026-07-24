@@ -56,6 +56,7 @@ public static class ReviewFindingConvergence
 {
     public const string MonotonicityViolationCode = "ERR_REVIEW_FINDING_OPEN_SET_INCREASED";
     public const string UntouchedReopenViolationCode = "ERR_REVIEW_FINDING_UNTOUCHED_REOPEN";
+    public const string RecycledAnchorIdentityViolationCode = "ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED";
 
     public static IReadOnlyList<ReviewFinding> ApplyRound(
         IReadOnlyList<ReviewFinding> previous,
@@ -105,7 +106,20 @@ public static class ReviewFindingConvergence
             merged.Add(submitted);
         }
 
-        merged.AddRange(nextById.Values);
+        foreach (var newFinding in nextById.Values)
+        {
+            var priorAtAnchor = previous.FirstOrDefault(prior => SameAnchor(prior.Location, newFinding.Location));
+            if (priorAtAnchor is not null)
+            {
+                throw new ReviewFindingConvergenceException(
+                    RecycledAnchorIdentityViolationCode,
+                    CountOpen(previous),
+                    CountOpen(nextRound.Findings),
+                    $"Structural anchor '{newFinding.Location}' already belongs to stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.");
+            }
+
+            merged.Add(newFinding);
+        }
 
         var previousOpenCount = CountOpen(previous);
         var nextOpenCount = CountOpen(merged);

@@ -24,6 +24,23 @@ public sealed partial class AgentOrchestratorKernel
 
     public TaskSpec GetTask(GoalId goalId, TaskId taskId) => GetGoal(goalId).FindTask(taskId);
 
+    public IReadOnlyList<ReviewFinding> GetReviewFindingState(GoalId goalId)
+    {
+        IReadOnlyList<ReviewFinding> state = [];
+        foreach (var verification in GetGoal(goalId).Tasks
+            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+            .SelectMany(candidate => candidate.VerificationHistory)
+            .OrderBy(candidate => candidate.CompletedAt))
+        {
+            if (WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
+            {
+                state = ReviewFindingConvergence.ApplyRound(state, round);
+            }
+        }
+
+        return state;
+    }
+
     public int EstimatePriorTaskEvidenceCharacterCount(GoalId goalId, TaskId taskId)
     {
         return EstimatePriorTaskEvidenceCharacterCount(GetGoal(goalId), taskId);
@@ -52,7 +69,8 @@ public sealed partial class AgentOrchestratorKernel
         int? reviewerScopeTotalChangedFileCount = null,
         bool? reviewerMergeTreeClean = null,
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
-        int? reviewerMergeTreeTotalConflictPathCount = null)
+        int? reviewerMergeTreeTotalConflictPathCount = null,
+        IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -162,7 +180,8 @@ public sealed partial class AgentOrchestratorKernel
         var reviewerConvergenceScope = BuildReviewerConvergenceScopeBriefBlock(
             goal,
             task,
-            reviewerScopeChangedFiles);
+            reviewerScopeChangedFiles,
+            reviewerRoundTouchedAnchors);
         if (reviewerConvergenceScope.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(reviewerConvergenceScope));
@@ -701,7 +720,8 @@ public sealed partial class AgentOrchestratorKernel
     private static IReadOnlyList<string> BuildReviewerConvergenceScopeBriefBlock(
         Goal goal,
         TaskSpec task,
-        IReadOnlyList<string>? changedFiles)
+        IReadOnlyList<string>? changedFiles,
+        IReadOnlyList<ReviewFindingLocation>? roundTouchedAnchors)
     {
         if (task.RequiredRole != AgentRole.Reviewer)
         {
@@ -745,13 +765,19 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"- {finding.StableId} | {finding.Location} | carry forward; do not re-review unless this exact anchor was touched.");
         }
 
-        lines.Add("DIFF_TOUCHED_FILE_CANDIDATES (file membership alone does not prove a structural anchor was touched):");
+        lines.Add("ROUND_DIFF_TOUCHED_ANCHORS (system-derived; authoritative for regression reopening):");
+        foreach (var anchor in roundTouchedAnchors ?? [])
+        {
+            lines.Add($"- {anchor}");
+        }
+
+        lines.Add("GOAL_DIFF_CHANGED_FILES (context only; file membership does not prove a structural anchor was touched):");
         foreach (var file in changedFiles ?? [])
         {
             lines.Add($"- {file}");
         }
 
-        lines.Add("Actively check only OPEN_ACTIVE_RECHECK, exact RESOLVED_CARRIED anchors actually touched by this round, and net-new code. Carry every untouched resolved finding forward as resolved.");
+        lines.Add("Actively check only OPEN_ACTIVE_RECHECK, RESOLVED_CARRIED anchors listed in ROUND_DIFF_TOUCHED_ANCHORS, and net-new code. Carry every other resolved finding forward as resolved.");
         lines.Add(string.Empty);
         return lines;
     }

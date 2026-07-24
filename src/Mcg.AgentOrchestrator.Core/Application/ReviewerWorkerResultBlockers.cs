@@ -165,7 +165,38 @@ public static class WorkerResultBlockers
             return false;
         }
 
-        return ReviewFindingConvergence.TryParseJson(findingsJson, touchedAnchorsJson, out round, out diagnostic);
+        if (!ReviewFindingConvergence.TryParseJson(findingsJson, touchedAnchorsJson, out var reportedRound, out diagnostic))
+        {
+            return false;
+        }
+
+        round = reportedRound with
+        {
+            // Reviewer-authored touched_anchors remains a required, validated receipt, but is not
+            // authoritative for regression reopening. Only dispatch-preparation's round diff may
+            // prove that a resolved structural anchor was touched.
+            TouchedAnchors = verification.ReviewFindingTouchedAnchors ?? []
+        };
+        return true;
+    }
+
+    public static bool TryFindPassVerdict(TaskVerificationRecord? verification)
+    {
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "verdict", out var verdict) &&
+                verdict.Trim().Equals("pass", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool TryFindHardFailureBlocker(TaskVerificationRecord? verification, out string blocker)

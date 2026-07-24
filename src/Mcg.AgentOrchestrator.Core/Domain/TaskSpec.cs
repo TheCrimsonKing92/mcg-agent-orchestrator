@@ -97,7 +97,9 @@ public sealed class TaskSpec
                     LastVerification.ModelFitNote,
                     LastVerification.StandardOutputPath,
                     LastVerification.StandardErrorPath,
-                    LastVerification.ProviderFailureKind),
+                    LastVerification.ProviderFailureKind,
+                    LastVerification.ReviewFindingTouchedAnchors,
+                    LastVerification.ReviewedCommit),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -109,7 +111,9 @@ public sealed class TaskSpec
                     verification.ModelFitNote,
                     verification.StandardOutputPath,
                     verification.StandardErrorPath,
-                    verification.ProviderFailureKind))
+                    verification.ProviderFailureKind,
+                    verification.ReviewFindingTouchedAnchors,
+                    verification.ReviewedCommit))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -135,7 +139,8 @@ public sealed class TaskSpec
                     LastDispatch.ProviderSessionId,
                     LastDispatch.WorktreeHeadSha,
                     LastDispatch.DirtyStateHash,
-                    LastDispatch.ProviderSessionRetiredAt),
+                    LastDispatch.ProviderSessionRetiredAt,
+                    LastDispatch.ReviewFindingTouchedAnchors),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -211,7 +216,9 @@ public sealed class TaskSpec
                     verification.ModelFitNote,
                     verification.StandardOutputPath,
                     verification.StandardErrorPath,
-                    ProviderFailureKind: verification.ProviderFailureKind));
+                    ProviderFailureKind: verification.ProviderFailureKind,
+                    ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
+                    ReviewedCommit: verification.ReviewedCommit));
             }
         }
 
@@ -227,7 +234,9 @@ public sealed class TaskSpec
                 snapshot.LastVerification.ModelFitNote,
                 snapshot.LastVerification.StandardOutputPath,
                 snapshot.LastVerification.StandardErrorPath,
-                ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind);
+                ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind,
+                ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
+                ReviewedCommit: snapshot.LastVerification.ReviewedCommit);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -260,7 +269,8 @@ public sealed class TaskSpec
                 ProviderSessionId: snapshot.LastDispatch.ProviderSessionId,
                 WorktreeHeadSha: snapshot.LastDispatch.WorktreeHeadSha,
                 DirtyStateHash: snapshot.LastDispatch.DirtyStateHash,
-                ProviderSessionRetiredAt: snapshot.LastDispatch.ProviderSessionRetiredAt));
+                ProviderSessionRetiredAt: snapshot.LastDispatch.ProviderSessionRetiredAt,
+                ReviewFindingTouchedAnchors: snapshot.LastDispatch.ReviewFindingTouchedAnchors));
         }
 
         if (snapshot.LastProcess is not null)
