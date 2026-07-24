@@ -17,19 +17,61 @@ public sealed class SemanticAcceptanceTests : IDisposable
 
     public void Dispose()
     {
+        List<Exception> cleanupFailures = [];
         foreach (var path in _tempDirectories)
         {
-            try
+            Exception? lastFailure = null;
+            Exception? attributeCleanupFailure = null;
+            for (var attempt = 1; attempt <= 3 && Directory.Exists(path); attempt++)
             {
-                if (Directory.Exists(path))
+                try
                 {
                     Directory.Delete(path, recursive: true);
+                    lastFailure = null;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    lastFailure = ex;
+                    if (ex is UnauthorizedAccessException)
+                    {
+                        attributeCleanupFailure = TryClearReadOnlyAttributes(path);
+                    }
                 }
             }
-            catch
+
+            if (Directory.Exists(path))
             {
-                // Best effort: each repository is unique per test, so failed cleanup cannot cross-contaminate.
+                var cause = attributeCleanupFailure is null
+                    ? lastFailure
+                    : new AggregateException(lastFailure!, attributeCleanupFailure);
+                cleanupFailures.Add(new IOException(
+                    $"Failed to delete isolated semantic-acceptance repository after 3 attempts: {path}",
+                    cause));
             }
+        }
+
+        if (cleanupFailures.Count > 0)
+        {
+            throw new AggregateException("One or more isolated semantic-acceptance repositories could not be cleaned up.", cleanupFailures);
+        }
+    }
+
+    private static Exception? TryClearReadOnlyAttributes(string path)
+    {
+        try
+        {
+            var root = new DirectoryInfo(path);
+            root.Attributes &= ~FileAttributes.ReadOnly;
+            foreach (var entry in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                entry.Attributes &= ~FileAttributes.ReadOnly;
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ex;
         }
     }
 

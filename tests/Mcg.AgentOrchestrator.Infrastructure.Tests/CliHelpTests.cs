@@ -509,9 +509,18 @@ public sealed class CliHelpTests
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start git init.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(10000) || process.ExitCode != 0)
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10000))
+        {
+            var termination = TryTerminateProcess(process);
+            throw new TimeoutException(
+                $"git init did not exit within 10 seconds; {termination}. stdout={CompletedOutput(outputTask)} stderr={CompletedOutput(errorTask)}");
+        }
+
+        var output = outputTask.GetAwaiter().GetResult();
+        var error = errorTask.GetAwaiter().GetResult();
+        if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"git init failed. stdout={output} stderr={error}");
         }
@@ -541,14 +550,39 @@ public sealed class CliHelpTests
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start app CLI.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(30000))
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException($"CLI did not exit for: {string.Join(' ', args)}");
+            var termination = TryTerminateProcess(process);
+            throw new TimeoutException(
+                $"CLI did not exit for: {string.Join(' ', args)}; {termination}. stdout={CompletedOutput(outputTask)} stderr={CompletedOutput(errorTask)}");
         }
 
+        var output = outputTask.GetAwaiter().GetResult();
+        var error = errorTask.GetAwaiter().GetResult();
         return (process.ExitCode, output, error);
     }
+
+    private static string TryTerminateProcess(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+            return process.WaitForExit(5000)
+                ? "process tree terminated"
+                : "process tree did not exit within 5 seconds after termination";
+        }
+        catch (InvalidOperationException)
+        {
+            return "process exited before termination";
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            return $"process termination failed: {ex.Message}";
+        }
+    }
+
+    private static string CompletedOutput(Task<string> outputTask) =>
+        outputTask.IsCompletedSuccessfully ? outputTask.Result : "<stream still open>";
 }
