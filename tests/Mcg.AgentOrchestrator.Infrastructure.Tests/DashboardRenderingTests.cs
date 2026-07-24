@@ -1618,7 +1618,8 @@ public sealed class DashboardRenderingTests
     Assert.Contains("'gpt-5.6-luna': [['','Default'], ['low','Low'], ['medium','Medium'], ['high','High'], ['xhigh','Extra high'], ['max','Max']]", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("'gpt-5.6-terra': 'medium'", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("['sonnet','Claude Sonnet (latest)']", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
-    Assert.Contains("['fable','Claude Fable (heaviest tasks)']", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("['opus-5','Claude Opus 5 (pinned)']", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.DoesNotContain("['fable',", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("maxTokenPlaceholder(provider)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("complexMaxTokenPlaceholder(provider)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("complexProviderName", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
