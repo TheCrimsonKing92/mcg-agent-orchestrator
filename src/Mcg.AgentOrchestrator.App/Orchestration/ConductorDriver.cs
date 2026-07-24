@@ -11,6 +11,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
+
+    // Reviewer evidence-on-demand is bounded per review round to break request loops while still
+    // letting a reviewer legitimately request focused receipts for more than one changed area
+    // (multi-file infra goals commonly need 2-3 suites). The guard previously allowed exactly one
+    // request across the whole reviewer phase, which escalated a legitimate second suite as a
+    // "repeat" (the mechanical evidence re-dispatch retries the reviewer task itself, so it never
+    // advances the round boundary). Requests beyond this bound escalate normally.
+    private const int MaxReviewerEvidenceRequestsPerRound = 3;
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -875,16 +883,16 @@ internal sealed class ConductorDriver
         if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
             WorkerResultBlockers.TryFindEvidenceRequest(triggeringTask.LastVerification, out var evidenceRequest))
         {
-            var hadPriorEvidenceRequest = HasPriorReviewerEvidenceRequestInCurrentRound(goal, triggeringTask);
+            var priorEvidenceRequests = CountReviewerEvidenceRequestsInCurrentRound(goal, triggeringTask);
             _recordReviewerEvidenceRequestReceived(
                 goal.Id,
                 triggeringTask.Id,
                 $"Reviewer evidence request received: {evidenceRequest}. Full reviewer output: {outputArtifact}");
 
-            if (hadPriorEvidenceRequest)
+            if (priorEvidenceRequests >= MaxReviewerEvidenceRequestsPerRound)
             {
                 decision = VerifyingFindingAutoRetryDecision.Escalate(
-                    $"Reviewer evidence request repeated in the same review round for task {triggeringTask.Id.Value[..8]}; " +
+                    $"Reviewer exceeded the evidence-on-demand limit ({MaxReviewerEvidenceRequestsPerRound} focused runs) in the same review round for task {triggeringTask.Id.Value[..8]}; " +
                     $"normal escalation required. Request: {TrimForConductorMessage(evidenceRequest)}. Full reviewer output: {outputArtifact}");
                 return true;
             }
@@ -1083,7 +1091,7 @@ internal sealed class ConductorDriver
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
 
-    private static bool HasPriorReviewerEvidenceRequestInCurrentRound(Goal goal, TaskSpec reviewerTask)
+    private static int CountReviewerEvidenceRequestsInCurrentRound(Goal goal, TaskSpec reviewerTask)
     {
         var currentRoundStartedAt = goal.Timeline
             .Where(evt =>
@@ -1094,7 +1102,7 @@ internal sealed class ConductorDriver
             .DefaultIfEmpty(DateTimeOffset.MinValue)
             .Max();
 
-        return goal.Timeline.Any(evt =>
+        return goal.Timeline.Count(evt =>
             evt.TaskId == reviewerTask.Id &&
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.OccurredAt >= currentRoundStartedAt);
