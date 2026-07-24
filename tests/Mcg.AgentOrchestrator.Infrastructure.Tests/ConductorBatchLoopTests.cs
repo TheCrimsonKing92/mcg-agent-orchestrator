@@ -103,6 +103,56 @@ public sealed class ConductorBatchLoopTests
         return goal;
     }
 
+    [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_activation_switch_defaults_off_and_requires_true")]
+    [Xunit.InlineData(null, false)]
+    [Xunit.InlineData("", false)]
+    [Xunit.InlineData("false", false)]
+    [Xunit.InlineData("1", false)]
+    [Xunit.InlineData("true", true)]
+    public void BatchLoopSelfRelaunchActivationSwitchDefaultsOffAndRequiresTrue(
+        string? configuredValue,
+        bool expected)
+    {
+        Assert.False(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
+        Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
+    public void BatchLoopDefaultSelfRelaunchActivationDoesNotScheduleOrExecute()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
+        var landed = false;
+        var relaunchCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => landed
+                ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            land: candidate =>
+            {
+                landed = true;
+                return new LandingResult(candidate.Id.Value, candidate.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            getLandingFileScopes: _ =>
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"]);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            new ConductorBatchLoop(
+                selfRelaunch: _ =>
+                {
+                    relaunchCalls++;
+                    return new ConductorSelfRelaunchResult(false, "build", "must not run");
+                }).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 3));
+
+        Assert.Equal(0, relaunchCalls);
+        Assert.DoesNotContain("LOOP_RELAUNCH_SCHEDULED", output, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_infrastructure_landing_drains_before_self_handoff")]
     public void BatchLoopInfrastructureLandingDrainsBeforeSelfHandoff()
     {
@@ -171,7 +221,8 @@ public sealed class ConductorBatchLoopTests
                             handoff.Started ? null : "handoff",
                             handoff.Reason,
                             handoff);
-                    }).Run(
+                    },
+                    selfRelaunchEnabled: true).Run(
                         kernel,
                         driver,
                         ConductorAutonomyPolicy.Conservative,
@@ -243,7 +294,8 @@ public sealed class ConductorBatchLoopTests
                         failedPhase,
                         "forced failure",
                         IncumbentCanContinue: incumbentCanContinue);
-                });
+                },
+                selfRelaunchEnabled: true);
             if (incumbentCanContinue)
             {
                 var summary = loop.Run(
@@ -301,7 +353,8 @@ public sealed class ConductorBatchLoopTests
             {
                 relaunchCalls++;
                 return new ConductorSelfRelaunchResult(false, "build", "must not run");
-            }).Run(
+            },
+            selfRelaunchEnabled: true).Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Conservative,

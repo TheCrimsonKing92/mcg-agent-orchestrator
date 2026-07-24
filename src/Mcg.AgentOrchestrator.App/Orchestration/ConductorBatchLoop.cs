@@ -16,6 +16,8 @@ internal sealed class ConductorBatchLoop
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
     internal const int DefaultUnscopedStallTickThreshold = 3;
+    internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
+    internal const bool DefaultSelfRelaunchEnabled = false;
 
     private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -27,6 +29,7 @@ internal sealed class ConductorBatchLoop
     private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
     private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _selfRelaunch;
+    private readonly bool _selfRelaunchEnabled;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
@@ -47,7 +50,8 @@ internal sealed class ConductorBatchLoop
         Func<DateTimeOffset>? utcNow = null,
         ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null,
         ProgressiveReviewSteeringCoordinator? progressiveReviewSteering = null,
-        Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? selfRelaunch = null)
+        Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? selfRelaunch = null,
+        bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -63,6 +67,7 @@ internal sealed class ConductorBatchLoop
         _progressiveReviewSteering = progressiveReviewSteering;
         _handoffOnMaxDuration = handoffOnMaxDuration;
         _selfRelaunch = selfRelaunch;
+        _selfRelaunchEnabled = selfRelaunchEnabled;
         _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
@@ -118,7 +123,7 @@ internal sealed class ConductorBatchLoop
         ConductorLoopHandoffResult? selfRelaunchHandoff = null;
         var started = _utcNow();
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
-        if (_selfRelaunch is not null)
+        if (_selfRelaunchEnabled && _selfRelaunch is not null)
         {
             driver.SuccessfulLandingSink = receipt =>
             {
@@ -740,6 +745,9 @@ internal sealed class ConductorBatchLoop
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
         }
     }
+
+    internal static bool ResolveSelfRelaunchEnabled(string? configuredValue) =>
+        bool.TryParse(configuredValue, out var enabled) && enabled;
 
     private static void EmitHandoffProgress(
         int tick,
