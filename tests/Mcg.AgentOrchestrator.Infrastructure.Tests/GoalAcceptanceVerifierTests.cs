@@ -798,8 +798,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_focused_evidence_uses_slot_routed_filtered_dotnet_test")]
-    public async Task GoalAcceptanceVerifierFocusedEvidenceUsesSlotRoutedFilteredDotnetTest()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_focused_evidence_uses_slot_routed_mtp_executable")]
+    public async Task GoalAcceptanceVerifierFocusedEvidenceUsesSlotRoutedMtpExecutable()
     {
         var calls = new List<string[]>();
         var root = CreateManifestWorkspace("""
@@ -814,9 +814,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
-                    ? new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2.")
-                    : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             });
 
             var result = await verifier.RunFocusedEvidenceAsync(
@@ -827,15 +831,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             Assert.True(result.Accepted);
             Assert.True(result.Passed);
-            Assert.Equal(3, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[1][0]);
-            Assert.Equal("build", calls[1][1]);
-            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", calls[1]);
-            AssertIsolatedTestCommand(calls[2]);
-            Assert.Contains("--no-build", calls[2]);
-            Assert.Contains("--filter", calls[2]);
-            Assert.Contains("FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~GoalAcceptanceVerifierTests", calls[2]);
+            // The focused-evidence target projects are MTP, so the run must route through the MTP
+            // executable, NOT `dotnet test` (which fails against MTP projects on .NET 10).
+            Assert.DoesNotContain(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test");
+            var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            Assert.Contains("--report-trx", mtpCall);
+            Assert.Contains("--filter-class", mtpCall);
             Assert.Equal("run-slot-0", result.Checks.Single().LeaseId);
         }
         finally

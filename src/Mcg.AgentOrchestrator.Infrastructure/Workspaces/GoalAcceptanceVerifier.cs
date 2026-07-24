@@ -654,6 +654,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 Name = $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
                 Type = "dotnet-test",
+                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
+                // without this the check defaults to the VSTest runner and fails on .NET 10 with
+                // "VSTest target is no longer supported", making every reviewer evidence run fail.
+                Runner = "mtp",
                 Project = project,
                 Arguments = ["--verbosity", "minimal", "--filter", filter],
                 TimeoutMinutes = 10
