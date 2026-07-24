@@ -897,18 +897,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
                 var handoff = ConductorLoopHandoff.Create(handoffOptions);
                 var repositoryRoot = context.Workspace.ExecutionDirectory;
+                var repositoryBuildKey = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
                 var appOutputDirectory = Path.Combine(
-                    repositoryRoot,
-                    "src",
-                    "Mcg.AgentOrchestrator.App",
-                    "bin",
-                    "Debug",
-                    "net10.0");
+                    Path.GetTempPath(),
+                    "mcg-self-relaunch-build",
+                    repositoryBuildKey);
                 var selfRelaunch = ConductorSelfRelaunch.Create(new ConductorSelfRelaunchOptions(
                     RepositoryRoot: repositoryRoot,
                     AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
                     AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
-                    AppHeadMarkerPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll.git-head"),
                     UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
                     ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
                     StateStorePath: context.Workspace.SqliteStatePath,

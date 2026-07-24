@@ -21,6 +21,12 @@ public sealed class ConductorSelfRelaunchTests
         Assert.Contains("lanes=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
         Assert.Contains("modelFunctions=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
         Assert.False(fixture.Lease.IsHeld);
+        Assert.True(
+            WaitUntil(
+                () => File.Exists(result.Handoff!.StdoutPath) &&
+                    ReadAllTextShared(result.Handoff.StdoutPath!).Contains("TICK tick=1", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(15)),
+            "The freshly-built successor did not execute its first conductor tick.");
     }
 
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_handoff_failure_stops_successor_and_reacquires_incumbent_lease")]
@@ -144,7 +150,6 @@ public sealed class ConductorSelfRelaunchTests
             root,
             Path.Combine(root, "App.csproj"),
             Path.Combine(root, "App.dll"),
-            Path.Combine(root, "App.dll.git-head"),
             Path.Combine(root, "update.ps1"),
             Path.Combine(root, "resolve.ps1"),
             Path.Combine(root, "state.db"),
@@ -198,6 +203,27 @@ public sealed class ConductorSelfRelaunchTests
         }
     }
 
+    private static bool WaitUntil(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (predicate())
+                return true;
+
+            Thread.Sleep(50);
+        }
+
+        return predicate();
+    }
+
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     private sealed class RealRelaunchFixture : IDisposable
     {
         private RealRelaunchFixture(
@@ -231,13 +257,7 @@ public sealed class ConductorSelfRelaunchTests
                 .GetAwaiter()
                 .GetResult();
             var lease = ConductorLoopLeaseController.Acquire(orchestratorDirectory);
-            var appOutputDirectory = Path.Combine(
-                repositoryRoot,
-                "src",
-                "Mcg.AgentOrchestrator.App",
-                "bin",
-                "Debug",
-                "net10.0");
+            var appOutputDirectory = Path.Combine(root, "build-output");
             var handoffOptions = new ConductLoopHandoffOptions(
                 Args: loopArgs ?? ["conduct", "--loop", "--max-iterations", "1"],
                 ExecutionDirectory: root,
@@ -257,7 +277,6 @@ public sealed class ConductorSelfRelaunchTests
                 RepositoryRoot: repositoryRoot,
                 AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
                 AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
-                AppHeadMarkerPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll.git-head"),
                 UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
                 ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
                 StateStorePath: stateStorePath,

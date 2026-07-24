@@ -52,11 +52,17 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunctionCatalogStore.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AgentCatalogStore.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/TaskComplexityEstimator.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementGate.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/DispatchReadinessEvaluator.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorEntityResolver.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Providers/ProviderRegistryFactory.cs")]
     [Xunit.InlineData("config/acceptance-manifest.json")]
     [Xunit.InlineData("Directory.Build.props")]
+    [Xunit.InlineData("Directory.Build.rsp")]
     public void RepositoryChangeClassifierIdentifiesConductorRelaunchChanges(string path)
     {
         var summary = RepositoryChangeClassifier.Classify([path]);

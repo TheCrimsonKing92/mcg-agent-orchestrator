@@ -359,7 +359,8 @@ internal static partial class ConductorLoopHandoff
             request.StdoutPath,
             request.StderrPath,
             rollbackDetail,
-            launched?.ProcessId);
+            launched?.ProcessId,
+            rollbackSucceeded);
     }
 
     private static ConductLoopHandoffVerification WaitForSuccessorReady(
@@ -1028,7 +1029,11 @@ internal static partial class ConductorLoopHandoff
             }
 
             process.Kill(entireProcessTree: true);
-            process.WaitForExit(5000);
+            if (!process.WaitForExit(5000) || !process.HasExited)
+            {
+                throw new InvalidOperationException(
+                    $"Conduct loop successor pid {processId} did not terminate within 5 seconds.");
+            }
         }
         catch (ArgumentException)
         {

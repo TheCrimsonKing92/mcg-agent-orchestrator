@@ -7,7 +7,6 @@ internal sealed record ConductorSelfRelaunchOptions(
     string RepositoryRoot,
     string AppProjectPath,
     string AppDllPath,
-    string AppHeadMarkerPath,
     string UpdateHeadMarkerScriptPath,
     string ResolveRunDirectoryScriptPath,
     string StateStorePath,
@@ -35,7 +34,8 @@ internal sealed record ConductorSelfRelaunchResult(
     string? FailedPhase,
     string? Reason,
     ConductorLoopHandoffResult? Handoff = null,
-    ConductorPreparedSuccessor? Successor = null)
+    ConductorPreparedSuccessor? Successor = null,
+    bool IncumbentCanContinue = true)
 {
     public static ConductorSelfRelaunchResult PreparationFailed(string phase, string reason) =>
         new(false, phase, reason);
@@ -118,7 +118,8 @@ internal static class ConductorSelfRelaunch
                 "handoff",
                 handoffResult.Reason ?? "successor handoff did not start",
                 handoffResult,
-                successor);
+                successor,
+                handoffResult.RollbackSucceeded);
     }
 
     internal static ConductorPreparedSuccessor PrepareSuccessor(ConductorSelfRelaunchOptions options)
@@ -144,12 +145,20 @@ internal static class ConductorSelfRelaunch
                 "Merged git HEAD was empty.");
         }
 
+        var buildOutputDirectory = Path.Combine(
+            Path.GetDirectoryName(options.AppDllPath)
+                ?? throw new ConductorSelfRelaunchPreparationException("build", "App output directory was not configured."),
+            gitHead);
+        var appDllPath = Path.Combine(buildOutputDirectory, Path.GetFileName(options.AppDllPath));
+        var appHeadMarkerPath = appDllPath + ".git-head";
         var build = RunProcess(
             options.DotnetPath,
             [
                 "build",
                 options.AppProjectPath,
                 "--nologo",
+                "--output",
+                buildOutputDirectory,
                 "-v",
                 "quiet",
                 "-clp:ErrorsOnly"
@@ -161,14 +170,14 @@ internal static class ConductorSelfRelaunch
         var marker = RunPowerShell(
             options,
             options.UpdateHeadMarkerScriptPath,
-            [options.RepositoryRoot, options.AppHeadMarkerPath],
+            [options.RepositoryRoot, appHeadMarkerPath],
             TimeSpan.FromMinutes(1));
         EnsureSucceeded("build", "record conductor git HEAD", marker);
 
         var resolve = RunPowerShell(
             options,
             options.ResolveRunDirectoryScriptPath,
-            [options.AppDllPath],
+            [appDllPath],
             TimeSpan.FromMinutes(2));
         EnsureSucceeded("build", "publish content-addressed run directory", resolve);
         var runDirectory = resolve.Stdout
@@ -181,7 +190,7 @@ internal static class ConductorSelfRelaunch
                 "Run-directory resolver returned no content-addressed directory.");
         }
 
-        var successorDll = Path.Combine(runDirectory, Path.GetFileName(options.AppDllPath));
+        var successorDll = Path.Combine(runDirectory, Path.GetFileName(appDllPath));
         var selfCheck = RunProcess(
             options.DotnetPath,
             [

@@ -57,7 +57,20 @@ function Get-OutputContentHashPrefix {
         }
         # Windows PowerShell runs on .NET Framework, which does not expose Path.GetRelativePath.
         $relativePath = $file.FullName.Substring($rootPath.Length).Replace('\', '/')
-        $fileHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+        # Use the framework crypto API because the supported Windows PowerShell host does not
+        # consistently expose Get-FileHash.
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $stream = $null
+        try {
+            $stream = [System.IO.File]::OpenRead($file.FullName)
+            $fileHash = [System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace '-', ''
+        }
+        finally {
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            $sha256.Dispose()
+        }
         [void]$payload.Append($relativePath)
         [void]$payload.Append(':')
         [void]$payload.Append($fileHash)

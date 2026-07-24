@@ -208,11 +208,13 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_failure_rolls_back_and_continues")]
-    [Xunit.InlineData("self-check", "LOOP_RELAUNCH_ROLLBACK")]
-    [Xunit.InlineData("handoff", "LOOP_HANDOFF_FAILED")]
+    [Xunit.InlineData("self-check", "LOOP_RELAUNCH_ROLLBACK", true)]
+    [Xunit.InlineData("handoff", "LOOP_HANDOFF_FAILED", true)]
+    [Xunit.InlineData("handoff", "LOOP_HANDOFF_FAILED", false)]
     public void BatchLoopSelfRelaunchFailureRollsBackAndContinues(
         string failedPhase,
-        string expectedEvent)
+        string expectedEvent,
+        bool incumbentCanContinue)
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update verifier");
@@ -232,25 +234,47 @@ public sealed class ConductorBatchLoopTests
 
         var output = AsyncLocalConsoleRouter.Capture(() =>
         {
-            var summary = new ConductorBatchLoop(
+            var loop = new ConductorBatchLoop(
                 selfRelaunch: _ =>
                 {
                     relaunchCalls++;
-                    return new ConductorSelfRelaunchResult(false, failedPhase, "forced failure");
-                }).Run(
+                    return new ConductorSelfRelaunchResult(
+                        false,
+                        failedPhase,
+                        "forced failure",
+                        IncumbentCanContinue: incumbentCanContinue);
+                });
+            if (incumbentCanContinue)
+            {
+                var summary = loop.Run(
+                        kernel,
+                        driver,
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 4);
+                Assert.Null(summary.Handoff);
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => loop.Run(
                     kernel,
                     driver,
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
-                    maxIterations: 4);
-
-            Assert.Null(summary.Handoff);
+                    maxIterations: 4));
+                Assert.Contains("refusing to continue", error.Message, StringComparison.OrdinalIgnoreCase);
+            }
         });
 
         Assert.Equal(1, relaunchCalls);
         Assert.Contains(expectedEvent, output, StringComparison.Ordinal);
         Assert.Contains($"phase={failedPhase}", output, StringComparison.Ordinal);
-        Assert.Contains("rolledBack=true continuing=true", output, StringComparison.Ordinal);
+        Assert.Contains(
+            incumbentCanContinue
+                ? "rolledBack=true continuing=true"
+                : "rolledBack=false continuing=false",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_non_infrastructure_landing_does_not_self_relaunch")]
