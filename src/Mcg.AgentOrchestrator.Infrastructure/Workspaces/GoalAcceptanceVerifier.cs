@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -2148,9 +2149,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
-                result.TimedOut
-                    ? BuildTimeoutOutput(result)
-                    : passed ? null : TailOutput(result.Output),
+                passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry),
                 environment.ArtifactsPath,
                 "goal-acceptance-verifier",
                 environment.LeaseId,
@@ -4121,6 +4120,109 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Console.WriteLine($"TRX_TELEMETRY_UNAVAILABLE paths={QuoteProgressToken(string.Join(";", missing))}");
         Console.Out.Flush();
     }
+
+    private static string BuildMtpFailureOutput(
+        string checkName,
+        CommandResult result,
+        DotnetTestTelemetry telemetry)
+    {
+        var details = new List<string>();
+        var commandOutput = result.TimedOut
+            ? BuildTimeoutOutput(result)
+            : TailOutput(result.Output);
+        if (!string.IsNullOrWhiteSpace(commandOutput))
+        {
+            details.Add(commandOutput);
+        }
+
+        var trxPaths = telemetry.Paths.Where(File.Exists).ToArray();
+        if (trxPaths.Length == 0)
+        {
+            details.Add(
+                $"[FAIL] {checkName}: failed — no TRX produced (shard was killed or crashed before reporter flushed)");
+            return string.Join(Environment.NewLine, details);
+        }
+
+        var failures = new List<string>();
+        foreach (var trxPath in trxPaths)
+        {
+            try
+            {
+                failures.AddRange(ExtractTrxFailureEvidence(trxPath));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                details.Add(
+                    $"[FAIL] {checkName}: failed — TRX found but could not be read ({FirstNonEmptyLine(ex.Message)})");
+                return string.Join(Environment.NewLine, details);
+            }
+        }
+
+        if (failures.Count == 0)
+        {
+            details.Add(
+                $"[FAIL] {checkName}: failed — TRX found but contained no failure records (process may have exited before tests ran)");
+        }
+        else
+        {
+            details.AddRange(failures);
+        }
+
+        return string.Join(Environment.NewLine, details);
+    }
+
+    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
+    {
+        var document = XDocument.Load(trxPath, LoadOptions.None);
+        return document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                string.Equals(
+                    element.Attribute("outcome")?.Value,
+                    "Failed",
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(result =>
+            {
+                var testName = ResolveTrxTestName(result);
+                var message = result
+                    .Descendants()
+                    .FirstOrDefault(element =>
+                        element.Name.LocalName.Equals("Message", StringComparison.Ordinal) &&
+                        element.Ancestors().Any(ancestor =>
+                            ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
+                    ?.Value;
+                return $"[FAIL] {testName}: {FirstNonEmptyLine(message) ?? "failure message unavailable"}";
+            })
+            .ToArray();
+    }
+
+    private static string ResolveTrxTestName(XElement result)
+    {
+        var testName = result.Attribute("testName")?.Value?.Trim();
+        var displayName = result
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("DisplayName", StringComparison.Ordinal) ||
+                element.Name.LocalName.Equals("Description", StringComparison.Ordinal))
+            .Select(element => element.Value.Trim())
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+        if (!string.IsNullOrWhiteSpace(displayName) &&
+            (string.IsNullOrWhiteSpace(testName) || displayName.Length < testName.Length))
+        {
+            return displayName;
+        }
+
+        return string.IsNullOrWhiteSpace(testName)
+            ? result.Attribute("testId")?.Value?.Trim() ?? "unknown test"
+            : testName;
+    }
+
+    private static string? FirstNonEmptyLine(string? value) =>
+        value?
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));
 
     private static string SanitizeFileName(string value)
     {

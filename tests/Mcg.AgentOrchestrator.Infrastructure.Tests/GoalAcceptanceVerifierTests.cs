@@ -914,6 +914,164 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_extracts_all_failed_tests_from_real_mtp_trx_fixture")]
+    public void GoalAcceptanceVerifierExtractsAllFailedTestsFromRealMtpTrxFixture()
+    {
+        var fixturePath = MtpFailureFixturePath();
+
+        var evidence = GoalAcceptanceVerifier.ExtractTrxFailureEvidence(fixturePath);
+
+        Assert.Equal(
+            [
+                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1"
+            ],
+            evidence);
+        Assert.DoesNotContain(evidence, line =>
+            line.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_surfaces_fixture_test_names_and_messages")]
+    public async Task GoalAcceptanceVerifierFailedMtpShardSurfacesFixtureTestNamesAndMessages()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests: Cli", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter", "FullyQualifiedName~CliCommandTests"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, "TestResults", "mtp-fixture"));
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    WriteMtpTrx(args, MtpFailureFixturePath());
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Failed! - Failed: 2, Passed: 1, Skipped: 0, Total: 3."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root, stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            var output = Assert.Single(result.Checks!).OutputTail;
+            Assert.Contains(
+                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
+                output,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1",
+                output,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("Passing MTP test is not surfaced", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_explains_missing_or_empty_trx")]
+    [Xunit.InlineData(false, "failed — no TRX produced (shard was killed or crashed before reporter flushed)")]
+    [Xunit.InlineData(true, "failed — TRX found but contained no failure records (process may have exited before tests ran)")]
+    public async Task GoalAcceptanceVerifierFailedMtpShardExplainsMissingOrEmptyTrx(
+        bool writeEmptyTrx,
+        string expectedEvidence)
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests: Cli", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter", "FullyQualifiedName~CliCommandTests"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, "TestResults", writeEmptyTrx ? "empty-trx" : "missing-trx"));
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    if (writeEmptyTrx)
+                    {
+                        WriteMtpTrx(args);
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root, stableSlotIndex: 0);
+
+            Assert.False(result.Passed);
+            Assert.Contains(
+                $"[FAIL] infrastructure tests: Cli: {expectedEvidence}",
+                Assert.Single(result.Checks!).OutputTail,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_vstest_failure_stdout_remains_unchanged")]
+    public async Task GoalAcceptanceVerifierVstestFailureStdoutRemainsUnchanged()
+    {
+        const string failureOutput =
+            "[xUnit.net 00:00:01.23]     Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]\n" +
+            "Assert.True() Failure";
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+                Task.FromResult(args.Length >= 2 && args[0] == "dotnet" && args[1] == "test"
+                    ? new GoalAcceptanceVerifier.CommandResult(1, failureOutput)
+                    : new GoalAcceptanceVerifier.CommandResult(0, "")));
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.False(result.Passed);
+            Assert.Equal(failureOutput, Assert.Single(result.Checks!).OutputTail);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_mtp_runner_omits_total_session_timeout")]
     public async Task GoalAcceptanceVerifierMtpRunnerOmitsTotalSessionTimeout()
     {
@@ -3721,6 +3879,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static void WriteMtpTrx(string[] args)
     {
+        WriteMtpTrx(args, sourcePath: null);
+    }
+
+    private static void WriteMtpTrx(string[] args, string? sourcePath)
+    {
         var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
         var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
         Assert.True(resultsDirectoryIndex >= 0);
@@ -3728,8 +3891,25 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.True(trxFileIndex >= 0);
         Assert.True(trxFileIndex + 1 < args.Length);
         Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
-        File.WriteAllText(Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]), "<TestRun />");
+        var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
+        if (sourcePath is null)
+        {
+            File.WriteAllText(destinationPath, "<TestRun />");
+        }
+        else
+        {
+            File.Copy(sourcePath, destinationPath, overwrite: true);
+        }
     }
+
+    private static string MtpFailureFixturePath() =>
+        Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "TestData",
+            "Fixtures",
+            "mtp-xunit-v3-failures.trx.xml");
 
     private static void CorruptPartitionCacheKey(string root, string partitionId)
     {
