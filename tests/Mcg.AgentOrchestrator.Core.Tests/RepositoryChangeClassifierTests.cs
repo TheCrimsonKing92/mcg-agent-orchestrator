@@ -47,6 +47,31 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(summary.Files, file => file.IsSecuritySensitive);
     }
 
+    [Xunit.Theory(DisplayName = "RepositoryChangeClassifier_identifies_conductor_relaunch_changes")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunctionCatalogStore.cs")]
+    [Xunit.InlineData("config/acceptance-manifest.json")]
+    [Xunit.InlineData("Directory.Build.props")]
+    public void RepositoryChangeClassifierIdentifiesConductorRelaunchChanges(string path)
+    {
+        var summary = RepositoryChangeClassifier.Classify([path]);
+
+        Assert.True(summary.RequiresConductorRelaunch);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_does_not_relaunch_for_non_infrastructure_changes")]
+    public void RepositoryChangeClassifierDoesNotRelaunchForNonInfrastructureChanges()
+    {
+        var summary = RepositoryChangeClassifier.Classify([
+            "docs/operator.md",
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs"
+        ]);
+
+        Assert.False(summary.RequiresConductorRelaunch);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_classifies_high_risk_generated_dashboard_tests_and_docs")]
     public void RepositoryOwnershipMapClassifiesHighRiskGeneratedDashboardTestsAndDocs()
     {

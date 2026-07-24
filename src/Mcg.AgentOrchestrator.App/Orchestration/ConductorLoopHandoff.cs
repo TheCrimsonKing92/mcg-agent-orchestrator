@@ -53,6 +53,36 @@ internal sealed class ConductorLoopLease : IDisposable
     }
 }
 
+internal sealed class ConductorLoopLeaseController : IDisposable
+{
+    private readonly string _orchestratorDirectory;
+    private ConductorLoopLease? _lease;
+
+    private ConductorLoopLeaseController(string orchestratorDirectory)
+    {
+        _orchestratorDirectory = orchestratorDirectory;
+        _lease = ConductorLoopLease.Acquire(orchestratorDirectory);
+    }
+
+    public static ConductorLoopLeaseController Acquire(string orchestratorDirectory) =>
+        new(orchestratorDirectory);
+
+    public void Release()
+    {
+        _lease?.Dispose();
+        _lease = null;
+    }
+
+    public void Reacquire()
+    {
+        _lease ??= ConductorLoopLease.Acquire(_orchestratorDirectory);
+    }
+
+    public bool IsHeld => _lease is not null;
+
+    public void Dispose() => Release();
+}
+
 internal sealed record ConductLoopHandoffOptions(
     IReadOnlyList<string> Args,
     string ExecutionDirectory,
@@ -65,7 +95,10 @@ internal sealed record ConductLoopHandoffOptions(
     Action ReleaseCurrentLease,
     TimeSpan VerificationTimeout = default,
     TimeSpan VerificationHardTimeout = default,
-    Func<ConductLoopHandoffOptions, long, bool>? LoopStartProbe = null);
+    Func<ConductLoopHandoffOptions, long, bool>? LoopStartProbe = null,
+    Action? ReacquireCurrentLease = null,
+    Action<int>? StopFailedSuccessor = null,
+    IReadOnlyList<string>? SuccessorCommandPrefix = null);
 
 internal sealed record ConductLoopLaunchRequest(
     string Name,
@@ -73,7 +106,8 @@ internal sealed record ConductLoopLaunchRequest(
     string StdoutPath,
     string StderrPath,
     string WorkingDirectory,
-    int RenewalCount);
+    int RenewalCount,
+    IReadOnlyList<string>? CommandPrefix = null);
 
 internal sealed record ConductLoopLaunchResult(
     int ProcessId,
@@ -137,7 +171,14 @@ internal static partial class ConductorLoopHandoff
         var stdoutPath = Path.GetFullPath(Path.Combine(options.LogDirectory, $"operator-{safeName}-{stamp}.out.log"));
         var stderrPath = Path.GetFullPath(Path.Combine(options.LogDirectory, $"operator-{safeName}-{stamp}.err.log"));
         var args = WithRenewalCount(options.Args, nextRenewalCount);
-        var launchRequest = new ConductLoopLaunchRequest(successorName, args, stdoutPath, stderrPath, options.ExecutionDirectory, nextRenewalCount);
+        var launchRequest = new ConductLoopLaunchRequest(
+            successorName,
+            args,
+            stdoutPath,
+            stderrPath,
+            options.ExecutionDirectory,
+            nextRenewalCount,
+            options.SuccessorCommandPrefix);
 
         options.ReleaseCurrentLease();
         var guardDetail = "guard=lease-released-before-launch";
@@ -168,6 +209,8 @@ internal static partial class ConductorLoopHandoff
             TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
             EmitHandoffFailure(detail);
             var failureReason = VerificationFailureReason(verification);
+            options.StopFailedSuccessor?.Invoke(result.ProcessId);
+            options.ReacquireCurrentLease?.Invoke();
             TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
                 $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={detail}");
             return ConductorLoopHandoffResult.FailedStart(
@@ -185,6 +228,7 @@ internal static partial class ConductorLoopHandoff
             TryRecordHandoffEvent(options.RunEventStorePath, "Failed", detail);
             EmitHandoffFailure(detail);
             var failureReason = $"successor-launch-failed {ex.GetType().Name}:{ex.Message}";
+            options.ReacquireCurrentLease?.Invoke();
             TryRecordHandoffEvent(options.RunEventStorePath, "Escalated",
                 $"reason={failureReason} stdout={stdoutPath} stderr={stderrPath} verification={detail}");
             return ConductorLoopHandoffResult.FailedStart(
@@ -277,14 +321,17 @@ internal static partial class ConductorLoopHandoff
 
     private static ConductLoopLaunchResult LaunchDetached(ConductLoopLaunchRequest request)
     {
-        var commandLineArgs = Environment.GetCommandLineArgs();
-        var executable = Environment.ProcessPath ?? "dotnet";
-        var command = new List<string> { executable };
-
-        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-            commandLineArgs.Length > 0)
+        var command = request.CommandPrefix?.ToList() ?? [];
+        if (command.Count == 0)
         {
-            command.Add(commandLineArgs[0]);
+            var commandLineArgs = Environment.GetCommandLineArgs();
+            var executable = Environment.ProcessPath ?? "dotnet";
+            command.Add(executable);
+            if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                commandLineArgs.Length > 0)
+            {
+                command.Add(commandLineArgs[0]);
+            }
         }
 
         command.AddRange(request.Args);
@@ -616,6 +663,30 @@ internal static partial class ConductorLoopHandoff
         catch
         {
             return false;
+        }
+    }
+
+    internal static void StopFailedSuccessor(int processId)
+    {
+        if (processId == Environment.ProcessId)
+        {
+            throw new InvalidOperationException("Refusing to stop the incumbent conductor process.");
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+        }
+        catch (ArgumentException)
+        {
+            // The exact successor pid is already gone.
         }
     }
 

@@ -61,6 +61,10 @@ public interface IGoalAcceptanceVerifier
 
 public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
+    public sealed record StartupContract(
+        int ManifestCheckCount,
+        IReadOnlyList<string> InfrastructureLaneNames);
+
     internal sealed record CommandResult(
         int ExitCode,
         string Output,
@@ -133,6 +137,41 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests" +
             "&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration")
     ];
+
+    public static StartupContract ValidateStartupContract(string repositoryRoot)
+    {
+        var manifest = AcceptanceManifest.Load(repositoryRoot, changedFiles: null);
+        if (manifest.Checks.Count == 0)
+        {
+            throw new InvalidOperationException("Acceptance manifest loaded without any checks.");
+        }
+
+        foreach (var check in manifest.Checks)
+        {
+            var type = check.Type.Trim().ToLowerInvariant();
+            if (type == "command")
+            {
+                _ = BuildCommandArguments(check);
+            }
+            else if (type == "dotnet-test")
+            {
+                _ = BuildDotnetTestArguments(check);
+            }
+            else if (type is not ("no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
+            {
+                throw new InvalidOperationException(
+                    $"Acceptance manifest check '{check.Name}' has unsupported type '{check.Type}'.");
+            }
+        }
+
+        var laneNames = InfrastructureTestLanes.Select(lane => lane.Name).ToArray();
+        if (laneNames.Length == 0 || laneNames.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException("Acceptance infrastructure lanes could not be enumerated.");
+        }
+
+        return new StartupContract(manifest.Checks.Count, laneNames);
+    }
 
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
     private readonly TimeProvider _timeProvider;

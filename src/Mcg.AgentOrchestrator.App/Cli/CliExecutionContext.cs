@@ -19,6 +19,7 @@ internal sealed class CliExecutionContext(
     Func<AcceptanceHostStopRequest, AcceptanceHostStopResult>? stopAcceptanceHosts = null,
     CliPhaseTimingRecorder? phaseTimings = null,
     Action? releaseConductLoopLease = null,
+    Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
 {
@@ -77,6 +78,8 @@ public RunGoalService.SleepFunc? RunGoalSleep { get; init; }
 public Func<Goal, Task<RunGoalService.RunGoalResult>>? RunGoalOverride { get; init; }
 
 public Action ReleaseConductLoopLease { get; } = releaseConductLoopLease ?? (() => { });
+
+public Action ReacquireConductLoopLease { get; } = reacquireConductLoopLease ?? (() => { });
 
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
