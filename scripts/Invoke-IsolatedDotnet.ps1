@@ -335,6 +335,42 @@ function Get-ReusableTestArtifacts {
     }
 }
 
+function ConvertTo-MtpFilterArguments {
+    param([string]$Filter)
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($rawToken in [System.Text.RegularExpressions.Regex]::Split($Filter, "[&|]")) {
+        $token = $rawToken.Trim().Trim([char[]]@("(", ")")).Trim()
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            continue
+        }
+
+        $fullyQualifiedName = [System.Text.RegularExpressions.Regex]::Match(
+            $token,
+            "^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($fullyQualifiedName.Success) {
+            $result.Add($(if ($fullyQualifiedName.Groups["op"].Value -eq "!~") { "--filter-not-class" } else { "--filter-class" }))
+            $result.Add("*$($fullyQualifiedName.Groups["value"].Value)*")
+            continue
+        }
+
+        $categoryExclusion = [System.Text.RegularExpressions.Regex]::Match(
+            $token,
+            "^Category\s*!=\s*(?<value>[A-Za-z_][A-Za-z0-9_.-]*)$",
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($categoryExclusion.Success) {
+            $result.Add("--filter-not-trait")
+            $result.Add("Category=$($categoryExclusion.Groups["value"].Value)")
+            continue
+        }
+
+        throw "MTP test filter '$Filter' contains unsupported token '$token'."
+    }
+
+    return $result.ToArray()
+}
+
 function Get-MtpTestArguments {
     param([string[]]$Values)
 
@@ -360,6 +396,24 @@ function Get-MtpTestArguments {
             $value.Equals("-v", [System.StringComparison]::OrdinalIgnoreCase) -or
             $value.Equals("--logger", [System.StringComparison]::OrdinalIgnoreCase)) {
             $i++
+            continue
+        }
+
+        if ($value.Equals("--filter", [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($i + 1 -ge $Values.Count) {
+                throw "--filter requires a value."
+            }
+
+            foreach ($filterArgument in (ConvertTo-MtpFilterArguments -Filter $Values[++$i])) {
+                $result.Add($filterArgument)
+            }
+            continue
+        }
+
+        if ($value.StartsWith("--filter=", [System.StringComparison]::OrdinalIgnoreCase)) {
+            foreach ($filterArgument in (ConvertTo-MtpFilterArguments -Filter $value.Substring("--filter=".Length))) {
+                $result.Add($filterArgument)
+            }
             continue
         }
 

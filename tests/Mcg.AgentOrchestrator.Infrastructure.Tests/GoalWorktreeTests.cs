@@ -805,7 +805,7 @@ public abstract class GoalWorktreeTestBase
 public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuses_prebuilt_test_assembly_and_dependency_directory")]
-    public void InvokeIsolatedDotnetReusesPrebuiltTestAssemblyAndDependencyDirectory()
+    public async Task InvokeIsolatedDotnetReusesPrebuiltTestAssemblyAndDependencyDirectory()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -815,7 +815,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         var fixture = CreateReuseFixture(includeAssembly: true);
         try
         {
-            var result = RunReusePass(fixture);
+            var result = await RunReusePassAsync(fixture);
 
             Assert.True(
                 result.ExitCode == 0,
@@ -849,7 +849,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
     }
 
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuse_fails_loudly_when_test_assembly_is_missing")]
-    public void InvokeIsolatedDotnetReuseFailsLoudlyWhenTestAssemblyIsMissing()
+    public async Task InvokeIsolatedDotnetReuseFailsLoudlyWhenTestAssemblyIsMissing()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -859,7 +859,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         var fixture = CreateReuseFixture(includeAssembly: false);
         try
         {
-            var result = RunReusePass(fixture);
+            var result = await RunReusePassAsync(fixture);
 
             Assert.Equal(86, result.ExitCode);
             Assert.Contains("Artifact reuse precondition failed", result.Stderr, StringComparison.Ordinal);
@@ -936,12 +936,13 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             probeReceiptPath);
     }
 
-    private static (int ExitCode, string Stdout, string Stderr) RunReusePass(ReuseFixture fixture)
+    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunReusePassAsync(ReuseFixture fixture)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = WorkerShell.Executable,
             WorkingDirectory = fixture.WorkDirectory,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -965,8 +966,8 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("Debug");
         startInfo.ArgumentList.Add("--verbosity");
         startInfo.ArgumentList.Add("minimal");
-        startInfo.ArgumentList.Add("--filter-class");
-        startInfo.ArgumentList.Add("*IsolatedDotnetVSTestBypassProbeTests*");
+        startInfo.ArgumentList.Add("--filter");
+        startInfo.ArgumentList.Add("FullyQualifiedName~IsolatedDotnetVSTestBypassProbeTests");
         startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
         startInfo.Environment["DOTNET_SHIM_LOG"] = fixture.DotnetLogPath;
         startInfo.Environment["MCG_ISOLATED_DOTNET_MTP_PROBE_PATH"] = fixture.ProbeReceiptPath;
@@ -975,9 +976,30 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start PowerShell.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+        process.StandardInput.Close();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await process.WaitForExitAsync();
+            var timedOutStdout = await stdoutTask;
+            var timedOutStderr = await stderrTask;
+            throw new Xunit.Sdk.XunitException(
+                $"Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.{Environment.NewLine}stdout:{Environment.NewLine}{timedOutStdout}{Environment.NewLine}stderr:{Environment.NewLine}{timedOutStderr}");
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
         return (process.ExitCode, stdout, stderr);
     }
 
