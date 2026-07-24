@@ -126,6 +126,96 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     Assert.Contains("--role Developer", preparation.Command, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_resolves_subscription_model_name_matrix")]
+    public void WorkerProfileDispatcherResolvesSubscriptionModelNameMatrix()
+{
+    var baseModel = new ModelProfile("OpenAI", "api-base", ModelCapability.Text, SubscriptionMode.ApiKey, "low");
+    var complexModel = new ModelProfile("OpenAI", "api-complex", ModelCapability.Text, SubscriptionMode.ApiKey, "high");
+    var agent = new AgentDefinition(
+        new AgentId("sentinel-developer"),
+        "Sentinel Developer",
+        AgentRole.Developer,
+        baseModel,
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "sub-alias", "medium"),
+        ComplexModel: complexModel);
+    var agentWithoutSubscription = agent with { Subscription = null };
+    var cases = new[]
+    {
+        new
+        {
+            Name = "complex subscription launch profile",
+            Agent = agent,
+            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+                TaskComplexity.Complex,
+                complexModel,
+                UsesComplexModel: true,
+                UsesSubscriptionLaunchProfile: true),
+            Expected = "sub-alias"
+        },
+        new
+        {
+            Name = "simple subscription launch profile",
+            Agent = agent,
+            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+                TaskComplexity.Simple,
+                baseModel,
+                UsesComplexModel: false,
+                UsesSubscriptionLaunchProfile: true),
+            Expected = "sub-alias"
+        },
+        new
+        {
+            Name = "complex non-subscription launch profile",
+            Agent = agent,
+            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+                TaskComplexity.Complex,
+                complexModel,
+                UsesComplexModel: true,
+                UsesSubscriptionLaunchProfile: false),
+            Expected = "api-complex"
+        },
+        new
+        {
+            Name = "simple non-subscription launch profile",
+            Agent = agent,
+            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+                TaskComplexity.Simple,
+                baseModel,
+                UsesComplexModel: false,
+                UsesSubscriptionLaunchProfile: false),
+            Expected = "api-base"
+        },
+        new
+        {
+            Name = "null subscription launch profile",
+            Agent = agentWithoutSubscription,
+            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+                TaskComplexity.Complex,
+                complexModel,
+                UsesComplexModel: true,
+                UsesSubscriptionLaunchProfile: true),
+            Expected = "api-complex"
+        }
+    };
+
+    foreach (var testCase in cases)
+    {
+        var actual = WorkerProfileDispatcher.ResolveEffectiveSubscriptionModelName(testCase.Agent, testCase.Selection);
+
+        if (testCase.Name == "complex subscription launch profile")
+        {
+            Assert.True(
+                actual == testCase.Expected,
+                "pre-fix code returned 'api-complex' for complex subscription launch profiles; fixed code returns 'sub-alias'.");
+        }
+        else
+        {
+            Assert.Equal(testCase.Expected, actual);
+        }
+    }
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_renders_latest_retry_feedback_into_fresh_prompt_before_dispatch")]
     public void WorkerProfileDispatcherRendersLatestRetryFeedbackIntoFreshPromptBeforeDispatch()
 {
@@ -387,10 +477,12 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
 
     Assert.True(File.Exists(dispatch.PromptPath));
-    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch!.Command, StringComparison.Ordinal);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Contains("--model 'gpt-5-mini-codex'", task.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='high'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal("gpt-5-mini-codex", task.LastDispatch.ModelName);
     Assert.Equal("high", task.LastDispatch.ReasoningEffort);
     Assert.Equal("base", task.LastDispatch.ReasoningEffortReason);
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
@@ -528,13 +620,15 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Equal("gpt-5-mini-codex", simpleTask.LastDispatch.ModelName);
     Assert.Equal("low", simpleTask.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, simpleTask.LastDispatch.TaskComplexity);
-    Assert.Contains("--model 'gpt-5.5'", complexTask.LastDispatch!.Command, StringComparison.Ordinal);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Contains("--model 'gpt-5-mini-codex'", complexTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='high'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--api-model 'gpt-5.5'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--api-reasoning 'high'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--complexity 'Complex'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", complexTask.LastDispatch.ProviderName);
-    Assert.Equal("gpt-5.5", complexTask.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal("gpt-5-mini-codex", complexTask.LastDispatch.ModelName);
     Assert.Equal("high", complexTask.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Complex, complexTask.LastDispatch.TaskComplexity);
 }
@@ -783,7 +877,8 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
-    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
     Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
     Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -895,10 +990,12 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
-    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; fallback from spark still uses the configured default alias.
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
     Assert.Contains("fallback-default-lane: spark unavailable", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
-    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch.Command, StringComparison.Ordinal);
+    // Subscription launch profiles always pin the configured alias; fallback from spark still uses the configured default alias.
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
@@ -1906,14 +2003,17 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt);
 
-    Assert.Contains("--model 'gpt-5.5'", developer.LastDispatch!.Command, StringComparison.Ordinal);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", developer.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", developer.LastDispatch.ProviderName);
-    Assert.Equal("gpt-5.5", developer.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, developer.LastDispatch.ModelName);
     Assert.Contains("model_reasoning_effort='high'", developer.LastDispatch.Command, StringComparison.Ordinal);
     var dispatchEvent = goal.Timeline.Single(evt =>
         evt.TaskId == developer.Id &&
         evt.Kind == ProgressKind.TaskDispatchRecorded);
-    Assert.Contains("OpenAI/gpt-5.5", dispatchEvent.Message, StringComparison.Ordinal);
+    // Subscription launch profiles always pin the configured alias in dispatch metadata.
+    Assert.Contains($"OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias}", dispatchEvent.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]
@@ -2146,8 +2246,10 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
 
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
-    Assert.Equal("gpt-5.5", task.LastDispatch.ModelName);
-    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch.Command, StringComparison.Ordinal);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Equal("gpt-5-mini-codex", task.LastDispatch.ModelName);
+    // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
+    Assert.Contains("--model 'gpt-5-mini-codex'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_pins_anthropic_subscription_model")]

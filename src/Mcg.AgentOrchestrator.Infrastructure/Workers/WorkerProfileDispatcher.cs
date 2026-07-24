@@ -1129,13 +1129,11 @@ public static class WorkerProfileDispatcher
         };
     }
 
-    private static string ResolveEffectiveSubscriptionModelName(AgentDefinition agent, SubscriptionModelSelection selection)
+    internal static string ResolveEffectiveSubscriptionModelName(AgentDefinition agent, SubscriptionModelSelection selection)
     {
-        return selection.UsesComplexModel
-            ? selection.Model.ModelName
-            : !selection.UsesSubscriptionLaunchProfile
-                ? selection.Model.ModelName
-            : agent.Subscription?.ModelAlias ?? selection.Model.ModelName;
+        return selection.UsesSubscriptionLaunchProfile
+            ? agent.Subscription?.ModelAlias ?? selection.Model.ModelName
+            : selection.Model.ModelName;
     }
 
     private static string? ResolveEffectiveSubscriptionReasoningEffort(AgentDefinition agent, SubscriptionModelSelection selection)
@@ -1662,7 +1660,7 @@ public static class WorkerProfileDispatcher
             agent.ComplexModel.ModelName.Equals(model.ModelName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed record SubscriptionModelSelection(
+    internal sealed record SubscriptionModelSelection(
         TaskComplexity Complexity,
         ModelProfile Model,
         bool UsesComplexModel,
