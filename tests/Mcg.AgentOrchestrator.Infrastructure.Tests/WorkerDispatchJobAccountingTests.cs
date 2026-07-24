@@ -76,7 +76,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
             DateTimeOffset.UtcNow));
 
         var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
-        WaitForExitFile(process.ExitCodePath);
+        WaitForDispatchHostExit(process);
         new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         var output = File.ReadAllLines(process.StandardOutputPath);
@@ -172,7 +172,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
             WorkerProviderKind: ProviderKind.OpenAICodexCli));
 
         var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
-        WaitForExitFile(process.ExitCodePath);
+        WaitForDispatchHostExit(process);
         new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         var dispatch = task.LastDispatch!;
@@ -299,18 +299,25 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
             "}");
     }
 
-    private static void WaitForExitFile(string path)
+    private static void WaitForDispatchHostExit(TaskProcessRecord processRecord)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
-        while (!File.Exists(path) && DateTimeOffset.UtcNow < deadline)
+        try
         {
-            Thread.Sleep(50);
+            using var process = Process.GetProcessById(processRecord.ProcessId);
+            if (!process.WaitForExit(30_000))
+            {
+                throw new TimeoutException(
+                    $"Timed out waiting for dispatch host process {processRecord.ProcessId} to exit.");
+            }
+        }
+        catch (ArgumentException)
+        {
+            // The host already exited and can no longer be opened; its terminal artifacts are durable.
         }
 
-        if (!File.Exists(path))
-        {
-            throw new TimeoutException($"Timed out waiting for exit file '{path}'.");
-        }
+        Assert.True(
+            File.Exists(processRecord.ExitCodePath),
+            $"Dispatch host exited without writing exit file '{processRecord.ExitCodePath}'.");
     }
 
     private static void WaitUntil(Func<bool> condition, TimeSpan timeout)
