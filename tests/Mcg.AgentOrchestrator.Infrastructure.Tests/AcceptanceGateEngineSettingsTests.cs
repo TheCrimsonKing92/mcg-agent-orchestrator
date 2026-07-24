@@ -55,6 +55,40 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_slot_count_limits_stable_slot_execution")]
+    public async Task GoalAcceptanceVerifierCandidateSlotCountLimitsStableSlotExecution()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 1,
+                "maxConcurrentShards": 1
+              },
+              "checks": [{
+                "name": "core tests",
+                "type": "dotnet-test",
+                "runner": "vstest",
+                "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"
+              }]
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((_, _, _) =>
+                Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1")));
+
+            var error = await Xunit.Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+                () => verifier.RunAsync(root, stableSlotIndex: 1));
+
+            Xunit.Assert.Contains("requested slot count", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_candidate_MTP_invocation_template_drives_own_gate")]
     public async Task AcceptanceGateEngineCandidateMtpInvocationTemplateDrivesOwnGate()
     {

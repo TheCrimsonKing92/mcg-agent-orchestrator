@@ -62,7 +62,8 @@ public sealed class ConductorBatchLoopTests
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
-        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null) =>
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
+        Func<Goal, int>? getAcceptanceSlotCount = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -90,7 +91,8 @@ public sealed class ConductorBatchLoopTests
             recordMissingBranchRetirement: recordMissingBranchRetirement,
             getLandingFileScopes: getLandingFileScopes,
             runAcceptanceVerificationWithSlot: runAcceptanceWithSlot,
-            parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator);
+            parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator,
+            getAcceptanceSlotCount: getAcceptanceSlotCount);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -489,6 +491,58 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_candidate_manifest_slot_count_limits_own_parallel_acceptance")]
+    public void BatchLoopCandidateManifestSlotCountLimitsOwnParallelAcceptance()
+    {
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
+        var goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
+        using var release = new ManualResetEventSlim();
+        using var started = new CountdownEvent(1);
+        var slots = new ConcurrentDictionary<string, int?>();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-manifest-slot-count");
+        Action waitForAttempts = () => { };
+
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (goal, slot) =>
+                {
+                    slots[goal.Id.Value] = slot;
+                    started.Signal();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: goal => goal.Id == goalA.Id
+                    ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
+                    : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts),
+                getAcceptanceSlotCount: goal => goal.Id == goalA.Id ? 4 : 1);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(2, summary.Held);
+            Assert.Equal(0, slots[goalA.Id.Value]);
+            Assert.False(slots.ContainsKey(goalB.Id.Value));
+            Assert.Equal(GoalStatus.Verifying, goalA.Status);
+            Assert.Equal(GoalStatus.Verified, goalB.Status);
+        }
+        finally
+        {
+            release.Set();
             waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }

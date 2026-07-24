@@ -98,11 +98,15 @@ public static class DotnetBuildEnvironmentManager
         WriteIndented = true
     };
 
-    public static DotnetBuildEnvironment CreateAttempt(GoalId? goalId, string attemptName)
+    public static DotnetBuildEnvironment CreateAttempt(
+        GoalId? goalId,
+        string attemptName,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
         if (goalId is not null)
         {
-            return CreateGoalLease(goalId, attemptName);
+            return CreateGoalLease(goalId, attemptName, slotCount);
         }
 
         var root = StableSlotRoot("manual");
@@ -201,8 +205,19 @@ public static class DotnetBuildEnvironmentManager
         return BuildArguments(StableSlotArtifactsPath(slotIndex));
     }
 
-    public static DotnetBuildEnvironment CreateStableSlotAttempt(int slotIndex)
+    public static DotnetBuildEnvironment CreateStableSlotAttempt(
+        int slotIndex,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
+        if (slotIndex >= slotCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(slotIndex),
+                slotIndex,
+                $"Stable slot index must be 0 through {slotCount - 1} for the requested slot count.");
+        }
+
         return CreateStableSlotEnvironment(slotIndex);
     }
 
@@ -623,7 +638,10 @@ public static class DotnetBuildEnvironmentManager
         return (int)((uint)Interlocked.Increment(ref s_nextStableSlotScanStart) % slotCount);
     }
 
-    private static DotnetBuildEnvironment CreateGoalLease(GoalId goalId, string attemptName)
+    private static DotnetBuildEnvironment CreateGoalLease(
+        GoalId goalId,
+        string attemptName,
+        int slotCount)
     {
         var root = GoalRoot(goalId);
         var leaseId = $"goal-{Prefix(goalId)}";
@@ -631,7 +649,7 @@ public static class DotnetBuildEnvironmentManager
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
-        var slotName = SelectStableSlotNameForGoal(metadataPath, reused);
+        var slotName = SelectStableSlotNameForGoal(metadataPath, reused, slotCount);
         var artifactsPath = StableSlotArtifactsPath(slotName);
         var executionLockPath = StableSlotExecutionLockPath(slotName);
         Directory.CreateDirectory(leaseDirectory);
@@ -690,37 +708,44 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(GoalRoot(goalId), LeaseDirectoryName);
     }
 
-    private static string StableSlotName(GoalId goalId)
+    private static string StableSlotName(
+        GoalId goalId,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
         var hash = 0;
         foreach (var ch in Prefix(goalId))
         {
             hash = unchecked((hash * 31) + char.ToLowerInvariant(ch));
         }
 
-        return $"slot-{Math.Abs(hash % StableSlotCount)}";
+        return $"slot-{Math.Abs(hash % slotCount)}";
     }
 
-    private static string SelectStableSlotNameForGoal(string metadataPath, bool reused)
+    private static string SelectStableSlotNameForGoal(
+        string metadataPath,
+        bool reused,
+        int slotCount)
     {
         if (reused &&
             TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName &&
+            ParseStableSlotIndex(existingSlotName) < slotCount &&
             IsStableSlotAvailable(existingSlotName))
         {
             return existingSlotName;
         }
 
-        var scanStart = NextStableSlotScanStart();
-        for (var offset = 0; offset < StableSlotCount; offset++)
+        var scanStart = NextStableSlotScanStart(slotCount);
+        for (var offset = 0; offset < slotCount; offset++)
         {
-            var slotName = $"slot-{(scanStart + offset) % StableSlotCount}";
+            var slotName = $"slot-{(scanStart + offset) % slotCount}";
             if (IsStableSlotAvailable(slotName))
             {
                 return slotName;
             }
         }
 
-        var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
+        var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(slotCount);
         return $"slot-{leastRecentlyLeased.SlotIndex}";
     }
 

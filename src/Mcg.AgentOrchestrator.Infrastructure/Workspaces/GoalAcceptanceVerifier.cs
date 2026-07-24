@@ -2175,8 +2175,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var elapsed = Stopwatch.StartNew();
         var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName));
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
+            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName, EngineSettings.SlotCount));
         FileStream? leaseLock = null;
         try
         {
@@ -2345,7 +2345,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var wall = Stopwatch.StartNew();
         var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
             : null);
         if (environment is null)
         {
@@ -2514,8 +2514,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var elapsed = Stopwatch.StartNew();
         var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName));
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
+            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName, EngineSettings.SlotCount));
         FileStream? leaseLock = null;
         try
         {
@@ -2717,7 +2717,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
             : currentEnvironment);
         reacquireLease(retryEnvironment);
         CommandResult? retry = null;
@@ -2776,7 +2776,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var killRetryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
             : currentEnvironment);
         reacquireLease(killRetryEnvironment);
         CommandResult killRetry;
@@ -2819,7 +2819,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken)
     {
         var retryEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
             : currentEnvironment);
         var cycleAttribution = attribution;
         var maxRetryCycles = Math.Max(1, TransientNoHolderBuildLockMaxRetryCycles);
@@ -3516,8 +3516,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value)
-            : DotnetBuildEnvironmentManager.CreateAttempt(null, "acceptance-coverage-discovery"));
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
+            : DotnetBuildEnvironmentManager.CreateAttempt(null, "acceptance-coverage-discovery", EngineSettings.SlotCount));
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
         if (string.IsNullOrWhiteSpace(mainWorktreePath))
         {

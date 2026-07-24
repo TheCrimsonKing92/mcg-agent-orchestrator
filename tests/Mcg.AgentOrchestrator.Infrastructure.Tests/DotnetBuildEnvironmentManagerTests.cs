@@ -76,6 +76,26 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.True(first.Arguments.Contains(first.ArtifactsPath));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_candidate_slot_count_limits_goal_and_stable_attempts")]
+    public void DotnetBuildEnvironmentManagerCandidateSlotCountLimitsGoalAndStableAttempts()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var goalId = new GoalId("facefeedfacefeedfacefeedfacefeed");
+        try
+        {
+            var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "Acceptance", slotCount: 1);
+
+            Assert.Contains(Path.Combine("slots", "slot-0", "artifacts"), environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            var error = Assert.Throws<ArgumentOutOfRangeException>(
+                () => DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1, slotCount: 1));
+            Assert.Contains("requested slot count", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBaseBuildCache_restores_identical_project_outputs_from_main_sha_entry")]
     public void DotnetBaseBuildCacheRestoresIdenticalProjectOutputsFromMainShaEntry()
     {
