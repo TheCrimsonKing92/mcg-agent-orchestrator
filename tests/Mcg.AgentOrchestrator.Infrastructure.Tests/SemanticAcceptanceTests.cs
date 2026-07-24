@@ -3,14 +3,84 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class SemanticAcceptanceTests
+[Xunit.Collection(TestCollections.ProcessSpawning)]
+public sealed class SemanticAcceptanceTests : IDisposable
 {
+    private readonly List<string> _tempDirectories = [];
+
     private static SemanticAcceptanceInputs SampleInputs() => new(
         "Add a GetDiffExcerpt helper and feed it to the judge",
         ["Focused tests pass", "No forbidden paths changed"],
         ["src/A.cs", "tests/ATests.cs"],
         "diff --git a/src/A.cs b/src/A.cs\n+public static string GetDiffExcerpt() => ...;",
         "core tests: Passed!  - Failed: 0, Passed: 5");
+
+    public void Dispose()
+    {
+        List<Exception> cleanupFailures = [];
+        foreach (var path in _tempDirectories)
+        {
+            Exception? lastFailure = null;
+            Exception? attributeCleanupFailure = null;
+            for (var attempt = 1; attempt <= 3 && Directory.Exists(path); attempt++)
+            {
+                try
+                {
+                    Directory.Delete(path, recursive: true);
+                    lastFailure = null;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    lastFailure = ex;
+                    if (ex is UnauthorizedAccessException)
+                    {
+                        attributeCleanupFailure = TryClearReadOnlyAttributes(path);
+                    }
+                }
+            }
+
+            if (Directory.Exists(path))
+            {
+                var cause = attributeCleanupFailure is null
+                    ? lastFailure
+                    : new AggregateException(lastFailure!, attributeCleanupFailure);
+                cleanupFailures.Add(new IOException(
+                    $"Failed to delete isolated semantic-acceptance repository after 3 attempts: {path}",
+                    cause));
+            }
+        }
+
+        if (cleanupFailures.Count > 0)
+        {
+            throw new AggregateException("One or more isolated semantic-acceptance repositories could not be cleaned up.", cleanupFailures);
+        }
+    }
+
+    private static Exception? TryClearReadOnlyAttributes(string path)
+    {
+        try
+        {
+            var root = new DirectoryInfo(path);
+            root.Attributes &= ~FileAttributes.ReadOnly;
+            foreach (var entry in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                entry.Attributes &= ~FileAttributes.ReadOnly;
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ex;
+        }
+    }
+
+    private string CreateIsolatedTempDirectory()
+    {
+        var path = CreateTempDirectory();
+        _tempDirectories.Add(path);
+        return path;
+    }
 
     [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_parses_a_valid_fenced_verdict")]
     public void ParsesValidFencedVerdict()
@@ -136,7 +206,7 @@ public sealed class SemanticAcceptanceTests
     [Xunit.Fact(DisplayName = "SemanticAcceptancePlanner_evidence_context_includes_bounded_oversized_per_file_diff")]
     public void EvidenceContextIncludesBoundedOversizedPerFileDiff()
     {
-        var root = CreateTempDirectory();
+        var root = CreateIsolatedTempDirectory();
         RunGit(root, "init", "-b", "main");
         RunGit(root, "config", "user.email", "test@example.com");
         RunGit(root, "config", "user.name", "Test User");
@@ -240,7 +310,7 @@ public sealed class SemanticAcceptanceTests
     [Xunit.Fact(DisplayName = "GoalLandingPostActions_writes_semantic_receipt_for_negative_verdict")]
     public void GoalLandingPostActionsWritesSemanticReceiptForNegativeVerdict()
     {
-        var root = CreateTempDirectory();
+        var root = CreateIsolatedTempDirectory();
         RunGit(root, "init", "-b", "main");
         RunGit(root, "config", "user.email", "test@example.com");
         RunGit(root, "config", "user.name", "Test User");
@@ -289,7 +359,7 @@ public sealed class SemanticAcceptanceTests
     [Xunit.Fact(DisplayName = "GoalLandingPostActions_skips_semantic_judges_when_goal_receipt_exists")]
     public void GoalLandingPostActionsSkipsSemanticJudgesWhenGoalReceiptExists()
     {
-        var root = CreateTempDirectory();
+        var root = CreateIsolatedTempDirectory();
         Directory.CreateDirectory(Path.Combine(root, "src"));
         RunGit(root, "init");
         RunGit(root, "config", "user.email", "test@example.com");

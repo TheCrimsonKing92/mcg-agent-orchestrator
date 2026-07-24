@@ -11,6 +11,7 @@ using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSupport
 {
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_and_persists_when_assigned_agent_is_missing")]
