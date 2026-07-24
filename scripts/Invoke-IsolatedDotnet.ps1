@@ -3,19 +3,24 @@
 Runs dotnet with stable isolated build artifacts, including reusable no-build timing passes.
 
 .DESCRIPTION
-Use the same -GoalPrefix for both timing passes. The first invocation builds and tests into
-the goal's stable artifact slot. The second invocation adds -ReuseArtifacts and --no-build;
-it verifies the slot owner and test assembly before running xUnit without rebuilding.
+Use the same -GoalPrefix for both timing passes. For Microsoft.Testing.Platform (MTP) test
+projects, the first measurement builds into the goal's stable artifact slot and then runs
+the built test executable with -ReuseArtifacts. The second measurement repeats only the
+-ReuseArtifacts invocation. Reuse verifies the slot owner, test assembly, and MTP executable
+before running xUnit directly without invoking MSBuild or the unsupported VSTest target.
 
 .EXAMPLE
-Measure-Command { .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal }
+Measure-Command {
+    .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 build tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal
+    .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 -ReuseArtifacts test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --verbosity minimal
+}
 
-Measures total build plus test time and leaves the output in the goal's stable artifact slot.
+Measures total build plus xUnit time and leaves the output in the goal's stable artifact slot.
 
 .EXAMPLE
 Measure-Command { .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 -ReuseArtifacts test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --verbosity minimal }
 
-Reuses the first pass's output and measures xUnit execution time without invoking MSBuild.
+Reuses the first measurement's output and measures only direct MTP/xUnit execution time.
 #>
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -253,20 +258,12 @@ function Get-ReusableTestArtifacts {
     $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
     $configuration = Get-DotnetOptionValue -Values $DotnetArguments -Names @("--configuration", "-c")
     $targetFramework = Get-DotnetOptionValue -Values $DotnetArguments -Names @("--framework", "-f")
-    $layoutName = if (-not [string]::IsNullOrWhiteSpace($configuration) -and -not [string]::IsNullOrWhiteSpace($targetFramework)) {
-        "${configuration}_${targetFramework}"
-    }
-    elseif (-not [string]::IsNullOrWhiteSpace($configuration)) {
-        "${configuration}_<target-framework>"
-    }
-    elseif (-not [string]::IsNullOrWhiteSpace($targetFramework)) {
-        "<configuration>_${targetFramework}"
-    }
-    else {
-        "<configuration>_<target-framework>"
-    }
+    $layoutName = if ([string]::IsNullOrWhiteSpace($configuration)) { "<configuration>" } else { $configuration.ToLowerInvariant() }
     $projectArtifactsPath = Join-Path (Join-Path $ArtifactsPath "bin") $projectName
     $expectedArtifactPath = Join-Path (Join-Path $projectArtifactsPath $layoutName) "$projectName.dll"
+    $isWindowsHost = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    $executableName = if ($isWindowsHost) { "$projectName.exe" } else { $projectName }
+    $expectedExecutablePath = Join-Path (Join-Path $projectArtifactsPath $layoutName) $executableName
     $ownerPath = Join-Path $ArtifactsPath ".mcg-artifacts-owner.json"
     $foundOwnerToken = Get-OwnerMarkerToken -Path $ownerPath
 
@@ -281,23 +278,30 @@ function Get-ReusableTestArtifacts {
 
     $candidateDirectories = if (Test-Path -LiteralPath $projectArtifactsPath -PathType Container) {
         @(Get-ChildItem -LiteralPath $projectArtifactsPath -Directory -ErrorAction SilentlyContinue | Where-Object {
-            ([string]::IsNullOrWhiteSpace($configuration) -or $_.Name.StartsWith("${configuration}_", [System.StringComparison]::OrdinalIgnoreCase)) -and
-            ([string]::IsNullOrWhiteSpace($targetFramework) -or $_.Name.EndsWith("_${targetFramework}", [System.StringComparison]::OrdinalIgnoreCase))
+            [string]::IsNullOrWhiteSpace($configuration) -or
+            $_.Name.Equals($configuration, [System.StringComparison]::OrdinalIgnoreCase) -or
+            ($_.Name.StartsWith("${configuration}_", [System.StringComparison]::OrdinalIgnoreCase) -and
+                ([string]::IsNullOrWhiteSpace($targetFramework) -or
+                    $_.Name.EndsWith("_${targetFramework}", [System.StringComparison]::OrdinalIgnoreCase)))
         })
     }
     else {
         @()
     }
 
-    $assemblyPaths = @($candidateDirectories | ForEach-Object {
+    $assemblyArtifacts = @($candidateDirectories | ForEach-Object {
         $candidatePath = Join-Path $_.FullName "$projectName.dll"
         if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
-            $candidatePath
+            [pscustomobject]@{
+                AssemblyPath = $candidatePath
+                ExecutablePath = Join-Path $_.FullName $executableName
+                DependencyDirectory = $_.FullName
+            }
         }
     })
 
-    if ($assemblyPaths.Count -ne 1) {
-        $reason = if ($assemblyPaths.Count -eq 0) {
+    if ($assemblyArtifacts.Count -ne 1) {
+        $reason = if ($assemblyArtifacts.Count -eq 0) {
             "The reusable test assembly was not found."
         }
         else {
@@ -311,13 +315,108 @@ function Get-ReusableTestArtifacts {
         }
     }
 
+    $selectedArtifact = $assemblyArtifacts[0]
+    if (-not (Test-Path -LiteralPath $selectedArtifact.ExecutablePath -PathType Leaf)) {
+        return [pscustomobject]@{
+            Success = $false
+            Reason = "The reusable Microsoft.Testing.Platform executable was not found."
+            ExpectedArtifactPath = $expectedExecutablePath
+            FoundOwnerToken = $foundOwnerToken
+        }
+    }
+
     return [pscustomobject]@{
         Success = $true
-        AssemblyPath = $assemblyPaths[0]
-        DependencyDirectory = Split-Path -Parent $assemblyPaths[0]
+        AssemblyPath = $selectedArtifact.AssemblyPath
+        ExecutablePath = $selectedArtifact.ExecutablePath
+        DependencyDirectory = $selectedArtifact.DependencyDirectory
         ExpectedArtifactPath = $expectedArtifactPath
         FoundOwnerToken = $foundOwnerToken
     }
+}
+
+function Get-MtpTestArguments {
+    param([string[]]$Values)
+
+    $projectPath = Get-TestProjectPath -Values $Values
+    $result = [System.Collections.Generic.List[string]]::new()
+    for ($i = 1; $i -lt $Values.Count; $i++) {
+        $value = $Values[$i]
+        if ($value.Equals($projectPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--no-build", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--no-restore", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--nologo", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--", [System.StringComparison]::Ordinal) -or
+            $value.StartsWith("-p:", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("/p:", [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        if ($value.Equals("--configuration", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-c", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--framework", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-f", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--verbosity", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-v", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--logger", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $i++
+            continue
+        }
+
+        if ($value.StartsWith("--configuration=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--framework=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--verbosity=", [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $result.Add($value)
+    }
+
+    if (-not $result.Contains("--no-ansi")) {
+        $result.Add("--no-ansi")
+    }
+    if (-not $result.Contains("--progress")) {
+        $result.Add("--progress")
+        $result.Add("off")
+    }
+
+    return $result.ToArray()
+}
+
+function Get-ReuseBuildArguments {
+    param([string[]]$Values)
+
+    $projectPath = Get-TestProjectPath -Values $Values
+    $result = [System.Collections.Generic.List[string]]::new()
+    $result.Add("build")
+    $result.Add($projectPath)
+    for ($i = 0; $i -lt $Values.Count; $i++) {
+        $value = $Values[$i]
+        if ($value.Equals("--configuration", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-c", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--framework", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-f", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--verbosity", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("-v", [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($i + 1 -lt $Values.Count) {
+                $result.Add($value)
+                $result.Add($Values[++$i])
+            }
+            continue
+        }
+
+        if ($value.StartsWith("--configuration=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--framework=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("--verbosity=", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("-p:", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.StartsWith("/p:", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--no-restore", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $value.Equals("--nologo", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $result.Add($value)
+        }
+    }
+
+    return $result.ToArray()
 }
 
 function ConvertTo-CommandText {
@@ -511,9 +610,7 @@ try {
     if ($ReuseArtifacts) {
         $reuse = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $DotnetArguments
         if (-not $reuse.Success) {
-            $buildArguments = @($DotnetArguments | Where-Object {
-                -not $_.Equals("--no-build", [System.StringComparison]::OrdinalIgnoreCase)
-            })
+            $buildArguments = Get-ReuseBuildArguments -Values $DotnetArguments
             $goalArgument = if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
                 ""
             }
@@ -528,13 +625,19 @@ try {
             $exitCode = 86
         }
         else {
-            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' with dependency directory '$($reuse.DependencyDirectory)'."
+            Write-Host "Reusing test assembly '$($reuse.AssemblyPath)' and MTP executable '$($reuse.ExecutablePath)' with dependency directory '$($reuse.DependencyDirectory)'."
         }
     }
 
     if ($exitCode -ne 86) {
         $appDllBeforeDotnet = Get-AppDllSnapshot
-        & dotnet @DotnetArguments @isolatedArguments
+        if ($ReuseArtifacts) {
+            $mtpArguments = Get-MtpTestArguments -Values $DotnetArguments
+            & $reuse.ExecutablePath @mtpArguments
+        }
+        else {
+            & dotnet @DotnetArguments @isolatedArguments
+        }
         $exitCode = $LASTEXITCODE
         if ($exitCode -eq 0 -and (Test-AppDllChangedSinceSnapshot -Snapshot $appDllBeforeDotnet)) {
             Update-AppDllGitHeadMarker

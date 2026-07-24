@@ -821,15 +821,19 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
                 result.ExitCode == 0,
                 $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}");
             Assert.Contains(fixture.AssemblyPath, result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(fixture.ExecutablePath, result.Stdout, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(fixture.DependencyDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
             Assert.True(File.Exists(fixture.AssemblyPath), "The reuse pass must preserve the pre-built test assembly.");
+            Assert.True(File.Exists(fixture.ExecutablePath), "The reuse pass must preserve the pre-built MTP executable.");
             Assert.True(
-                File.Exists(Path.Combine(fixture.DependencyDirectory, "Fake.Tests.deps.json")),
+                File.Exists(Path.Combine(fixture.DependencyDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.deps.json")),
                 "The reuse pass must preserve the test assembly dependency directory.");
+            Assert.Equal("xUnit executed", File.ReadAllText(fixture.ProbeReceiptPath));
 
             var log = File.ReadAllText(fixture.DotnetLogPath);
-            Assert.Contains("args=test Fake.Tests.csproj --no-build --configuration Release --framework net10.0 --verbosity minimal --artifacts-path ", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
             Assert.DoesNotContain("args=build ", log, StringComparison.Ordinal);
+            Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
 
             var source = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
             Assert.Contains(".SYNOPSIS", source, StringComparison.Ordinal);
@@ -863,7 +867,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             Assert.Contains("Expected owner token: 'goal-reuse-goal'", result.Stderr, StringComparison.Ordinal);
             Assert.Contains("found owner token: 'goal-reuse-goal'", result.Stderr, StringComparison.Ordinal);
             Assert.Contains(
-                @".\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix reuse-goal test Fake.Tests.csproj --configuration Release --framework net10.0 --verbosity minimal",
+                @".\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix reuse-goal build tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --configuration Debug --verbosity minimal",
                 result.Stderr,
                 StringComparison.Ordinal);
 
@@ -884,9 +888,12 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         var shimDirectory = Path.Combine(root, "shim");
         var workDirectory = Path.Combine(root, "repo");
         var artifactsPath = Path.Combine(isolatedRoot, "slots", StableSlotName("reuse-goal"), "artifacts");
-        var dependencyDirectory = Path.Combine(artifactsPath, "bin", "Fake.Tests", "Release_net10.0");
-        var assemblyPath = Path.Combine(dependencyDirectory, "Fake.Tests.dll");
+        const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+        var dependencyDirectory = Path.Combine(artifactsPath, "bin", projectName, "debug");
+        var assemblyPath = Path.Combine(dependencyDirectory, $"{projectName}.dll");
+        var executablePath = Path.Combine(dependencyDirectory, $"{projectName}.exe");
         var dotnetLogPath = Path.Combine(root, "dotnet.log");
+        var probeReceiptPath = Path.Combine(root, "xunit-probe.txt");
 
         Directory.CreateDirectory(shimDirectory);
         Directory.CreateDirectory(workDirectory);
@@ -903,8 +910,9 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             }));
         if (includeAssembly)
         {
-            File.WriteAllText(assemblyPath, "pre-built test assembly");
-            File.WriteAllText(Path.Combine(dependencyDirectory, "Fake.Tests.deps.json"), "pre-built dependencies");
+            CopyDirectory(AppContext.BaseDirectory, dependencyDirectory);
+            Assert.True(File.Exists(assemblyPath), $"Current test output is missing {assemblyPath}.");
+            Assert.True(File.Exists(executablePath), $"Current test output is missing {executablePath}.");
         }
 
         File.WriteAllText(
@@ -923,7 +931,9 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             artifactsPath,
             dependencyDirectory,
             assemblyPath,
-            dotnetLogPath);
+            executablePath,
+            dotnetLogPath,
+            probeReceiptPath);
     }
 
     private static (int ExitCode, string Stdout, string Stderr) RunReusePass(ReuseFixture fixture)
@@ -949,16 +959,17 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("reuse-goal");
         startInfo.ArgumentList.Add("-ReuseArtifacts");
         startInfo.ArgumentList.Add("test");
-        startInfo.ArgumentList.Add("Fake.Tests.csproj");
+        startInfo.ArgumentList.Add("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
         startInfo.ArgumentList.Add("--no-build");
         startInfo.ArgumentList.Add("--configuration");
-        startInfo.ArgumentList.Add("Release");
-        startInfo.ArgumentList.Add("--framework");
-        startInfo.ArgumentList.Add("net10.0");
+        startInfo.ArgumentList.Add("Debug");
         startInfo.ArgumentList.Add("--verbosity");
         startInfo.ArgumentList.Add("minimal");
+        startInfo.ArgumentList.Add("--filter-class");
+        startInfo.ArgumentList.Add("*IsolatedDotnetVSTestBypassProbeTests*");
         startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
         startInfo.Environment["DOTNET_SHIM_LOG"] = fixture.DotnetLogPath;
+        startInfo.Environment["MCG_ISOLATED_DOTNET_MTP_PROBE_PATH"] = fixture.ProbeReceiptPath;
         startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = fixture.IsolatedRoot;
         startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
@@ -968,6 +979,21 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
         return (process.ExitCode, stdout, stderr);
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
     }
 
     private static string StableSlotName(string value)
@@ -989,5 +1015,20 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         string ArtifactsPath,
         string DependencyDirectory,
         string AssemblyPath,
-        string DotnetLogPath);
+        string ExecutablePath,
+        string DotnetLogPath,
+        string ProbeReceiptPath);
+}
+
+public sealed class IsolatedDotnetVSTestBypassProbeTests
+{
+    [Xunit.Fact]
+    public void WritesExecutionReceiptWhenRequested()
+    {
+        var receiptPath = Environment.GetEnvironmentVariable("MCG_ISOLATED_DOTNET_MTP_PROBE_PATH");
+        if (!string.IsNullOrWhiteSpace(receiptPath))
+        {
+            File.WriteAllText(receiptPath, "xUnit executed");
+        }
+    }
 }
