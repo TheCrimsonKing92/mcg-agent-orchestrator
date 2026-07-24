@@ -1608,7 +1608,7 @@ public sealed class ConductorDriverTests
 
         Assert.Contains("auto-review-retry round 2 convergence brief", retryMessage);
         Assert.Contains("## RESIDUAL_OPEN_ACTION_ITEMS", retryMessage);
-        Assert.Equal(1, CountOccurrences(retryMessage!, "- stable_id: finding-a"));
+        Assert.Equal(1, CountOccurrences(retryMessage!, "- stable_id: finding-1"));
         Assert.Contains("New blocker surfaced.", retryMessage);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
