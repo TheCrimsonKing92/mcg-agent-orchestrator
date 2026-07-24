@@ -255,6 +255,18 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            !WorkerResultBlockers.TryFindPassVerdict(verification))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                "Reviewer WORKER_RESULT verdict rejected: zero open structured findings requires verdict: pass.");
+            return true;
+        }
+
         if (verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&

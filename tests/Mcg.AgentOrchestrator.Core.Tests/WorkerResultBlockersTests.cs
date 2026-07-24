@@ -147,6 +147,29 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
     }
 
+    [Xunit.Fact(DisplayName = "TryFindNeedsWorkVerdict_uses_open_structured_findings_when_blockers_is_none")]
+    public void TryFindNeedsWorkVerdictUsesOpenStructuredFindingsWhenBlockersIsNone()
+    {
+        var verification = new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            0,
+            """
+            WORKER_RESULT:
+            blockers: none
+            findings: [{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]
+            touched_anchors: []
+            verdict: needs-work
+            END_WORKER_RESULT
+            """,
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.True(WorkerResultBlockers.TryFindNeedsWorkVerdict(verification, out var blocker));
+        Assert.Equal("Missing guard.", blocker);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindEvidenceRequest_reads_latest_worker_result_field")]
     public void TryFindEvidenceRequestReadsLatestWorkerResultField()
     {

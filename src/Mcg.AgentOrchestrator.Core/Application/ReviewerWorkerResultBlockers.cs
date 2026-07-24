@@ -64,7 +64,27 @@ public static class WorkerResultBlockers
             }
         }
 
-        return hasNeedsWorkVerdict && !string.IsNullOrWhiteSpace(blocker);
+        if (!hasNeedsWorkVerdict)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(blocker))
+        {
+            return true;
+        }
+
+        if (!TryFindReviewFindingRound(verification, out var round, out _))
+        {
+            return false;
+        }
+
+        blocker = string.Join(
+            "; ",
+            round.Findings
+                .Where(finding => finding.State == ReviewFindingState.Open)
+                .Select(finding => finding.Description));
+        return !string.IsNullOrWhiteSpace(blocker);
     }
 
     public static bool TryFindUnsuppressedNeedsWorkVerdict(

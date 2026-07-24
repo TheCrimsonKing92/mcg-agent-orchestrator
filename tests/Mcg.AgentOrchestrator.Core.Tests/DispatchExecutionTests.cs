@@ -1108,6 +1108,33 @@ public sealed class DispatchExecutionTests
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskCompleted);
     }
 
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_reviewer_zero_open_findings_requires_pass_verdict")]
+    [Xunit.InlineData("needs-work")]
+    [Xunit.InlineData("fail")]
+    [Xunit.InlineData("reviewed")]
+    public void RecordDispatchExecutionResultReviewerZeroOpenFindingsRequiresPassVerdict(string verdict)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Require an explicit passing reviewer verdict", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var result = StructuredReviewerResult(verdict, "[]", "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("zero open structured findings requires verdict: pass", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskCompleted);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_nonzero_worker_result_blocker_before_subscription_retry")]
     public void RecordDispatchExecutionResultFailsNonzeroWorkerResultBlockerBeforeSubscriptionRetry()
 {
