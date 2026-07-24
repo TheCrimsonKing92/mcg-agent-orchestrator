@@ -28,7 +28,7 @@ public sealed class FirewallSetupCommand
     {
         _ruleWriter = ruleWriter;
         _isAdministrator = isAdministrator ?? IsAdministrator;
-        _manifestRoot = manifestRoot ?? Directory.GetCurrentDirectory();
+        _manifestRoot = manifestRoot ?? ResolveDefaultManifestRoot();
     }
 
     public int Execute(TextWriter output)
@@ -73,6 +73,31 @@ public sealed class FirewallSetupCommand
         using var identity = WindowsIdentity.GetCurrent();
         var principal = new WindowsPrincipal(identity);
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    private static string ResolveDefaultManifestRoot()
+    {
+        var candidates = new[]
+        {
+            Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT"),
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory
+        };
+        foreach (var candidate in candidates.Where(path => !string.IsNullOrWhiteSpace(path)))
+        {
+            var directory = new DirectoryInfo(Path.GetFullPath(candidate!));
+            while (directory is not null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "config", "acceptance-manifest.json")))
+                {
+                    return directory.FullName;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+
+        return Directory.GetCurrentDirectory();
     }
 }
 

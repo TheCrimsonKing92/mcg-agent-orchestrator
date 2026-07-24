@@ -73,13 +73,67 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
-    private static string WriteTrx(params (string Id, string Name, string Outcome)[] tests)
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_matches_bare_MTP_display_names_to_TRX_results")]
+    public void TestCoverageInvariantMatchesBareMtpDisplayNamesToTrxResults()
+    {
+        var trx = WriteTrxWithMethodIdentity(
+            ("1", "structural coverage uses the MTP display name", "Passed", "ExampleTests.Runs"));
+        try
+        {
+            var discovered = TestCoverageInvariant.ParseDiscoveredTests(
+                "structural coverage uses the MTP display name",
+                bareTestList: true);
+
+            var result = TestCoverageInvariant.Evaluate(
+                discovered,
+                [new TestPartitionCoverage("core tests", true, [trx])]);
+
+            Xunit.Assert.True(result.Passed);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_apply_generic_deleted_filename_to_unrelated_test")]
+    public void TestCoverageInvariantDoesNotApplyGenericDeletedFilenameToUnrelatedTest()
+    {
+        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        try
+        {
+            var candidate = new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase);
+            var main = new HashSet<string>(
+                ["CurrentTests.Runs", "UnrelatedTests.WasPresentOnMain"],
+                StringComparer.OrdinalIgnoreCase);
+
+            var result = TestCoverageInvariant.Evaluate(
+                candidate,
+                [new TestPartitionCoverage("lane", true, [trx])],
+                main,
+                ["tests/Tests.cs"]);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Contains("main-only:UnrelatedTests.WasPresentOnMain", result.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    private static string WriteTrx(params (string Id, string Name, string Outcome)[] tests) =>
+        WriteTrxWithMethodIdentity(
+            tests.Select(test => (test.Id, test.Name, test.Outcome, test.Name)).ToArray());
+
+    private static string WriteTrxWithMethodIdentity(
+        params (string Id, string Name, string Outcome, string MethodIdentity)[] tests)
     {
         var path = Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx");
         var definitions = string.Join(
             "",
             tests.Select(test =>
-                $"<UnitTest id=\"{test.Id}\" name=\"{test.Name}\"><TestMethod className=\"{test.Name[..test.Name.LastIndexOf('.')]}\" name=\"{test.Name[(test.Name.LastIndexOf('.') + 1)..]}\" /></UnitTest>"));
+                $"<UnitTest id=\"{test.Id}\" name=\"{test.Name}\"><TestMethod className=\"{test.MethodIdentity[..test.MethodIdentity.LastIndexOf('.')]}\" name=\"{test.MethodIdentity[(test.MethodIdentity.LastIndexOf('.') + 1)..]}\" /></UnitTest>"));
         var results = string.Join(
             "",
             tests.Select(test =>

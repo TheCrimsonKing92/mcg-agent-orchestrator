@@ -69,12 +69,6 @@ internal sealed class AcceptanceGateEngineSettings
             throw new InvalidDataException("Acceptance manifest engine maxConcurrentShards must be at least 1.");
         }
 
-        if (InfrastructureTestLanes.Count == 0 && EnforceStructuralCoverage)
-        {
-            throw new InvalidDataException(
-                "Acceptance manifest structural coverage requires at least one infrastructure test lane.");
-        }
-
         var duplicateLane = InfrastructureTestLanes
             .GroupBy(lane => lane.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
@@ -166,10 +160,12 @@ internal sealed class AcceptanceMtpInvocation
                 "Acceptance manifest MTP invocations require project, executablePathTemplate, and firewallExecutablePathTemplate.");
         }
 
-        if (Arguments.Count == 0 || !Arguments.Contains("{executable}", StringComparer.Ordinal))
+        if (Arguments.Count == 0 ||
+            !Arguments[0].Equals("{executable}", StringComparison.Ordinal) ||
+            Arguments.Skip(1).Contains("{executable}", StringComparer.Ordinal))
         {
             throw new InvalidDataException(
-                $"Acceptance manifest MTP invocation for '{Project}' must include an '{{executable}}' argument.");
+                $"Acceptance manifest MTP invocation for '{Project}' must use '{{executable}}' exactly once as its first argument.");
         }
     }
 

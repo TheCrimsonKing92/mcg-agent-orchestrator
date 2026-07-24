@@ -66,6 +66,40 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("trusted review required", decision.Evidence, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_structural_coverage_disable_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesStructuralCoverageDisableToTrustedReview()
+    {
+        const string trusted = """{ "engine": { "enforceStructuralCoverage": true } }""";
+        const string candidate = """{ "engine": { "enforceStructuralCoverage": false } }""";
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.enforceStructuralCoverage", decision.SecurityCriticalChanges);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_MTP_command_token_change_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesMtpCommandTokenChangeToTrustedReview()
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "arguments": ["{executable}", "--old"]
+            }] } }
+            """;
+        const string candidate = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "arguments": ["candidate.exe", "{executable}"]
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.mtpInvocations[].arguments[0]", decision.SecurityCriticalChanges);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_identifies_docs_only_changes")]
     public void RepositoryChangeClassifierIdentifiesDocsOnlyChanges()
     {

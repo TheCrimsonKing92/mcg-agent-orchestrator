@@ -159,12 +159,29 @@ public static class RepositoryChangeClassifier
             "engine.mtpInvocations[].firewallExecutablePathTemplate",
             invocation => invocation.TryGetProperty("firewallExecutablePathTemplate", out var value) ? value.GetString() : null,
             changed);
+        CompareSecurityCriticalField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "engine.mtpInvocations[].arguments[0]",
+            invocation =>
+                invocation.TryGetProperty("arguments", out var arguments) &&
+                arguments.ValueKind == JsonValueKind.Array &&
+                arguments.GetArrayLength() > 0
+                    ? arguments[0].GetString()
+                    : null,
+            changed);
+        CompareSecurityCriticalEngineField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "enforceStructuralCoverage",
+            "engine.enforceStructuralCoverage",
+            changed);
 
         return changed.Count == 0
             ? new AcceptanceManifestTrustDecision(
                 false,
                 [],
-                "positive evidence: security-critical MTP executable and firewall path templates are unchanged")
+                "positive evidence: structural coverage enforcement and security-critical MTP executable dimensions are unchanged")
             : new AcceptanceManifestTrustDecision(
                 true,
                 changed,
@@ -248,6 +265,32 @@ public static class RepositoryChangeClassifier
         {
             changed.Add(fieldName);
         }
+    }
+
+    private static void CompareSecurityCriticalEngineField(
+        JsonElement trustedRoot,
+        JsonElement candidateRoot,
+        string propertyName,
+        string fieldName,
+        ICollection<string> changed)
+    {
+        var trustedValue = ReadEngineProperty(trustedRoot, propertyName);
+        var candidateValue = ReadEngineProperty(candidateRoot, propertyName);
+        if (!string.Equals(trustedValue, candidateValue, StringComparison.Ordinal))
+        {
+            changed.Add(fieldName);
+        }
+    }
+
+    private static string? ReadEngineProperty(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty("engine", out var engine) ||
+            !engine.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.GetRawText();
     }
 
     private static string[] ReadMtpInvocationValues(

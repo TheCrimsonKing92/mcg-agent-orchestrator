@@ -15,7 +15,7 @@ internal sealed record TestCoverageInvariantResult(
 
 internal static class TestCoverageInvariant
 {
-    public static IReadOnlySet<string> ParseDiscoveredTests(string output)
+    public static IReadOnlySet<string> ParseDiscoveredTests(string output, bool bareTestList = false)
     {
         var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var inTestList = false;
@@ -33,6 +33,12 @@ internal static class TestCoverageInvariant
             if (line.StartsWith("DISCOVERED_TEST:", StringComparison.OrdinalIgnoreCase))
             {
                 AddNormalized(tests, line["DISCOVERED_TEST:".Length..]);
+                continue;
+            }
+
+            if (bareTestList)
+            {
+                AddNormalized(tests, line);
                 continue;
             }
 
@@ -90,10 +96,12 @@ internal static class TestCoverageInvariant
                 }
 
                 var id = (string?)result.Attribute("testId");
-                var identity = id is not null && definitions.TryGetValue(id, out var definition)
-                    ? definition
-                    : (string?)result.Attribute("testName");
-                AddNormalized(tests, identity);
+                var displayName = (string?)result.Attribute("testName");
+                AddNormalized(tests, displayName);
+                if (id is not null && definitions.TryGetValue(id, out var definition))
+                {
+                    AddNormalized(tests, definition);
+                }
             }
         }
 
@@ -143,7 +151,7 @@ internal static class TestCoverageInvariant
             missing.AddRange(mainDiscoveredTests
                 .Where(mainTest => !candidateDiscoveredTests.Any(candidate => IdentitiesMatch(mainTest, candidate)))
                 .Where(mainTest => !deletedClassNames.Any(className =>
-                    mainTest.Contains(className!, StringComparison.OrdinalIgnoreCase)))
+                    IdentityBelongsToDeletedTestFile(mainTest, className!)))
                 .Select(mainTest => $"main-only:{mainTest}"));
         }
 
@@ -161,6 +169,13 @@ internal static class TestCoverageInvariant
         return normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase) ||
             normalizedLeft.EndsWith($".{normalizedRight}", StringComparison.OrdinalIgnoreCase) ||
             normalizedRight.EndsWith($".{normalizedLeft}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IdentityBelongsToDeletedTestFile(string identity, string className)
+    {
+        var normalized = NormalizeIdentity(identity);
+        return normalized.StartsWith($"{className}.", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains($".{className}.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AddNormalized(ISet<string> tests, string? value)

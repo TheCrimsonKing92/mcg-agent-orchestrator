@@ -114,6 +114,107 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_rejects_candidate_command_before_MTP_executable")]
+    public void AcceptanceGateEngineRejectsCandidateCommandBeforeMtpExecutable()
+    {
+        var root = CreateWorkspace("""
+            {
+              "engine": {
+                "mtpInvocations": [{
+                  "project": "tests/Example.Tests/Example.Tests.csproj",
+                  "executablePathTemplate": "bin/{projectName}{executableExtension}",
+                  "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+                  "arguments": ["candidate-command", "{executable}"]
+                }]
+              }
+            }
+            """);
+        try
+        {
+            var error = Xunit.Assert.Throws<InvalidDataException>(
+                () => AcceptanceGateEngineSettings.Load(root));
+
+            Xunit.Assert.Contains("first argument", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_discovers_Core_through_direct_MTP")]
+    public async Task GoalAcceptanceVerifierStructuralCoverageDiscoversCoreThroughDirectMtp()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 1,
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": true,
+                "mtpInvocations": [{
+                  "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                  "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                  "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                  "arguments": [
+                    "{executable}",
+                    "--results-directory",
+                    "{resultsDirectory}",
+                    "--report-trx-filename",
+                    "{trxFileName}"
+                  ]
+                }]
+              },
+              "checks": [{
+                "name": "core tests",
+                "type": "dotnet-test",
+                "runner": "mtp",
+                "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"
+              }]
+            }
+            """);
+        const string displayName = "structural coverage discovers Core through direct MTP";
+        var calls = new List<string[]>();
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                calls.Add(arguments);
+                if (arguments.Contains("--list-tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, displayName));
+                }
+
+                if (arguments.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(arguments, displayName, "CoreCoverageTests.Runs");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Contains(result.Checks!, check =>
+                check.Name == "structural test coverage" &&
+                check.ResultSummary!.Contains("discovered=1", StringComparison.Ordinal));
+            var discoveryCalls = calls.Where(call => call.Contains("--list-tests")).ToArray();
+            Xunit.Assert.Equal(2, discoveryCalls.Length);
+            Xunit.Assert.All(discoveryCalls, call =>
+                Xunit.Assert.NotEqual("dotnet", call[0], StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_fails_when_manifest_lane_filters_out_discovered_test")]
     public async Task GoalAcceptanceVerifierStructuralCoverageFailsWhenManifestLaneFiltersOutDiscoveredTest()
     {
@@ -201,5 +302,19 @@ public sealed class AcceptanceGateEngineSettingsTests
         File.WriteAllText(
             Path.Combine(resultsDirectory, logger[prefix.Length..]),
             $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results></TestRun>");
+    }
+
+    private static void WriteMtpTrx(string[] arguments, string displayName, string methodIdentity)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(arguments, "--results-directory");
+        var trxFileIndex = Array.IndexOf(arguments, "--report-trx-filename");
+        Xunit.Assert.True(resultsDirectoryIndex >= 0 && trxFileIndex >= 0);
+        var resultsDirectory = arguments[resultsDirectoryIndex + 1];
+        Directory.CreateDirectory(resultsDirectory);
+        var testClass = methodIdentity[..methodIdentity.LastIndexOf('.')];
+        var method = methodIdentity[(methodIdentity.LastIndexOf('.') + 1)..];
+        File.WriteAllText(
+            Path.Combine(resultsDirectory, arguments[trxFileIndex + 1]),
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{displayName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{displayName}\" outcome=\"Passed\" /></Results></TestRun>");
     }
 }

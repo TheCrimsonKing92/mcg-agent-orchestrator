@@ -7,8 +7,12 @@ public sealed class FirewallSetupCommandTests
     public void FirewallSetupCommandComputesStableSlotTesthostRulesIdempotently()
     {
         var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var previousRepositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
         var root = Path.Combine(Path.GetTempPath(), "mcg-firewall-test-root");
         Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, root);
+        Environment.SetEnvironmentVariable(
+            "MCG_ORCHESTRATOR_REPOSITORY_ROOT",
+            InfrastructureTestSupport.FindRepositoryRoot());
         try
         {
             var writer = new RecordingFirewallRuleWriter();
@@ -61,6 +65,7 @@ public sealed class FirewallSetupCommandTests
         finally
         {
             Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT", previousRepositoryRoot);
         }
     }
 

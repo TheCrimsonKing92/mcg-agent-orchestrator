@@ -3504,14 +3504,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
-        var broadChecks = manifestChecks.Where(IsBroadInfrastructureTestCheck).ToArray();
+        var broadChecks = manifestChecks.Where(IsFullPolicyShardCheck).ToArray();
         if (broadChecks.Length == 0)
         {
             return new AcceptanceCheckResult(
                 "structural test coverage",
                 false,
                 1,
-                "Structural coverage is enabled but the manifest has no broad infrastructure test check.",
+                "Structural coverage is enabled but the manifest has no broad Core or Infrastructure test check.",
                 ResultSummary: "no broad test project");
         }
 
@@ -3533,8 +3533,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var allSummaries = new List<string>();
         foreach (var broadCheck in broadChecks)
         {
-            var candidateDiscoveryArguments = WithBuildEnvironmentArguments(
-                BuildDiscoveryArguments(broadCheck),
+            var candidateDiscoveryArguments = BuildDiscoveryArguments(
+                broadCheck,
+                EngineSettings,
                 environment);
             var candidateDiscovery = await _runner(
                 candidateDiscoveryArguments,
@@ -3577,18 +3578,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ResultSummary: "trusted main baseline build failed");
             }
 
-            var mainDiscoveryArguments = new[]
-            {
-                "dotnet",
-                "test",
-                broadCheck.Project!,
-                "--no-build",
-                "--list-tests",
-                "--artifacts-path",
-                mainArtifactsPath,
-                "--verbosity",
-                "minimal"
-            };
+            var mainDiscoveryArguments = BuildDiscoveryArguments(
+                broadCheck,
+                EngineSettings,
+                environment with { ArtifactsPath = mainArtifactsPath });
             var mainDiscovery = await _runner(
                 mainDiscoveryArguments,
                 mainWorktreePath,
@@ -3604,7 +3597,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ResultSummary: "trusted main discovery failed");
             }
 
-            var partitions = ExpandBroadInfrastructureCheck(broadCheck)
+            IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
+                ? ExpandBroadInfrastructureCheck(broadCheck)
+                : [broadCheck];
+            var partitions = partitionChecks
                 .Select(shard =>
                 {
                     var result = completedChecks.FirstOrDefault(candidate =>
@@ -3616,9 +3612,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 })
                 .ToArray();
             var coverage = TestCoverageInvariant.Evaluate(
-                TestCoverageInvariant.ParseDiscoveredTests(candidateDiscovery.Output),
+                TestCoverageInvariant.ParseDiscoveredTests(
+                    candidateDiscovery.Output,
+                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
                 partitions,
-                TestCoverageInvariant.ParseDiscoveredTests(mainDiscovery.Output),
+                TestCoverageInvariant.ParseDiscoveredTests(
+                    mainDiscovery.Output,
+                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
                 deletedTestFiles);
             if (!coverage.Passed)
             {
@@ -3644,11 +3644,27 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ResultSummary: string.Join("; ", allSummaries));
     }
 
-    private static string[] BuildDiscoveryArguments(AcceptanceManifestCheck check)
+    private static string[] BuildDiscoveryArguments(
+        AcceptanceManifestCheck check,
+        AcceptanceGateEngineSettings engineSettings,
+        DotnetBuildEnvironment environment)
     {
         if (string.IsNullOrWhiteSpace(check.Project))
         {
             throw new InvalidDataException($"Acceptance check '{check.Name}' has no discovery project.");
+        }
+
+        if (UsesMicrosoftTestingPlatform(check))
+        {
+            var invocation = engineSettings.ResolveMtpInvocation(check.Project);
+            return
+            [
+                invocation.ResolveExecutablePath(environment),
+                "--no-ansi",
+                "--progress",
+                "off",
+                "--list-tests"
+            ];
         }
 
         var arguments = new List<string>
@@ -3671,7 +3687,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             arguments.Add(argument);
         }
 
-        return [.. arguments];
+        return WithBuildEnvironmentArguments([.. arguments], environment);
     }
 
     private static string? ResolveMainWorktreePath(string worktreePath)
