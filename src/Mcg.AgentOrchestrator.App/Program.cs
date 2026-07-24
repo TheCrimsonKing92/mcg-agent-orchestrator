@@ -16,6 +16,11 @@ if (args.Length >= 2 && args[0] == ConductorParallelAcceptanceAttemptCoordinator
     return ConductorParallelAcceptanceAttemptCoordinator.RunOwnedProcess(args[1]);
 }
 
+if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
+{
+    return ConductorSuccessorSelfCheck.Run(args);
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;
@@ -123,12 +128,11 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-if (RunsStartupCleanup(startupArgs))
-{
-    WorkerProcessJobs.ConfigureRegistry(workspace.SqliteStatePath);
-    WorkerProcessJobs.SweepStartupOrphans();
-    GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
-}
+ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+    RunsStartupCleanup(startupArgs),
+    ConductorLoopHandoff.IsAuthorityTransferRequested,
+    workspace.SqliteStatePath,
+    workspace.ExecutionDirectory);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
@@ -200,6 +204,12 @@ try
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
+    if (CliPersistentStateRunner.IsConductLoop(startupArgs))
+    {
+        // A handoff successor completes normal startup and state/config loading while the
+        // incumbent retains exclusive authority, then waits for the explicit lease transfer.
+        ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
+    }
 }
 catch (Exception ex)
 {
@@ -376,4 +386,28 @@ static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
     return startupArgs.Count >= 3 &&
         startupArgs[0].Equals("goal-events", StringComparison.OrdinalIgnoreCase) &&
         startupArgs.Any(arg => arg.Equals("--follow", StringComparison.OrdinalIgnoreCase));
+}
+
+internal static class ProgramStartupLifecycle
+{
+    internal static void InitializeWorkerProcessTracking(
+        bool runsStartupCleanup,
+        bool authorityTransferRequested,
+        string stateStorePath,
+        string executionDirectory)
+    {
+        if (!runsStartupCleanup)
+        {
+            return;
+        }
+
+        WorkerProcessJobs.ConfigureRegistry(stateStorePath);
+        if (authorityTransferRequested)
+        {
+            return;
+        }
+
+        WorkerProcessJobs.SweepStartupOrphans();
+        GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+    }
 }

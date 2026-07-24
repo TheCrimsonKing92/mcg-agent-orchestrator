@@ -11,6 +11,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestratorStateRepository
 {
+    public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
@@ -28,6 +29,56 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     public SqliteOrchestratorStateRepository(string dbPath)
         : this(dbPath, statementObserver: null, telemetryOptions: null)
     {
+    }
+
+    public static string ValidateReadOnlySchema(string dbPath)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly
+        };
+        using var conn = new SqliteConnection(builder.ConnectionString);
+        conn.Open();
+
+        using var version = conn.CreateCommand();
+        version.CommandText = "SELECT value FROM meta WHERE key = 'schema_version'";
+        var value = version.ExecuteScalar()?.ToString();
+        if (!string.Equals(value, CurrentSchemaVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"State schema is incompatible or has a pending migration: expected {CurrentSchemaVersion}, found {value ?? "missing"}.");
+        }
+
+        using var requiredColumns = conn.CreateCommand();
+        requiredColumns.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name IN ('version', 'source_backlog_item_id')) +
+                (SELECT COUNT(*) FROM pragma_table_info('model_fit_history') WHERE name IN ('outcome_rule', 'outcome_class', 'dispatch_lane'))
+            """;
+        if (Convert.ToInt32(requiredColumns.ExecuteScalar(), CultureInfo.InvariantCulture) != 5)
+        {
+            throw new InvalidOperationException(
+                "State schema has pending column migrations and cannot be opened safely by the successor.");
+        }
+
+        using var requiredObjects = conn.CreateCommand();
+        requiredObjects.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE (type = 'table' AND name = 'engineering_practices')
+               OR (type = 'index' AND name IN (
+                    'ix_goals_source_backlog_item_id',
+                    'ix_goals_status',
+                    'ix_model_fit_history_outcome_class'))
+            """;
+        if (Convert.ToInt32(requiredObjects.ExecuteScalar(), CultureInfo.InvariantCulture) != 4)
+        {
+            throw new InvalidOperationException(
+                "State schema has pending table or index migrations and cannot be opened safely by the successor.");
+        }
+
+        return value;
     }
 
     internal SqliteOrchestratorStateRepository(string dbPath, Action<string>? statementObserver)
@@ -247,7 +298,7 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
-        RunNonQuery(conn, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')");
+        RunNonQuery(conn, $"INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '{CurrentSchemaVersion}')");
         PracticeRegistryStore.EnsureSchemaAndSeed(conn);
     }
 

@@ -67,6 +67,7 @@ internal sealed class ConductorDriver
     private readonly bool _parallelAcceptanceEnabled;
 
     internal Action<string>? PhaseTimingSink { get; set; }
+    internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -1998,6 +1999,7 @@ internal sealed class ConductorDriver
         }
 
         // Gate 3: land via integration branch (the branch is already rebased onto main by Gate 1).
+        var landingFileScopes = _getLandingFileScopes(goal);
         var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
@@ -2014,6 +2016,12 @@ internal sealed class ConductorDriver
 
         if (landResult.MainAdvanced)
         {
+            // Schedule any required generation handoff before fallible advisory/post-landing work.
+            // Main has already advanced, so losing this receipt would permanently miss the relaunch.
+            SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
+                goal.Id.Value,
+                landingFileScopes));
+
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
             // successful landing. It records judge receipts for observability but never gates landing.
             _runAdvisorySemanticAcceptance(goal, acceptance);
@@ -2219,3 +2227,7 @@ internal sealed class ConductorDriver
             : $"{criterion.Name}: {summary.Trim()}";
     }
 }
+
+internal sealed record ConductorLandingReceipt(
+    string GoalId,
+    IReadOnlyList<string> ChangedFiles);

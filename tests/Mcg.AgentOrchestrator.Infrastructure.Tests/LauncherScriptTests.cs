@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 [Xunit.Collection("ProcessSpawning")]
@@ -314,7 +315,7 @@ public sealed class LauncherScriptTests
             Directory.CreateDirectory(Path.GetDirectoryName(nativeSource)!);
             File.WriteAllText(nativeSource, "native");
 
-            var runDir = Path.Combine(root, "mcg-run", AppDllHashPrefix(appDll));
+            var runDir = Path.Combine(root, "mcg-run", OutputContentHashPrefix(appOutput));
             Directory.CreateDirectory(runDir);
             File.Copy(appDll, Path.Combine(runDir, Path.GetFileName(appDll)));
 
@@ -329,6 +330,54 @@ public sealed class LauncherScriptTests
             Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
             Assert.Equal(runDir, result.Stdout.Trim());
             Assert.True(File.Exists(Path.Combine(runDir, "runtimes", "win-x64", "native", "e_sqlite3.dll")));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ResolveRunDir_content_address_includes_changed_dependencies")]
+    public void ResolveRunDirContentAddressIncludesChangedDependencies()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(Path.Combine(appOutput, "runtimes", "win-x64", "native"));
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            var dependency = Path.Combine(appOutput, "Mcg.AgentOrchestrator.Infrastructure.dll");
+            File.WriteAllText(appDll, "unchanged app");
+            File.WriteAllText(dependency, "dependency v1");
+            File.WriteAllText(
+                Path.Combine(appOutput, "runtimes", "win-x64", "native", "e_sqlite3.dll"),
+                "native");
+
+            string Resolve()
+            {
+                var result = RunPowerShellCommand(repoRoot, $"""
+                    $ErrorActionPreference = 'Stop'
+                    $env:TEMP = '{EscapePowerShellSingleQuoted(root)}'
+                    $env:TMP = '{EscapePowerShellSingleQuoted(root)}'
+                    & '{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "resolve-run-dir.ps1"))}' '{EscapePowerShellSingleQuoted(appDll)}'
+                    """);
+                Assert.Equal(0, result.ExitCode);
+                Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+                Assert.False(string.IsNullOrWhiteSpace(result.Stdout));
+                return result.Stdout.Trim();
+            }
+
+            var firstRunDirectory = Resolve();
+            File.WriteAllText(dependency, "dependency v2");
+            var secondRunDirectory = Resolve();
+
+            Assert.NotEqual(firstRunDirectory, secondRunDirectory);
+            Assert.True(Directory.Exists(firstRunDirectory));
+            Assert.True(Directory.Exists(secondRunDirectory));
+            Assert.Equal(
+                "dependency v2",
+                File.ReadAllText(Path.Combine(secondRunDirectory, Path.GetFileName(dependency))));
         }
         finally
         {
@@ -1113,10 +1162,21 @@ public sealed class LauncherScriptTests
     private static string RetiredManualLandingScriptName() =>
         string.Concat("Land-", "Verified", "Goal.ps1");
 
-    private static string AppDllHashPrefix(string appDll)
+    private static string OutputContentHashPrefix(string outputDirectory)
     {
-        using var stream = File.OpenRead(appDll);
-        return Convert.ToHexString(SHA1.HashData(stream)).Substring(0, 16);
+        var payload = new StringBuilder();
+        foreach (var file in Directory.GetFiles(outputDirectory, "*", SearchOption.AllDirectories)
+                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            payload.Append(Path.GetRelativePath(outputDirectory, file).Replace('\\', '/'));
+            payload.Append(':');
+            using var stream = File.OpenRead(file);
+            payload.Append(Convert.ToHexString(SHA256.HashData(stream)));
+            payload.Append('\n');
+        }
+
+        return Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(payload.ToString())))
+            .Substring(0, 16);
     }
 
     private static void TryDeleteDirectory(string path)

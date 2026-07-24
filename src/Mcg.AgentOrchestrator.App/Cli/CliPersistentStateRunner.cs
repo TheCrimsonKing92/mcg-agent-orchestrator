@@ -524,7 +524,7 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
-        using var conductLoopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        using var conductLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
         var kernel = LoadConductLoopKernel(stateRepository);
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
@@ -629,12 +629,15 @@ internal static class CliPersistentStateRunner
             () => LoadConductLoopKernel(stateRepository),
             Persist,
             persistGoalKernel: PersistGoals,
-            releaseConductLoopLease: conductLoopLease.Dispose,
+            releaseConductLoopLease: conductLoopLease.Release,
+            reacquireConductLoopLease: conductLoopLease.Reacquire,
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository));
 
-        // Final checkpoint so the loop's terminal state is durable even if the last tick made no progress.
-        Persist(kernel);
+        // A successful handoff has transferred the lease and authority to the successor. All incumbent
+        // tick state was persisted before handoff; do not write once the successor owns the loop.
+        if (conductLoopLease.IsHeld)
+            Persist(kernel);
         currentGoal = loopCurrentGoal;
         return shouldSave;
     }

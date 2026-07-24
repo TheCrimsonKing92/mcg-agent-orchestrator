@@ -47,6 +47,55 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(summary.Files, file => file.IsSecuritySensitive);
     }
 
+    [Xunit.Theory(DisplayName = "RepositoryChangeClassifier_identifies_conductor_relaunch_changes")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunctionCatalogStore.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AgentCatalogStore.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/TaskComplexityEstimator.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementGate.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/DispatchReadinessEvaluator.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorEntityResolver.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Dashboard/Api/GoalManagementCommandService.Dispatches.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/SubscriptionPlanning/SubscriptionPlanBuilder.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Providers/ProviderRegistryFactory.cs")]
+    [Xunit.InlineData("config/acceptance-manifest.json")]
+    [Xunit.InlineData("Directory.Build.props")]
+    [Xunit.InlineData("Directory.Build.rsp")]
+    public void RepositoryChangeClassifierIdentifiesConductorRelaunchChanges(string path)
+    {
+        var summary = RepositoryChangeClassifier.Classify([path]);
+
+        Assert.True(summary.RequiresConductorRelaunch);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryChangeClassifier_does_not_infer_relaunch_from_similar_non_runtime_paths")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderRegistryFactoryTests.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/BuildStatusRenderer.cs")]
+    public void RepositoryChangeClassifierDoesNotInferRelaunchFromSimilarNonRuntimePaths(string path)
+    {
+        var summary = RepositoryChangeClassifier.Classify([path]);
+
+        Assert.False(summary.RequiresConductorRelaunch);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_does_not_relaunch_for_non_infrastructure_changes")]
+    public void RepositoryChangeClassifierDoesNotRelaunchForNonInfrastructureChanges()
+    {
+        var summary = RepositoryChangeClassifier.Classify([
+            "docs/operator.md",
+            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs"
+        ]);
+
+        Assert.False(summary.RequiresConductorRelaunch);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryOwnershipMap_classifies_high_risk_generated_dashboard_tests_and_docs")]
     public void RepositoryOwnershipMapClassifiesHighRiskGeneratedDashboardTestsAndDocs()
     {

@@ -24,6 +24,7 @@ public static bool ExecuteCommand(
     TimeSpan? stableSlotAcquisitionTimeout = null,
     Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
     Action? releaseConductLoopLease = null,
+    Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
 {
@@ -43,6 +44,7 @@ public static bool ExecuteCommand(
         persistGoalKernel,
         phaseTimings: phaseTimings,
         releaseConductLoopLease: releaseConductLoopLease,
+        reacquireConductLoopLease: reacquireConductLoopLease,
         reloadResolvedParkedHumanWaitKernel: reloadResolvedParkedHumanWaitKernel,
         reloadParkedGoalSafetyNetKernel: reloadParkedGoalSafetyNetKernel)
     {

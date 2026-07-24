@@ -93,6 +93,52 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_handoff_configures_registry_without_sweeping_incumbent_processes")]
+    public void ProgramStartupLifecycleHandoffConfiguresRegistryWithoutSweepingIncumbentProcesses()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
+        var dbPath = Path.Combine(root, "state.db");
+        Directory.CreateDirectory(root);
+        Process? incumbentWorker = null;
+        Process? successorWorker = null;
+        try
+        {
+            incumbentWorker = StartLongRunningShell();
+            Assert.True(SpawnProcessIdentityReader.TryRead(incumbentWorker, out var incumbentIdentity));
+            new SpawnRegistry(dbPath).Register("incumbent-dispatch", incumbentIdentity);
+
+            ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+                runsStartupCleanup: true,
+                authorityTransferRequested: true,
+                dbPath,
+                root);
+
+            Assert.True(IsRunning(incumbentWorker.Id));
+            successorWorker = StartLongRunningShell();
+            Assert.True(WorkerProcessJobs.TryRegister(successorWorker, "successor-dispatch"));
+            var activeEntries = WorkerProcessJobs.ListActiveRegistryEntriesForTests();
+            Assert.Contains(activeEntries, entry => entry.OwnerId == "incumbent-dispatch");
+            Assert.Contains(activeEntries, entry => entry.OwnerId == "successor-dispatch");
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (incumbentWorker is not null)
+            {
+                try { incumbentWorker.Kill(entireProcessTree: true); } catch { }
+                incumbentWorker.Dispose();
+            }
+
+            if (successorWorker is not null)
+            {
+                try { successorWorker.Kill(entireProcessTree: true); } catch { }
+                successorWorker.Dispose();
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_registers_and_releases_wrapper_job")]
     public void WorkerProcessJobsRegistersAndReleasesWrapperJob()
     {

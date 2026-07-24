@@ -16,6 +16,8 @@ internal sealed class ConductorBatchLoop
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
     internal const int DefaultUnscopedStallTickThreshold = 3;
+    internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
+    internal const bool DefaultSelfRelaunchEnabled = false;
 
     private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -26,6 +28,8 @@ internal sealed class ConductorBatchLoop
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
     private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
+    private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _selfRelaunch;
+    private readonly bool _selfRelaunchEnabled;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
@@ -45,7 +49,9 @@ internal sealed class ConductorBatchLoop
         ConductEventLogWriter? conductEventLogWriter = null,
         Func<DateTimeOffset>? utcNow = null,
         ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null,
-        ProgressiveReviewSteeringCoordinator? progressiveReviewSteering = null)
+        ProgressiveReviewSteeringCoordinator? progressiveReviewSteering = null,
+        Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? selfRelaunch = null,
+        bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -60,6 +66,8 @@ internal sealed class ConductorBatchLoop
         _progressiveReviewGlances = progressiveReviewGlances;
         _progressiveReviewSteering = progressiveReviewSteering;
         _handoffOnMaxDuration = handoffOnMaxDuration;
+        _selfRelaunch = selfRelaunch;
+        _selfRelaunchEnabled = selfRelaunchEnabled;
         _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
@@ -87,6 +95,7 @@ internal sealed class ConductorBatchLoop
         Action<TimeSpan>? busyWriteDelay = null)
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
+        var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
         try
         {
@@ -107,12 +116,46 @@ internal sealed class ConductorBatchLoop
         var totalDone = 0;
         var stopRequested = false;
         var maxDurationReached = false;
+        ConductorSelfRelaunchRequest? pendingSelfRelaunch = null;
+        ConductorSelfRelaunchRequest? deferredSelfRelaunch = null;
+        int? selfRelaunchRetryAfterTick = null;
+        DateTimeOffset? selfRelaunchDrainStartedAt = null;
+        ConductorLoopHandoffResult? selfRelaunchHandoff = null;
         var started = _utcNow();
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
+        if (_selfRelaunchEnabled && _selfRelaunch is not null)
+        {
+            driver.SuccessfulLandingSink = receipt =>
+            {
+                var changes = RepositoryChangeClassifier.Classify(receipt.ChangedFiles);
+                if (changes.RequiresConductorRelaunch)
+                {
+                    pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
+                    deferredSelfRelaunch = null;
+                    selfRelaunchRetryAfterTick = null;
+                    selfRelaunchDrainStartedAt ??= _utcNow();
+                    EmitProgress(
+                        $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
+                        $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
+                }
+
+                previousSuccessfulLandingSink?.Invoke(receipt);
+            };
+        }
         EmitProgress($"LOOP_START policy={Sanitize(policy.Name)} maxIterations={maxIterations?.ToString() ?? "none"} maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}");
 
         while (true)
         {
+            if (pendingSelfRelaunch is null &&
+                deferredSelfRelaunch is not null &&
+                totalTicks >= selfRelaunchRetryAfterTick)
+            {
+                pendingSelfRelaunch = deferredSelfRelaunch;
+                deferredSelfRelaunch = null;
+                selfRelaunchRetryAfterTick = null;
+                selfRelaunchDrainStartedAt = _utcNow();
+            }
+
             if (IsStopRequested(stopFilePath))
             {
                 stopRequested = true;
@@ -123,7 +166,9 @@ internal sealed class ConductorBatchLoop
                 break;
             }
 
-            if (maxIterations.HasValue && totalTicks >= maxIterations.Value)
+            if (pendingSelfRelaunch is null &&
+                maxIterations.HasValue &&
+                totalTicks >= maxIterations.Value)
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
@@ -132,7 +177,9 @@ internal sealed class ConductorBatchLoop
                 break;
             }
 
-            if (maxDuration.HasValue && _utcNow() - started >= maxDuration.Value)
+            if (pendingSelfRelaunch is null &&
+                maxDuration.HasValue &&
+                _utcNow() - started >= maxDuration.Value)
             {
                 EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
@@ -151,6 +198,108 @@ internal sealed class ConductorBatchLoop
                 _recoverInterruptedDispatches(kernel);
                 return true;
             });
+            if (pendingSelfRelaunch is not null)
+            {
+                var activeDispatches = CountRunningDispatches(kernel, onlyGoalId);
+                if (activeDispatches > 0)
+                {
+                    var drainElapsed = _utcNow() - (selfRelaunchDrainStartedAt ?? _utcNow());
+                    if (drainElapsed >= DispatchRecoveryPolicy.DefaultLiveIdleTimeout)
+                    {
+                        EmitSelfRelaunchRollback(
+                            totalTicks,
+                            pendingSelfRelaunch.GoalId,
+                            "drain",
+                            $"active dispatches did not reach terminal receipts within {(int)DispatchRecoveryPolicy.DefaultLiveIdleTimeout.TotalMinutes} minutes");
+                        deferredSelfRelaunch = pendingSelfRelaunch;
+                        selfRelaunchRetryAfterTick = totalTicks + 1;
+                        pendingSelfRelaunch = null;
+                        selfRelaunchDrainStartedAt = null;
+                    }
+
+                    if (pendingSelfRelaunch is not null)
+                    {
+                        EmitProgress(
+                            $"LOOP_RELAUNCH_DRAIN tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active={activeDispatches} admitting=false");
+                        TryPersistCheckpoint(
+                            persistTick,
+                            persistGoalTick,
+                            kernel,
+                            totalTicks,
+                            onlyGoalId,
+                            "self-relaunch-drain",
+                            null,
+                            busyWriteDelay);
+                        var drainWait = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
+                        if (sleepFunc is not null)
+                        {
+                            sleepFunc(drainWait);
+                        }
+                        else
+                        {
+                            SleepUntilNextTick(
+                                drainWait,
+                                stopFilePath,
+                                wakeSignal,
+                                GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
+                        }
+                        continue;
+                    }
+                }
+
+                if (pendingSelfRelaunch is not null)
+                {
+                    EmitProgress(
+                        $"LOOP_RELAUNCH_REBUILD tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active=0 admitting=false");
+                    ConductorSelfRelaunchResult relaunchResult;
+                    try
+                    {
+                        relaunchResult = _selfRelaunch!(pendingSelfRelaunch);
+                    }
+                    catch (Exception ex)
+                    {
+                        EmitProgress(
+                            $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
+                            $"rolledBack=false continuing=false reason={SanitizeHandoffDetail($"{ex.GetType().Name}: {ex.Message}")}");
+                        throw new InvalidOperationException(
+                            "Self-relaunch failed without confirming incumbent authority; refusing to continue the conductor loop.",
+                            ex);
+                    }
+                    if (relaunchResult.HandedOff)
+                    {
+                        selfRelaunchHandoff = relaunchResult.Handoff;
+                        EmitHandoffProgress(totalTicks, relaunchResult.Handoff!, pendingSelfRelaunch.GoalId);
+                        break;
+                    }
+
+                    if (!relaunchResult.IncumbentCanContinue)
+                    {
+                        EmitProgress(
+                            $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
+                            $"rolledBack=false continuing=false reason={SanitizeHandoffDetail(relaunchResult.Reason ?? "rollback authority was not confirmed")}");
+                        throw new InvalidOperationException(
+                            "Self-relaunch rollback did not confirm incumbent authority; refusing to continue the conductor loop.");
+                    }
+
+                    if (string.Equals(relaunchResult.FailedPhase, "handoff", StringComparison.Ordinal))
+                    {
+                        EmitProgress(
+                            $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
+                            $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(relaunchResult.Reason ?? "unknown")}");
+                    }
+                    else
+                    {
+                        EmitSelfRelaunchRollback(
+                            totalTicks,
+                            pendingSelfRelaunch.GoalId,
+                            relaunchResult.FailedPhase ?? "build",
+                            relaunchResult.Reason ?? "unknown");
+                    }
+
+                    pendingSelfRelaunch = null;
+                    selfRelaunchDrainStartedAt = null;
+                }
+            }
             ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, escalatedGoals, reapedGoals, goalProjectionCache);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
             ReconcileUnscopedDispatchableGoals(
@@ -265,6 +414,12 @@ internal sealed class ConductorBatchLoop
                 : kernel.BuildTaskDurationStats();
             foreach (var goal in eligible)
             {
+                if (pendingSelfRelaunch is not null &&
+                    !parallelLandingResults.ContainsKey(goal.Id.Value))
+                {
+                    break;
+                }
+
                 var label = goal.Id.Value[..8];
                 var singleGoalClock = Stopwatch.StartNew();
                 void FinishGoalWalk(string result)
@@ -573,7 +728,7 @@ internal sealed class ConductorBatchLoop
             onTick?.Invoke(tickSummary);
         }
 
-        ConductorLoopHandoffResult? handoff = null;
+        ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
         if (maxDurationReached && _handoffOnMaxDuration is not null)
         {
             var landedGoalDelta = GetCompletedGoalIds(kernel).Except(initiallyCompletedGoalIds, StringComparer.Ordinal).Count();
@@ -586,15 +741,23 @@ internal sealed class ConductorBatchLoop
         }
         finally
         {
+            driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
         }
     }
 
-    private static void EmitHandoffProgress(int tick, ConductorLoopHandoffResult handoff)
+    internal static bool ResolveSelfRelaunchEnabled(string? configuredValue) =>
+        bool.TryParse(configuredValue, out var enabled) && enabled;
+
+    private static void EmitHandoffProgress(
+        int tick,
+        ConductorLoopHandoffResult handoff,
+        string? goalId = null)
     {
+        var goal = goalId is null ? string.Empty : $" goal={goalId}";
         if (handoff.Started)
         {
-            EmitProgress($"LOOP_HANDOFF tick={tick} pid={handoff.ProcessId} stdout={SanitizeHandoffDetail(handoff.StdoutPath ?? "")} stderr={SanitizeHandoffDetail(handoff.StderrPath ?? "")} verification={SanitizeHandoffDetail(handoff.VerificationOutcome ?? "unknown")}");
+            EmitProgress($"LOOP_HANDOFF tick={tick}{goal} pid={handoff.ProcessId} stdout={SanitizeHandoffDetail(handoff.StdoutPath ?? "")} stderr={SanitizeHandoffDetail(handoff.StderrPath ?? "")} verification={SanitizeHandoffDetail(handoff.VerificationOutcome ?? "unknown")}");
             Console.WriteLine($"[conduct --loop] Handoff started successor pid={handoff.ProcessId} log={handoff.StdoutPath}");
             return;
         }
@@ -609,6 +772,15 @@ internal sealed class ConductorBatchLoop
         EmitProgress($"LOOP_HANDOFF_SKIPPED tick={tick} reason={Sanitize(handoff.Reason ?? "not-started")}");
         Console.WriteLine($"[conduct --loop] Handoff skipped: {handoff.Reason ?? "not-started"}");
     }
+
+    private static void EmitSelfRelaunchRollback(
+        int tick,
+        string goalId,
+        string phase,
+        string reason) =>
+        EmitProgress(
+            $"LOOP_RELAUNCH_ROLLBACK tick={tick} goal={goalId} phase={SanitizeHandoffDetail(phase)} " +
+            $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(reason)}");
 
     private static T? RunJanitorialPhase<T>(string phase, int tick, Func<T> action)
     {
@@ -639,11 +811,26 @@ internal sealed class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
+        var required = kind == "loop-relaunch-rollback" ||
+            line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
-            writer.Append(kind, goalId, line);
+            if (required)
+            {
+                if (!writer.AppendRequired(kind, goalId, line))
+                {
+                    Console.Error.WriteLine(
+                        $"LOOP_EVENT_STREAM_WRITE_PENDING eventKind={kind} goal={goalId ?? "none"} " +
+                        $"pending=true detail={SanitizeHandoffDetail(line)}");
+                    Console.Error.Flush();
+                }
+            }
+            else
+            {
+                writer.Append(kind, goalId, line);
+            }
         }
-        catch
+        catch when (!required)
         {
             // Shared operator event streaming is advisory; stdout remains the primary conduct log.
         }
@@ -667,6 +854,10 @@ internal sealed class ConductorBatchLoop
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
             "LOOP_HANDOFF_PENDING" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
+            "LOOP_RELAUNCH_SCHEDULED" => "loop-relaunch",
+            "LOOP_RELAUNCH_DRAIN" => "loop-relaunch",
+            "LOOP_RELAUNCH_REBUILD" => "loop-relaunch",
+            "LOOP_RELAUNCH_ROLLBACK" => "loop-relaunch-rollback",
             "LOOP_JANITORIAL_FAILED" => "loop-janitorial-failure",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
@@ -2232,6 +2423,11 @@ internal sealed class ConductorBatchLoop
             (onlyGoalId is null || goal.Id.Value == onlyGoalId)
             && goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }));
 
+    private static int CountRunningDispatches(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
+        kernel.Goals
+            .Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId)
+            .Sum(goal => goal.Tasks.Count(task => task.LastProcess is { IsRunning: true }));
+
     private static IReadOnlyList<string> GetRunningDispatchExitCodePaths(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
         kernel.Goals
             .Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId)
@@ -2370,7 +2566,8 @@ public sealed record ConductorLoopHandoffResult(
     string? StderrPath,
     string? Reason,
     bool Failed = false,
-    string? VerificationOutcome = null)
+    string? VerificationOutcome = null,
+    bool RollbackSucceeded = true)
 {
     public static ConductorLoopHandoffResult StartedProcess(
         int processId,
@@ -2387,8 +2584,9 @@ public sealed record ConductorLoopHandoffResult(
         string? stdoutPath,
         string? stderrPath,
         string? verificationOutcome = null,
-        int? processId = null) =>
-        new(false, processId, stdoutPath, stderrPath, reason, Failed: true, verificationOutcome);
+        int? processId = null,
+        bool rollbackSucceeded = false) =>
+        new(false, processId, stdoutPath, stderrPath, reason, Failed: true, verificationOutcome, rollbackSucceeded);
 }
 
 public sealed record BatchTickSummary(

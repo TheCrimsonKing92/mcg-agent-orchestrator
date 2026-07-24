@@ -1156,6 +1156,35 @@ public sealed class ConductorDriverTests
         Xunit.Assert.Equal(new[] { "land", "semantic", "close" }, order);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_main_advance_schedules_relaunch_before_fallible_post_landing_actions")]
+    public void ConductorDriverMainAdvanceSchedulesRelaunchBeforeFalliblePostLandingActions()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        ConductorLandingReceipt? receipt = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAdvisorySemanticAcceptance: (_, _) =>
+                throw new InvalidOperationException("post-merge advisory failed"),
+            land: g =>
+                new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed"));
+        driver.SuccessfulLandingSink = landed => receipt = landed;
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Equal("post-merge advisory failed", error.Message);
+        Assert.NotNull(receipt);
+        Assert.Equal(goal.Id.Value, receipt!.GoalId);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_ownership_hold_escalates_and_skips_semantic_receipt")]
     public void ConductorDriverVerifiedOwnershipHoldEscalatesAndSkipsSemanticReceipt()
     {

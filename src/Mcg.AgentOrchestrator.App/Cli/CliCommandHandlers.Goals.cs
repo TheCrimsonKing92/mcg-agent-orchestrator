@@ -883,7 +883,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Providers,
                     context.PersistGoalCheckpoint);
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
-                var handoff = ConductorLoopHandoff.Create(new ConductLoopHandoffOptions(
+                var handoffOptions = new ConductLoopHandoffOptions(
                     Args: parts.ToArray(),
                     ExecutionDirectory: context.Workspace.ExecutionDirectory,
                     OrchestratorDirectory: context.Workspace.OrchestratorDirectory,
@@ -892,7 +892,31 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     StopFilePath: stopFilePath,
                     RenewalCount: ConductorLoopHandoff.ParseRenewalCount(parts),
                     MaxRenewals: ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
-                    ReleaseCurrentLease: context.ReleaseConductLoopLease));
+                    ReleaseCurrentLease: context.ReleaseConductLoopLease,
+                    ReacquireCurrentLease: context.ReacquireConductLoopLease,
+                    StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
+                var handoff = ConductorLoopHandoff.Create(handoffOptions);
+                var repositoryRoot = context.Workspace.ExecutionDirectory;
+                var repositoryBuildKey = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
+                var appOutputDirectory = Path.Combine(
+                    Path.GetTempPath(),
+                    "mcg-self-relaunch-build",
+                    repositoryBuildKey);
+                var selfRelaunch = ConductorSelfRelaunch.Create(new ConductorSelfRelaunchOptions(
+                    RepositoryRoot: repositoryRoot,
+                    AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+                    AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
+                    UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
+                    ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
+                    StateStorePath: context.Workspace.SqliteStatePath,
+                    AgentCatalogPath: context.Workspace.AgentCatalogPath,
+                    WorkerProfilePath: context.Workspace.WorkerProfilePath,
+                    ModelFunctionCatalogPath: context.Workspace.ModelFunctionCatalogPath,
+                    DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
+                    PowerShellPath: "powershell",
+                    HandoffOptions: handoffOptions));
 
                 // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
                 // start of every tick. Without this the loop holds a goal at Running forever — the worker
@@ -980,7 +1004,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     handoffOnMaxDuration: handoff,
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
-                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers)).Run(
+                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
+                    selfRelaunch: selfRelaunch,
+                    selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
+                        Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable))).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,

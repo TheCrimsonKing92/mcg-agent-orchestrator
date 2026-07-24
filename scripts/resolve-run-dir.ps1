@@ -1,8 +1,8 @@
 # Resolves (and lazily populates) a per-build ISOLATED copy of the orchestrator binary, and writes its
 # directory to stdout. The launcher runs `dotnet <run-dir>\App.dll` so a live run holds its own copy
 # instead of the in-tree output -- leaving the in-tree binary free to rebuild while something runs, so
-# builds and real runs stop interfering. Content-addressed by the App.dll hash: identical builds reuse one
-# copy, a new build gets a fresh one. Copies unused for 7 days are pruned (a live copy's dll is locked, so
+# builds and real runs stop interfering. Content-addressed by the complete app output: identical builds reuse
+# one copy, while any changed dependency/config/head marker gets a fresh one. Copies unused for 7 days are pruned (a live copy's dll is locked, so
 # it survives the prune). The copy is valid only when the native SQLite asset is present too; otherwise the
 # launcher fails before running an orchestrator command that would later hit DllNotFoundException.
 param([Parameter(Mandatory = $true)][string]$Dll)
@@ -43,28 +43,53 @@ function Assert-NativeSqliteAssetPresent {
     throw "Native SQLite asset e_sqlite3 is missing from $Context ($Path). Rebuild the app with 'dotnet build src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj' and retry; if it is still missing, restore packages and inspect Microsoft.Data.Sqlite runtime assets."
 }
 
-function Get-Sha1Prefix {
+function Get-OutputContentHashPrefix {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $stream = [System.IO.File]::OpenRead($Path)
-    try {
-        $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    $payload = [System.Text.StringBuilder]::new()
+    $rootPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar.ToString(), [System.StringComparison]::Ordinal)) {
+        $rootPath += [System.IO.Path]::DirectorySeparatorChar
+    }
+    foreach ($file in (Get-ChildItem -LiteralPath $Path -Recurse -File | Sort-Object FullName)) {
+        if (-not $file.FullName.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Cannot hash file outside output directory: $($file.FullName)"
+        }
+        # Windows PowerShell runs on .NET Framework, which does not expose Path.GetRelativePath.
+        $relativePath = $file.FullName.Substring($rootPath.Length).Replace('\', '/')
+        # Use the framework crypto API because the supported Windows PowerShell host does not
+        # consistently expose Get-FileHash.
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $stream = $null
         try {
-            $hashBytes = $sha1.ComputeHash($stream)
-            return ([System.BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
+            $stream = [System.IO.File]::OpenRead($file.FullName)
+            $fileHash = [System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace '-', ''
         }
         finally {
-            $sha1.Dispose()
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            $sha256.Dispose()
         }
+        [void]$payload.Append($relativePath)
+        [void]$payload.Append(':')
+        [void]$payload.Append($fileHash)
+        [void]$payload.Append("`n")
+    }
+
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    try {
+        $hashBytes = $sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload.ToString()))
+        return ([System.BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
     }
     finally {
-        $stream.Dispose()
+        $sha1.Dispose()
     }
 }
 
 $out  = Split-Path $Dll
 $leaf = Split-Path $Dll -Leaf
-$hash = Get-Sha1Prefix -Path $Dll
+$hash = Get-OutputContentHashPrefix -Path $out
 $base = Join-Path $env:TEMP 'mcg-run'
 $run  = Join-Path $base $hash
 

@@ -103,6 +103,267 @@ public sealed class ConductorBatchLoopTests
         return goal;
     }
 
+    [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_activation_switch_defaults_off_and_requires_true")]
+    [Xunit.InlineData(null, false)]
+    [Xunit.InlineData("", false)]
+    [Xunit.InlineData("false", false)]
+    [Xunit.InlineData("1", false)]
+    [Xunit.InlineData("true", true)]
+    public void BatchLoopSelfRelaunchActivationSwitchDefaultsOffAndRequiresTrue(
+        string? configuredValue,
+        bool expected)
+    {
+        Assert.False(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
+        Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
+    public void BatchLoopDefaultSelfRelaunchActivationDoesNotScheduleOrExecute()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
+        var landed = false;
+        var relaunchCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => landed
+                ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            land: candidate =>
+            {
+                landed = true;
+                return new LandingResult(candidate.Id.Value, candidate.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            getLandingFileScopes: _ =>
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"]);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            new ConductorBatchLoop(
+                selfRelaunch: _ =>
+                {
+                    relaunchCalls++;
+                    return new ConductorSelfRelaunchResult(false, "build", "must not run");
+                }).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 3));
+
+        Assert.Equal(0, relaunchCalls);
+        Assert.DoesNotContain("LOOP_RELAUNCH_SCHEDULED", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_infrastructure_landing_drains_before_self_handoff")]
+    public void BatchLoopInfrastructureLandingDrainsBeforeSelfHandoff()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var infraGoal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
+        var runningGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Existing worker");
+        var runningTask = runningGoal.Tasks.Single();
+        StartProcess(kernel, runningGoal, runningTask, DateTimeOffset.UtcNow, "abc123");
+        var landed = false;
+        var order = new List<string>();
+        Process? successor = null;
+        var handoffRoot = CreateTempDirectory("mcg-conduct-loop-drain-real-handoff");
+        var loopStartedPath = Path.Combine(handoffRoot, "loop-started");
+        var driver = MakeDriver(
+            getFacts: goal => goal.Id == infraGoal.Id && landed
+                ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            land: goal =>
+            {
+                landed = true;
+                return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            getLandingFileScopes: _ =>
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"]);
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var summary = new ConductorBatchLoop(
+                    selfRelaunch: request =>
+                    {
+                        order.Add("handoff");
+                        var handoff = ConductorLoopHandoff.TryStartSuccessor(
+                            HandoffOptions(
+                                handoffRoot,
+                                release: () => order.Add("authority-release"),
+                                verificationTimeout: TimeSpan.FromMilliseconds(50),
+                                loopStartProbe: (_, _) => File.Exists(loopStartedPath),
+                                useProtocolReady: true),
+                            new ConductorLoopHandoffRequest(request.Tick, TimeSpan.Zero, 0, 1),
+                            launchRequest =>
+                            {
+                                successor = Process.Start(new ProcessStartInfo("powershell")
+                                {
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true,
+                                    ArgumentList =
+                                    {
+                                        "-NoProfile",
+                                        "-Command",
+                                        $"Set-Content -LiteralPath '{launchRequest.ReadyFilePath!.Replace("'", "''", StringComparison.Ordinal)}' " +
+                                        $"-Value ('LOOP_HANDOFF_READY token={launchRequest.HandoffToken} pid=' + $PID); " +
+                                        $"while (-not (Test-Path -LiteralPath '{launchRequest.ActivationFilePath!.Replace("'", "''", StringComparison.Ordinal)}')) {{ Start-Sleep -Milliseconds 25 }}; " +
+                                        $"Set-Content -LiteralPath '{loopStartedPath.Replace("'", "''", StringComparison.Ordinal)}' -Value started; Start-Sleep -Seconds 10"
+                                    }
+                                })!;
+                                return new ConductLoopLaunchResult(
+                                    successor.Id,
+                                    launchRequest.StdoutPath,
+                                    launchRequest.StderrPath,
+                                    "spawnPath=test-real-process");
+                            });
+                        return new ConductorSelfRelaunchResult(
+                            handoff.Started,
+                            handoff.Started ? null : "handoff",
+                            handoff.Reason,
+                            handoff);
+                    },
+                    selfRelaunchEnabled: true).Run(
+                        kernel,
+                        driver,
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 5,
+                        watchInterval: TimeSpan.FromMilliseconds(1),
+                        sleepFunc: _ =>
+                        {
+                            order.Add("terminal-receipt");
+                            CompleteDispatchedTask(kernel, runningGoal, runningTask, DateTimeOffset.UtcNow, "def456");
+                            return false;
+                        });
+
+                Assert.True(summary.Handoff?.Started);
+            });
+
+            Assert.True(order.IndexOf("terminal-receipt") < order.IndexOf("handoff"));
+            Assert.True(order.IndexOf("handoff") < order.IndexOf("authority-release"));
+            Assert.Contains("LOOP_RELAUNCH_DRAIN", output, StringComparison.Ordinal);
+            Assert.Contains("active=1 admitting=false", output, StringComparison.Ordinal);
+            Assert.Contains("LOOP_HANDOFF", output, StringComparison.Ordinal);
+            Assert.False(successor!.HasExited);
+        }
+        finally
+        {
+            if (successor is { HasExited: false })
+            {
+                successor.Kill(entireProcessTree: true);
+                successor.WaitForExit(5000);
+            }
+            successor?.Dispose();
+            TryDeleteDirectory(handoffRoot);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_failure_rolls_back_and_continues")]
+    [Xunit.InlineData("self-check", "LOOP_RELAUNCH_ROLLBACK", true)]
+    [Xunit.InlineData("handoff", "LOOP_HANDOFF_FAILED", true)]
+    [Xunit.InlineData("handoff", "LOOP_HANDOFF_FAILED", false)]
+    public void BatchLoopSelfRelaunchFailureRollsBackAndContinues(
+        string failedPhase,
+        string expectedEvent,
+        bool incumbentCanContinue)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update verifier");
+        var landed = false;
+        var relaunchCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => landed
+                ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            land: candidate =>
+            {
+                landed = true;
+                return new LandingResult(candidate.Id.Value, candidate.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            getLandingFileScopes: _ =>
+                ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"]);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            var loop = new ConductorBatchLoop(
+                selfRelaunch: _ =>
+                {
+                    relaunchCalls++;
+                    return new ConductorSelfRelaunchResult(
+                        false,
+                        failedPhase,
+                        "forced failure",
+                        IncumbentCanContinue: incumbentCanContinue);
+                },
+                selfRelaunchEnabled: true);
+            if (incumbentCanContinue)
+            {
+                var summary = loop.Run(
+                        kernel,
+                        driver,
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 4);
+                Assert.Null(summary.Handoff);
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => loop.Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 4));
+                Assert.Contains("refusing to continue", error.Message, StringComparison.OrdinalIgnoreCase);
+            }
+        });
+
+        Assert.Equal(1, relaunchCalls);
+        Assert.Contains(expectedEvent, output, StringComparison.Ordinal);
+        Assert.Contains($"phase={failedPhase}", output, StringComparison.Ordinal);
+        Assert.Contains(
+            incumbentCanContinue
+                ? "rolledBack=true continuing=true"
+                : "rolledBack=false continuing=false",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_non_infrastructure_landing_does_not_self_relaunch")]
+    public void BatchLoopNonInfrastructureLandingDoesNotSelfRelaunch()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update dashboard rendering");
+        var landed = false;
+        var relaunchCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => landed
+                ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            land: candidate =>
+            {
+                landed = true;
+                return new LandingResult(candidate.Id.Value, candidate.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            },
+            getLandingFileScopes: _ =>
+                ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs"]);
+
+        new ConductorBatchLoop(
+            selfRelaunch: _ =>
+            {
+                relaunchCalls++;
+                return new ConductorSelfRelaunchResult(false, "build", "must not run");
+            },
+            selfRelaunchEnabled: true).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 3);
+
+        Assert.Equal(0, relaunchCalls);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_runs_disjoint_gate_ready_acceptance_concurrently_on_distinct_slots")]
     public void BatchLoopRunsDisjointGateReadyAcceptanceConcurrentlyOnDistinctSlots()
     {
@@ -2200,7 +2461,8 @@ public sealed class ConductorBatchLoopTests
         int maxRenewals = ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
         Action? release = null,
         TimeSpan verificationTimeout = default,
-        Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null) =>
+        Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
+        bool useProtocolReady = false) =>
         new(
             Args: args ?? ["conduct", "--loop", "--watch", "--max-duration", "14400"],
             ExecutionDirectory: root,
@@ -2212,7 +2474,8 @@ public sealed class ConductorBatchLoopTests
             MaxRenewals: maxRenewals,
             ReleaseCurrentLease: release ?? (() => { }),
             VerificationTimeout: verificationTimeout,
-            LoopStartProbe: loopStartProbe);
+            LoopStartProbe: loopStartProbe,
+            SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true);
 
     private static void RunGit(string workingDirectory, params string[] args)
     {
@@ -2434,7 +2697,7 @@ public sealed class ConductorBatchLoopTests
             Assert.DoesNotContain(ConductorLoopHandoff.RenewalCountFlag, launchRequest.Args);
             Assert.Equal(5, launchRequest.RenewalCount);
             Assert.Equal(4567, result.ProcessId);
-            Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
 
@@ -2446,7 +2709,7 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal("Started", handoffEvent.Status);
             Assert.Contains(Path.GetFullPath(launchRequest.StdoutPath), handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains(Path.GetFullPath(launchRequest.StderrPath), handoffEvent.Detail, StringComparison.Ordinal);
-            Assert.Contains("guard=lease-released-before-launch", handoffEvent.Detail, StringComparison.Ordinal);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains("spawnPath=injected", handoffEvent.Detail, StringComparison.Ordinal);
             Assert.Contains("loopStartJournaled=true", handoffEvent.Detail, StringComparison.Ordinal);
         }
@@ -2677,7 +2940,7 @@ public sealed class ConductorBatchLoopTests
                     Assert.Equal("successor-child-dead", result.Reason);
                     Assert.Contains("attempt=1", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains($"pid={int.MaxValue}", result.VerificationOutcome, StringComparison.Ordinal);
-                    Assert.Contains("guard=lease-released-before-launch", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("guard=incumbent-held-until-successor-ready", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains("spawnPath=injected", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains("loopStartJournaled=false", result.VerificationOutcome, StringComparison.Ordinal);
                     Assert.Contains("terminalReason=child-dead", result.VerificationOutcome, StringComparison.Ordinal);
@@ -2874,7 +3137,7 @@ public sealed class ConductorBatchLoopTests
             successorPid = ParseHandoffProcessId(stdout);
 
             Assert.True(IsProcessRunning(successorPid.Value), $"Successor pid {successorPid.Value} did not survive parent job close. stdout={stdout} stderr={stderr}");
-            Assert.Contains("guard=lease-released-before-launch", stdout, StringComparison.Ordinal);
+            Assert.Contains("guard=incumbent-held-until-successor-ready", stdout, StringComparison.Ordinal);
             Assert.Contains("spawnPath=windows-createprocess", stdout, StringComparison.Ordinal);
             Assert.Contains("breakawayRequested=true", stdout, StringComparison.Ordinal);
             Assert.Contains("breakawaySucceeded=true", stdout, StringComparison.Ordinal);
@@ -5717,6 +5980,49 @@ public sealed class ConductorBatchLoopTests
 
         Assert.True(records.Count(record => record.EventKind == "loop-start") >= 2);
         Assert.Contains(records, record => record.EventKind == "goal" && record.GoalId is not null);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_required_rollback_survives_transient_stream_write_failure")]
+    public void ConductEventsRequiredRollbackSurvivesTransientStreamWriteFailure()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-required");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        var writer = new ConductEventLogWriter(logPath);
+
+        bool appendedImmediately;
+        using (var streamLock = new FileStream(
+            logPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.Read))
+        {
+            appendedImmediately = writer.AppendRequired(
+                "loop-relaunch-rollback",
+                "goal1234",
+                "LOOP_RELAUNCH_ROLLBACK goal=goal1234 phase=self-check rolledBack=true continuing=true");
+        }
+
+        Assert.False(appendedImmediately);
+        Assert.Single(Directory.GetFiles(
+            Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+
+        writer.Append("loop-stop", null, "LOOP_STOP tick=2 reason=test");
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Contains(records, record =>
+            record.EventKind == "loop-relaunch-rollback" &&
+            record.GoalId == "goal1234" &&
+            record.Detail.Contains("continuing=true", StringComparison.Ordinal));
+        Assert.Contains(records, record => record.EventKind == "loop-stop");
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_skips_janitorial_phase_failure_and_journals_event")]
