@@ -797,6 +797,55 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         Assert.Equal("api-version", Assert.Single(stale.Keys));
     }
 
+    [Xunit.Fact(DisplayName = "acceptance-retry_does_not_emit_worker_dispatch_or_start_paid_work")]
+    public void AcceptanceRetryDoesNotEmitWorkerDispatchOrStartPaidWork()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var events = new RecordingLifecycleEvents();
+            var kernel = new AgentOrchestratorKernel();
+            kernel.SetEventWriter(events);
+            var task = new TaskSpec(TaskId.New(), "Implement verified work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Re-gate without worker dispatch", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Verified before acceptance.", root, DateTimeOffset.UtcNow));
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["environment-only gate failure"],
+                "Acceptance environment failed."));
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                EventWriter = events
+            };
+
+            CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                context);
+
+            Assert.Equal(0, events.DispatchCount);
+            Assert.Null(task.LastDispatch);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static GoalRefinementService CreateRefinementService(
         OrchestratorWorkspace workspace,
         ICollaborationItemStore store,
@@ -844,13 +893,14 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
     private sealed class RecordingLifecycleEvents : IGoalLifecycleEventWriter
     {
         public List<(GoalId GoalId, IReadOnlyList<string> Keys, string Command)> StaleClarifications { get; } = [];
+        public int DispatchCount { get; private set; }
 
         public void AppendTimelineEvent(ProgressEvent progressEvent) { }
         public void AppendGoalCreated(GoalId goalId, string objective) { }
         public void AppendClarificationNeeded(GoalId goalId, string clarificationId) { }
         public void AppendStaleClarificationDetected(GoalId goalId, IReadOnlyList<string> staleTopicKeys, string recoveryCommand) =>
             StaleClarifications.Add((goalId, staleTopicKeys, recoveryCommand));
-        public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
+        public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) => DispatchCount++;
         public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
         public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
         public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }

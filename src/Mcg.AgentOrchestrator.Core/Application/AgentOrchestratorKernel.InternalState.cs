@@ -85,6 +85,18 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.ReviewerWorkerResultBlocker);
         }
 
+        if (task.Status == WorkTaskStatus.Cancelled)
+        {
+            return new TaskVerificationGate(
+                task.Id,
+                task.RequiredRole,
+                task.Description,
+                task.Status,
+                VerificationGateStatus.Passed,
+                "Task was deliberately cancelled and is excluded from acceptance.",
+                VerificationGateReason.Passed);
+        }
+
         if (task.Status != WorkTaskStatus.Completed)
         {
             return new TaskVerificationGate(

@@ -39,7 +39,11 @@ internal sealed record GoalOperationJournalEntry(
     string? PartitionAttemptId = null,
     IReadOnlyList<string>? PartitionTestResultPaths = null,
     int? PartitionReuseAttemptCount = null,
-    bool? PartitionForcedFullRerun = null)
+    bool? PartitionForcedFullRerun = null,
+    string? OperatorReason = null,
+    string? PriorGateMainSha = null,
+    string? CurrentHeadMainSha = null,
+    int? OperatorRegateCount = null)
 {
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
@@ -251,6 +255,28 @@ internal static class GoalOperationJournal
         DateTimeOffset? attemptStartedAt = null,
         GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
         AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt);
+
+    public static void AcceptanceRetried(
+        string executionDirectory,
+        Goal goal,
+        string operatorReason,
+        string? priorGateMainSha,
+        string? currentHeadMainSha,
+        int operatorRegateCount) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            $"{Key(goal.Id, "acceptance-retry")}:{operatorRegateCount}",
+            "acceptance-retry",
+            GoalOperationStatus.Completed,
+            $"Operator acceptance re-gate {operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}: {operatorReason}",
+            branchHeadSha: null,
+            mainHeadSha: NormalizeSha(currentHeadMainSha),
+            acceptanceOutcome: "operator-regate",
+            operatorReason: operatorReason,
+            priorGateMainSha: NormalizeSha(priorGateMainSha),
+            currentHeadMainSha: NormalizeSha(currentHeadMainSha),
+            operatorRegateCount: operatorRegateCount);
 
     public static void AcceptanceBlocked(
         string executionDirectory,
@@ -610,7 +636,11 @@ internal static class GoalOperationJournal
         string? mainHeadSha,
         string? acceptanceOutcome,
         DateTimeOffset? at = null,
-        GoalAcceptanceAttemptReceipt? attemptReceipt = null)
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null,
+        string? operatorReason = null,
+        string? priorGateMainSha = null,
+        string? currentHeadMainSha = null,
+        int? operatorRegateCount = null)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -634,7 +664,11 @@ internal static class GoalOperationJournal
             attemptReceipt?.BaseBuildCacheProjects,
             attemptReceipt?.BaseBuildCacheBuiltProjects,
             attemptReceipt?.BaseBuildCacheEvictions,
-            attemptReceipt?.BaseBuildCacheReceipt);
+            attemptReceipt?.BaseBuildCacheReceipt,
+            OperatorReason: operatorReason,
+            PriorGateMainSha: priorGateMainSha,
+            CurrentHeadMainSha: currentHeadMainSha,
+            OperatorRegateCount: operatorRegateCount);
         File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
         TryAppendRunEvent(executionDirectory, entry);
     }

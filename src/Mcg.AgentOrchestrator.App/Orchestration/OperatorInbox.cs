@@ -463,7 +463,9 @@ internal static class OperatorInbox
         ICollaborationItemStore? collaborationStore = null)
     {
         var existing = LoadLandingEscalations(workspace)
-            .Where(e => !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+            .Where(e =>
+                !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
+                e.ResolvedAtUtc is not null)
             .ToList();
         existing.Add(new LandingEscalationRecord(goal.Id.Value, reason, integrationBranch, DateTimeOffset.UtcNow));
         SaveLandingEscalations(workspace, existing);
@@ -518,6 +520,40 @@ internal static class OperatorInbox
         {
             // Best-effort: inbox JSON write already succeeded.
         }
+    }
+
+    public static bool ResolveLandingEscalation(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        string operatorReason,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        var changed = false;
+        var resolvedAt = resolvedAtUtc ?? DateTimeOffset.UtcNow;
+        var items = LoadLandingEscalations(workspace)
+            .Select(item =>
+            {
+                if (!item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
+                    item.ResolvedAtUtc is not null)
+                {
+                    return item;
+                }
+
+                changed = true;
+                return item with
+                {
+                    ResolvedAtUtc = resolvedAt,
+                    ResolvedBy = "acceptance-retry",
+                    ResolutionReason = operatorReason
+                };
+            })
+            .ToArray();
+        if (changed)
+        {
+            SaveLandingEscalations(workspace, items);
+        }
+
+        return changed;
     }
 
     public static IReadOnlyList<OperatorInboxItem> RecordOwnershipHolds(
@@ -651,7 +687,8 @@ internal static class OperatorInbox
     {
         var escalations = LoadLandingEscalations(workspace);
         foreach (var escalation in escalations.Where(e =>
-            e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase)))
+            e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+            e.ResolvedAtUtc is null))
         {
             Add(items, BuildItem(
                 goal,
@@ -1145,7 +1182,10 @@ internal static class OperatorInbox
         string GoalId,
         string Reason,
         string IntegrationBranch,
-        DateTimeOffset EscalatedAt);
+        DateTimeOffset EscalatedAt,
+        DateTimeOffset? ResolvedAtUtc = null,
+        string? ResolvedBy = null,
+        string? ResolutionReason = null);
 
     private sealed record LandingEscalationStore(IReadOnlyList<LandingEscalationRecord> Items);
 

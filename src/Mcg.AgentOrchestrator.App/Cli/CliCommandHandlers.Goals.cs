@@ -337,6 +337,53 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
         }
 
+        case "acceptance-retry":
+        {
+            if (!HasCliConfirmation(parts, "--confirm-acceptance-retry"))
+            {
+                throw new ArgumentException(CliCommandHelp.AcceptanceRetryUsage);
+            }
+
+            var retryParts = RemoveStandaloneFlag(parts, "--confirm-acceptance-retry");
+            CliArgumentParser.RequirePartCount(
+                retryParts,
+                3,
+                "acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(
+                context.Kernel,
+                context.CurrentGoal,
+                retryParts[1]);
+            var retryGoal = context.CurrentGoal;
+            var operatorReason = retryParts[2];
+            context.Kernel.ValidateAcceptanceGateRetry(retryGoal.Id, operatorReason);
+            var priorGateMainSha = retryGoal.LatestAcceptanceFailure?.MainHeadSha ??
+                GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, retryGoal.Id).Entries
+                    .LastOrDefault(entry =>
+                        entry.Status == GoalOperationStatus.Failed &&
+                        entry.Operation.Contains("acceptance", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(entry.MainHeadSha))
+                    ?.MainHeadSha;
+            var currentHeadMainSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory)
+                ?? throw new InvalidOperationException("acceptance-retry could not resolve current main HEAD.");
+            var operatorRegateCount = context.Kernel.RetryAcceptanceGate(retryGoal.Id, operatorReason);
+
+            GoalOperationJournal.AcceptanceRetried(
+                context.Workspace.ExecutionDirectory,
+                retryGoal,
+                operatorReason,
+                priorGateMainSha,
+                currentHeadMainSha,
+                operatorRegateCount);
+            OperatorInbox.ResolveLandingEscalation(
+                context.Workspace,
+                retryGoal,
+                operatorReason);
+
+            Console.WriteLine(
+                $"Acceptance retry scheduled: goal={retryGoal.Id.Value[..8]} state={retryGoal.Status} operator-regate={operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; next conductor tick will re-run acceptance.");
+            return true;
+        }
+
         case "park-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]");
             context.CurrentGoal = HandleGoalParkCommand(context, parts);

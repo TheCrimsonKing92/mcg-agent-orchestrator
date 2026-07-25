@@ -2007,7 +2007,7 @@ internal sealed class ConductorDriver
                     $"Acceptance criteria unmet but no completed task is available to retry: {criteria}; review/land manually");
             }
 
-            if (task.CriterionRetryCount < policy.MaxCriterionRetries)
+            if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
                 var retryFeedback = FormatCriterionRetryFeedback(acceptance.RequiredUnmetCriteria);
                 var retryCount = _recordCriterionRetryFeedback(
@@ -2022,7 +2022,7 @@ internal sealed class ConductorDriver
             }
 
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                $"Acceptance criteria unmet after {task.CriterionRetryCount} retries: {criteria}; review/land manually");
+                $"Acceptance criteria unmet after {goal.AutomaticAcceptanceRetryCount} retries: {criteria}; review/land manually");
         }
 
         foreach (var task in goal.Tasks)
