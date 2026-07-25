@@ -235,6 +235,55 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         }
     }
 
+    [Xunit.Fact(DisplayName = "GetReviewFindingState_skips_an_unfoldable_stored_round_instead_of_throwing")]
+    public void GetReviewFindingStateSkipsUnfoldableStoredRoundInsteadOfThrowing()
+    {
+        var openedAt = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var movedTo = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Unfoldable stored round");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [new ReviewFinding("F-1", ReviewFindingState.Open, openedAt, "A is missing its guard.")],
+            [openedAt]);
+
+        // A round reporting a still-open finding at a different anchor is rejected when recorded, but the
+        // verification record is retained in history. Replaying it must not make the state unreadable.
+        kernel.RetryTask(goal.Id, reviewer.Id, "round 2");
+        try
+        {
+            RecordReviewerRound(
+                kernel,
+                goal,
+                reviewer,
+                "needs-work",
+                [new ReviewFinding("F-1", ReviewFindingState.Open, movedTo, "A is missing its guard.")],
+                [movedTo]);
+        }
+        catch (ReviewFindingConvergenceException)
+        {
+            // Rejection at record time is expected; the stored round is what this test exercises.
+        }
+
+        var state = kernel.GetReviewFindingState(goal.Id, out var inconsistencies);
+
+        var finding = Assert.Single(state);
+        Assert.Equal("F-1", finding.StableId);
+        Assert.Equal(ReviewFindingState.Open, finding.State);
+        Assert.Equal(openedAt, finding.Location);
+        Assert.Contains(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            Assert.Single(inconsistencies));
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_structured_open_set_is_authoritative")]
     public void StructuredOpenSetIsNotFilteredByFreeTextBlockerFragments()
     {

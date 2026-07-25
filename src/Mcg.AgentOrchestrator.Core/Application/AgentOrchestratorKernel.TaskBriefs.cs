@@ -24,20 +24,42 @@ public sealed partial class AgentOrchestratorKernel
 
     public TaskSpec GetTask(GoalId goalId, TaskId taskId) => GetGoal(goalId).FindTask(taskId);
 
-    public IReadOnlyList<ReviewFinding> GetReviewFindingState(GoalId goalId)
+    public IReadOnlyList<ReviewFinding> GetReviewFindingState(GoalId goalId) =>
+        GetReviewFindingState(goalId, out _);
+
+    /// <summary>
+    /// Derives current finding state by replaying stored reviewer rounds. Replaying history must never
+    /// fail: a round that cannot be folded is skipped and reported through <paramref name="inconsistencies"/>,
+    /// leaving the prior state intact so the finding stays open at the anchor it was opened against. New
+    /// rounds are still validated where they are recorded, so skipping here does not weaken convergence.
+    /// </summary>
+    public IReadOnlyList<ReviewFinding> GetReviewFindingState(
+        GoalId goalId,
+        out IReadOnlyList<string> inconsistencies)
     {
         IReadOnlyList<ReviewFinding> state = [];
+        List<string>? skipped = null;
         foreach (var verification in GetGoal(goalId).Tasks
             .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
             .SelectMany(candidate => candidate.VerificationHistory)
             .OrderBy(candidate => candidate.CompletedAt))
         {
-            if (WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
+            {
+                continue;
+            }
+
+            try
             {
                 state = ReviewFindingConvergence.ApplyRound(state, round);
             }
+            catch (ReviewFindingConvergenceException error)
+            {
+                (skipped ??= []).Add($"{error.Code}: {error.Message}");
+            }
         }
 
+        inconsistencies = skipped ?? [];
         return state;
     }
 
