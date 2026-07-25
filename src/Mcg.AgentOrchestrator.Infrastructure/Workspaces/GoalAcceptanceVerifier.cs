@@ -4559,6 +4559,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment)
     {
+        // The build-environment arguments are MSBuild-shaped (--artifacts-path, -maxcpucount,
+        // -p:BuildInParallel=false) and only mean something to dotnet-driven commands. Appending them to a
+        // direct MTP test-executable invocation corrupts the run: every post-landing gate produced an empty
+        // <TestRun /> core-tests receipt and failed structural coverage (backlog 8af9b957, 2026-07-25).
+        if (arguments.Length == 0 ||
+            !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            return arguments;
+        }
+
         return [.. arguments, .. environment.Arguments];
     }
 
