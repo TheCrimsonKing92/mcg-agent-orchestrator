@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -68,6 +69,68 @@ public sealed class AgentCatalogTests
         Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
+}
+    [Xunit.Fact(DisplayName = "DashboardAgentOptionCatalog_Anthropic_contains_pinned_Opus_5_without_Fable")]
+    public void DashboardAgentOptionCatalogAnthropicContainsPinnedOpus5WithoutFable()
+{
+    var subscriptionModels = DashboardAgentOptionCatalog.SubscriptionModelOptions("Anthropic");
+    var apiModels = DashboardAgentOptionCatalog.ApiModelOptions("Anthropic");
+
+    Assert.Contains(
+        subscriptionModels,
+        option => option.Value == "opus-5"
+            && option.Label.Contains("Opus 5", StringComparison.Ordinal)
+            && option.Label.Contains("pinned", StringComparison.OrdinalIgnoreCase));
+    Assert.Contains(
+        subscriptionModels,
+        option => option.Value == "opus" && option.Label == "Claude Opus (latest)");
+    Assert.DoesNotContain(subscriptionModels, option => option.Value == "fable");
+    Assert.Contains(apiModels, option => option.Value == "claude-opus-5");
+}
+    [Xunit.Fact(DisplayName = "Agents_configuration_Opus_5_alternates_preserve_counts_and_primaries")]
+    public void AgentsConfigurationOpus5AlternatesPreserveCountsAndPrimaries()
+{
+    // Mirrors only the order-sensitive fields from gitignored runtime state;
+    // the test must not read or mutate the operator's live agents.json.
+    (string Id, string Name, AgentRole Role, string Provider, string? ModelAlias)[] fixture =
+    [
+        ("openai-planner", "OpenAI planner", AgentRole.Planner, "OpenAI", "gpt-5.6-luna"),
+        ("ollama-ideation", "Ollama ideation", AgentRole.Ideation, "Ollama", null),
+        ("openai-researcher", "OpenAI researcher", AgentRole.Researcher, "OpenAI", "gpt-5.6-sol"),
+        ("openai-developer", "OpenAI developer", AgentRole.Developer, "OpenAI", "gpt-5.6-sol"),
+        ("openai-tester", "OpenAI tester", AgentRole.Tester, "OpenAI", "gpt-5.6-luna"),
+        ("openai-reviewer", "OpenAI reviewer", AgentRole.Reviewer, "OpenAI", "gpt-5.6-sol"),
+        ("anthropic-reviewer-opus-5", "Opus 5", AgentRole.Reviewer, "Anthropic", "claude-opus-5"),
+        ("anthropic-planner-opus-5", "Opus 5", AgentRole.Planner, "Anthropic", "claude-opus-5"),
+        ("anthropic-researcher-opus-5", "Opus 5", AgentRole.Researcher, "Anthropic", "claude-opus-5"),
+        ("anthropic-developer-opus-5", "Opus 5", AgentRole.Developer, "Anthropic", "claude-opus-5"),
+        ("anthropic-tester-opus-5", "Opus 5", AgentRole.Tester, "Anthropic", "claude-opus-5")
+    ];
+    var expectedPrimaryIds = new Dictionary<AgentRole, string>
+    {
+        [AgentRole.Reviewer] = "openai-reviewer",
+        [AgentRole.Planner] = "openai-planner",
+        [AgentRole.Researcher] = "openai-researcher",
+        [AgentRole.Developer] = "openai-developer",
+        [AgentRole.Tester] = "openai-tester"
+    };
+
+    foreach (var (role, expectedPrimaryId) in expectedPrimaryIds)
+    {
+        var roleAgents = fixture.Where(agent => agent.Role == role).ToList();
+        Assert.Equal(2, roleAgents.Count);
+        Assert.Equal(expectedPrimaryId, roleAgents[0].Id);
+
+        var alternate = Assert.Single(roleAgents.Skip(1));
+        Assert.Equal($"anthropic-{role.ToString().ToLowerInvariant()}-opus-5", alternate.Id);
+        Assert.Equal("Opus 5", alternate.Name);
+        Assert.Equal("Anthropic", alternate.Provider);
+        Assert.Equal("claude-opus-5", alternate.ModelAlias);
+    }
+
+    Assert.DoesNotContain(
+        fixture,
+        agent => agent.ModelAlias == "fable" || agent.Name == "Fable");
 }
     [Xunit.Fact(DisplayName = "AgentCatalog_upsert_replaces_role")]
     public void AgentCatalogUpsertReplacesRole()

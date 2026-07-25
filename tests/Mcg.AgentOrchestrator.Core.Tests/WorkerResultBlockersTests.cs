@@ -147,6 +147,42 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
     }
 
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_resolved_finding_reported_at_moved_anchor")]
+    public void ReviewFindingConvergenceAllowsResolvedFindingReportedAtMovedAnchor()
+    {
+        var openedAt = new ReviewFindingLocation("tests/DashboardRenderingTests.cs", "line-1621 assertion");
+        var fixedAt = new ReviewFindingLocation("tests/DashboardRenderingTests.cs", "operator-controls catalog assertions", "CanEmitOperatorControls");
+        var previous = new[]
+        {
+            new ReviewFinding("REV-001", ReviewFindingState.Open, openedAt, "Stale assertion.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("REV-001", ReviewFindingState.Resolved, fixedAt, "Assertion replaced; focused tests pass.")],
+            [fixedAt]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(0, ReviewFindingConvergence.CountOpen(state));
+        Assert.Equal(openedAt, state.Single(finding => finding.StableId == "REV-001").Location);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_still_open_finding_reported_at_moved_anchor")]
+    public void ReviewFindingConvergenceRejectsStillOpenFindingReportedAtMovedAnchor()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run"), "Missing guard.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/B.cs", "B.Run"), "Missing guard.")],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindNeedsWorkVerdict_uses_open_structured_findings_when_blockers_is_none")]
     public void TryFindNeedsWorkVerdictUsesOpenStructuredFindingsWhenBlockersIsNone()
     {

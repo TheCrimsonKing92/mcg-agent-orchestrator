@@ -88,7 +88,8 @@ internal static class DashboardAgentOptionCatalog
                 [
                     new("claude-sonnet-4-6", "Claude Sonnet 4.6"),
                     new("claude-haiku-4-5", "Claude Haiku 4.5"),
-                    new("claude-opus-4-8", "Claude Opus 4.8")
+                    new("claude-opus-4-8", "Claude Opus 4.8"),
+                    new("claude-opus-5", "Claude Opus 5")
                 ],
                 ApiReasoning: [Default],
                 SubscriptionModels:
@@ -97,7 +98,7 @@ internal static class DashboardAgentOptionCatalog
                     new("sonnet", "Claude Sonnet (latest)"),
                     new("haiku", "Claude Haiku (latest)"),
                     new("opus", "Claude Opus (latest)"),
-                    new("fable", "Claude Fable (heaviest tasks)")
+                    new("opus-5", "Claude Opus 5 (pinned)")
                 ],
                 SubscriptionReasoning: [Default],
                 SubscriptionReasoningByModel: new Dictionary<string, IReadOnlyList<DashboardAgentOption>>(StringComparer.OrdinalIgnoreCase),

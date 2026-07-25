@@ -54,6 +54,7 @@ public sealed class ReviewFindingConvergenceException : InvalidOperationExceptio
 
 public static class ReviewFindingConvergence
 {
+    public const string IdentityMovedViolationCode = "ERR_REVIEW_FINDING_IDENTITY_MOVED";
     public const string MonotonicityViolationCode = "ERR_REVIEW_FINDING_OPEN_SET_INCREASED";
     public const string UntouchedReopenViolationCode = "ERR_REVIEW_FINDING_UNTOUCHED_REOPEN";
     public const string RecycledAnchorIdentityViolationCode = "ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED";
@@ -79,13 +80,14 @@ public static class ReviewFindingConvergence
                 continue;
             }
 
-            if (!SameAnchor(prior.Location, submitted.Location))
+            var anchorMoved = !SameAnchor(prior.Location, submitted.Location);
+            if (anchorMoved && submitted.State == ReviewFindingState.Open)
             {
                 throw new ReviewFindingConvergenceException(
-                    "ERR_REVIEW_FINDING_IDENTITY_MOVED",
+                    IdentityMovedViolationCode,
                     CountOpen(previous),
                     CountOpen(nextRound.Findings),
-                    $"Finding '{prior.StableId}' moved to a different structural anchor; new code requires a new stable_id.");
+                    $"Finding '{prior.StableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.");
             }
 
             if (prior.State == ReviewFindingState.Resolved &&
@@ -103,7 +105,9 @@ public static class ReviewFindingConvergence
                 regressionReopenCount++;
             }
 
-            merged.Add(submitted);
+            merged.Add(anchorMoved
+                ? submitted with { Location = prior.Location }
+                : submitted);
         }
 
         foreach (var newFinding in nextById.Values)
