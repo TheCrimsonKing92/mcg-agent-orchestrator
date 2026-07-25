@@ -35,11 +35,16 @@ public sealed partial class AgentOrchestratorKernel
     /// </summary>
     public IReadOnlyList<ReviewFinding> GetReviewFindingState(
         GoalId goalId,
+        out IReadOnlyList<string> inconsistencies) =>
+        ReplayStoredReviewFindingRounds(GetGoal(goalId), out inconsistencies);
+
+    private static IReadOnlyList<ReviewFinding> ReplayStoredReviewFindingRounds(
+        Goal goal,
         out IReadOnlyList<string> inconsistencies)
     {
         IReadOnlyList<ReviewFinding> state = [];
         List<string>? skipped = null;
-        foreach (var verification in GetGoal(goalId).Tasks
+        foreach (var verification in goal.Tasks
             .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
             .SelectMany(candidate => candidate.VerificationHistory)
             .OrderBy(candidate => candidate.CompletedAt))
@@ -750,19 +755,7 @@ public sealed partial class AgentOrchestratorKernel
             return [];
         }
 
-        IReadOnlyList<ReviewFinding> state = [];
-        foreach (var verification in goal.Tasks
-            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
-            .SelectMany(candidate => candidate.VerificationHistory)
-            .OrderBy(verification => verification.CompletedAt))
-        {
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
-            {
-                continue;
-            }
-
-            state = ReviewFindingConvergence.ApplyRound(state, round);
-        }
+        var state = ReplayStoredReviewFindingRounds(goal, out _);
 
         if (state.Count == 0)
         {
