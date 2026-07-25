@@ -2087,6 +2087,22 @@ public sealed class ConductorBatchLoopTests
     {
         using var _ = IsolatedDotnetRootScope();
         var root = CreateSeededGitRepository();
+        Directory.CreateDirectory(Path.Combine(root, "config"));
+        File.WriteAllText(
+            Path.Combine(root, "config", "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine(
+                """
+                {
+                  "version": 1,
+                  "checks": [
+                    { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
+                    { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }
+                  ],
+                  "forbiddenChangedPathGlobs": []
+                }
+                """));
+        RunGit(root, "add", "config/acceptance-manifest.json");
+        RunGit(root, "commit", "-m", "Seed acceptance manifest");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs");
@@ -2103,18 +2119,6 @@ public sealed class ConductorBatchLoopTests
             File.WriteAllText(
                 Path.Combine(worktree, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ParkBoundary.cs"),
                 "namespace Mcg.AgentOrchestrator.App.Orchestration; internal static class ParkBoundary { }");
-            File.WriteAllText(
-                Path.Combine(worktree, "config", "acceptance-manifest.json"),
-                """
-                {
-                  "version": 1,
-                  "checks": [
-                    { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
-                    { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }
-                  ],
-                  "forbiddenChangedPathGlobs": []
-                }
-                """);
             RunGit(worktree, "add", "-A");
             RunGit(worktree, "commit", "-m", "Goal work");
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
