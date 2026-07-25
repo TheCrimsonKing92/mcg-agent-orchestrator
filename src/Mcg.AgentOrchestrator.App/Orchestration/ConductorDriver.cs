@@ -1372,6 +1372,12 @@ internal sealed class ConductorDriver
         string reason) =>
         Escalate(candidate.Goal, candidate.GoalPrefix, policy, GoalLifecycleState.Verified, reason);
 
+    internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string reason) =>
+        Escalate(goal, goal.Id.Value[..8], policy, GoalLifecycleState.Verified, reason);
+
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&
         goal.Tasks.All(task =>

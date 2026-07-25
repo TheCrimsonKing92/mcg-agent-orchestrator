@@ -341,6 +341,29 @@ public sealed class AcceptanceGateEngineSettingsTests
         var root = Path.Combine(Path.GetTempPath(), "mcg-engine-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "config"));
         File.WriteAllText(Path.Combine(root, "config", "acceptance-manifest.json"), manifest);
+        using var document = System.Text.Json.JsonDocument.Parse(manifest);
+        if (document.RootElement.TryGetProperty("checks", out var checks))
+        {
+            foreach (var check in checks.EnumerateArray())
+            {
+                if (!check.TryGetProperty("project", out var projectElement))
+                {
+                    continue;
+                }
+
+                var project = projectElement.GetString();
+                if (string.IsNullOrWhiteSpace(project) ||
+                    !project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var projectPath = Path.Combine(root, project.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+                File.WriteAllText(projectPath, "<Project />");
+            }
+        }
+
         return root;
     }
 

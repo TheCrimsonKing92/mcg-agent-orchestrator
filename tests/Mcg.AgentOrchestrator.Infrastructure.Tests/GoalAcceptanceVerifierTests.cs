@@ -4662,6 +4662,45 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         return root;
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_trusted_discovery_enumerates_test_projects_omitted_from_manifest")]
+    public void GoalAcceptanceVerifierTrustedDiscoveryEnumeratesTestProjectsOmittedFromManifest()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-project-discovery", Guid.NewGuid().ToString("N"));
+        var mainRoot = Path.Combine(Path.GetTempPath(), "mcg-acceptance-project-discovery-main", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var coreProject = Path.Combine(root, "tests", "Core.Tests", "Core.Tests.csproj");
+            var addedProject = Path.Combine(root, "tests", "Added", "Added.csproj");
+            var supportProject = Path.Combine(root, "tests", "Support", "Support.csproj");
+            var mainOnlyProject = Path.Combine(mainRoot, "tests", "Legacy.Tests", "Legacy.Tests.csproj");
+            Directory.CreateDirectory(Path.GetDirectoryName(coreProject)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(addedProject)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(supportProject)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(mainOnlyProject)!);
+            File.WriteAllText(coreProject, "<Project />");
+            File.WriteAllText(
+                addedProject,
+                "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+            File.WriteAllText(supportProject, "<Project />");
+            File.WriteAllText(mainOnlyProject, "<Project />");
+
+            var projects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(root, mainRoot);
+
+            Assert.Equal(
+                [
+                    "tests/Added/Added.csproj",
+                    "tests/Core.Tests/Core.Tests.csproj",
+                    "tests/Legacy.Tests/Legacy.Tests.csproj"
+                ],
+                projects);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+            DeleteDirectoryWithRetry(mainRoot);
+        }
+    }
+
     private static string? SetAcceptanceTimeoutEnvironment(string? value)
     {
         var previous = Environment.GetEnvironmentVariable(AcceptanceCheckTimeouts.EnvironmentVariable);

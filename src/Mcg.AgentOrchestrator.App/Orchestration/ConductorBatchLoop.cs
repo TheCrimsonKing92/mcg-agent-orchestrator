@@ -1245,13 +1245,13 @@ internal sealed class ConductorBatchLoop
             catch (Exception ex)
             {
                 results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
+                    driver.EscalateParallelLandingAcceptance(
                         goal,
                         policy,
-                        $"parallel acceptance slot settings unavailable; retry on next conduct tick: {Sanitize(ex.Message)}"),
+                        $"invalid parallel acceptance slot settings: {Sanitize(ex.Message)}"),
                     null);
                 RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=held reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={Sanitize(ex.Message)}",
+                    $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={Sanitize(ex.Message)}",
                     changedGoalLines);
                 continue;
             }

@@ -45,6 +45,13 @@ internal sealed class AcceptanceGateEngineSettings
                 $"Acceptance manifest has no MTP invocation for project '{project}'.");
     }
 
+    public bool HasMtpInvocation(string project)
+    {
+        var normalizedProject = NormalizePath(project);
+        return MtpInvocations.Any(invocation =>
+            NormalizePath(invocation.Project).Equals(normalizedProject, StringComparison.OrdinalIgnoreCase));
+    }
+
     public TimeSpan ResolveCheckTimeout(int? timeoutMinutes) =>
         timeoutMinutes is > 0
             ? TimeSpan.FromMinutes(timeoutMinutes.Value)

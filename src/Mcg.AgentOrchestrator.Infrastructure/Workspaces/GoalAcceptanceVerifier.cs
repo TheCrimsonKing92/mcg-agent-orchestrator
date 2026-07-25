@@ -426,7 +426,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (checks.All(check => check.Passed) && engineSettings.EnforceStructuralCoverage)
         {
             checks.Add(await RunStructuralCoverageCheckAsync(
-                manifest.Checks,
+                effectiveChecks,
                 checks,
                 worktreePath,
                 changedFiles,
@@ -3496,7 +3496,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         cached.TestResultPaths.All(path => TryGetFileLength(path) > 0);
 
     private async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
-        IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         IReadOnlyList<AcceptanceCheckResult> completedChecks,
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
@@ -3504,20 +3504,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken)
     {
-        var broadChecks = manifestChecks.Where(IsFullPolicyShardCheck).ToArray();
-        if (broadChecks.Length == 0)
-        {
-            return new AcceptanceCheckResult(
-                "structural test coverage",
-                false,
-                1,
-                "Structural coverage is enabled but the manifest has no broad Core or Infrastructure test check.",
-                ResultSummary: "no broad test project");
-        }
-
-        var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
-            : DotnetBuildEnvironmentManager.CreateAttempt(null, "acceptance-coverage-discovery", EngineSettings.SlotCount));
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
         if (string.IsNullOrWhiteSpace(mainWorktreePath))
         {
@@ -3529,6 +3515,22 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ResultSummary: "main discovery unavailable");
         }
 
+        var broadChecks = DiscoverTrustedTestProjects(worktreePath, mainWorktreePath)
+            .Select(project => BuildTrustedStructuralCoverageCheck(project, effectiveChecks))
+            .ToArray();
+        if (broadChecks.Length == 0)
+        {
+            return new AcceptanceCheckResult(
+                "structural test coverage",
+                false,
+                1,
+                "Structural coverage is enabled but trusted discovery found no test projects.",
+                ResultSummary: "no trusted test project");
+        }
+
+        var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
+            : DotnetBuildEnvironmentManager.CreateAttempt(null, "acceptance-coverage-discovery", EngineSettings.SlotCount));
         var deletedTestFiles = ResolveDeletedTestFiles(worktreePath);
         var allSummaries = new List<string>();
         foreach (var broadCheck in broadChecks)
@@ -3552,49 +3554,60 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ResultSummary: "candidate trusted discovery failed");
             }
 
-            var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
-            var mainBuildArguments = new[]
-            {
-                "dotnet",
-                "build",
-                broadCheck.Project!,
-                "--artifacts-path",
-                mainArtifactsPath,
-                "--verbosity",
-                "minimal"
-            };
-            var mainBuild = await _runner(
-                mainBuildArguments,
+            IReadOnlySet<string>? mainDiscoveredTests = null;
+            var mainProjectPath = Path.Combine(
                 mainWorktreePath,
-                EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
-                cancellationToken).ConfigureAwait(false);
-            if (mainBuild.ExitCode != 0)
+                broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(mainProjectPath))
             {
-                return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
-                    false,
-                    mainBuild.ExitCode,
-                    TailOutput(mainBuild.Output),
-                    ResultSummary: "trusted main baseline build failed");
-            }
+                var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
+                var mainBuildArguments = new[]
+                {
+                    "dotnet",
+                    "build",
+                    broadCheck.Project,
+                    "--artifacts-path",
+                    mainArtifactsPath,
+                    "--verbosity",
+                    "minimal"
+                };
+                var mainBuild = await _runner(
+                    mainBuildArguments,
+                    mainWorktreePath,
+                    EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
+                    cancellationToken).ConfigureAwait(false);
+                if (mainBuild.ExitCode != 0)
+                {
+                    return new AcceptanceCheckResult(
+                        $"structural test coverage: {broadCheck.Name}",
+                        false,
+                        mainBuild.ExitCode,
+                        TailOutput(mainBuild.Output),
+                        ResultSummary: "trusted main baseline build failed");
+                }
 
-            var mainDiscoveryArguments = BuildDiscoveryArguments(
-                broadCheck,
-                EngineSettings,
-                environment with { ArtifactsPath = mainArtifactsPath });
-            var mainDiscovery = await _runner(
-                mainDiscoveryArguments,
-                mainWorktreePath,
-                EngineSettings.ResolveDiscoveryTimeout(),
-                cancellationToken).ConfigureAwait(false);
-            if (mainDiscovery.ExitCode != 0)
-            {
-                return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
-                    false,
-                    mainDiscovery.ExitCode,
-                    TailOutput(mainDiscovery.Output),
-                    ResultSummary: "trusted main discovery failed");
+                var mainDiscoveryArguments = BuildDiscoveryArguments(
+                    broadCheck,
+                    EngineSettings,
+                    environment with { ArtifactsPath = mainArtifactsPath });
+                var mainDiscovery = await _runner(
+                    mainDiscoveryArguments,
+                    mainWorktreePath,
+                    EngineSettings.ResolveDiscoveryTimeout(),
+                    cancellationToken).ConfigureAwait(false);
+                if (mainDiscovery.ExitCode != 0)
+                {
+                    return new AcceptanceCheckResult(
+                        $"structural test coverage: {broadCheck.Name}",
+                        false,
+                        mainDiscovery.ExitCode,
+                        TailOutput(mainDiscovery.Output),
+                        ResultSummary: "trusted main discovery failed");
+                }
+
+                mainDiscoveredTests = TestCoverageInvariant.ParseDiscoveredTests(
+                    mainDiscovery.Output,
+                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck));
             }
 
             IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
@@ -3616,9 +3629,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     candidateDiscovery.Output,
                     bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
                 partitions,
-                TestCoverageInvariant.ParseDiscoveredTests(
-                    mainDiscovery.Output,
-                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
+                mainDiscoveredTests,
                 deletedTestFiles);
             if (!coverage.Passed)
             {
@@ -3642,6 +3653,92 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             0,
             null,
             ResultSummary: string.Join("; ", allSummaries));
+    }
+
+    internal static IReadOnlyList<string> DiscoverTrustedTestProjects(string worktreePath)
+    {
+        var testsRoot = Path.Combine(worktreePath, "tests");
+        if (!Directory.Exists(testsRoot))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(testsRoot, "*.csproj", SearchOption.AllDirectories)
+            .Where(path =>
+                Path.GetFileNameWithoutExtension(path).EndsWith(".Tests", StringComparison.OrdinalIgnoreCase) ||
+                File.ReadAllText(path).Contains("<IsTestProject>true</IsTestProject>", StringComparison.OrdinalIgnoreCase))
+            .Select(path => NormalizePath(Path.GetRelativePath(worktreePath, path))!)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    internal static IReadOnlyList<string> DiscoverTrustedTestProjects(
+        string candidateWorktreePath,
+        string mainWorktreePath) =>
+        DiscoverTrustedTestProjects(candidateWorktreePath)
+            .Concat(DiscoverTrustedTestProjects(mainWorktreePath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static bool IsBroadTestProjectCheck(AcceptanceManifestCheck check) =>
+        check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(check.Project) &&
+        check.Project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) &&
+        !check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
+
+    private static AcceptanceManifestCheck BuildTrustedStructuralCoverageCheck(
+        string project,
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    {
+        var matchingChecks = effectiveChecks
+            .Where(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (matchingChecks.FirstOrDefault(IsBroadTestProjectCheck) is { } broadCheck)
+        {
+            return broadCheck;
+        }
+
+        if (matchingChecks.FirstOrDefault() is { } filteredCheck)
+        {
+            var laneSeparator = filteredCheck.Name.LastIndexOf(": ", StringComparison.Ordinal);
+            return new AcceptanceManifestCheck
+            {
+                Name = laneSeparator > 0 ? filteredCheck.Name[..laneSeparator] : filteredCheck.Name,
+                Type = filteredCheck.Type,
+                Project = filteredCheck.Project,
+                Arguments = RemoveTestFilter(filteredCheck.Arguments),
+                TimeoutMinutes = filteredCheck.TimeoutMinutes,
+                Runner = filteredCheck.Runner
+            };
+        }
+
+        return new AcceptanceManifestCheck
+        {
+            Name = $"trusted structural discovery: {Path.GetFileNameWithoutExtension(project)}",
+            Type = "dotnet-test",
+            Project = project,
+            Runner = EngineSettings.HasMtpInvocation(project) ? "mtp" : "vstest"
+        };
+    }
+
+    private static IReadOnlyList<string> RemoveTestFilter(IReadOnlyList<string> arguments)
+    {
+        var unfiltered = new List<string>();
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (arguments[index].Equals("--filter", StringComparison.OrdinalIgnoreCase))
+            {
+                index++;
+                continue;
+            }
+
+            unfiltered.Add(arguments[index]);
+        }
+
+        return unfiltered;
     }
 
     private static string[] BuildDiscoveryArguments(

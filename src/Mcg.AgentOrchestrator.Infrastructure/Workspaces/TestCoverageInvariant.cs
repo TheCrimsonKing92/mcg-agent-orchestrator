@@ -15,6 +15,34 @@ internal sealed record TestCoverageInvariantResult(
 
 internal static class TestCoverageInvariant
 {
+    private static readonly string[] BareTestListDiagnosticPrefixes =
+    [
+        "Microsoft.Testing.Platform",
+        "Test run summary",
+        "Test run for",
+        "Test execution",
+        "Total tests",
+        "Tests found",
+        "Test modules",
+        "Passed:",
+        "Failed:",
+        "Skipped:",
+        "Succeeded:",
+        "Total:",
+        "Duration:",
+        "Artifacts produced:",
+        "Build ",
+        "Starting test",
+        "Discovering",
+        "Executing tests",
+        "Running tests",
+        "Results File:",
+        "Attachments:",
+        "No test",
+        "Warning",
+        "Error"
+    ];
+
     public static IReadOnlySet<string> ParseDiscoveredTests(string output, bool bareTestList = false)
     {
         var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -38,7 +66,11 @@ internal static class TestCoverageInvariant
 
             if (bareTestList)
             {
-                AddNormalized(tests, line);
+                if (!IsBareTestListDiagnostic(line))
+                {
+                    AddNormalized(tests, line);
+                }
+
                 continue;
             }
 
@@ -148,11 +180,15 @@ internal static class TestCoverageInvariant
                 .Select(Path.GetFileNameWithoutExtension)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .ToArray();
-            missing.AddRange(mainDiscoveredTests
-                .Where(mainTest => !candidateDiscoveredTests.Any(candidate => IdentitiesMatch(mainTest, candidate)))
-                .Where(mainTest => !deletedClassNames.Any(className =>
-                    IdentityBelongsToDeletedTestFile(mainTest, className!)))
-                .Select(mainTest => $"main-only:{mainTest}"));
+            var deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
+                deletedClassNames.Any(className =>
+                    IdentityBelongsToDeletedTestFile(mainTest, className!)));
+            var minimumCandidateCount = Math.Max(0, mainDiscoveredTests.Count - deletedMainTestCount);
+            if (candidateDiscoveredTests.Count < minimumCandidateCount)
+            {
+                missing.Add(
+                    $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount}");
+            }
         }
 
         var passed = emptyPartitions.Count == 0 && missing.Count == 0;
@@ -177,6 +213,12 @@ internal static class TestCoverageInvariant
         return normalized.StartsWith($"{className}.", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains($".{className}.", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsBareTestListDiagnostic(string line) =>
+        BareTestListDiagnosticPrefixes.Any(prefix =>
+            line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
+        line.StartsWith("[xUnit.net", StringComparison.OrdinalIgnoreCase) ||
+        line.All(character => character is '-' or '=' or '_');
 
     private static void AddNormalized(ISet<string> tests, string? value)
     {

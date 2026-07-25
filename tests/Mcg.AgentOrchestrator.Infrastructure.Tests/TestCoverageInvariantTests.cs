@@ -64,8 +64,30 @@ public sealed class TestCoverageInvariantTests
             var allowed = TestCoverageInvariant.Evaluate(candidate, partitions, main, ["tests/RemovedTests.cs"]);
 
             Xunit.Assert.False(rejected.Passed);
-            Xunit.Assert.Contains("main-only:RemovedTests.WasPresentOnMain", rejected.MissingTests);
+            Xunit.Assert.Contains(
+                rejected.MissingTests,
+                missing => missing.StartsWith("cross-generation-count:", StringComparison.Ordinal));
             Xunit.Assert.True(allowed.Passed);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_cross_generation_allows_identity_rename_when_count_is_preserved")]
+    public void TestCoverageInvariantCrossGenerationAllowsIdentityRenameWhenCountIsPreserved()
+    {
+        var trx = WriteTrx(("1", "RenamedTests.NewName", "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["RenamedTests.NewName"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("lane", true, [trx])],
+                new HashSet<string>(["OriginalTests.OldName"], StringComparer.OrdinalIgnoreCase),
+                []);
+
+            Xunit.Assert.True(result.Passed);
         }
         finally
         {
@@ -96,6 +118,24 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_bare_MTP_discovery_ignores_summaries_and_diagnostics")]
+    public void TestCoverageInvariantBareMtpDiscoveryIgnoresSummariesAndDiagnostics()
+    {
+        var discovered = TestCoverageInvariant.ParseDiscoveredTests(
+            """
+            Microsoft.Testing.Platform v1.8.0
+            [xUnit.net 00:00:00.10] Discovering: Example.Tests
+            structural coverage uses the MTP display name
+            Test run summary: Tests found: 1
+            total: 1
+            succeeded: 1
+            Duration: 00:00:00.42
+            """,
+            bareTestList: true);
+
+        Xunit.Assert.Equal(["structural coverage uses the MTP display name"], discovered);
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_apply_generic_deleted_filename_to_unrelated_test")]
     public void TestCoverageInvariantDoesNotApplyGenericDeletedFilenameToUnrelatedTest()
     {
@@ -114,7 +154,9 @@ public sealed class TestCoverageInvariantTests
                 ["tests/Tests.cs"]);
 
             Xunit.Assert.False(result.Passed);
-            Xunit.Assert.Contains("main-only:UnrelatedTests.WasPresentOnMain", result.MissingTests);
+            Xunit.Assert.Contains(
+                result.MissingTests,
+                missing => missing.StartsWith("cross-generation-count:", StringComparison.Ordinal));
         }
         finally
         {

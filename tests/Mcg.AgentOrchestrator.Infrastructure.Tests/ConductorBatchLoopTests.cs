@@ -854,6 +854,43 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_invalid_parallel_acceptance_slot_settings_escalate_without_retry")]
+    public void BatchLoopInvalidParallelAcceptanceSlotSettingsEscalateWithoutRetry()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(
+            kernel,
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/InvalidSlotSettings.cs");
+        var slotReads = 0;
+        var escalationReasons = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            writeEscalation: (_, _, reason) => escalationReasons.Add(reason),
+            getAcceptanceSlotCount: _ =>
+            {
+                slotReads++;
+                throw new InvalidDataException("slotCount must be between 1 and 4");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(1, slotReads);
+        Assert.Equal(0, summary.Held);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Contains(
+            escalationReasons,
+            reason => reason.Contains("invalid parallel acceptance slot settings", StringComparison.Ordinal));
+        Assert.DoesNotContain(escalationReasons, reason => reason.Contains("retry", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_slots_busy_gate_retries_and_lands_on_later_tick")]
     public void BatchLoopSlotsBusyGateRetriesAndLandsOnLaterTick()
     {
