@@ -2,8 +2,8 @@ namespace Mcg.AgentOrchestrator.Core.Tests;
 
 public sealed class RepositoryChangeClassifierTests
 {
-    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_allows_candidate_lane_timeout_and_invocation_argument_changes")]
-    public void RepositoryChangeClassifierAllowsCandidateLaneTimeoutAndInvocationArgumentChanges()
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_allows_candidate_lane_timeout_and_safe_MTP_reporting_changes")]
+    public void RepositoryChangeClassifierAllowsCandidateLaneTimeoutAndSafeMtpReportingChanges()
     {
         const string trusted = """
             {
@@ -14,7 +14,15 @@ public sealed class RepositoryChangeClassifierTests
                   "project": "tests/A.csproj",
                   "executablePathTemplate": "bin/{projectName}.exe",
                   "firewallExecutablePathTemplate": "bin/{projectName}.exe",
-                  "arguments": ["{executable}", "--old"]
+                  "arguments": [
+                    "{executable}",
+                    "--no-ansi",
+                    "--progress", "off",
+                    "--results-directory", "{resultsDirectory}",
+                    "--report-trx",
+                    "--report-trx-filename", "{trxFileName}",
+                    "--long-running", "120"
+                  ]
                 }]
               }
             }
@@ -28,7 +36,15 @@ public sealed class RepositoryChangeClassifierTests
                   "project": "tests/A.csproj",
                   "executablePathTemplate": "bin/{projectName}.exe",
                   "firewallExecutablePathTemplate": "bin/{projectName}.exe",
-                  "arguments": ["{executable}", "--new"]
+                  "arguments": [
+                    "{executable}",
+                    "--no-ansi",
+                    "--progress", "off",
+                    "--results-directory", "{resultsDirectory}",
+                    "--report-trx",
+                    "--report-trx-filename", "{trxFileName}",
+                    "--long-running", "60"
+                  ]
                 }]
               }
             }
@@ -48,14 +64,16 @@ public sealed class RepositoryChangeClassifierTests
             { "engine": { "mtpInvocations": [{
               "project": "tests/A.csproj",
               "executablePathTemplate": "bin/A.exe",
-              "firewallExecutablePathTemplate": "bin/A.exe"
+              "firewallExecutablePathTemplate": "bin/A.exe",
+              "arguments": ["{executable}", "--report-trx"]
             }] } }
             """;
         const string candidate = """
             { "engine": { "mtpInvocations": [{
               "project": "tests/A.csproj",
               "executablePathTemplate": "../candidate.exe",
-              "firewallExecutablePathTemplate": "../candidate.exe"
+              "firewallExecutablePathTemplate": "../candidate.exe",
+              "arguments": ["{executable}", "--report-trx"]
             }] } }
             """;
 
@@ -111,6 +129,55 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(decision.RequiresTrustedReview);
         Assert.Contains("engine.mtpInvocations[].arguments[0]", decision.SecurityCriticalChanges);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_MTP_ignore_exit_code_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesMtpIgnoreExitCodeToTrustedReview()
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "arguments": ["{executable}", "--report-trx"]
+            }] } }
+            """;
+        const string candidate = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "arguments": ["{executable}", "--report-trx", "--ignore-exit-code"]
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.mtpInvocations[].arguments", decision.SecurityCriticalChanges);
+    }
+
+    [Xunit.Theory(DisplayName = "RepositoryChangeClassifier_routes_unknown_or_malformed_MTP_arguments_to_trusted_review")]
+    [Xunit.InlineData("""["{executable}", "--unknown"]""")]
+    [Xunit.InlineData("""["{executable}", "--results-directory", "../outside"]""")]
+    [Xunit.InlineData("""["{executable}", "--progress"]""")]
+    [Xunit.InlineData("""["{executable}", "extra-position"]""")]
+    public void RepositoryChangeClassifierRoutesUnknownOrMalformedMtpArgumentsToTrustedReview(
+        string candidateArguments)
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "arguments": ["{executable}", "--report-trx"]
+            }] } }
+            """;
+        var candidate = $$"""
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "arguments": {{candidateArguments}}
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.mtpInvocations[].arguments", decision.SecurityCriticalChanges);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_identifies_docs_only_changes")]
