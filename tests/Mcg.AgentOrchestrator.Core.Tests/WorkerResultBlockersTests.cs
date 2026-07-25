@@ -67,9 +67,13 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.UntouchedReopenViolationCode, error.Code);
     }
 
-    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_open_set_growth")]
-    public void ReviewFindingConvergenceRejectsOpenSetGrowth()
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_open_set_growth_from_a_new_identity_at_a_new_anchor")]
+    public void ReviewFindingConvergenceAllowsOpenSetGrowthFromNewIdentityAtNewAnchor()
     {
+        // A reviewer discovering a genuinely new defect late must be able to report it, even when the
+        // open set grows. Rejecting this trapped reviewers on 2026-07-25: structured reports failed the
+        // old open-set-increase check, prose-only needs-work fails the no-open-findings rule, and pass
+        // would be dishonest. Re-litigation is still blocked by the anchor-identity guards.
         var previous = new[]
         {
             new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run"), "A.")
@@ -81,12 +85,11 @@ public sealed class WorkerResultBlockersTests
             ],
             []);
 
-        var error = Assert.Throws<ReviewFindingConvergenceException>(
-            () => ReviewFindingConvergence.ApplyRound(previous, next));
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
 
-        Assert.Equal(ReviewFindingConvergence.MonotonicityViolationCode, error.Code);
-        Assert.Equal(1, error.PreviousOpenCount);
-        Assert.Equal(2, error.NextOpenCount);
+        Assert.Equal(2, ReviewFindingConvergence.CountOpen(state));
+        Assert.Contains(state, finding => finding.StableId == "F-2" &&
+            finding.State == ReviewFindingState.Open);
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_exact_anchor_regression_reopen")]
