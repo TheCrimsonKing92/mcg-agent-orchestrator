@@ -1658,8 +1658,9 @@ internal sealed class ConductorBatchLoop
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&
         goal.Tasks.All(task =>
-            task.Status == WorkTaskStatus.Completed &&
-            task.LastVerification is { Succeeded: true });
+            task.Status == WorkTaskStatus.Cancelled ||
+            (task.Status == WorkTaskStatus.Completed &&
+             task.LastVerification is { Succeeded: true }));
 
     private static bool ShouldDeferForParallelAcceptanceFairness(string oldestGoalId)
     {

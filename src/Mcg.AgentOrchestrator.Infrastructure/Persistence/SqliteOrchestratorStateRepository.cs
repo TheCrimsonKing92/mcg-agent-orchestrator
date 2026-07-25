@@ -962,6 +962,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
             RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
+            AutomaticAcceptanceRetryCount = PickStoreOwned(
+                baseline.AutomaticAcceptanceRetryCount,
+                stored.AutomaticAcceptanceRetryCount,
+                current.AutomaticAcceptanceRetryCount),
+            OperatorAcceptanceRegateCount = PickStoreOwned(
+                baseline.OperatorAcceptanceRegateCount,
+                stored.OperatorAcceptanceRegateCount,
+                current.OperatorAcceptanceRegateCount),
             EffectiveAcceptanceCriteriaCorrections = PickStoreOwnedList(
                 baseline.EffectiveAcceptanceCriteriaCorrections,
                 stored.EffectiveAcceptanceCriteriaCorrections,

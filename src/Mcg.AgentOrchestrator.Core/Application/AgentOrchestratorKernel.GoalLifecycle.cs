@@ -371,7 +371,6 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         goal.ClearAcceptanceFailure();
-        goal.ResetAutomaticAcceptanceRetryCount();
     }
 
     public int RetryAcceptanceGate(GoalId goalId, string operatorReason)

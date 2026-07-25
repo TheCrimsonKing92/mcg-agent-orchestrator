@@ -817,7 +817,8 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
             Assert.True(kernel.ReconcileGoalAcceptanceFailed(
                 goal.Id,
                 ["environment-only gate failure"],
-                "Acceptance environment failed."));
+                "Acceptance environment failed.",
+                mainHeadSha: ReadGit(root, ["rev-parse", "HEAD"])));
 
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             var context = new CliExecutionContext(
@@ -842,7 +843,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            _ = GoalWorktrees.DeleteDirectory(root);
         }
     }
 

@@ -354,15 +354,20 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 retryParts[1]);
             var retryGoal = context.CurrentGoal;
-            var operatorReason = retryParts[2];
+            var operatorReason = ResolveTextArgument(
+                retryParts,
+                inlineIndex: 2,
+                "acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry");
             context.Kernel.ValidateAcceptanceGateRetry(retryGoal.Id, operatorReason);
-            var priorGateMainSha = retryGoal.LatestAcceptanceFailure?.MainHeadSha ??
+            var priorGateMainSha = (retryGoal.LatestAcceptanceFailure?.MainHeadSha ??
                 GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, retryGoal.Id).Entries
                     .LastOrDefault(entry =>
                         entry.Status == GoalOperationStatus.Failed &&
                         entry.Operation.Contains("acceptance", StringComparison.OrdinalIgnoreCase) &&
                         !string.IsNullOrWhiteSpace(entry.MainHeadSha))
-                    ?.MainHeadSha;
+                    ?.MainHeadSha)
+                ?? throw new InvalidOperationException(
+                    "acceptance-retry could not resolve the prior failing gate's main HEAD SHA.");
             var currentHeadMainSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory)
                 ?? throw new InvalidOperationException("acceptance-retry could not resolve current main HEAD.");
             var operatorRegateCount = context.Kernel.RetryAcceptanceGate(retryGoal.Id, operatorReason);

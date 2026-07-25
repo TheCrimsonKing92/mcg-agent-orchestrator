@@ -1383,8 +1383,9 @@ internal sealed class ConductorDriver
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&
         goal.Tasks.All(task =>
-            task.Status == WorkTaskStatus.Completed &&
-            task.LastVerification is { Succeeded: true });
+            task.Status == WorkTaskStatus.Cancelled ||
+            (task.Status == WorkTaskStatus.Completed &&
+             task.LastVerification is { Succeeded: true }));
 
     private static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
     {

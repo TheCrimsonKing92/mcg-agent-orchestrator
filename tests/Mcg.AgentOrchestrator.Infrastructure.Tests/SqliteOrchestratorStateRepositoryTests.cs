@@ -1019,6 +1019,39 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_acceptance_retry_counters")]
+    public async Task TickMergePreservesAcceptanceRetryCounters()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect acceptance retry counters");
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        var tickSnapshot = baseline with { AutomaticAcceptanceRetryCount = 1 };
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) => Task.FromResult((
+                true,
+                stored! with
+                {
+                    Objective = "Concurrent operator update",
+                    OperatorAcceptanceRegateCount = 1
+                },
+                true)));
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        Assert.Equal(1, restoredGoal.AutomaticAcceptanceRetryCount);
+        Assert.Equal(1, restoredGoal.OperatorAcceptanceRegateCount);
+        Assert.Equal("Concurrent operator update", restoredGoal.Objective);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_store_owned_same_field_conflict_keeps_cli_value")]
     public async Task TickMergeStoreOwnedSameFieldConflictKeepsCliValue()
     {
