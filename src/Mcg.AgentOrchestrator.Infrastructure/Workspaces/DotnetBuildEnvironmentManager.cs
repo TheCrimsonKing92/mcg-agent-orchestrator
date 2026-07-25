@@ -98,11 +98,15 @@ public static class DotnetBuildEnvironmentManager
         WriteIndented = true
     };
 
-    public static DotnetBuildEnvironment CreateAttempt(GoalId? goalId, string attemptName)
+    public static DotnetBuildEnvironment CreateAttempt(
+        GoalId? goalId,
+        string attemptName,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
         if (goalId is not null)
         {
-            return CreateGoalLease(goalId, attemptName);
+            return CreateGoalLease(goalId, attemptName, slotCount);
         }
 
         var root = StableSlotRoot("manual");
@@ -163,28 +167,32 @@ public static class DotnetBuildEnvironmentManager
         return paths;
     }
 
-    public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotMtpExecutableFirewallPaths()
+    internal static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotMtpExecutableFirewallPaths(
+        int slotCount,
+        IReadOnlyList<AcceptanceMtpInvocation> invocations)
     {
-        DotnetTesthostFirewallPath[] paths = new DotnetTesthostFirewallPath[StableSlotCount];
-        for (var slot = 0; slot < StableSlotCount; slot++)
+        ValidateRequestedSlotCount(slotCount);
+        var paths = new List<DotnetTesthostFirewallPath>(slotCount * invocations.Count);
+        for (var slot = 0; slot < slotCount; slot++)
         {
-            paths[slot] = new DotnetTesthostFirewallPath(
-                slot,
-                "Core-MTP",
-                "Debug",
-                Path.Combine(
-                    StableSlotArtifactsPath($"slot-{slot}"),
-                    "bin",
-                    "Mcg.AgentOrchestrator.Core.Tests",
-                    "debug",
-                    "Mcg.AgentOrchestrator.Core.Tests.exe"));
+            foreach (var invocation in invocations)
+            {
+                paths.Add(new DotnetTesthostFirewallPath(
+                    slot,
+                    $"{Path.GetFileNameWithoutExtension(invocation.Project)}-MTP",
+                    "Debug",
+                    invocation.ResolveFirewallExecutablePath(StableSlotArtifactsPath($"slot-{slot}"))));
+            }
         }
 
         return paths;
     }
 
-    public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTestExecutableFirewallPaths() =>
-        [.. StableSlotTesthostFirewallPaths(), .. StableSlotMtpExecutableFirewallPaths()];
+    internal static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTestExecutableFirewallPaths(
+        int slotCount,
+        IReadOnlyList<AcceptanceMtpInvocation> invocations) =>
+        [.. StableSlotTesthostFirewallPaths().Where(path => path.SlotIndex < slotCount),
+            .. StableSlotMtpExecutableFirewallPaths(slotCount, invocations)];
 
     public static string StableSlotArtifactsPath(int slotIndex)
     {
@@ -197,8 +205,19 @@ public static class DotnetBuildEnvironmentManager
         return BuildArguments(StableSlotArtifactsPath(slotIndex));
     }
 
-    public static DotnetBuildEnvironment CreateStableSlotAttempt(int slotIndex)
+    public static DotnetBuildEnvironment CreateStableSlotAttempt(
+        int slotIndex,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
+        if (slotIndex >= slotCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(slotIndex),
+                slotIndex,
+                $"Stable slot index must be 0 through {slotCount - 1} for the requested slot count.");
+        }
+
         return CreateStableSlotEnvironment(slotIndex);
     }
 
@@ -238,9 +257,10 @@ public static class DotnetBuildEnvironmentManager
     public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
         TimeSpan? timeout = null,
         Action<DotnetBuildStableSlotWait>? onWait = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int slotCount = StableSlotCount)
     {
-        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken) switch
+        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -252,18 +272,20 @@ public static class DotnetBuildEnvironmentManager
     public static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableStableSlotExecutionLock(
         TimeSpan? timeout = null,
         Action<DotnetBuildStableSlotWait>? onWait = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
         var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
         var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
         var waitingReported = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var scanStart = NextStableSlotScanStart();
-            for (var offset = 0; offset < StableSlotCount; offset++)
+            var scanStart = NextStableSlotScanStart(slotCount);
+            for (var offset = 0; offset < slotCount; offset++)
             {
-                var slot = (scanStart + offset) % StableSlotCount;
+                var slot = (scanStart + offset) % slotCount;
                 var environment = CreateStableSlotEnvironment(slot);
                 if (IsSlotArtifactsBusy(environment))
                 {
@@ -280,7 +302,7 @@ public static class DotnetBuildEnvironmentManager
                 }
             }
 
-            var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
+            var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(slotCount);
             if (!waitingReported)
             {
                 onWait?.Invoke(new DotnetBuildStableSlotWait(leastRecentlyLeased.SlotIndex, leastRecentlyLeased.OwnerProcessId));
@@ -289,7 +311,7 @@ public static class DotnetBuildEnvironmentManager
 
             if (DateTimeOffset.UtcNow >= timeoutAt)
             {
-                return EmitSlotsBusy("first-available-stable-slot");
+                return EmitSlotsBusy("first-available-stable-slot", slotCount);
             }
 
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
@@ -594,10 +616,11 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static (int SlotIndex, int? OwnerProcessId, DateTimeOffset LastAcquiredAt) FindLeastRecentlyLeasedStableSlot()
+    private static (int SlotIndex, int? OwnerProcessId, DateTimeOffset LastAcquiredAt) FindLeastRecentlyLeasedStableSlot(
+        int slotCount = StableSlotCount)
     {
         var oldest = (SlotIndex: 0, OwnerProcessId: (int?)null, LastAcquiredAt: DateTimeOffset.MaxValue);
-        for (var slot = 0; slot < StableSlotCount; slot++)
+        for (var slot = 0; slot < slotCount; slot++)
         {
             var marker = TryReadStableSlotOwnerMarker(slot);
             var acquiredAt = marker?.LastAcquiredAt ?? DateTimeOffset.MinValue;
@@ -610,12 +633,15 @@ public static class DotnetBuildEnvironmentManager
         return oldest;
     }
 
-    private static int NextStableSlotScanStart()
+    private static int NextStableSlotScanStart(int slotCount = StableSlotCount)
     {
-        return (int)((uint)Interlocked.Increment(ref s_nextStableSlotScanStart) % StableSlotCount);
+        return (int)((uint)Interlocked.Increment(ref s_nextStableSlotScanStart) % slotCount);
     }
 
-    private static DotnetBuildEnvironment CreateGoalLease(GoalId goalId, string attemptName)
+    private static DotnetBuildEnvironment CreateGoalLease(
+        GoalId goalId,
+        string attemptName,
+        int slotCount)
     {
         var root = GoalRoot(goalId);
         var leaseId = $"goal-{Prefix(goalId)}";
@@ -623,7 +649,7 @@ public static class DotnetBuildEnvironmentManager
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
-        var slotName = SelectStableSlotNameForGoal(metadataPath, reused);
+        var slotName = SelectStableSlotNameForGoal(metadataPath, reused, slotCount);
         var artifactsPath = StableSlotArtifactsPath(slotName);
         var executionLockPath = StableSlotExecutionLockPath(slotName);
         Directory.CreateDirectory(leaseDirectory);
@@ -682,37 +708,44 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(GoalRoot(goalId), LeaseDirectoryName);
     }
 
-    private static string StableSlotName(GoalId goalId)
+    private static string StableSlotName(
+        GoalId goalId,
+        int slotCount = StableSlotCount)
     {
+        ValidateRequestedSlotCount(slotCount);
         var hash = 0;
         foreach (var ch in Prefix(goalId))
         {
             hash = unchecked((hash * 31) + char.ToLowerInvariant(ch));
         }
 
-        return $"slot-{Math.Abs(hash % StableSlotCount)}";
+        return $"slot-{Math.Abs(hash % slotCount)}";
     }
 
-    private static string SelectStableSlotNameForGoal(string metadataPath, bool reused)
+    private static string SelectStableSlotNameForGoal(
+        string metadataPath,
+        bool reused,
+        int slotCount)
     {
         if (reused &&
             TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName &&
+            ParseStableSlotIndex(existingSlotName) < slotCount &&
             IsStableSlotAvailable(existingSlotName))
         {
             return existingSlotName;
         }
 
-        var scanStart = NextStableSlotScanStart();
-        for (var offset = 0; offset < StableSlotCount; offset++)
+        var scanStart = NextStableSlotScanStart(slotCount);
+        for (var offset = 0; offset < slotCount; offset++)
         {
-            var slotName = $"slot-{(scanStart + offset) % StableSlotCount}";
+            var slotName = $"slot-{(scanStart + offset) % slotCount}";
             if (IsStableSlotAvailable(slotName))
             {
                 return slotName;
             }
         }
 
-        var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot();
+        var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(slotCount);
         return $"slot-{leastRecentlyLeased.SlotIndex}";
     }
 
@@ -837,6 +870,17 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
+    private static void ValidateRequestedSlotCount(int slotCount)
+    {
+        if (slotCount is < 1 or > StableSlotCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(slotCount),
+                slotCount,
+                $"Requested stable slot count must be 1 through {StableSlotCount}.");
+        }
+    }
+
     private static string IsolatedRootBase()
     {
         var overridden = Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable);
@@ -860,9 +904,11 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(StableSlotRoot(slotName), "lease.execution.lock");
     }
 
-    private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(string wantedBy)
+    private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(
+        string wantedBy,
+        int slotCount = StableSlotCount)
     {
-        var busySlots = BuildBusySlotSnapshot();
+        var busySlots = BuildBusySlotSnapshot(slotCount);
         Console.WriteLine(
             $"SLOTS_BUSY wantedBy={wantedBy} busySlots={FormatBusySlots(busySlots)} pid={Environment.ProcessId}");
         return new DotnetBuildLeaseAcquisition.SlotsBusy(wantedBy, busySlots);
@@ -877,10 +923,11 @@ public static class DotnetBuildEnvironmentManager
         return new DotnetBuildLeaseAcquisition.BuildLockBlocked(wantedBy, attribution);
     }
 
-    private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot()
+    private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot(
+        int slotCount = StableSlotCount)
     {
-        var waits = new DotnetBuildStableSlotWait[StableSlotCount];
-        for (var slot = 0; slot < StableSlotCount; slot++)
+        var waits = new DotnetBuildStableSlotWait[slotCount];
+        for (var slot = 0; slot < slotCount; slot++)
         {
             waits[slot] = new DotnetBuildStableSlotWait(slot, TryReadStableSlotExecutionOwner(slot));
         }

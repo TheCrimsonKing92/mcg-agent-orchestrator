@@ -1211,8 +1211,8 @@ internal sealed class ConductorBatchLoop
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds)
     {
-        var slotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount);
-        if (slotCount < 2)
+        var trustedHostSlotCount = Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount);
+        if (trustedHostSlotCount < 2)
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
@@ -1232,6 +1232,30 @@ internal sealed class ConductorBatchLoop
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
+            int acceptanceSlotCount;
+            try
+            {
+                acceptanceSlotCount = driver.GetAcceptanceSlotCount(goal);
+                if (acceptanceSlotCount is < 1 || acceptanceSlotCount > trustedHostSlotCount)
+                {
+                    throw new InvalidDataException(
+                        $"Acceptance slot count must be between 1 and the trusted host maximum {trustedHostSlotCount}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    driver.EscalateParallelLandingAcceptance(
+                        goal,
+                        policy,
+                        $"invalid parallel acceptance slot settings: {Sanitize(ex.Message)}"),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={Sanitize(ex.Message)}",
+                    changedGoalLines);
+                continue;
+            }
+
             if (oldestWaiter is not null &&
                 goal.Id != oldestWaiter.Id &&
                 !oldestServedThisTick &&
@@ -1241,7 +1265,7 @@ internal sealed class ConductorBatchLoop
                     driver,
                     goal,
                     policy,
-                    activeCandidates.Count,
+                    Math.Min(activeCandidates.Count, acceptanceSlotCount - 1),
                     out var deferredBuildException);
                 if (deferredCandidate is not null)
                 {
@@ -1271,6 +1295,18 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
+            if (activeCandidates.Count >= acceptanceSlotCount)
+            {
+                deferredByAdmission++;
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        $"candidate manifest slot cap {acceptanceSlotCount} reached; retry on next conduct tick"),
+                    null);
+                continue;
+            }
+
             var candidate = TryBuildParallelAcceptanceCandidate(
                 driver,
                 goal,
@@ -1295,7 +1331,7 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            if (activeCandidates.Count >= slotCount)
+            if (activeCandidates.Count >= trustedHostSlotCount)
             {
                 deferredByAdmission++;
                 results[goal.Id.Value] = new ParallelLandingOutcome(
@@ -1431,7 +1467,7 @@ internal sealed class ConductorBatchLoop
         if (deferredByAdmission > 0)
         {
             RecordParallelAcceptanceProgress(
-                $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-slot-cap cap={slotCount} deferred={deferredByAdmission}",
+                $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-slot-cap cap={trustedHostSlotCount} deferred={deferredByAdmission}",
                 changedGoalLines);
         }
 

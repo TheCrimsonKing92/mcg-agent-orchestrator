@@ -42,13 +42,10 @@ public static class RepositoryTestImpactPlanner
     private const string DashboardInfrastructureFilter =
         "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests";
 
-    private static readonly string[] FullDotnetTests =
-    [
-        "dotnet",
-        "test",
-        "--verbosity",
-        "minimal"
-    ];
+    // The full suite is expressed as the two per-project runs rather than one solution-level
+    // "dotnet test": both test projects are Microsoft.Testing.Platform, and a project-less
+    // dotnet-test check cannot be routed to the MTP runner, so it always dies on .NET 10 with
+    // "Testing with VSTest target is no longer supported".
 
     public static RepositoryTestImpactPlan Plan(IEnumerable<string> paths) =>
         Plan(RepositoryChangeClassifier.Classify(paths));
@@ -190,8 +187,12 @@ public static class RepositoryTestImpactPlanner
             Checks:
             [
                 new RepositoryTestImpactCheck(
-                    "full dotnet tests",
-                    FullDotnetTests,
+                    "full dotnet tests: core",
+                    CoreTests,
+                    summary),
+                new RepositoryTestImpactCheck(
+                    "full dotnet tests: infrastructure",
+                    InfrastructureTests,
                     summary)
             ]);
 

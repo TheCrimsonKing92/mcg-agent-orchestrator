@@ -1,5 +1,75 @@
 {
   "version": 1,
+  "engine": {
+    "slotCount": 4,
+    "maxConcurrentShards": 1,
+    "enforceStructuralCoverage": true,
+    "timeouts": {
+      "defaultMinutes": 25,
+      "buildServerShutdownMinutes": 5,
+      "discoveryMinutes": 10
+    },
+    "infrastructureTestLanes": [
+      { "name": "Cli", "filter": "FullyQualifiedName~CliCommandTests" },
+      { "name": "Cli help", "filter": "FullyQualifiedName~CliHelpTests" },
+      { "name": "Worker dispatch", "filter": "FullyQualifiedName~WorkerDispatchTests" },
+      { "name": "Worker profiles", "filter": "FullyQualifiedName~WorkerProfileTests" },
+      { "name": "Worker processes", "filter": "FullyQualifiedName~WorkerProcessJobsTests" },
+      { "name": "Worker shell", "filter": "FullyQualifiedName~WorkerShellTests" },
+      { "name": "Worker sandbox planner", "filter": "FullyQualifiedName~WorkerSandboxCapabilityPlannerTests" },
+      { "name": "Dispatch process host", "filter": "FullyQualifiedName~DispatchProcessHostTests" },
+      { "name": "Goal worktree", "filter": "FullyQualifiedName~GoalWorktreeTests" },
+      { "name": "Goal acceptance verifier", "filter": "FullyQualifiedName~GoalAcceptanceVerifierTests" },
+      { "name": "Dashboard rendering", "filter": "FullyQualifiedName~DashboardRenderingTests" },
+      { "name": "Dashboard validation", "filter": "FullyQualifiedName~DashboardValidationHarnessTests" },
+      { "name": "Advance loop", "filter": "FullyQualifiedName~AdvanceLoopTests" },
+      { "name": "Conductor batch loop", "filter": "FullyQualifiedName~ConductorBatchLoopTests" },
+      { "name": "Conductor driver", "filter": "FullyQualifiedName~ConductorDriverTests" },
+      { "name": "Conduct watch sweep scoping", "filter": "FullyQualifiedName~ConductWatchSweepScopingTests" },
+      {
+        "name": "Remainder",
+        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration"
+      }
+    ],
+    "mtpInvocations": [
+      {
+        "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+        "arguments": [
+          "{executable}",
+          "--no-ansi",
+          "--progress",
+          "off",
+          "--results-directory",
+          "{resultsDirectory}",
+          "--report-trx",
+          "--report-trx-filename",
+          "{trxFileName}",
+          "--long-running",
+          "120"
+        ]
+      },
+      {
+        "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+        "arguments": [
+          "{executable}",
+          "--no-ansi",
+          "--progress",
+          "off",
+          "--results-directory",
+          "{resultsDirectory}",
+          "--report-trx",
+          "--report-trx-filename",
+          "{trxFileName}",
+          "--long-running",
+          "120"
+        ]
+      }
+    ]
+  },
   "checks": [
     {
       "name": "git diff whitespace",

@@ -325,11 +325,20 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (File.Exists(path) &&
-                int.TryParse(File.ReadAllText(path).Trim(), out var pid) &&
-                pid > 0)
+            try
             {
-                return pid;
+                if (File.Exists(path) &&
+                    int.TryParse(File.ReadAllText(path).Trim(), out var pid) &&
+                    pid > 0)
+                {
+                    return pid;
+                }
+            }
+            catch (IOException)
+            {
+                // The writer can still hold the pid file open when it first appears; a sharing
+                // violation here means "not ready yet", not failure — keep polling until the
+                // deadline. (Killed a full acceptance-gate attempt as a flake on 2026-07-25.)
             }
 
             Thread.Sleep(50);

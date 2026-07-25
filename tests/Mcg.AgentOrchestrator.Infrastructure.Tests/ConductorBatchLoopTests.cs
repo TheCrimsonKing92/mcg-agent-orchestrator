@@ -62,7 +62,8 @@ public sealed class ConductorBatchLoopTests
         Func<GoalId, TaskId, IReadOnlyList<string>, int>? recordCriterionRetryFeedback = null,
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
-        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null) =>
+        ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
+        Func<Goal, int>? getAcceptanceSlotCount = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -90,7 +91,8 @@ public sealed class ConductorBatchLoopTests
             recordMissingBranchRetirement: recordMissingBranchRetirement,
             getLandingFileScopes: getLandingFileScopes,
             runAcceptanceVerificationWithSlot: runAcceptanceWithSlot,
-            parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator);
+            parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator,
+            getAcceptanceSlotCount: getAcceptanceSlotCount);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -494,6 +496,58 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_candidate_manifest_slot_count_limits_own_parallel_acceptance")]
+    public void BatchLoopCandidateManifestSlotCountLimitsOwnParallelAcceptance()
+    {
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
+        var goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
+        using var release = new ManualResetEventSlim();
+        using var started = new CountdownEvent(1);
+        var slots = new ConcurrentDictionary<string, int?>();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-manifest-slot-count");
+        Action waitForAttempts = () => { };
+
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (goal, slot) =>
+                {
+                    slots[goal.Id.Value] = slot;
+                    started.Signal();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: goal => goal.Id == goalA.Id
+                    ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
+                    : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
+                parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts),
+                getAcceptanceSlotCount: goal => goal.Id == goalA.Id ? 4 : 1);
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(2, summary.Held);
+            Assert.Equal(0, slots[goalA.Id.Value]);
+            Assert.False(slots.ContainsKey(goalB.Id.Value));
+            Assert.Equal(GoalStatus.Verifying, goalA.Status);
+            Assert.Equal(GoalStatus.Verified, goalB.Status);
+        }
+        finally
+        {
+            release.Set();
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_serializes_overlapping_gate_ready_acceptance")]
     public void BatchLoopSerializesOverlappingGateReadyAcceptance()
     {
@@ -798,6 +852,43 @@ public sealed class ConductorBatchLoopTests
             waitForAttempts();
             TryDeleteDirectory(attemptRoot);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_invalid_parallel_acceptance_slot_settings_escalate_without_retry")]
+    public void BatchLoopInvalidParallelAcceptanceSlotSettingsEscalateWithoutRetry()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(
+            kernel,
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/InvalidSlotSettings.cs");
+        var slotReads = 0;
+        var escalationReasons = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            writeEscalation: (_, _, reason) => escalationReasons.Add(reason),
+            getAcceptanceSlotCount: _ =>
+            {
+                slotReads++;
+                throw new InvalidDataException("slotCount must be between 1 and 4");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(1, slotReads);
+        Assert.Equal(0, summary.Held);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Contains(
+            escalationReasons,
+            reason => reason.Contains("invalid parallel acceptance slot settings", StringComparison.Ordinal));
+        Assert.DoesNotContain(escalationReasons, reason => reason.Contains("retry", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_slots_busy_gate_retries_and_lands_on_later_tick")]
@@ -2033,6 +2124,22 @@ public sealed class ConductorBatchLoopTests
     {
         using var _ = IsolatedDotnetRootScope();
         var root = CreateSeededGitRepository();
+        Directory.CreateDirectory(Path.Combine(root, "config"));
+        File.WriteAllText(
+            Path.Combine(root, "config", "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine(
+                """
+                {
+                  "version": 1,
+                  "checks": [
+                    { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
+                    { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }
+                  ],
+                  "forbiddenChangedPathGlobs": []
+                }
+                """));
+        RunGit(root, "add", "config/acceptance-manifest.json");
+        RunGit(root, "commit", "-m", "Seed acceptance manifest");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs");
@@ -2049,18 +2156,6 @@ public sealed class ConductorBatchLoopTests
             File.WriteAllText(
                 Path.Combine(worktree, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ParkBoundary.cs"),
                 "namespace Mcg.AgentOrchestrator.App.Orchestration; internal static class ParkBoundary { }");
-            File.WriteAllText(
-                Path.Combine(worktree, "config", "acceptance-manifest.json"),
-                """
-                {
-                  "version": 1,
-                  "checks": [
-                    { "name": "first target", "type": "command", "command": "first-target", "arguments": ["--ok"] },
-                    { "name": "second target", "type": "command", "command": "second-target", "arguments": ["--should-not-run"] }
-                  ],
-                  "forbiddenChangedPathGlobs": []
-                }
-                """);
             RunGit(worktree, "add", "-A");
             RunGit(worktree, "commit", "-m", "Goal work");
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();

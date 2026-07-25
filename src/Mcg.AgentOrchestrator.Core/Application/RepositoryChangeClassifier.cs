@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public enum RepositoryChangeCategory
@@ -29,6 +31,11 @@ public sealed record RepositoryChangeSummary(
     bool HasSecuritySensitiveChanges,
     bool RequiresBroadVerification,
     string RecommendedVerification);
+
+public sealed record AcceptanceManifestTrustDecision(
+    bool RequiresTrustedReview,
+    IReadOnlyList<string> SecurityCriticalChanges,
+    string Evidence);
 
 public static class RepositoryChangeClassifier
 {
@@ -133,6 +140,58 @@ public static class RepositoryChangeClassifier
             BuildRecommendation(isDocsOnly, hasGenerated, hasBuild, hasSecurity, requiresBroad, hasBehavior));
     }
 
+    public static AcceptanceManifestTrustDecision ClassifyAcceptanceManifestChange(
+        string trustedManifestJson,
+        string candidateManifestJson)
+    {
+        using var trusted = JsonDocument.Parse(trustedManifestJson);
+        using var candidate = JsonDocument.Parse(candidateManifestJson);
+        var changed = new List<string>();
+        CompareSecurityCriticalField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "engine.mtpInvocations[].executablePathTemplate",
+            invocation => invocation.TryGetProperty("executablePathTemplate", out var value) ? value.GetString() : null,
+            changed);
+        CompareSecurityCriticalField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "engine.mtpInvocations[].firewallExecutablePathTemplate",
+            invocation => invocation.TryGetProperty("firewallExecutablePathTemplate", out var value) ? value.GetString() : null,
+            changed);
+        CompareSecurityCriticalField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "engine.mtpInvocations[].arguments[0]",
+            invocation =>
+                invocation.TryGetProperty("arguments", out var arguments) &&
+                arguments.ValueKind == JsonValueKind.Array &&
+                arguments.GetArrayLength() > 0
+                    ? arguments[0].GetString()
+                    : null,
+            changed);
+        if (HasUnsafeMtpInvocationArguments(candidate.RootElement))
+        {
+            changed.Add("engine.mtpInvocations[].arguments");
+        }
+        CompareSecurityCriticalEngineField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "enforceStructuralCoverage",
+            "engine.enforceStructuralCoverage",
+            changed);
+
+        return changed.Count == 0
+            ? new AcceptanceManifestTrustDecision(
+                false,
+                [],
+                "positive evidence: structural coverage enforcement and security-critical MTP executable dimensions are unchanged; MTP arguments use the non-semantic reporting allowlist")
+            : new AcceptanceManifestTrustDecision(
+                true,
+                changed,
+                $"trusted review required for changed field(s): {string.Join(", ", changed)}");
+    }
+
     private static RepositoryChangedFile ClassifyFile(string rawPath)
     {
         var path = Normalize(rawPath);
@@ -195,6 +254,172 @@ public static class RepositoryChangeClassifier
             generated,
             securitySensitive,
             broad);
+    }
+
+    private static void CompareSecurityCriticalField(
+        JsonElement trustedRoot,
+        JsonElement candidateRoot,
+        string fieldName,
+        Func<JsonElement, string?> selector,
+        ICollection<string> changed)
+    {
+        var trustedValues = ReadMtpInvocationValues(trustedRoot, selector);
+        var candidateValues = ReadMtpInvocationValues(candidateRoot, selector);
+        if (!trustedValues.SequenceEqual(candidateValues, StringComparer.Ordinal))
+        {
+            changed.Add(fieldName);
+        }
+    }
+
+    private static void CompareSecurityCriticalEngineField(
+        JsonElement trustedRoot,
+        JsonElement candidateRoot,
+        string propertyName,
+        string fieldName,
+        ICollection<string> changed)
+    {
+        var trustedValue = ReadEngineProperty(trustedRoot, propertyName);
+        var candidateValue = ReadEngineProperty(candidateRoot, propertyName);
+        if (!string.Equals(trustedValue, candidateValue, StringComparison.Ordinal))
+        {
+            changed.Add(fieldName);
+        }
+    }
+
+    private static string? ReadEngineProperty(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty("engine", out var engine) ||
+            !engine.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.GetRawText();
+    }
+
+    private static string[] ReadMtpInvocationValues(
+        JsonElement root,
+        Func<JsonElement, string?> selector)
+    {
+        if (!root.TryGetProperty("engine", out var engine) ||
+            !engine.TryGetProperty("mtpInvocations", out var invocations) ||
+            invocations.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return invocations.EnumerateArray()
+            .Select(invocation =>
+            {
+                var project = invocation.TryGetProperty("project", out var projectValue)
+                    ? projectValue.GetString()
+                    : null;
+                return $"{project}\u001f{selector(invocation)}";
+            })
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool HasUnsafeMtpInvocationArguments(JsonElement root)
+    {
+        if (!root.TryGetProperty("engine", out var engine) ||
+            !engine.TryGetProperty("mtpInvocations", out var invocations))
+        {
+            return false;
+        }
+
+        if (invocations.ValueKind != JsonValueKind.Array)
+        {
+            return true;
+        }
+
+        return invocations.EnumerateArray().Any(invocation =>
+            invocation.ValueKind != JsonValueKind.Object ||
+            !invocation.TryGetProperty("arguments", out var arguments) ||
+            arguments.ValueKind != JsonValueKind.Array ||
+            !AreSafeMtpInvocationArguments(arguments));
+    }
+
+    private static bool AreSafeMtpInvocationArguments(JsonElement arguments)
+    {
+        var values = arguments.EnumerateArray().ToArray();
+        if (values.Length == 0 ||
+            values.Any(value => value.ValueKind != JsonValueKind.String) ||
+            !string.Equals(values[0].GetString(), "{executable}", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var seenOptions = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 1; index < values.Length; index++)
+        {
+            var option = values[index].GetString()!;
+            if (!seenOptions.Add(option))
+            {
+                return false;
+            }
+
+            switch (option)
+            {
+                case "--no-ansi":
+                case "--report-trx":
+                    break;
+                case "--progress":
+                    if (!HasRequiredMtpArgumentValue(values, ref index, "off"))
+                    {
+                        return false;
+                    }
+
+                    break;
+                case "--results-directory":
+                    if (!HasRequiredMtpArgumentValue(values, ref index, "{resultsDirectory}"))
+                    {
+                        return false;
+                    }
+
+                    break;
+                case "--report-trx-filename":
+                    if (!HasRequiredMtpArgumentValue(values, ref index, "{trxFileName}"))
+                    {
+                        return false;
+                    }
+
+                    break;
+                case "--long-running":
+                    if (!TryReadPositiveMtpArgumentValue(values, ref index))
+                    {
+                        return false;
+                    }
+
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool HasRequiredMtpArgumentValue(
+        IReadOnlyList<JsonElement> arguments,
+        ref int index,
+        string requiredValue)
+    {
+        index++;
+        return index < arguments.Count &&
+            string.Equals(arguments[index].GetString(), requiredValue, StringComparison.Ordinal);
+    }
+
+    private static bool TryReadPositiveMtpArgumentValue(
+        IReadOnlyList<JsonElement> arguments,
+        ref int index)
+    {
+        index++;
+        var text = index < arguments.Count ? arguments[index].GetString() : null;
+        return !string.IsNullOrEmpty(text) &&
+            text.All(character => character is >= '0' and <= '9') &&
+            int.TryParse(text, out var value) &&
+            value > 0;
     }
 
     private static string BuildRecommendation(

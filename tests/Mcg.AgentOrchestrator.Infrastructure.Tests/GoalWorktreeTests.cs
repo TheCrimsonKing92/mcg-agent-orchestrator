@@ -801,3 +801,256 @@ public abstract class GoalWorktreeTestBase
         public DateTimeOffset UtcNow { get; } = utcNow;
     }
 }
+
+public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
+{
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuses_prebuilt_test_assembly_and_dependency_directory")]
+    public async Task InvokeIsolatedDotnetReusesPrebuiltTestAssemblyAndDependencyDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = CreateReuseFixture(includeAssembly: true);
+        try
+        {
+            var result = await RunReusePassAsync(fixture);
+
+            Assert.True(
+                result.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}stderr:{Environment.NewLine}{result.Stderr}");
+            Assert.Contains(fixture.AssemblyPath, result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(fixture.ExecutablePath, result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(fixture.DependencyDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(fixture.AssemblyPath), "The reuse pass must preserve the pre-built test assembly.");
+            Assert.True(File.Exists(fixture.ExecutablePath), "The reuse pass must preserve the pre-built MTP executable.");
+            Assert.True(
+                File.Exists(Path.Combine(fixture.DependencyDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.deps.json")),
+                "The reuse pass must preserve the test assembly dependency directory.");
+            Assert.Equal("xUnit executed", File.ReadAllText(fixture.ProbeReceiptPath));
+
+            var log = File.ReadAllText(fixture.DotnetLogPath);
+            Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("args=build ", log, StringComparison.Ordinal);
+            Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+
+            var source = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+            Assert.Contains(".SYNOPSIS", source, StringComparison.Ordinal);
+            Assert.Contains(".DESCRIPTION", source, StringComparison.Ordinal);
+            Assert.True(source.Split(".EXAMPLE", StringSplitOptions.None).Length >= 3);
+            Assert.Contains("-ReuseArtifacts", source, StringComparison.Ordinal);
+            Assert.Contains("--no-build", source, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(fixture.Root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuse_fails_loudly_when_test_assembly_is_missing")]
+    public async Task InvokeIsolatedDotnetReuseFailsLoudlyWhenTestAssemblyIsMissing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = CreateReuseFixture(includeAssembly: false);
+        try
+        {
+            var result = await RunReusePassAsync(fixture);
+
+            Assert.Equal(86, result.ExitCode);
+            Assert.Contains("Artifact reuse precondition failed", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains(fixture.AssemblyPath, result.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Expected owner token: 'goal-reuse-goal'", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("found owner token: 'goal-reuse-goal'", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains(
+                @".\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix reuse-goal build tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --configuration Debug --verbosity minimal",
+                result.Stderr,
+                StringComparison.Ordinal);
+
+            var log = File.ReadAllText(fixture.DotnetLogPath);
+            Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
+            Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(fixture.Root);
+        }
+    }
+
+    private static ReuseFixture CreateReuseFixture(bool includeAssembly)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-isolated-dotnet-reuse-tests", Guid.NewGuid().ToString("N"));
+        var isolatedRoot = Path.Combine(root, "isolated");
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        var artifactsPath = Path.Combine(isolatedRoot, "slots", StableSlotName("reuse-goal"), "artifacts");
+        const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+        var dependencyDirectory = Path.Combine(artifactsPath, "bin", projectName, "debug");
+        var assemblyPath = Path.Combine(dependencyDirectory, $"{projectName}.dll");
+        var executablePath = Path.Combine(dependencyDirectory, $"{projectName}.exe");
+        var dotnetLogPath = Path.Combine(root, "dotnet.log");
+        var probeReceiptPath = Path.Combine(root, "xunit-probe.txt");
+
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        Directory.CreateDirectory(dependencyDirectory);
+        File.WriteAllText(
+            Path.Combine(artifactsPath, ".mcg-artifacts-owner.json"),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                ownerToken = "goal-reuse-goal",
+                ownerProcessId = 123456789,
+                machineName = Environment.MachineName,
+                lastAcquiredAt = DateTimeOffset.UtcNow
+            }));
+        if (includeAssembly)
+        {
+            CopyDirectory(AppContext.BaseDirectory, dependencyDirectory);
+            Assert.True(File.Exists(assemblyPath), $"Current test output is missing {assemblyPath}.");
+            Assert.True(File.Exists(executablePath), $"Current test output is missing {executablePath}.");
+        }
+
+        File.WriteAllText(
+            Path.Combine(shimDirectory, "dotnet.cmd"),
+            """
+            @echo off
+            >> "%DOTNET_SHIM_LOG%" echo args=%*
+            exit /b 0
+            """);
+
+        return new ReuseFixture(
+            root,
+            isolatedRoot,
+            shimDirectory,
+            workDirectory,
+            artifactsPath,
+            dependencyDirectory,
+            assemblyPath,
+            executablePath,
+            dotnetLogPath,
+            probeReceiptPath);
+    }
+
+    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunReusePassAsync(ReuseFixture fixture)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            WorkingDirectory = fixture.WorkDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-InputFormat");
+        startInfo.ArgumentList.Add("None");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+        startInfo.ArgumentList.Add("-GoalPrefix");
+        startInfo.ArgumentList.Add("reuse-goal");
+        startInfo.ArgumentList.Add("-ReuseArtifacts");
+        startInfo.ArgumentList.Add("test");
+        startInfo.ArgumentList.Add("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--configuration");
+        startInfo.ArgumentList.Add("Debug");
+        startInfo.ArgumentList.Add("--verbosity");
+        startInfo.ArgumentList.Add("minimal");
+        startInfo.ArgumentList.Add("--filter");
+        startInfo.ArgumentList.Add("FullyQualifiedName~IsolatedDotnetVSTestBypassProbeTests");
+        startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        startInfo.Environment["DOTNET_SHIM_LOG"] = fixture.DotnetLogPath;
+        startInfo.Environment["MCG_ISOLATED_DOTNET_MTP_PROBE_PATH"] = fixture.ProbeReceiptPath;
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = fixture.IsolatedRoot;
+        startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start PowerShell.");
+        process.StandardInput.Close();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await process.WaitForExitAsync();
+            var timedOutStdout = await stdoutTask;
+            var timedOutStderr = await stderrTask;
+            throw new Xunit.Sdk.XunitException(
+                $"Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.{Environment.NewLine}stdout:{Environment.NewLine}{timedOutStdout}{Environment.NewLine}stderr:{Environment.NewLine}{timedOutStderr}");
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        return (process.ExitCode, stdout, stderr);
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
+    private static string StableSlotName(string value)
+    {
+        long hash = 0;
+        foreach (var character in value.ToLowerInvariant())
+        {
+            hash = ((hash * 31) + character) % 2147483647;
+        }
+
+        return $"slot-{Math.Abs(hash % 4)}";
+    }
+
+    private sealed record ReuseFixture(
+        string Root,
+        string IsolatedRoot,
+        string ShimDirectory,
+        string WorkDirectory,
+        string ArtifactsPath,
+        string DependencyDirectory,
+        string AssemblyPath,
+        string ExecutablePath,
+        string DotnetLogPath,
+        string ProbeReceiptPath);
+}
+
+public sealed class IsolatedDotnetVSTestBypassProbeTests
+{
+    [Xunit.Fact]
+    public void WritesExecutionReceiptWhenRequested()
+    {
+        var receiptPath = Environment.GetEnvironmentVariable("MCG_ISOLATED_DOTNET_MTP_PROBE_PATH");
+        if (!string.IsNullOrWhiteSpace(receiptPath))
+        {
+            File.WriteAllText(receiptPath, "xUnit executed");
+        }
+    }
+}

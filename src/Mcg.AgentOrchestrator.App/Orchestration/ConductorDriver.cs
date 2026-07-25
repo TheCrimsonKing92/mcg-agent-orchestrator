@@ -60,6 +60,7 @@ internal sealed class ConductorDriver
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
+    private readonly Func<Goal, int> _getAcceptanceSlotCount;
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly string? _executionDirectory;
@@ -81,6 +82,13 @@ internal sealed class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _getAcceptanceSlotCount = goal =>
+        {
+            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id)
+                ?? throw new DirectoryNotFoundException(
+                    $"Acceptance worktree was not found for goal {goal.Id.Value[..8]}.");
+            return AcceptanceGateEngineSettings.Load(worktreePath).SlotCount;
+        };
         _parallelAcceptanceEnabled = true;
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
@@ -586,7 +594,8 @@ internal sealed class ConductorDriver
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
-        Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null)
+        Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
+        Func<Goal, int>? getAcceptanceSlotCount = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -635,6 +644,7 @@ internal sealed class ConductorDriver
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
+        _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => DotnetBuildEnvironmentManager.StableSlotCount);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
         _tryBuildAwaitingClarificationEscalationReason =
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
@@ -654,6 +664,8 @@ internal sealed class ConductorDriver
     internal string? ExecutionDirectory => _executionDirectory;
 
     internal bool ParallelAcceptanceEnabled => _parallelAcceptanceEnabled;
+
+    internal int GetAcceptanceSlotCount(Goal goal) => _getAcceptanceSlotCount(goal);
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
@@ -1218,6 +1230,15 @@ internal sealed class ConductorDriver
             return null;
         }
 
+        var slotCount = GetAcceptanceSlotCount(goal);
+        if (slotIndex < 0 || slotIndex >= slotCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(slotIndex),
+                slotIndex,
+                $"Acceptance slot index must be 0 through {slotCount - 1} for goal {goal.Id.Value[..8]}.");
+        }
+
         return ConductorParallelAcceptanceCandidate.Create(
             goal,
             slotIndex,
@@ -1350,6 +1371,12 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         string reason) =>
         Escalate(candidate.Goal, candidate.GoalPrefix, policy, GoalLifecycleState.Verified, reason);
+
+    internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string reason) =>
+        Escalate(goal, goal.Id.Value[..8], policy, GoalLifecycleState.Verified, reason);
 
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&

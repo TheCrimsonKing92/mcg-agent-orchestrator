@@ -308,6 +308,16 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     WaitForExitFile(process.ExitCodePath);
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
 
+    // The exit file can appear before the final accounting snapshot lands, so under load the first
+    // refresh may read null accounting. Re-poll briefly; the assertions below stay unchanged.
+    // (Killed two full acceptance-gate attempts as a flake on 2026-07-25 before this wait.)
+    var accountingDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+    while (task.LastProcess!.ResourceAccounting is null && DateTimeOffset.UtcNow < accountingDeadline)
+    {
+        Thread.Sleep(100);
+        new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+    }
+
     var refreshed = task.LastProcess!;
     var output = File.ReadAllLines(process.StandardOutputPath);
     Assert.True(File.Exists(BackgroundDispatchRunner.GetHeartbeatPath(process)));

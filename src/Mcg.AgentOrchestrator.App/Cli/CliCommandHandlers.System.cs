@@ -363,7 +363,9 @@ internal static partial class CliCommandHandlers
 
             case "firewall-setup":
             {
-                var exitCode = new FirewallSetupCommand(new WindowsFirewallRuleWriter()).Execute(Console.Out);
+                var exitCode = new FirewallSetupCommand(
+                    new WindowsFirewallRuleWriter(),
+                    manifestRoot: context.Workspace.RootDirectory).Execute(Console.Out);
                 if (exitCode != FirewallSetupCommand.SuccessExitCode)
                 {
                     throw new CliExitException(exitCode);

@@ -7,8 +7,12 @@ public sealed class FirewallSetupCommandTests
     public void FirewallSetupCommandComputesStableSlotTesthostRulesIdempotently()
     {
         var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var previousRepositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
         var root = Path.Combine(Path.GetTempPath(), "mcg-firewall-test-root");
         Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, root);
+        Environment.SetEnvironmentVariable(
+            "MCG_ORCHESTRATOR_REPOSITORY_ROOT",
+            InfrastructureTestSupport.FindRepositoryRoot());
         try
         {
             var writer = new RecordingFirewallRuleWriter();
@@ -21,9 +25,9 @@ public sealed class FirewallSetupCommandTests
 
             Xunit.Assert.Equal(FirewallSetupCommand.SuccessExitCode, firstExit);
             Xunit.Assert.Equal(FirewallSetupCommand.SuccessExitCode, secondExit);
-            Xunit.Assert.Contains("created 20 rule(s), already present 0, total 20", firstOutput.ToString());
-            Xunit.Assert.Contains("created 0 rule(s), already present 20, total 20", secondOutput.ToString());
-            Xunit.Assert.Equal(20, writer.Rules.Count);
+            Xunit.Assert.Contains("created 24 rule(s), already present 0, total 24", firstOutput.ToString());
+            Xunit.Assert.Contains("created 0 rule(s), already present 24, total 24", secondOutput.ToString());
+            Xunit.Assert.Equal(24, writer.Rules.Count);
 
             var expected = new List<FirewallRuleSpec>();
             for (var slot = 0; slot < 4; slot++)
@@ -36,17 +40,24 @@ public sealed class FirewallSetupCommandTests
 
             for (var slot = 0; slot < 4; slot++)
             {
-                expected.Add(new FirewallRuleSpec(
-                    $"MCG-testhost-slot{slot}-Core-MTP-Debug",
-                    Path.Combine(
-                        root,
-                        "slots",
-                        $"slot-{slot}",
-                        "artifacts",
-                        "bin",
-                        "Mcg.AgentOrchestrator.Core.Tests",
-                        "debug",
-                        "Mcg.AgentOrchestrator.Core.Tests.exe")));
+                foreach (var projectName in new[]
+                {
+                    "Mcg.AgentOrchestrator.Core.Tests",
+                    "Mcg.AgentOrchestrator.Infrastructure.Tests"
+                })
+                {
+                    expected.Add(new FirewallRuleSpec(
+                        $"MCG-testhost-slot{slot}-{projectName}-MTP-Debug",
+                        Path.Combine(
+                            root,
+                            "slots",
+                            $"slot-{slot}",
+                            "artifacts",
+                            "bin",
+                            projectName,
+                            "debug",
+                            $"{projectName}.exe")));
+                }
             }
 
             Xunit.Assert.Equal(expected, writer.Rules);
@@ -54,6 +65,7 @@ public sealed class FirewallSetupCommandTests
         finally
         {
             Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT", previousRepositoryRoot);
         }
     }
 

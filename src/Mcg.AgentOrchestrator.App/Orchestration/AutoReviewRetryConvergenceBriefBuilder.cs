@@ -234,7 +234,16 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                     $"Reviewer structured findings are missing or invalid: {diagnostic}");
             }
 
-            state = ReviewFindingConvergence.ApplyRound(state, nextRound);
+            try
+            {
+                state = ReviewFindingConvergence.ApplyRound(state, nextRound);
+            }
+            catch (ReviewFindingConvergenceException)
+            {
+                // A round that cannot be folded was already rejected when it was recorded. Skip it rather
+                // than abandon the brief: the residual-items list is derived from the rounds that ARE valid,
+                // and refusing to build a brief here strands the goal with no retry path at all.
+            }
         }
 
         return state

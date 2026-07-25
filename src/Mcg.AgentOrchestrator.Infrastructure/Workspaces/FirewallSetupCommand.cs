@@ -19,11 +19,16 @@ public sealed class FirewallSetupCommand
 
     private readonly IFirewallRuleWriter _ruleWriter;
     private readonly Func<bool> _isAdministrator;
+    private readonly string _manifestRoot;
 
-    public FirewallSetupCommand(IFirewallRuleWriter ruleWriter, Func<bool>? isAdministrator = null)
+    public FirewallSetupCommand(
+        IFirewallRuleWriter ruleWriter,
+        Func<bool>? isAdministrator = null,
+        string? manifestRoot = null)
     {
         _ruleWriter = ruleWriter;
         _isAdministrator = isAdministrator ?? IsAdministrator;
+        _manifestRoot = manifestRoot ?? ResolveDefaultManifestRoot();
     }
 
     public int Execute(TextWriter output)
@@ -38,7 +43,10 @@ public sealed class FirewallSetupCommand
 
         var created = 0;
         var existing = 0;
-        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTestExecutableFirewallPaths())
+        var engineSettings = AcceptanceGateEngineSettings.Load(_manifestRoot);
+        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTestExecutableFirewallPaths(
+            engineSettings.SlotCount,
+            engineSettings.MtpInvocations))
         {
             var ruleName = $"MCG-testhost-slot{path.SlotIndex}-{path.Project}-{path.Configuration}";
             if (_ruleWriter.CreateInboundAllowRule(new FirewallRuleSpec(ruleName, path.Path)))
@@ -65,6 +73,31 @@ public sealed class FirewallSetupCommand
         using var identity = WindowsIdentity.GetCurrent();
         var principal = new WindowsPrincipal(identity);
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    private static string ResolveDefaultManifestRoot()
+    {
+        var candidates = new[]
+        {
+            Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT"),
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory
+        };
+        foreach (var candidate in candidates.Where(path => !string.IsNullOrWhiteSpace(path)))
+        {
+            var directory = new DirectoryInfo(Path.GetFullPath(candidate!));
+            while (directory is not null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "config", "acceptance-manifest.json")))
+                {
+                    return directory.FullName;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+
+        return Directory.GetCurrentDirectory();
     }
 }
 
