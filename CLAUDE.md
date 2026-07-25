@@ -36,6 +36,10 @@ For conductor loop monitoring, prefer a persistent Monitor on the stable structu
 
 For graceful conductor stops, create `.conduct-stop`, wait for `LOOP_STOP` in `conduct-events.log`, then remove `.conduct-stop` before any new loop. Bounded loops self-renew on `--max-duration`; relaunch manually only after `LOOP_HANDOFF_FAILED`, deliberate stop/Ctrl-C, code/config changes, or an all-done stop followed by new goals.
 
+Until the lock-lifecycle fix lands, every relaunch after a self-stop first verifies `.orchestrator/conduct-loop.lock`'s recorded pid is dead (`Get-Process -Id <pid>` failing = dead) and deletes the stale lock; an all-done self-stop always leaves one behind. After ANY manual worktree-state repair (stash pop, privileged rebase finish), the repair is complete only when the next tick's dispatch actually forms — a dirty goal worktree blocks all dispatch with only a generic "no ready batch" hold, so commit restored work on the goal branch rather than leaving it unstaged.
+
+To reopen an AcceptanceFailed goal whose verdict genuinely stands (flake or environment-caused gate failure) without a paid worker round: with the loop DOWN, `retry <goal> <last-task#> "<reason>" --mechanical`, then `progress <goal> <task#> completed "<justification>"`, then `verify-manual <goal> <task#> passed "<evidence>"` — progress alone strands the goal at AwaitingVerification. Sequence strictly loop-down or the retry dispatches a worker.
+
 Use dashboard cancel/refresh controls or exact known process ids for stuck workers. Never run broad process cleanup.
 
 ## Orchestrator Notes
