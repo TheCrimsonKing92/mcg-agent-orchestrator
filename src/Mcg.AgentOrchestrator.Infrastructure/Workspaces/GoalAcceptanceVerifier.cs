@@ -4442,13 +4442,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            if (!process.Start() || !process.WaitForExit(5000) || process.ExitCode != 0)
+            if (!process.Start())
+            {
+                return null;
+            }
+
+            // Drain both pipes concurrently BEFORE waiting for exit. Waiting first deadlocks as soon
+            // as the child's output exceeds the pipe buffer (~4KB): the child blocks writing, the
+            // 5s wait expires, and the caller sees null. The acceptance manifest crossed that size
+            // when the engine section landed, which turned every trusted-manifest read into a refusal.
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(5000) || process.ExitCode != 0)
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return null;
             }
 
-            return process.StandardOutput.ReadToEnd();
+            return standardOutputTask.GetAwaiter().GetResult();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
