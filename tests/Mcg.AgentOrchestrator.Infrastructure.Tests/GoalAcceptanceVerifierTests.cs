@@ -4341,9 +4341,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
         });
 
-        var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
-            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+        var result = await RunTamperGuardAsync(
+            verifier,
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
 
         // Suite still passed — advisory does not gate
         Assert.True(result.Passed);
@@ -4395,9 +4395,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
         });
 
-        var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
-            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+        var result = await RunTamperGuardAsync(
+            verifier,
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
 
         Assert.True(result.Passed);
         var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
@@ -4446,9 +4446,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
         });
 
-        var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
-            changedFiles: [
+        var result = await RunTamperGuardAsync(
+            verifier,
+            [
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs"
             ]);
@@ -4505,9 +4505,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
         });
 
-        var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
-            changedFiles: [
+        var result = await RunTamperGuardAsync(
+            verifier,
+            [
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs"
             ]);
@@ -4551,9 +4551,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
         });
 
-        var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
-            changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+        var result = await RunTamperGuardAsync(
+            verifier,
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
 
         Assert.True(result.Passed);
         var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
@@ -4605,9 +4605,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
         });
 
-        var result = await verifier.RunAsync(
-            "C:\\fake\\worktree",
-            changedFiles: [
+        var result = await RunTamperGuardAsync(
+            verifier,
+            [
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SplitFooTests.cs"
             ]);
@@ -4789,6 +4789,21 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "forbiddenChangedPathGlobs": []
             }
             """);
+
+    private static async Task<AcceptanceVerificationResult> RunTamperGuardAsync(
+        GoalAcceptanceVerifier verifier,
+        IReadOnlyList<string> changedFiles)
+    {
+        var root = CreatePartitionedInfrastructureManifestWorkspace();
+        try
+        {
+            return await verifier.RunAsync(root, changedFiles: changedFiles);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
 
     private static string CreateAdvisoryWorkspace(string criteriaJson)
     {
