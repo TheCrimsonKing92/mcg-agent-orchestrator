@@ -158,6 +158,14 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("""["{executable}", "--results-directory", "../outside"]""")]
     [Xunit.InlineData("""["{executable}", "--progress"]""")]
     [Xunit.InlineData("""["{executable}", "extra-position"]""")]
+    [Xunit.InlineData("""["{executable}", "--long-running", "60", "--long-running", "120"]""")]
+    [Xunit.InlineData("""["{executable}", "--long-running", "120", "--long-running", "60"]""")]
+    [Xunit.InlineData("""["{executable}", "--ignore-exit-code", "--ignore-exit-code=false"]""")]
+    [Xunit.InlineData("""["{executable}", "--ignore-exit-code=false", "--ignore-exit-code"]""")]
+    [Xunit.InlineData("""["{executable}", "--long-running", "0"]""")]
+    [Xunit.InlineData("""["{executable}", "--long-running", "-1"]""")]
+    [Xunit.InlineData("""["{executable}", "--long-running", "not-a-number"]""")]
+    [Xunit.InlineData("""["{executable}", "--long-running", "2147483648"]""")]
     public void RepositoryChangeClassifierRoutesUnknownOrMalformedMtpArgumentsToTrustedReview(
         string candidateArguments)
     {
