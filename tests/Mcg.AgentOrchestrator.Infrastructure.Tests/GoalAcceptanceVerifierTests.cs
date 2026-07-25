@@ -433,6 +433,19 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_skips_dotnet_tests_for_docs_only_default_plan")]
     public async Task GoalAcceptanceVerifierSkipsDotnetTestsForDocsOnlyDefaultPlan()
     {
+        var root = CreateManifestWorkspace("""
+            {
+              "engine": {
+                "slotCount": 1,
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": true
+              },
+              "checks": [
+                { "name": "test impact: no build required", "type": "no-op" }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, "")
@@ -443,15 +456,22 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             return Task.FromResult(responses.Dequeue());
         });
 
-        var result = await verifier.RunAsync("C:\\fake\\worktree", changedFiles: ["README.md"]);
+        try
+        {
+            var result = await verifier.RunAsync(root, changedFiles: ["README.md"]);
 
-        Assert.True(result.Passed);
-        Assert.Equal(1, calls.Count);
-        Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-        var check = Xunit.Assert.Single(result.Checks!);
-        Assert.Equal("test impact: no build required", check.Name);
-        Xunit.Assert.Null(check.ExitCode);
-        Xunit.Assert.Null(result.ArtifactsPath);
+            Assert.True(result.Passed);
+            Assert.Equal(1, calls.Count);
+            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+            var check = Xunit.Assert.Single(result.Checks!);
+            Assert.Equal("test impact: no build required", check.Name);
+            Xunit.Assert.Null(check.ExitCode);
+            Xunit.Assert.Null(result.ArtifactsPath);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_uses_25_minute_default_timeout_when_unconfigured")]
@@ -4699,6 +4719,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             DeleteDirectoryWithRetry(root);
             DeleteDirectoryWithRetry(mainRoot);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_scopes_deleted_test_files_to_their_project")]
+    public void GoalAcceptanceVerifierScopesDeletedTestFilesToTheirProject()
+    {
+        var deleted = new[]
+        {
+            "tests/Core.Tests/FooTests.cs",
+            "tests/Infrastructure.Tests/FooTests.cs",
+            "tests/Infrastructure.Tests/Nested/BarTests.cs"
+        };
+
+        var core = GoalAcceptanceVerifier.DeletedTestFilesForProject(
+            deleted,
+            "tests/Core.Tests/Core.Tests.csproj");
+
+        Assert.Equal(["tests/Core.Tests/FooTests.cs"], core);
     }
 
     private static string? SetAcceptanceTimeoutEnvironment(string? value)

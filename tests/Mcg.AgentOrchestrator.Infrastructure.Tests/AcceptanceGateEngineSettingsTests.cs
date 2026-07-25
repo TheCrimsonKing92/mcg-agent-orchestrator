@@ -183,7 +183,15 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "engine": {
                 "enforceStructuralCoverage": true,
-                "EnforceStructuralCoverage": false
+                "EnforceStructuralCoverage": false,
+                "mtpInvocations": [{
+                  "project": "tests/Example.Tests/Example.Tests.csproj",
+                  "executablePathTemplate": "safe/{projectName}{executableExtension}",
+                  "ExecutablePathTemplate": "../candidate.exe",
+                  "firewallExecutablePathTemplate": "safe/{projectName}.exe",
+                  "FirewallExecutablePathTemplate": "../candidate.exe",
+                  "arguments": ["{executable}"]
+                }]
               }
             }
             """);
@@ -192,6 +200,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             var settings = AcceptanceGateEngineSettings.Load(root);
 
             Xunit.Assert.True(settings.EnforceStructuralCoverage);
+            var invocation = Xunit.Assert.Single(settings.MtpInvocations);
+            Xunit.Assert.Equal(
+                "safe/{projectName}{executableExtension}",
+                invocation.ExecutablePathTemplate);
+            Xunit.Assert.Equal("safe/{projectName}.exe", invocation.FirewallExecutablePathTemplate);
         }
         finally
         {
@@ -272,6 +285,77 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_executes_test_project_omitted_from_manifest")]
+    public async Task GoalAcceptanceVerifierStructuralCoverageExecutesTestProjectOmittedFromManifest()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 1,
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": true
+              },
+              "checks": [{
+                "name": "core tests",
+                "type": "dotnet-test",
+                "runner": "vstest",
+                "project": "tests/Core.Tests/Core.Tests.csproj"
+              }]
+            }
+            """);
+        var omittedProject = Path.Combine(root, "tests", "Added.Tests", "Added.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(omittedProject)!);
+        File.WriteAllText(
+            omittedProject,
+            "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+        var calls = new List<string[]>();
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                calls.Add(arguments);
+                var addedProject = arguments.Any(argument =>
+                    argument.EndsWith("Added.Tests.csproj", StringComparison.OrdinalIgnoreCase));
+                var testName = addedProject ? "AddedTests.Runs" : "CoreTests.Runs";
+                if (arguments.Contains("--list-tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        $"The following Tests are available:\n  {testName}"));
+                }
+
+                if (arguments.Length >= 2 &&
+                    arguments[0] == "dotnet" &&
+                    arguments[1] == "test")
+                {
+                    WriteVstestTrx(arguments, testName);
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Contains(calls, call =>
+                call.Length >= 3 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call.Any(argument =>
+                    argument.EndsWith("Added.Tests.csproj", StringComparison.OrdinalIgnoreCase)) &&
+                !call.Contains("--list-tests"));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_fails_when_manifest_lane_filters_out_discovered_test")]
     public async Task GoalAcceptanceVerifierStructuralCoverageFailsWhenManifestLaneFiltersOutDiscoveredTest()
     {
@@ -291,17 +375,20 @@ public sealed class AcceptanceGateEngineSettingsTests
                   "name": "infrastructure tests",
                   "type": "dotnet-test",
                   "runner": "vstest",
-                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--settings", "candidate-narrowing.runsettings"]
                 }
               ]
             }
             """);
+        var calls = new List<string[]>();
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
             var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
             {
+                calls.Add(arguments);
                 if (arguments.Contains("--list-tests"))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -327,6 +414,9 @@ public sealed class AcceptanceGateEngineSettingsTests
             var coverage = Xunit.Assert.Single(result.Checks!, check =>
                 check.Name == "structural test coverage: infrastructure tests");
             Xunit.Assert.Contains("DroppedTests.WasFilteredOut", coverage.OutputTail, StringComparison.Ordinal);
+            Xunit.Assert.All(
+                calls.Where(call => call.Contains("--list-tests")),
+                call => Xunit.Assert.DoesNotContain("candidate-narrowing.runsettings", call));
         }
         finally
         {

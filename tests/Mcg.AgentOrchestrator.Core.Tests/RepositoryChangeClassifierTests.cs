@@ -78,6 +78,19 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("engine.enforceStructuralCoverage", decision.SecurityCriticalChanges);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_case_alias_matches_case_sensitive_engine_interpreter")]
+    public void RepositoryChangeClassifierCaseAliasMatchesCaseSensitiveEngineInterpreter()
+    {
+        const string trusted = """{ "engine": { "enforceStructuralCoverage": true } }""";
+        const string candidate =
+            """{ "engine": { "enforceStructuralCoverage": true, "EnforceStructuralCoverage": false } }""";
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.False(decision.RequiresTrustedReview);
+        Assert.Empty(decision.SecurityCriticalChanges);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_MTP_command_token_change_to_trusted_review")]
     public void RepositoryChangeClassifierRoutesMtpCommandTokenChangeToTrustedReview()
     {

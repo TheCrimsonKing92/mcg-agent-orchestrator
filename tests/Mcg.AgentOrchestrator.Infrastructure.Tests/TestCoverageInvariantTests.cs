@@ -126,6 +126,8 @@ public sealed class TestCoverageInvariantTests
             Microsoft.Testing.Platform v1.8.0
             [xUnit.net 00:00:00.10] Discovering: Example.Tests
             structural coverage uses the MTP display name
+            Skipping real-worker process guard: process command-line enumeration is unavailable on this platform.
+            Test discovery summary: total: 1, failed: 0, succeeded: 1
             Test run summary: Tests found: 1
             total: 1
             succeeded: 1
@@ -134,6 +136,69 @@ public sealed class TestCoverageInvariantTests
             bareTestList: true);
 
         Xunit.Assert.Equal(["structural coverage uses the MTP display name"], discovered);
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_preserves_distinct_parameterized_cases")]
+    public void TestCoverageInvariantPreservesDistinctParameterizedCases()
+    {
+        var trx = WriteTrx(("1", "TheoryTests.Runs(value: 1)", "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(
+                    ["TheoryTests.Runs(value: 1)", "TheoryTests.Runs(value: 2)"],
+                    StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("theories", true, [trx])]);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Contains("TheoryTests.Runs(value: 2)", result.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_count_failed_TRX_rows_as_completed")]
+    public void TestCoverageInvariantDoesNotCountFailedTrxRowsAsCompleted()
+    {
+        var trx = WriteTrx(("1", "ExampleTests.Fails", "Failed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["ExampleTests.Fails"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("failure-neutralized-run", true, [trx])]);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Contains("ExampleTests.Fails", result.MissingTests);
+            Xunit.Assert.Contains("failure-neutralized-run", result.EmptyPartitions);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_allows_custom_display_name_for_deleted_test_file")]
+    public void TestCoverageInvariantAllowsCustomDisplayNameForDeletedTestFile()
+    {
+        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("lane", true, [trx])],
+                new HashSet<string>(
+                    ["CurrentTests.Runs", "custom display name without class identity"],
+                    StringComparer.OrdinalIgnoreCase),
+                ["tests/Example.Tests/RemovedTests.cs"]);
+
+            Xunit.Assert.True(result.Passed);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
     }
 
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_apply_generic_deleted_filename_to_unrelated_test")]

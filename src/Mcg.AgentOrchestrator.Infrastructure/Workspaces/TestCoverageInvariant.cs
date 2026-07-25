@@ -18,6 +18,7 @@ internal static class TestCoverageInvariant
     private static readonly string[] BareTestListDiagnosticPrefixes =
     [
         "Microsoft.Testing.Platform",
+        "Test discovery summary:",
         "Test run summary",
         "Test run for",
         "Test execution",
@@ -39,6 +40,7 @@ internal static class TestCoverageInvariant
         "Results File:",
         "Attachments:",
         "No test",
+        "Skipping real-worker process guard:",
         "Warning",
         "Error"
     ];
@@ -121,8 +123,7 @@ internal static class TestCoverageInvariant
             foreach (var result in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
             {
                 var outcome = (string?)result.Attribute("outcome");
-                if (!string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -183,11 +184,16 @@ internal static class TestCoverageInvariant
             var deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
                 deletedClassNames.Any(className =>
                     IdentityBelongsToDeletedTestFile(mainTest, className!)));
-            var minimumCandidateCount = Math.Max(0, mainDiscoveredTests.Count - deletedMainTestCount);
+            var unmatchedDeletedFileCount = deletedClassNames.Count(className =>
+                !mainDiscoveredTests.Any(mainTest =>
+                    IdentityBelongsToDeletedTestFile(mainTest, className!)));
+            var minimumCandidateCount = Math.Max(
+                0,
+                mainDiscoveredTests.Count - deletedMainTestCount - unmatchedDeletedFileCount);
             if (candidateDiscoveredTests.Count < minimumCandidateCount)
             {
                 missing.Add(
-                    $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount}");
+                    $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount + unmatchedDeletedFileCount}");
             }
         }
 
@@ -237,7 +243,6 @@ internal static class TestCoverageInvariant
             return string.Empty;
         }
 
-        var parameterIndex = normalized.IndexOf('(');
-        return parameterIndex > 0 ? normalized[..parameterIndex].Trim() : normalized;
+        return normalized;
     }
 }

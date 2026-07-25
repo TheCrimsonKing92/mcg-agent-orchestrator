@@ -275,7 +275,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Infrastructure project suite from the tracked manifest.
         var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles, policyRequiredChecks, policyShardPlan);
-        var effectiveChecks = ExpandBroadInfrastructureChecks(policyEffectiveChecks);
+        var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
+        var structurallyCompleteChecks = structuralCoverageApplies
+            ? EnsureTrustedStructuralCoverageExecutionChecks(
+                policyEffectiveChecks,
+                manifest.Checks,
+                worktreePath)
+            : policyEffectiveChecks;
+        var effectiveChecks = ExpandBroadInfrastructureChecks(structurallyCompleteChecks);
         var partitionVerdictCache = CreatePartitionVerdictCacheContext(worktreePath, goalId, effectiveChecks);
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
@@ -423,7 +430,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(await RunForbiddenChangedPathsCheckAsync(manifest.ForbiddenChangedPathGlobs, worktreePath, cancellationToken).ConfigureAwait(false));
         }
 
-        if (checks.All(check => check.Passed) && engineSettings.EnforceStructuralCoverage)
+        if (checks.All(check => check.Passed) && structuralCoverageApplies)
         {
             checks.Add(await RunStructuralCoverageCheckAsync(
                 effectiveChecks,
@@ -934,6 +941,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return effective;
     }
+
+    internal static bool StructuralCoverageApplies(
+        AcceptanceGateEngineSettings engineSettings,
+        IReadOnlyList<string>? changedFiles) =>
+        engineSettings.EnforceStructuralCoverage &&
+        (changedFiles is null ||
+            changedFiles.Count == 0 ||
+            !RepositoryChangeClassifier.Classify(changedFiles).IsDocsOnly);
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(IReadOnlyList<string>? changedFiles)
     {
@@ -3630,7 +3645,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
                 partitions,
                 mainDiscoveredTests,
-                deletedTestFiles);
+                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!));
             if (!coverage.Passed)
             {
                 var details = new List<string> { coverage.Summary };
@@ -3680,6 +3695,56 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private static IReadOnlyList<AcceptanceManifestCheck> EnsureTrustedStructuralCoverageExecutionChecks(
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
+        string worktreePath)
+    {
+        var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
+        var trustedProjects = string.IsNullOrWhiteSpace(mainWorktreePath)
+            ? DiscoverTrustedTestProjects(worktreePath)
+            : DiscoverTrustedTestProjects(worktreePath, mainWorktreePath);
+        var completed = effectiveChecks.ToList();
+        foreach (var project in trustedProjects)
+        {
+            if (completed.Any(check =>
+                    IsBroadTestProjectCheck(check) &&
+                    string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            completed.RemoveAll(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase));
+            completed.Add(BuildTrustedStructuralCoverageCheck(project, manifestChecks));
+        }
+
+        return completed;
+    }
+
+    internal static IReadOnlyList<string> DeletedTestFilesForProject(
+        IReadOnlyList<string> deletedTestFiles,
+        string project)
+    {
+        var normalizedProject = NormalizePath(project)!;
+        var projectDirectory = NormalizePath(Path.GetDirectoryName(normalizedProject))?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(projectDirectory))
+        {
+            return [];
+        }
+
+        return deletedTestFiles
+            .Where(path =>
+            {
+                var normalizedPath = NormalizePath(path);
+                return normalizedPath?.StartsWith(
+                    $"{projectDirectory}/",
+                    StringComparison.OrdinalIgnoreCase) == true;
+            })
+            .ToArray();
+    }
 
     private static bool IsBroadTestProjectCheck(AcceptanceManifestCheck check) =>
         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
@@ -3772,18 +3837,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "--no-build",
             "--list-tests"
         };
-        for (var index = 0; index < check.Arguments.Count; index++)
-        {
-            var argument = check.Arguments[index];
-            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
-            {
-                index++;
-                continue;
-            }
-
-            arguments.Add(argument);
-        }
-
         return WithBuildEnvironmentArguments([.. arguments], environment);
     }
 
