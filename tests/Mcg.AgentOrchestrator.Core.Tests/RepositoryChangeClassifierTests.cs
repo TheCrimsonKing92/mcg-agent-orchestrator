@@ -296,6 +296,27 @@ public sealed class RepositoryChangeClassifierTests
         Assert.True(plan.Checks.Any(check => check.Name == "infrastructure tests"));
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_two_per_project_checks_never_a_solution_run")]
+    public void RepositoryTestImpactPlannerFullSuiteIsTwoPerProjectChecksNeverASolutionRun()
+    {
+        // Security-sensitive paths force the full suite. Both test projects are MTP, so a
+        // project-less "dotnet test" always fails on .NET 10 with the VSTest-target error —
+        // the full suite must be expressed as the two per-project runs the MTP runner can route.
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Sandbox/WorkerSandboxPolicy.cs"
+        ]);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.True(plan.RequiresBroadVerification);
+        Assert.Equal(2, plan.Checks.Count);
+        Assert.All(plan.Checks, check =>
+            Assert.True(check.Command.Any(argument => argument.EndsWith(".csproj", StringComparison.Ordinal))));
+        Assert.True(plan.Checks.Any(check =>
+            check.Command.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj")));
+        Assert.True(plan.Checks.Any(check =>
+            check.Command.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")));
+    }
+
     [Xunit.Fact(DisplayName = "VerificationPolicyCompiler_compiles_different_policies_from_task_risk_and_scope")]
     public void VerificationPolicyCompilerCompilesDifferentPoliciesFromTaskRiskAndScope()
     {
