@@ -331,35 +331,42 @@ public sealed partial class AgentOrchestratorKernel
     {
         state = [];
         diagnostic = string.Empty;
-        try
+        foreach (var verification in goal.Tasks
+            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+            .SelectMany(candidate => candidate.VerificationHistory)
+            .OrderBy(candidate => candidate.CompletedAt))
         {
-            foreach (var verification in goal.Tasks
-                .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
-                .SelectMany(candidate => candidate.VerificationHistory)
-                .OrderBy(candidate => candidate.CompletedAt))
+            var isCurrentRound = ReferenceEquals(verification, currentVerification) ||
+                verification.CompletedAt == currentVerification.CompletedAt;
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
             {
-                if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
+                if (isCurrentRound)
                 {
-                    if (ReferenceEquals(verification, currentVerification) ||
-                        verification.CompletedAt == currentVerification.CompletedAt)
-                    {
-                        diagnostic = parseDiagnostic;
-                        return false;
-                    }
-
-                    continue;
+                    diagnostic = parseDiagnostic;
+                    return false;
                 }
 
-                state = ReviewFindingConvergence.ApplyRound(state, round);
+                continue;
             }
 
-            return true;
+            try
+            {
+                state = ReviewFindingConvergence.ApplyRound(state, round);
+            }
+            catch (ReviewFindingConvergenceException ex)
+            {
+                // Reject only the round being recorded. A HISTORICAL round that cannot be folded was already
+                // rejected when it was recorded; replaying it must not block every later review from being
+                // evaluated, and must not report a stale violation as though it described the new submission.
+                if (isCurrentRound)
+                {
+                    diagnostic = $"{ex.Code}: {ex.Message}";
+                    return false;
+                }
+            }
         }
-        catch (ReviewFindingConvergenceException ex)
-        {
-            diagnostic = $"{ex.Code}: {ex.Message}";
-            return false;
-        }
+
+        return true;
     }
 
     private static string BuildCompletionMessageWithAdvisoryBlocker(

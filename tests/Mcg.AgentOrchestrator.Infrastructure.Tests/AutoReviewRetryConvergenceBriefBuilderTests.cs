@@ -235,6 +235,53 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         }
     }
 
+    [Xunit.Fact(DisplayName = "Recording_a_valid_round_is_not_blocked_by_a_previously_rejected_round")]
+    public void RecordingValidRoundIsNotBlockedByPreviouslyRejectedRound()
+    {
+        var openedAt = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var movedTo = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Poisoned reviewer history");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [new ReviewFinding("F-1", ReviewFindingState.Open, openedAt, "Missing guard.")],
+            [openedAt]);
+
+        // Round 2 reports the finding still open at a DIFFERENT anchor, so it is rejected — but its
+        // verification record stays in history.
+        kernel.RetryTask(goal.Id, reviewer.Id, "round 2");
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [new ReviewFinding("F-1", ReviewFindingState.Open, movedTo, "Missing guard.")],
+            [movedTo]);
+
+        // Round 3 resolves the finding at its ORIGINAL anchor. Replaying the rejected round 2 must not
+        // block it, nor report round 2's stale violation as though it described this submission.
+        kernel.RetryTask(goal.Id, reviewer.Id, "round 3");
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "pass",
+            [new ReviewFinding("F-1", ReviewFindingState.Resolved, openedAt, "Guard added.")],
+            [openedAt]);
+
+        var recorded = kernel.GetGoal(goal.Id).Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        Assert.Equal(WorkTaskStatus.Completed, recorded.Status);
+        Assert.Equal(0, ReviewFindingConvergence.CountOpen(kernel.GetReviewFindingState(goal.Id)));
+    }
+
     [Xunit.Fact(DisplayName = "GetReviewFindingState_skips_an_unfoldable_stored_round_instead_of_throwing")]
     public void GetReviewFindingStateSkipsUnfoldableStoredRoundInsteadOfThrowing()
     {
