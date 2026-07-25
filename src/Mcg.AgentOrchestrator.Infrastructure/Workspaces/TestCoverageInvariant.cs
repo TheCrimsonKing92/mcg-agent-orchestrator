@@ -184,9 +184,14 @@ internal static class TestCoverageInvariant
             var deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
                 deletedClassNames.Any(className =>
                     IdentityBelongsToDeletedTestFile(mainTest, className!)));
-            var unmatchedDeletedFileCount = deletedClassNames.Count(className =>
-                !mainDiscoveredTests.Any(mainTest =>
-                    IdentityBelongsToDeletedTestFile(mainTest, className!)));
+            var unmatchedDeletedFileCount = Math.Min(
+                deletedClassNames.Count(className =>
+                    !mainDiscoveredTests.Any(mainTest =>
+                        IdentityBelongsToDeletedTestFile(mainTest, className!))),
+                mainDiscoveredTests.Count(mainTest =>
+                    !HasClassQualifiedIdentity(mainTest) &&
+                    !deletedClassNames.Any(className =>
+                        IdentityBelongsToDeletedTestFile(mainTest, className!))));
             var minimumCandidateCount = Math.Max(
                 0,
                 mainDiscoveredTests.Count - deletedMainTestCount - unmatchedDeletedFileCount);
@@ -218,6 +223,13 @@ internal static class TestCoverageInvariant
         var normalized = NormalizeIdentity(identity);
         return normalized.StartsWith($"{className}.", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains($".{className}.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasClassQualifiedIdentity(string identity)
+    {
+        var normalized = NormalizeIdentity(identity);
+        var separator = normalized.LastIndexOf('.');
+        return separator > 0 && separator < normalized.Length - 1;
     }
 
     private static bool IsBareTestListDiagnostic(string line) =>
