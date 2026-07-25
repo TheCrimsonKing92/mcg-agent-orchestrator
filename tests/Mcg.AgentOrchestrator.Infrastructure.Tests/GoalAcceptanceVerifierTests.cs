@@ -4804,7 +4804,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
 internal static class AcceptanceManifestTestDefaults
 {
-    public static string WithEngine(string manifest)
+    public static string WithEngine(
+        string manifest,
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
         var candidate = JsonNode.Parse(manifest)?.AsObject()
             ?? throw new InvalidOperationException("Expected acceptance manifest JSON object.");
@@ -4813,26 +4815,25 @@ internal static class AcceptanceManifestTestDefaults
             return candidate.ToJsonString();
         }
 
-        var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (directory is not null)
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath) ?? AppContext.BaseDirectory);
+        while (directory is not null &&
+            !File.Exists(Path.Combine(directory.FullName, "config", "acceptance-manifest.json")))
         {
-            var trackedManifest = Path.Combine(directory.FullName, "config", "acceptance-manifest.json");
-            if (File.Exists(trackedManifest))
-            {
-                var tracked = JsonNode.Parse(File.ReadAllText(trackedManifest))?.AsObject()
-                    ?? throw new InvalidOperationException("Expected tracked acceptance manifest JSON object.");
-                var engine = tracked["engine"]?.DeepClone()?.AsObject()
-                    ?? throw new InvalidOperationException("Tracked acceptance manifest has no engine settings.");
-                engine["enforceStructuralCoverage"] = false;
-                engine["timeouts"] = new JsonObject();
-                candidate["engine"] = engine;
-                return candidate.ToJsonString();
-            }
-
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate tracked acceptance manifest for test defaults.");
+        var trackedManifest = directory is not null
+            ? Path.Combine(directory.FullName, "config", "acceptance-manifest.json")
+            : throw new DirectoryNotFoundException(
+                $"Could not locate tracked acceptance manifest from source path '{sourceFilePath}'.");
+        var tracked = JsonNode.Parse(File.ReadAllText(trackedManifest))?.AsObject()
+            ?? throw new InvalidOperationException("Expected tracked acceptance manifest JSON object.");
+        var engine = tracked["engine"]?.DeepClone()?.AsObject()
+            ?? throw new InvalidOperationException("Tracked acceptance manifest has no engine settings.");
+        engine["enforceStructuralCoverage"] = false;
+        engine["timeouts"] = new JsonObject();
+        candidate["engine"] = engine;
+        return candidate.ToJsonString();
     }
 }
 
