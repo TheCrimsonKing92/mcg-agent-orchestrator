@@ -134,8 +134,11 @@ try {
     $goalId = '11112222333344445555666677778888'
     $goalDirectory = Join-Path $attemptRoot $goalId
     New-Item -ItemType Directory -Force $goalDirectory | Out-Null
-    $gateTrx = Write-TrxFixture 'gate-attempt.dotnet-test.trx' @(
-        @{ Name = 'Mcg.Acceptance.GateSlow'; Outcome = 'Passed'; Duration = '00:00:09.0000000' }
+    $gateTrx = Write-TrxFixture 'gate-attempt.core-tests.trx' @(
+        @{ Name = 'Mcg.Acceptance.GateSlow'; Class = 'Mcg.Acceptance.CoreTests'; Outcome = 'Passed'; Duration = '00:00:09.0000000' }
+    )
+    $gateInfrastructureTrx = Write-TrxFixture 'gate-attempt.infrastructure-tests-remainder.trx' @(
+        @{ Name = 'Mcg.Acceptance.InfrastructureLane'; Class = 'Mcg.Acceptance.InfrastructureTests'; Outcome = 'Passed'; Duration = '00:00:08.0000000' }
     )
     $attemptId = '11112222-0-20260717120000000-abcdef'
     $attemptPath = Join-Path $goalDirectory "$attemptId.attempt.json"
@@ -148,14 +151,14 @@ try {
         completedAt = '2026-07-17T12:01:00.0000000+00:00'
         outcome = 1
         resultPath = $resultPath
-        testResultPaths = @($gateTrx)
+        testResultPaths = @($gateTrx, $gateInfrastructureTrx)
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $attemptPath -Encoding UTF8
     @{
         kind = 'accepted'
         acceptance = @{
             passed = $true
             unmetCriteria = @()
-            testResultPaths = @($gateTrx)
+            testResultPaths = @($gateTrx, $gateInfrastructureTrx)
         }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resultPath -Encoding UTF8
 
@@ -267,6 +270,13 @@ try {
     Assert-True ($latestGateOutput -notmatch 'PartialNewer') 'Expected a newer partial receipt set not to displace a complete receipt set.'
     Assert-True ($latestGateOutput -notmatch 'MismatchedNewer') 'Expected a newer mismatched receipt set not to displace a complete receipt set.'
     Assert-True ($latestGateOutput -notmatch 'CachedNewest') 'Expected a newer cached placeholder receipt not to displace a complete timing receipt set.'
+
+    $gateByClass = Invoke-DurationScript @('-AttemptsRoot', $attemptRoot, '-Goal', '11112222', '-ByClass', '-Format', 'Csv', '-Top', '10')
+    Assert-True ($gateByClass.ExitCode -eq 0) "Expected goal-based per-class invocation to pass. Output: $($gateByClass.Output -join ' | ')"
+    $gateClassRows = @($gateByClass.Output | ConvertFrom-Csv)
+    Assert-True ($gateClassRows.Count -eq 1) "Expected only infrastructure lane classes, got $($gateClassRows.Count)."
+    Assert-True ($gateClassRows[0].Class -eq 'Mcg.Acceptance.InfrastructureTests') 'Expected goal-based per-class output to include the infrastructure lane class.'
+    Assert-True (-not (($gateByClass.Output -join "`n") -match 'CoreTests')) 'Expected goal-based per-class output to exclude core test receipts.'
 
     $missing = Invoke-DurationScript @((Join-Path $work 'missing.trx'))
     Assert-True ($missing.ExitCode -ne 0) 'Expected missing input to fail.'

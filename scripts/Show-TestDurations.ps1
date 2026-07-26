@@ -274,7 +274,16 @@ try {
         @(Resolve-TrxInput $Path)
     } else {
         $runCount = if ($ByClass) { $RecentRuns } else { 1 }
-        @(Resolve-RecentGateAttemptTrx (Resolve-AttemptsRoot $AttemptsRoot) $Goal $runCount)
+        $recentFiles = @(Resolve-RecentGateAttemptTrx (Resolve-AttemptsRoot $AttemptsRoot) $Goal $runCount)
+        if ($ByClass) {
+            $recentFiles = @($recentFiles | Where-Object {
+                $_.BaseName.IndexOf('.infrastructure-tests-', [StringComparison]::OrdinalIgnoreCase) -ge 0
+            })
+            if ($recentFiles.Count -eq 0) {
+                throw "No infrastructure lane TRX receipts found in the selected clean gate attempts."
+            }
+        }
+        $recentFiles
     }
     $rows = foreach ($file in $files) {
         Read-TrxDurations $file
