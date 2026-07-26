@@ -2,6 +2,50 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class TestCoverageInvariantTests
 {
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_attempt_receipt_copy_survives_originating_slot_clear")]
+    public void TestCoverageInvariantAttemptReceiptCopySurvivesOriginatingSlotClear()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-attempt-receipts-{Guid.NewGuid():N}");
+        var sourcePath = Path.Combine(root, "slot-3", "artifacts", "TestResults", "lane.trx");
+        var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            WriteTrxAt(sourcePath, ("1", "ExampleTests.Runs", "Passed"));
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                attemptPrefix);
+
+            var durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath])!;
+            Directory.Delete(Path.Combine(root, "slot-3", "artifacts"), recursive: true);
+            var coverage = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["ExampleTests.Runs"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("lane", true, durablePaths, AttemptId: "attempt-123")],
+                currentAttemptId: "attempt-123");
+
+            Assert.True(coverage.Passed, coverage.Summary);
+            Assert.Empty(coverage.EmptyPartitions);
+            Assert.Single(durablePaths);
+            Assert.True(File.Exists(durablePaths[0]));
+            Assert.StartsWith(
+                attemptPrefix + ".receipts" + Path.DirectorySeparatorChar,
+                durablePaths[0],
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_fails_when_a_discovered_test_was_filtered_out")]
     public void TestCoverageInvariantFailsWhenDiscoveredTestWasFilteredOut()
     {

@@ -2578,6 +2578,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed.Stop();
             var passed = !result.TimedOut && result.ExitCode == 0;
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -2588,7 +2589,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 environment.LeaseId,
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 ResultSummary: BuildGenericCommandResultSummary(result),
-                TestResultPaths: telemetry.Paths), false);
+                TestResultPaths: durableTestResultPaths), false);
         }
         finally
         {
@@ -2972,6 +2973,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -2985,7 +2987,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 lockRemediationApplied,
                 BuildManagedDotnetResultSummary(result, lockRemediationApplied),
-                TestResultPaths: telemetry?.Paths), lockRemediationApplied);
+                TestResultPaths: durableTestResultPaths), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -3030,6 +3032,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -3043,7 +3046,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 true,
                 BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true),
-                TestResultPaths: telemetry?.Paths), true);
+                TestResultPaths: durableTestResultPaths), true);
         }
         finally
         {
@@ -5056,6 +5059,46 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 throw new IOException($"Unable to clear stale TRX before the test run: {path}");
             }
         }
+    }
+
+    internal static IReadOnlyList<string>? CopyCompletedTestReceiptsToAttemptFolder(
+        IReadOnlyList<string>? sourcePaths)
+    {
+        if (sourcePaths is null)
+        {
+            return null;
+        }
+
+        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        if (string.IsNullOrWhiteSpace(attemptPrefix))
+        {
+            return sourcePaths;
+        }
+
+        var receiptDirectory = attemptPrefix + ".receipts";
+        var durablePaths = new string[sourcePaths.Count];
+        for (var index = 0; index < sourcePaths.Count; index++)
+        {
+            var sourcePath = sourcePaths[index];
+            if (!File.Exists(sourcePath))
+            {
+                durablePaths[index] = sourcePath;
+                continue;
+            }
+
+            Directory.CreateDirectory(receiptDirectory);
+            var destinationPath = Path.Combine(receiptDirectory, Path.GetFileName(sourcePath));
+            if (!sourcePath.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+            {
+                var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+                File.Copy(sourcePath, temporaryPath, overwrite: true);
+                File.Move(temporaryPath, destinationPath, overwrite: true);
+            }
+
+            durablePaths[index] = destinationPath;
+        }
+
+        return durablePaths;
     }
 
     private static string[] AddVstestTelemetryArguments(

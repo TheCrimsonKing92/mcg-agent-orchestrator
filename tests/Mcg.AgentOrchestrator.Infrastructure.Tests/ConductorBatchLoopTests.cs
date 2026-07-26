@@ -1434,6 +1434,8 @@ public sealed class ConductorBatchLoopTests
                     {
                         var prefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
                         Assert.False(string.IsNullOrWhiteSpace(prefix));
+                        Assert.True(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(
+                            DotnetBuildEnvironmentManager.StableSlotArtifactsPath(runCandidate.SlotIndex))));
                         var trxPath = prefix + ".dotnet-test.trx";
                         File.WriteAllText(trxPath, "trx");
                         return ConductorParallelAcceptanceRunResult.Accepted(
@@ -1446,6 +1448,8 @@ public sealed class ConductorBatchLoopTests
                 Assert.NotNull(persisted.TestResultPaths);
                 Assert.Single(persisted.TestResultPaths!);
                 Assert.True(File.Exists(persisted.TestResultPaths![0]));
+                Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(
+                    DotnetBuildEnvironmentManager.StableSlotArtifactsPath(candidate.SlotIndex))));
                 using var resultJson = JsonDocument.Parse(File.ReadAllText(completed.Attempt.ResultPath));
                 Assert.Equal(
                     persisted.TestResultPaths![0],

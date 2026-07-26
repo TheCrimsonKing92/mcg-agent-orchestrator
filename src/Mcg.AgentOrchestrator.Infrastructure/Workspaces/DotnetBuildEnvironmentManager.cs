@@ -1227,6 +1227,13 @@ public static class DotnetBuildEnvironmentManager
             clean |= !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
         }
 
+        if (clean)
+        {
+            AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
+                environment.ArtifactsPath,
+                Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
+        }
+
         if (clean && Directory.Exists(environment.ArtifactsPath))
         {
             try
@@ -1253,6 +1260,17 @@ public static class DotnetBuildEnvironmentManager
 
         Directory.CreateDirectory(environment.ArtifactsPath);
         WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
+        var attemptId = Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
+        var livenessCheckHint = Environment.GetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
+        if (!string.IsNullOrWhiteSpace(attemptId) && !string.IsNullOrWhiteSpace(livenessCheckHint))
+        {
+            AcceptanceAttemptArtifactCustody.Write(
+                environment.ArtifactsPath,
+                attemptId,
+                livenessCheckHint,
+                Environment.ProcessId);
+        }
     }
 
     private static bool OwnerMarkerMatches(string ownerPath, string expectedToken)

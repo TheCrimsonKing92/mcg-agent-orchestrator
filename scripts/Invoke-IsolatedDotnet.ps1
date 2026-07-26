@@ -188,6 +188,70 @@ function Get-OwnerMarkerToken {
     }
 }
 
+function Test-CustodyMarkerIsLive {
+    param([object]$Marker)
+
+    if ($null -eq $Marker -or [string]::IsNullOrWhiteSpace([string]$Marker.attemptId)) {
+        return $false
+    }
+
+    $hintPath = [string]$Marker.livenessCheckHint
+    if (-not [string]::IsNullOrWhiteSpace($hintPath) -and
+        (Test-Path -LiteralPath $hintPath -PathType Leaf)) {
+        try {
+            $attempt = Get-Content -LiteralPath $hintPath -Raw | ConvertFrom-Json
+            if (-not [string]::Equals(
+                    [string]$attempt.attemptId,
+                    [string]$Marker.attemptId,
+                    [System.StringComparison]::Ordinal)) {
+                return $false
+            }
+
+            if (-not [string]::Equals(
+                    [string]$attempt.outcome,
+                    "Running",
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $false
+            }
+
+            $ownerProcessId = [int]$attempt.ownerProcessId
+            return $null -ne (Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue)
+        }
+        catch {
+            # Protect a live owner while its atomic lifecycle record is briefly unavailable.
+        }
+    }
+
+    try {
+        return $null -ne (Get-Process -Id ([int]$Marker.ownerProcessId) -ErrorAction SilentlyContinue)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Assert-CustodyAllowsTakeover {
+    param([string]$ArtifactsPath)
+
+    $custodyPath = Join-Path $ArtifactsPath ".mcg-artifacts-custody.json"
+    if (-not (Test-Path -LiteralPath $custodyPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $custodyPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return
+    }
+
+    if (Test-CustodyMarkerIsLive -Marker $marker) {
+        throw (
+            "Artifact slot takeover refused because acceptance attempt '$([string]$marker.attemptId)' " +
+            "has live custody of '$ArtifactsPath'. Wait for the acceptance attempt to reach a terminal state before retrying.")
+    }
+}
+
 function Get-DotnetOptionValue {
     param(
         [string[]]$Values,
@@ -495,7 +559,9 @@ function Initialize-ArtifactsDirectory {
 
     $ownerPath = Join-Path $Path ".mcg-artifacts-owner.json"
     $hasEntries = (Test-Path -LiteralPath $Path) -and $null -ne (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
-    if ($ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))) {
+    $takeoverRequired = $ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))
+    if ($takeoverRequired) {
+        Assert-CustodyAllowsTakeover -ArtifactsPath $Path
         Clear-ArtifactsDirectory -Path $Path
     }
     else {

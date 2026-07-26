@@ -267,6 +267,84 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_live_attempt_custody_refuses_foreign_owner_takeover")]
+    public void DotnetBuildEnvironmentManagerLiveAttemptCustodyRefusesForeignOwnerTakeover()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptId = "live-attempt-123";
+        var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
+        var evidencePath = Path.Combine(environment.ArtifactsPath, "TestResults", "completed-lane.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+        File.WriteAllText(evidencePath, "receipt");
+        WriteForeignOwnerMarker(environment.ArtifactsPath);
+        WriteAttemptMetadata(metadataPath, attemptId, "Running", Environment.ProcessId);
+        AcceptanceAttemptArtifactCustody.Write(
+            environment.ArtifactsPath,
+            attemptId,
+            metadataPath,
+            Environment.ProcessId);
+
+        var exception = Assert.Throws<AcceptanceAttemptArtifactCustodyException>(
+            () => DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero));
+
+        Assert.Equal(attemptId, exception.AttemptId);
+        Assert.Contains(attemptId, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(environment.ArtifactsPath, exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(evidencePath));
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_terminal_attempt_custody_allows_foreign_owner_takeover")]
+    public void DotnetBuildEnvironmentManagerTerminalAttemptCustodyAllowsForeignOwnerTakeover()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptId = "failed-attempt-123";
+        var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
+        var evidencePath = Path.Combine(environment.ArtifactsPath, "TestResults", "stale.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+        File.WriteAllText(evidencePath, "stale");
+        WriteForeignOwnerMarker(environment.ArtifactsPath);
+        WriteAttemptMetadata(metadataPath, attemptId, "Failed", Environment.ProcessId);
+        AcceptanceAttemptArtifactCustody.Write(
+            environment.ArtifactsPath,
+            attemptId,
+            metadataPath,
+            Environment.ProcessId);
+
+        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+
+        Assert.False(File.Exists(evidencePath));
+        Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_missing_custody_marker_preserves_foreign_owner_takeover")]
+    public void DotnetBuildEnvironmentManagerMissingCustodyMarkerPreservesForeignOwnerTakeover()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var evidencePath = Path.Combine(environment.ArtifactsPath, "stale.txt");
+        File.WriteAllText(evidencePath, "stale");
+        WriteForeignOwnerMarker(environment.ArtifactsPath);
+
+        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+
+        Assert.False(File.Exists(evidencePath));
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_uses_operator_build_namespace_outside_firewall_test_slots")]
+    public void InvokeWorkerBuildCheckUsesOperatorBuildNamespaceOutsideFirewallTestSlots()
+    {
+        var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-WorkerBuildCheck.ps1"));
+
+        Assert.Contains(@"slots\operator-build\$safeGoalPrefix", source, StringComparison.Ordinal);
+        Assert.Contains(@"operators\worker-build\$safeGoalPrefix", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
     public void DotnetBuildEnvironmentManagerOwnedArtifactHolderIsReapedAndRetried()
     {
@@ -2082,6 +2160,22 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 ownerProcessId = 123456789,
                 machineName = Environment.MachineName,
                 lastAcquiredAt = DateTimeOffset.UtcNow
+            }));
+    }
+
+    private static void WriteAttemptMetadata(
+        string path,
+        string attemptId,
+        string outcome,
+        int ownerProcessId)
+    {
+        File.WriteAllText(
+            path,
+            JsonSerializer.Serialize(new
+            {
+                attemptId,
+                outcome,
+                ownerProcessId
             }));
     }
 

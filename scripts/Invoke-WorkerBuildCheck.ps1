@@ -21,20 +21,6 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
-function Get-StableSlotName {
-    param([string]$Value)
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return "manual"
-    }
-
-    [int64]$hash = 0
-    foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
-        $hash = (($hash * 31) + [int][char]$ch) % 2147483647
-    }
-
-    return "slot-$([Math]::Abs($hash % 4))"
-}
-
 function Get-IsolatedRootBase {
     if (-not [string]::IsNullOrWhiteSpace($env:MCG_DOTNET_ISOLATED_ROOT)) {
         return $env:MCG_DOTNET_ISOLATED_ROOT
@@ -206,10 +192,9 @@ if ($missingProjects.Count -gt 0) {
 
 $safeGoalPrefix = ConvertTo-SafePathSegment -Value (Get-GoalPrefix)
 $isolatedRoot = Get-IsolatedRootBase
-$slotName = Get-StableSlotName -Value $safeGoalPrefix
-$leaseId = "goal-$safeGoalPrefix"
-$runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
-$slotRoot = Join-Path $isolatedRoot "slots\$slotName"
+$leaseId = "operator-build-$safeGoalPrefix"
+$runRoot = Join-Path $isolatedRoot "operators\worker-build\$safeGoalPrefix"
+$slotRoot = Join-Path $isolatedRoot "slots\operator-build\$safeGoalPrefix"
 $leaseRoot = Join-Path $runRoot "lease"
 $artifactsPath = Join-Path $slotRoot "artifacts"
 $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
