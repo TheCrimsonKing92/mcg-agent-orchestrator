@@ -23,7 +23,10 @@ public sealed record AcceptanceCheckResult(
     string? ResultSummary = null,
     bool Advisory = false,
     IReadOnlyList<string>? TestResultPaths = null,
-    string? FailureClassification = null);
+    string? FailureClassification = null,
+    string? TestResultAttemptId = null,
+    int TestResultRunOrdinal = 0,
+    bool TestResultIsExplicitCrossAttemptReuse = false);
 
 public static class AcceptanceFailureClassifications
 {
@@ -462,6 +465,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 changedFiles,
                 stableSlotIndex,
                 stableSlotLease,
+                partitionVerdictCache?.AttemptId,
                 cancellationToken).ConfigureAwait(false));
         }
 
@@ -870,7 +874,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 null,
                 ResultSummary:
                     $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey}",
-                TestResultPaths: cached.TestResultPaths), false);
+                TestResultPaths: cached.TestResultPaths,
+                TestResultAttemptId: cached.AttemptId,
+                TestResultIsExplicitCrossAttemptReuse: true), false);
         }
 
         var fresh = await RunCheckWithCancellationProbeAsync(
@@ -882,6 +888,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             dotnetTestBuildPhase,
             cancellationToken,
             testResultsDirectoryOverride).ConfigureAwait(false);
+        var currentAttemptId = cacheContext?.AttemptId ?? CurrentAcceptanceAttemptIdOrNull();
+        fresh = (fresh.Result with
+        {
+            TestResultAttemptId = currentAttemptId,
+            TestResultRunOrdinal = 0
+        }, fresh.Retried);
 
         // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
         // (a concurrent test process grabbing a build-slot lease -> SlotsBusy, a live-repo-HEAD race, a
@@ -902,7 +914,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 dotnetTestBuildPhase,
                 cancellationToken,
                 testResultsDirectoryOverride).ConfigureAwait(false);
-            fresh = rerun.Result.Passed ? (rerun.Result, true) : fresh;
+            fresh = (rerun.Result with
+            {
+                TestResultAttemptId = currentAttemptId,
+                TestResultRunOrdinal = 1
+            }, true);
         }
 
         if (cacheContext is not null &&
@@ -2114,15 +2130,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string CurrentAcceptanceAttemptId()
     {
-        var prefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
-        if (!string.IsNullOrWhiteSpace(prefix))
+        if (CurrentAcceptanceAttemptIdOrNull() is { } attemptId)
         {
-            var name = Path.GetFileName(prefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (!string.IsNullOrWhiteSpace(name))
-                return name;
+            return attemptId;
         }
 
         return $"manual-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+    }
+
+    private static string? CurrentAcceptanceAttemptIdOrNull()
+    {
+        var prefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            return null;
+        }
+
+        var name = Path.GetFileName(prefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        return string.IsNullOrWhiteSpace(name) ? null : name;
     }
 
     private static string ShortHash(string value) =>
@@ -3855,6 +3880,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        string? currentAttemptId,
         CancellationToken cancellationToken)
     {
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
@@ -3969,13 +3995,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var partitions = partitionChecks
                 .Select(shard =>
                 {
-                    var result = completedChecks.FirstOrDefault(candidate =>
+                    var result = completedChecks.LastOrDefault(candidate =>
                         candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
                     return new TestPartitionCoverage(
                         shard.Name,
                         result?.Passed == true,
                         result?.TestResultPaths ?? [],
-                        result?.LockRemediationApplied == true);
+                        result?.LockRemediationApplied == true,
+                        result?.TestResultAttemptId,
+                        result?.TestResultRunOrdinal ?? 0,
+                        result?.TestResultIsExplicitCrossAttemptReuse == true);
                 })
                 .ToArray();
             var coverage = TestCoverageInvariant.Evaluate(
@@ -3984,7 +4013,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
                 partitions,
                 mainDiscoveredTests,
-                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!));
+                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
+                currentAttemptId);
             if (!coverage.Passed)
             {
                 var details = new List<string>
@@ -4163,9 +4193,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (UsesMicrosoftTestingPlatform(check))
         {
             var invocation = engineSettings.ResolveMtpInvocation(check.Project);
-            // Discovery must mirror the execution-side unattended exclusion: lanes filter out
-            // Category=HostIntegration tests, so listing them here would make the structural
-            // coverage invariant report by-design-excluded tests as missing on every attempt.
+            // Discovery must mirror tests intentionally excluded from unattended execution.
+            // Otherwise by-design host-integration and opt-in tests are reported as missing.
             return
             [
                 invocation.ResolveExecutablePath(environment),
@@ -4174,7 +4203,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 "off",
                 "--list-tests",
                 "--filter-not-trait",
-                "Category=HostIntegration"
+                "Category=HostIntegration",
+                "--filter-not-trait",
+                "Category=AcceptanceOptIn"
             ];
         }
 
@@ -4186,7 +4217,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "--no-build",
             "--list-tests",
             "--filter",
-            "Category!=HostIntegration"
+            "Category!=HostIntegration&Category!=AcceptanceOptIn"
         };
         return WithBuildEnvironmentArguments([.. arguments], environment);
     }

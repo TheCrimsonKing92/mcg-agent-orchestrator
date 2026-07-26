@@ -756,6 +756,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
+    [Xunit.Trait("Category", "AcceptanceOptIn")]
     public async Task GoalAcceptanceVerifierRealRunnerSmokeIsOptIn()
     {
         var root = CreateManifestWorkspace("""
@@ -2484,6 +2485,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.True(result.Passed);
             Assert.True(result.Retried);
             Assert.Equal(2, mtpRuns);
+            var partition = Assert.Single(
+                result.Checks!,
+                check => check.Name.Equals("infrastructure tests: Cli", StringComparison.Ordinal));
+            Assert.Equal(1, partition.TestResultRunOrdinal);
+            Assert.False(string.IsNullOrWhiteSpace(partition.TestResultAttemptId));
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&

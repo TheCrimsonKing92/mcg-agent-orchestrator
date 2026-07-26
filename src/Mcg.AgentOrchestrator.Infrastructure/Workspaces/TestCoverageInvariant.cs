@@ -6,14 +6,18 @@ internal sealed record TestPartitionCoverage(
     string Name,
     bool Completed,
     IReadOnlyList<string> TestResultPaths,
-    bool HasEnvironmentInterferenceEvidence = false);
+    bool HasEnvironmentInterferenceEvidence = false,
+    string? AttemptId = null,
+    int RunOrdinal = 0,
+    bool IsExplicitCrossAttemptReuse = false);
 
 internal sealed record TestCoverageInvariantResult(
     bool Passed,
     string Summary,
     IReadOnlyList<string> MissingTests,
     IReadOnlyList<string> EmptyPartitions,
-    string? FailureClassification);
+    string? FailureClassification,
+    IReadOnlyList<string> ExecutedTests);
 
 internal static class TestCoverageInvariant
 {
@@ -156,7 +160,8 @@ internal static class TestCoverageInvariant
         IReadOnlySet<string> candidateDiscoveredTests,
         IReadOnlyList<TestPartitionCoverage> partitions,
         IReadOnlySet<string>? mainDiscoveredTests = null,
-        IReadOnlyList<string>? deletedTestFiles = null)
+        IReadOnlyList<string>? deletedTestFiles = null,
+        string? currentAttemptId = null)
     {
         if (candidateDiscoveredTests.Count == 0)
         {
@@ -165,13 +170,28 @@ internal static class TestCoverageInvariant
                 "trusted discovery returned zero tests",
                 [],
                 [],
-                AcceptanceFailureClassifications.StructuralCoverageFailed);
+                AcceptanceFailureClassifications.StructuralCoverageFailed,
+                []);
         }
 
+        var effectivePartitions = partitions
+            .Select((partition, index) => (Partition: partition, Index: index))
+            .Where(item =>
+                string.IsNullOrWhiteSpace(currentAttemptId) ||
+                string.IsNullOrWhiteSpace(item.Partition.AttemptId) ||
+                item.Partition.AttemptId.Equals(currentAttemptId, StringComparison.OrdinalIgnoreCase) ||
+                item.Partition.IsExplicitCrossAttemptReuse)
+            .GroupBy(item => item.Partition.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderBy(item => item.Partition.RunOrdinal)
+                .ThenBy(item => item.Index)
+                .Last()
+                .Partition)
+            .ToArray();
         var emptyPartitions = new List<string>();
-        var completedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var receiptTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var accountedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var partition in partitions)
+        foreach (var partition in effectivePartitions)
         {
             var executed = ReadCompletedTests(partition.TestResultPaths);
             if (!partition.Completed || executed.Count == 0)
@@ -180,10 +200,14 @@ internal static class TestCoverageInvariant
                 continue;
             }
 
-            completedTests.UnionWith(executed);
+            receiptTests.UnionWith(executed);
             accountedTests.UnionWith(ReadRecordedTests(partition.TestResultPaths));
         }
 
+        var executedTests = candidateDiscoveredTests
+            .Where(discovered => receiptTests.Any(completed => IdentitiesMatch(discovered, completed)))
+            .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var missing = candidateDiscoveredTests
             .Where(discovered => !accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
@@ -218,16 +242,22 @@ internal static class TestCoverageInvariant
 
         var passed = emptyPartitions.Count == 0 && missing.Count == 0;
         var summary = passed
-            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={completedTests.Count}, partitions={partitions.Count}"
-            : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={completedTests.Count}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
+            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={effectivePartitions.Length}"
+            : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
         var failureClassification = passed
             ? null
-            : partitions.Any(partition =>
+            : effectivePartitions.Any(partition =>
                 emptyPartitions.Contains(partition.Name, StringComparer.OrdinalIgnoreCase) &&
                 partition.HasEnvironmentInterferenceEvidence)
                 ? AcceptanceFailureClassifications.GateEnvironmentInterference
                 : AcceptanceFailureClassifications.StructuralCoverageFailed;
-        return new TestCoverageInvariantResult(passed, summary, missing, emptyPartitions, failureClassification);
+        return new TestCoverageInvariantResult(
+            passed,
+            summary,
+            missing,
+            emptyPartitions,
+            failureClassification,
+            executedTests);
     }
 
     private static bool IdentitiesMatch(string left, string right)
