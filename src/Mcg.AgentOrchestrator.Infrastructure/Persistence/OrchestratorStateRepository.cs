@@ -101,6 +101,30 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         TransactGoalAsync(goalId, transaction, cancellationToken);
 }
 
+public sealed record OrchestratorStateOutboxMessage(
+    string Id,
+    string Kind,
+    string PayloadJson,
+    DateTimeOffset CreatedAt);
+
+public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestratorStateRepository
+{
+    Task<T> TransactWithOutboxAsync<T>(
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(
+            bool ShouldSave,
+            T Result,
+            IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
+        string kind,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteOutboxMessageAsync(
+        string id,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record GoalSnapshotSaveRequest(GoalSnapshot Baseline, GoalSnapshot Current);
 
 public sealed record GoalSnapshotSaveResult(

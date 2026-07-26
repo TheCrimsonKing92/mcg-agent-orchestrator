@@ -384,29 +384,24 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             var operatorRegateCount = context.Kernel.RetryAcceptanceGate(retryGoal.Id, operatorReason);
-            context.BeforeStateCommit(() =>
-            {
-                GoalOperationJournal.AcceptanceRetried(
-                    context.Workspace.ExecutionDirectory,
-                    retryGoal,
-                    operatorReason,
-                    priorGateMainSha,
-                    currentHeadMainSha,
-                    operatorRegateCount);
-                if (!OperatorInbox.ResolveLandingEscalation(
+            var auditMessage = GoalOperationJournal.CreateAcceptanceRetryAuditMessage(
+                retryGoal,
+                operatorReason,
+                priorGateMainSha,
+                currentHeadMainSha,
+                operatorRegateCount,
+                acceptanceFailureOccurredAt);
+            context.CommitWithState(
+                auditMessage,
+                () =>
+                {
+                    GoalOperationJournal.ApplyAcceptanceRetryAuditMessage(
                         context.Workspace,
                         retryGoal,
-                        operatorReason,
-                        acceptanceFailureOccurredAt: acceptanceFailureOccurredAt))
-                {
-                    throw new InvalidOperationException(
-                        $"acceptance-retry could not resolve the landing escalation for goal {retryGoal.Id.Value[..8]} " +
-                        "before the goal-state transaction committed.");
-                }
-
-                Console.WriteLine(
-                    $"Acceptance retry scheduled: goal={retryGoal.Id.Value[..8]} state={retryGoal.Status} operator-regate={operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; next conductor tick will re-run acceptance.");
-            });
+                        auditMessage);
+                    Console.WriteLine(
+                        $"Acceptance retry scheduled: goal={retryGoal.Id.Value[..8]} state={retryGoal.Status} operator-regate={operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; next conductor tick will re-run acceptance.");
+                });
             return true;
         }
 

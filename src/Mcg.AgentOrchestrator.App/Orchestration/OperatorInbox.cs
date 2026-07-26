@@ -559,17 +559,27 @@ internal static class OperatorInbox
         using (AcquireLandingEscalationLock(workspace))
         {
             var changed = false;
+            var matched = false;
             var resolvedAt = resolvedAtUtc ?? DateTimeOffset.UtcNow;
             var items = LoadLandingEscalationsUnsafe(workspace)
                 .Select(item =>
                 {
                     if (!item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
-                        item.ResolvedAtUtc is not null ||
-                        item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt)
+                        (item.AcceptanceFailureOccurredAt is not null &&
+                         item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt))
                     {
                         return item;
                     }
 
+                    if (item.ResolvedAtUtc is not null)
+                    {
+                        matched |= item.ResolvedBy?.Equals(
+                            "acceptance-retry",
+                            StringComparison.OrdinalIgnoreCase) is true;
+                        return item;
+                    }
+
+                    matched = true;
                     changed = true;
                     return item with
                     {
@@ -586,7 +596,7 @@ internal static class OperatorInbox
                 SaveLandingEscalationsUnsafe(workspace, items);
             }
 
-            return changed;
+            return matched;
         }
     }
 
@@ -596,10 +606,36 @@ internal static class OperatorInbox
         DateTimeOffset acceptanceFailureOccurredAt)
     {
         using var escalationLock = AcquireLandingEscalationLock(workspace);
-        return LoadLandingEscalationsUnsafe(workspace).Any(item =>
+        var items = LoadLandingEscalationsUnsafe(workspace).ToArray();
+        if (items.Any(item =>
             item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
             item.ResolvedAtUtc is null &&
-            item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt);
+            item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt))
+        {
+            return true;
+        }
+
+        var legacyIndexes = items
+            .Select((item, index) => (item, index))
+            .Where(candidate =>
+                candidate.item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                candidate.item.ResolvedAtUtc is null &&
+                candidate.item.AcceptanceFailureOccurredAt is null)
+            .Select(candidate => candidate.index)
+            .ToArray();
+        if (legacyIndexes.Length == 0)
+        {
+            return false;
+        }
+
+        if (legacyIndexes.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Landing escalation store contains {legacyIndexes.Length} unresolved legacy entries for goal " +
+                $"'{goal.Id.Value[..8]}'; repair the duplicate records before acceptance-retry.");
+        }
+
+        return true;
     }
 
     public static IReadOnlyList<OperatorInboxItem> RecordOwnershipHolds(

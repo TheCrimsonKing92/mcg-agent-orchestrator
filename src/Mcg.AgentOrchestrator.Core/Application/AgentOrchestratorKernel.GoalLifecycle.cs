@@ -423,6 +423,21 @@ public sealed partial class AgentOrchestratorKernel
                 $"Goal '{goal.Id.Value[..8]}' task {taskNumber} is {incompleteTask.Status}, not Completed or Cancelled; use '{correctLever}' instead of acceptance-retry.");
         }
 
+        var unverifiedTask = goal.Tasks.FirstOrDefault(task =>
+            task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is not { Succeeded: true });
+        if (unverifiedTask is not null)
+        {
+            var taskNumber = TaskDisplayNumber.Resolve(goal, unverifiedTask.Id);
+            var verificationState = unverifiedTask.LastVerification is null
+                ? "has no verification"
+                : "latest verification did not pass";
+            throw new InvalidOperationException(
+                $"Goal '{goal.Id.Value[..8]}' task {taskNumber} is Completed but {verificationState}; " +
+                $"use 'verify-manual {goal.Id.Value[..8]} {taskNumber} passed <note>' after validating the work, " +
+                "or retry the task if the work is wrong.");
+        }
+
         if (goal.OperatorAcceptanceRegateCount >= Goal.OperatorAcceptanceRegateCap)
         {
             throw new InvalidOperationException(

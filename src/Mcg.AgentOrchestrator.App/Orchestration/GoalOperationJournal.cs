@@ -66,6 +66,14 @@ internal sealed record GoalAcceptanceAttemptReceipt(
     string? BaseBuildCacheEvictions,
     string? BaseBuildCacheReceipt);
 
+internal sealed record AcceptanceRetryAuditPayload(
+    string GoalId,
+    string OperatorReason,
+    string PriorGateMainSha,
+    string CurrentHeadMainSha,
+    int OperatorRegateCount,
+    DateTimeOffset AcceptanceFailureOccurredAt);
+
 internal sealed record GoalOperationJournalSummary(
     string Path,
     IReadOnlyList<GoalOperationJournalEntry> Entries,
@@ -102,6 +110,7 @@ internal sealed record GoalLifecycleJournalEntry(
 
 internal static class GoalOperationJournal
 {
+    internal const string AcceptanceRetryAuditOutboxKind = "acceptance-retry-audit";
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
     public const string LandingIntentOperation = "conductor:landing-intent";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
@@ -288,6 +297,71 @@ internal static class GoalOperationJournal
             currentHeadMainSha: NormalizeSha(currentHeadMainSha),
             operatorRegateCount: operatorRegateCount);
     }
+
+    public static OrchestratorStateOutboxMessage CreateAcceptanceRetryAuditMessage(
+        Goal goal,
+        string operatorReason,
+        string priorGateMainSha,
+        string currentHeadMainSha,
+        int operatorRegateCount,
+        DateTimeOffset acceptanceFailureOccurredAt)
+    {
+        var payload = new AcceptanceRetryAuditPayload(
+            goal.Id.Value,
+            operatorReason,
+            priorGateMainSha,
+            currentHeadMainSha,
+            operatorRegateCount,
+            acceptanceFailureOccurredAt);
+        return new OrchestratorStateOutboxMessage(
+            $"{AcceptanceRetryAuditOutboxKind}:{goal.Id.Value}:{operatorRegateCount}",
+            AcceptanceRetryAuditOutboxKind,
+            JsonSerializer.Serialize(payload, JsonOptions),
+            DateTimeOffset.UtcNow);
+    }
+
+    public static void ApplyAcceptanceRetryAuditMessage(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        OrchestratorStateOutboxMessage message)
+    {
+        if (!message.Kind.Equals(AcceptanceRetryAuditOutboxKind, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cannot apply outbox message '{message.Id}' of kind '{message.Kind}' as an acceptance-retry audit.");
+        }
+
+        var payload = DeserializeAcceptanceRetryAuditMessage(message);
+        if (!payload.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Acceptance-retry audit outbox message '{message.Id}' targets goal '{payload.GoalId}', not '{goal.Id.Value}'.");
+        }
+
+        AcceptanceRetried(
+            workspace.ExecutionDirectory,
+            goal,
+            payload.OperatorReason,
+            payload.PriorGateMainSha,
+            payload.CurrentHeadMainSha,
+            payload.OperatorRegateCount);
+        if (!OperatorInbox.ResolveLandingEscalation(
+                workspace,
+                goal,
+                payload.OperatorReason,
+                payload.AcceptanceFailureOccurredAt))
+        {
+            throw new InvalidOperationException(
+                $"acceptance-retry could not resolve the landing escalation for goal {goal.Id.Value[..8]} " +
+                $"at occurrence {payload.AcceptanceFailureOccurredAt:O}; the durable audit remains pending.");
+        }
+    }
+
+    public static AcceptanceRetryAuditPayload DeserializeAcceptanceRetryAuditMessage(
+        OrchestratorStateOutboxMessage message) =>
+        JsonSerializer.Deserialize<AcceptanceRetryAuditPayload>(message.PayloadJson, JsonOptions)
+        ?? throw new InvalidOperationException(
+            $"Acceptance-retry audit outbox message '{message.Id}' has an empty payload.");
 
     public static void AcceptanceBlocked(
         string executionDirectory,
