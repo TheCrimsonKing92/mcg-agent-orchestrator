@@ -434,10 +434,40 @@ internal static class TerminalGoalSweep
                     staleTerminalExclusionEvidence,
                     "excluded"));
             }
-            else if (!blockedByDirtyWorktree &&
-                     !branchFacts.BranchAlreadyLanded &&
-                     hasTerminalTaskDesync &&
-                     kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                originalGoal.Status is GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded &&
+                (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
+                 branchFactIndex.HasGoalBranch(GoalWorktrees.BranchName(goal.Id)) ||
+                 Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id))))
+            {
+                var removeResult = GoalWorktrees.RemoveTerminal(
+                    executionDirectory,
+                    goal.Id,
+                    kernel);
+                if (!removeResult.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "terminal-worktree-cleanup-needed",
+                        removeResult.Message,
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                }
+                else
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "terminal-worktree-cleanup",
+                        removeResult.Message,
+                        $"workspace remove {prefix}"));
+                }
+
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
+            }
+
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                !branchFacts.BranchAlreadyLanded &&
+                hasTerminalTaskDesync &&
+                kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",
@@ -518,35 +548,6 @@ internal static class TerminalGoalSweep
                         removeResult.Message,
                         $"workspace remove {prefix}"));
                     goal = kernel.GetGoal(originalGoal.Id);
-                }
-
-                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
-            }
-            else if (goal.Status is GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded &&
-                     !blockers.Any(IsTerminalCleanupBlockingBlocker) &&
-                     (branchFacts.HasRegisteredWorktree ||
-                      branchFacts.HasGoalBranch ||
-                      Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id))))
-            {
-                var removeResult = GoalWorktrees.RemoveTerminal(
-                    executionDirectory,
-                    goal.Id,
-                    kernel,
-                    branchFacts.HasRegisteredWorktree,
-                    branchFacts.HasGoalBranch);
-                if (!removeResult.IsComplete)
-                {
-                    blockers.Add(new TerminalGoalSweepBlocker(
-                        "terminal-worktree-cleanup-needed",
-                        removeResult.Message,
-                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
-                }
-                else
-                {
-                    repairs.Add(new TerminalGoalSweepRepair(
-                        "terminal-worktree-cleanup",
-                        removeResult.Message,
-                        $"workspace remove {prefix}"));
                 }
 
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);

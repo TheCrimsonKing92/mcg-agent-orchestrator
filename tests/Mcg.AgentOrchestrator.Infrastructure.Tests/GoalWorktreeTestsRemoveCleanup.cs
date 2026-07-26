@@ -24,13 +24,14 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 
         var scratchRoot = Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-long-wt", Guid.NewGuid().ToString("n"));
         var repo = scratchRoot;
-        while (Path.Combine(repo, GoalWorktrees.DirectoryName, "12345678").Length <= 280)
+        while (Path.Combine(repo, GoalWorktrees.DirectoryName, "12345678").Length <= 260)
         {
             repo = Path.Combine(repo, "long-path-segment-0123456789");
         }
 
         try
         {
+            Assert.True(repo.Length < 260, $"Repository root must remain process-launchable, got {repo.Length}: {repo}");
             Directory.CreateDirectory(repo);
             RunGit(repo, "init");
             RunGit(repo, "config", "core.longpaths", "true");
