@@ -5078,16 +5078,25 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            Directory.CreateDirectory(receiptDirectory);
             var destinationPath = Path.Combine(receiptDirectory, Path.GetFileName(sourcePath));
-            if (!sourcePath.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+            try
             {
-                var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
-                File.Copy(sourcePath, temporaryPath, overwrite: true);
-                File.Move(temporaryPath, destinationPath, overwrite: true);
-            }
+                Directory.CreateDirectory(receiptDirectory);
+                if (!sourcePath.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+                    File.Copy(sourcePath, temporaryPath, overwrite: true);
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
+                }
 
-            durablePaths[index] = destinationPath;
+                durablePaths[index] = destinationPath;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine(
+                    $"ATTEMPT_RECEIPT_COPY_FAILED source=\"{sourcePath}\" destination=\"{destinationPath}\" error=\"{ex.Message}\"");
+                durablePaths[index] = sourcePath;
+            }
         }
 
         return durablePaths;

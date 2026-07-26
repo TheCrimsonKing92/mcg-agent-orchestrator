@@ -57,6 +57,42 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_receipt_copy_failure_preserves_slot_receipt_path")]
+    public void TestCoverageInvariantReceiptCopyFailurePreservesSlotReceiptPath()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-attempt-receipt-failure-{Guid.NewGuid():N}");
+        var sourcePath = Path.Combine(root, "slot", "lane.trx");
+        var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
+        var receiptDirectory = attemptPrefix + ".receipts";
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            WriteTrxAt(sourcePath, ("1", "ExampleTests.Runs", "Passed"));
+            Directory.CreateDirectory(Path.GetDirectoryName(receiptDirectory)!);
+            File.WriteAllText(receiptDirectory, "blocks directory creation");
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                attemptPrefix);
+
+            var durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath])!;
+
+            Assert.Equal([sourcePath], durablePaths);
+            Assert.True(File.Exists(sourcePath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_fails_when_a_discovered_test_was_filtered_out")]
     public void TestCoverageInvariantFailsWhenDiscoveredTestWasFilteredOut()
     {

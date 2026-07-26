@@ -2281,8 +2281,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_receipts_use_attempt_artifacts_instead_of_releasable_slot")]
-    public void GoalAcceptanceVerifierShardReceiptsUseAttemptArtifactsInsteadOfReleasableSlot()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_receipts_stage_in_slot_before_durable_copy")]
+    public void GoalAcceptanceVerifierShardReceiptsStageInSlotBeforeDurableCopy()
     {
         var attemptDirectory = Path.Combine(
             Path.GetTempPath(),
@@ -2305,8 +2305,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var resultsDirectory =
                 GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
 
-            Assert.Equal(attemptDirectory, resultsDirectory, ignoreCase: true);
-            Assert.False(
+            Assert.Equal(
+                Path.Combine(environment.ArtifactsPath, "TestResults"),
+                resultsDirectory,
+                ignoreCase: true);
+            Assert.True(
                 resultsDirectory.StartsWith(
                     environment.ArtifactsPath,
                     StringComparison.OrdinalIgnoreCase));
