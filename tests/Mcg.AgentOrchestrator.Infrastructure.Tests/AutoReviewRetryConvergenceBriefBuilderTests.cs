@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
+[Xunit.Collection(TestCollections.ChaosGateGit)]
 public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_SQLite_rounds_shrink_A_B_to_accept")]

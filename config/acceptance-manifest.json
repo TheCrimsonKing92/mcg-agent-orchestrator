@@ -2,7 +2,7 @@
   "version": 1,
   "engine": {
     "slotCount": 4,
-    "maxConcurrentShards": 1,
+    "maxConcurrentShards": 3,
     "enforceStructuralCoverage": true,
     "timeouts": {
       "defaultMinutes": 25,
@@ -26,9 +26,10 @@
       { "name": "Conductor batch loop", "filter": "FullyQualifiedName~ConductorBatchLoopTests" },
       { "name": "Conductor driver", "filter": "FullyQualifiedName~ConductorDriverTests" },
       { "name": "Conduct watch sweep scoping", "filter": "FullyQualifiedName~ConductWatchSweepScopingTests" },
+      { "name": "Chaos gate", "filter": "FullyQualifiedName~ChaosGate&Category!=HostIntegration" },
       {
         "name": "Remainder",
-        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration"
+        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~ChaosGate&Category!=HostIntegration"
       }
     ],
     "mtpInvocations": [

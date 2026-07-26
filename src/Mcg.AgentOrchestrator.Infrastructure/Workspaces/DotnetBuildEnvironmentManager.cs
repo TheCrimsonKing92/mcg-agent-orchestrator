@@ -1852,6 +1852,17 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
         return _stream;
     }
 
+    internal void ReleaseExecutionLock()
+    {
+        if (_detached)
+        {
+            return;
+        }
+
+        _detached = true;
+        _stream.Dispose();
+    }
+
     public void Dispose()
     {
         if (_detached)

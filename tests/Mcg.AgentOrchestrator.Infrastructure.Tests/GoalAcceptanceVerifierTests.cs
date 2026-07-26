@@ -1876,6 +1876,379 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_preserve_sequential_mixed_verdicts")]
+    public async Task GoalAcceptanceVerifierConcurrentShardsPreserveSequentialMixedVerdicts()
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        SetPartitionVerdictKeyHooks("tree-concurrency", "main-concurrency", "commit-concurrency");
+        var alphaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remainderFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completionOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var activeShardWorkers = 0;
+        var peakShardWorkers = 0;
+        try
+        {
+            static Task<GoalAcceptanceVerifier.CommandResult> RunSequentialFixedVerdict(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                WriteMtpTrx(args);
+                var filterClassIndex = Array.IndexOf(args, "--filter-class");
+                var alpha = filterClassIndex >= 0 &&
+                    args[filterClassIndex + 1].Contains("AlphaShardTests", StringComparison.Ordinal);
+                return Task.FromResult(alpha
+                    ? new GoalAcceptanceVerifier.CommandResult(7, "alpha failed deterministically")
+                    : new GoalAcceptanceVerifier.CommandResult(0, "passed deterministically"));
+            }
+
+            async Task<GoalAcceptanceVerifier.CommandResult> RunConcurrentFixedVerdict(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                WriteMtpTrx(args);
+                var active = Interlocked.Increment(ref activeShardWorkers);
+                int observedPeak;
+                do
+                {
+                    observedPeak = Volatile.Read(ref peakShardWorkers);
+                }
+                while (active > observedPeak &&
+                       Interlocked.CompareExchange(ref peakShardWorkers, active, observedPeak) != observedPeak);
+
+                var filterClassIndex = Array.IndexOf(args, "--filter-class");
+                var alpha = filterClassIndex >= 0 &&
+                    args[filterClassIndex + 1].Contains("AlphaShardTests", StringComparison.Ordinal);
+                try
+                {
+                    if (alpha)
+                    {
+                        alphaStarted.TrySetResult();
+                        await remainderFinished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        completionOrder.Enqueue("Alpha");
+                        return new GoalAcceptanceVerifier.CommandResult(7, "alpha failed deterministically");
+                    }
+
+                    await alphaStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    completionOrder.Enqueue("Remainder");
+                    remainderFinished.TrySetResult();
+                    return new GoalAcceptanceVerifier.CommandResult(0, "passed deterministically");
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref activeShardWorkers);
+                }
+            }
+
+            static async Task<AcceptanceVerificationResult> RunScenarioAsync(
+                int maxConcurrentShards,
+                Func<string[], string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner,
+                string goalId)
+            {
+                var root = CreateManifestWorkspace($$"""
+                    {
+                      "version": 1,
+                      "engine": {
+                        "slotCount": 4,
+                        "maxConcurrentShards": {{maxConcurrentShards}},
+                        "infrastructureTestLanes": [
+                          { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },
+                          {
+                            "name": "Remainder",
+                            "filter": "FullyQualifiedName!~AlphaShardTests&Category!=HostIntegration"
+                          }
+                        ],
+                        "mtpInvocations": [
+                          {
+                            "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                            "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                            "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                            "arguments": [
+                              "{executable}",
+                              "--no-ansi",
+                              "--progress",
+                              "off",
+                              "--results-directory",
+                              "{resultsDirectory}",
+                              "--report-trx",
+                              "--report-trx-filename",
+                              "{trxFileName}"
+                            ]
+                          }
+                        ]
+                      },
+                      "checks": [
+                        {
+                          "name": "infrastructure tests",
+                          "type": "dotnet-test",
+                          "runner": "mtp",
+                          "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                          "arguments": ["--verbosity", "minimal"]
+                        }
+                      ],
+                      "forbiddenChangedPathGlobs": []
+                    }
+                    """);
+                try
+                {
+                    var verifier = new GoalAcceptanceVerifier(runner);
+                    using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                        TimeSpan.FromSeconds(2));
+                    return await verifier.RunAsync(
+                        root,
+                        new GoalId(goalId),
+                        stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                        stableSlotLease: lease);
+                }
+                finally
+                {
+                    DeleteDirectoryWithRetry(root);
+                }
+            }
+
+            var sequential = await RunScenarioAsync(
+                1,
+                RunSequentialFixedVerdict,
+                "11111111111111111111111111111111");
+            var concurrent = await RunScenarioAsync(
+                2,
+                RunConcurrentFixedVerdict,
+                "22222222222222222222222222222222");
+            var sequentialShards = sequential.Checks!
+                .Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal))
+                .Select(check => (check.Name, check.Passed, check.ExitCode, check.OutputTail))
+                .ToArray();
+            var concurrentShards = concurrent.Checks!
+                .Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal))
+                .Select(check => (check.Name, check.Passed, check.ExitCode, check.OutputTail))
+                .ToArray();
+
+            Assert.False(sequential.Passed);
+            Assert.False(concurrent.Passed);
+            Assert.Equal(sequential.ExitCode, concurrent.ExitCode);
+            Assert.Equal(sequential.OutputTail, concurrent.OutputTail);
+            Assert.Equal(sequentialShards, concurrentShards);
+            Assert.Equal(2, peakShardWorkers);
+            Assert.Equal(new[] { "Remainder", "Alpha" }, completionOrder);
+            Assert.Collection(
+                concurrentShards,
+                alpha =>
+                {
+                    Assert.Equal("infrastructure tests: Alpha", alpha.Name);
+                    Assert.False(alpha.Passed);
+                    Assert.Equal(7, alpha.ExitCode);
+                    Assert.NotNull(alpha.OutputTail);
+                    Assert.StartsWith("alpha failed deterministically", alpha.OutputTail);
+                    Assert.Contains(
+                        "[FAIL] infrastructure tests: Alpha:",
+                        alpha.OutputTail,
+                        StringComparison.Ordinal);
+                },
+                remainder =>
+                {
+                    Assert.Equal("infrastructure tests: Remainder", remainder.Name);
+                    Assert.True(remainder.Passed);
+                    Assert.Equal(0, remainder.ExitCode);
+                    Assert.Null(remainder.OutputTail);
+                });
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_trusted_manifest_git_read_drains_large_output")]
+    public void GoalAcceptanceVerifierTrustedManifestGitReadDrainsLargeOutput()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+
+        var trustedManifest = GoalAcceptanceVerifier.ResolveGitText(
+            repositoryRoot,
+            "show",
+            "main:config/acceptance-manifest.json");
+
+        Assert.NotNull(trustedManifest);
+        Assert.True(
+            trustedManifest.Length > 4096,
+            $"Expected the trusted manifest fixture to exceed a Windows pipe buffer; actual length was {trustedManifest.Length}.");
+        Assert.Contains("\"maxConcurrentShards\"", trustedManifest, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_worker_count_respects_current_free_slots")]
+    public void GoalAcceptanceVerifierShardWorkerCountRespectsCurrentFreeSlots()
+    {
+        GoalAcceptanceVerifier.IsStableSlotAvailableForShardTests = _ => false;
+        try
+        {
+            var workerCount = GoalAcceptanceVerifier.ResolveAvailableShardWorkerCount(
+                primarySlotIndex: 0,
+                shardConcurrencyBudget: 3,
+                shardCount: 8);
+
+            Assert.Equal(1, workerCount);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.IsStableSlotAvailableForShardTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_real_process_shards_acquire_isolated_slots_and_release_them")]
+    public async Task GoalAcceptanceVerifierRealProcessShardsAcquireIsolatedSlotsAndReleaseThem()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        var root = CreateRealProcessShardManifestWorkspace();
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var invocations = new System.Collections.Concurrent.ConcurrentQueue<string[]>();
+        var executablePaths = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var resultsDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var testProcessIds = new System.Collections.Concurrent.ConcurrentBag<int>();
+        var signalDirectory = Path.Combine(root, ".shard-smoke");
+        Directory.CreateDirectory(signalDirectory);
+        var alphaSignalPath = Path.Combine(signalDirectory, "alpha.signal");
+        var betaSignalPath = Path.Combine(signalDirectory, "beta.signal");
+        var ambientAttemptPrefix = Path.Combine(root, "ambient-gate-attempt", "not-a-slot");
+        var previousAttemptPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        IReadOnlyDictionary<string, string> shardEnvironment = new Dictionary<string, string>
+        {
+            ["MCG_SHARD_SMOKE_ALPHA_SIGNAL"] = alphaSignalPath,
+            ["MCG_SHARD_SMOKE_BETA_SIGNAL"] = betaSignalPath
+        };
+        DotnetBuildEnvironmentLease? primaryLease = null;
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                ambientAttemptPrefix);
+            var verifier = new GoalAcceptanceVerifier(async (args, _, timeout, cancellationToken) =>
+            {
+                invocations.Enqueue(args);
+                var isTest = IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                if (isTest)
+                {
+                    executablePaths.Add(args[0]);
+                    var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+                    Assert.InRange(resultsDirectoryIndex, 0, args.Length - 2);
+                    resultsDirectories.Add(args[resultsDirectoryIndex + 1]);
+                }
+
+                return await RunRealShardProcessAsync(
+                    args,
+                    repositoryRoot,
+                    timeout,
+                    shardEnvironment,
+                    process =>
+                    {
+                        if (isTest)
+                        {
+                            testProcessIds.Add(process.Id);
+                        }
+                    },
+                    cancellationToken);
+            });
+
+            primaryLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var primarySlot = StableSlotIndex(primaryLease.Environment.ArtifactsPath);
+            var run = verifier.RunAsync(
+                root,
+                stableSlotIndex: primarySlot,
+                stableSlotLease: primaryLease);
+            var result = await run;
+            Assert.True(
+                result.Passed,
+                string.Join(
+                    " | ",
+                    result.Checks!
+                        .Where(check => !check.Passed)
+                        .Select(check => $"{check.Name}: exit={check.ExitCode}; output={check.OutputTail}")));
+            Assert.True(File.Exists(alphaSignalPath));
+            Assert.True(File.Exists(betaSignalPath));
+            Assert.Equal(2, testProcessIds.Distinct().Count());
+            var invocationArray = invocations.ToArray();
+            Assert.Single(invocationArray, call =>
+                call.Length >= 2 &&
+                call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                call[1].Equals("build", StringComparison.OrdinalIgnoreCase));
+            var firstShardIndex = Array.FindIndex(
+                invocationArray,
+                call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            Assert.True(firstShardIndex >= 0);
+            Assert.DoesNotContain(
+                invocationArray.Skip(firstShardIndex),
+                call => call.Length > 0 && call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase));
+            Assert.Single(executablePaths.Distinct(StringComparer.OrdinalIgnoreCase));
+            Assert.All(executablePaths, path => Assert.True(File.Exists(path), $"Missing prebuilt MTP executable '{path}'."));
+            Assert.DoesNotContain(
+                resultsDirectories,
+                path => path.StartsWith(
+                    Path.GetDirectoryName(ambientAttemptPrefix)!,
+                    StringComparison.OrdinalIgnoreCase));
+            var usedSlots = resultsDirectories.Select(StableSlotIndex).Distinct().ToArray();
+            Assert.Equal(2, usedSlots.Length);
+            var secondarySlot = Assert.Single(usedSlots, slot => slot != primarySlot);
+            Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(secondarySlot));
+
+            primaryLease.Dispose();
+            primaryLease = null;
+            Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(primarySlot));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousAttemptPrefix);
+            primaryLease?.Dispose();
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_reuses_green_partitions_on_reroll")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheReusesGreenPartitionsOnReroll()
     {
@@ -1936,7 +2309,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 Path.Combine(root, ".orchestrator", "attempt-three"));
             var third = await verifier.RunAsync(root, goalId);
             Assert.True(third.Passed);
-            Assert.Equal(19, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(
+                AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 2,
+                CountInfrastructurePartitionTestCalls(calls));
             var thirdReceipt = Assert.Single(third.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("{partition_id=remainder,verdict=GREEN}", thirdReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("aggregate_verdict=GREEN", thirdReceipt.ResultSummary, StringComparison.Ordinal);
@@ -2174,11 +2549,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             SetPartitionVerdictKeyHooks("tree-b", "main-a", "commit-b");
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
-            Assert.Equal(34, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(
+                AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 2,
+                CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-c");
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
-            Assert.Equal(51, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(
+                AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 3,
+                CountInfrastructurePartitionTestCalls(calls));
         }
         finally
         {
@@ -2271,7 +2650,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             failFirstPartitionOnForcedRerun = true;
             var third = await verifier.RunAsync(root, goalId);
             Assert.False(third.Passed);
-            Assert.Equal(34, CountInfrastructurePartitionTestCalls(calls));
+            Assert.Equal(
+                AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 2,
+                CountInfrastructurePartitionTestCalls(calls));
             var thirdReceipt = Assert.Single(third.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("forced_full_rerun=true", thirdReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("reroll_attempt_count=0", thirdReceipt.ResultSummary, StringComparison.Ordinal);
@@ -3575,7 +3956,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        Assert.Equal(21, calls.Count);
+        Assert.Equal(
+            AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 4,
+            calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
         var infrastructureCalls = calls
             .Where(call => call.Length > 2 &&
@@ -3911,6 +4294,253 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => verifyingCommitSha;
     }
 
+    private static async Task<AcceptanceVerificationResult> RunTwoLaneShardScenarioAsync(
+        int maxConcurrentShards,
+        Func<string[], string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner,
+        string goalId)
+    {
+        var root = CreateTwoLaneShardManifestWorkspace(maxConcurrentShards);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier(runner);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            return await verifier.RunAsync(
+                root,
+                new GoalId(goalId),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private static string CreateTwoLaneShardManifestWorkspace(int maxConcurrentShards) =>
+        CreateManifestWorkspace($$"""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 4,
+                "maxConcurrentShards": {{maxConcurrentShards}},
+                "infrastructureTestLanes": [
+                  { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },
+                  {
+                    "name": "Remainder",
+                    "filter": "FullyQualifiedName!~AlphaShardTests&Category!=HostIntegration"
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--verbosity", "minimal"]
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+
+    private static string CreateRealProcessShardManifestWorkspace() =>
+        CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 4,
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Real process alpha",
+                    "filter": "FullyQualifiedName~RealProcessShardAlphaSmokeTests"
+                  },
+                  {
+                    "name": "Real process beta",
+                    "filter": "FullyQualifiedName~RealProcessShardBetaSmokeTests"
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--no-ansi",
+                      "--progress",
+                      "off",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx",
+                      "--report-trx-filename",
+                      "{trxFileName}",
+                      "--long-running",
+                      "120"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--verbosity", "minimal"]
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+
+    internal static async Task SynchronizeRealProcessShardSmokeAsync(
+        string ownSignalVariable,
+        string peerSignalVariable)
+    {
+        var ownSignalPath = Environment.GetEnvironmentVariable(ownSignalVariable);
+        if (string.IsNullOrWhiteSpace(ownSignalPath))
+        {
+            return;
+        }
+
+        var peerSignalPath = Environment.GetEnvironmentVariable(peerSignalVariable);
+        Assert.False(string.IsNullOrWhiteSpace(peerSignalPath));
+        File.WriteAllText(ownSignalPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await WaitForShardSignalAsync(peerSignalPath!);
+    }
+
+    private static async Task WaitForShardSignalAsync(string signalPath)
+    {
+        if (File.Exists(signalPath))
+        {
+            return;
+        }
+
+        var signalDirectory = Path.GetDirectoryName(signalPath)
+            ?? throw new InvalidOperationException($"Shard signal path has no directory: '{signalPath}'.");
+        using var watcher = new FileSystemWatcher(signalDirectory, Path.GetFileName(signalPath))
+        {
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.LastWrite
+        };
+        var signalObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        FileSystemEventHandler onSignal = (_, _) => signalObserved.TrySetResult();
+        watcher.Created += onSignal;
+        watcher.Changed += onSignal;
+        try
+        {
+            watcher.EnableRaisingEvents = true;
+            if (File.Exists(signalPath))
+            {
+                return;
+            }
+
+            try
+            {
+                await signalObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+            catch (TimeoutException)
+            {
+                Assert.True(
+                    File.Exists(signalPath),
+                    $"Peer shard did not reach the real-process event gate '{signalPath}'.");
+            }
+        }
+        finally
+        {
+            watcher.Created -= onSignal;
+            watcher.Changed -= onSignal;
+        }
+    }
+
+    private static async Task<GoalAcceptanceVerifier.CommandResult> RunRealShardProcessAsync(
+        string[] args,
+        string workingDirectory,
+        TimeSpan timeout,
+        IReadOnlyDictionary<string, string> environmentVariables,
+        Action<System.Diagnostics.Process> onStarted,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = args[0],
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in args.Skip(1))
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        foreach (var (name, value) in environmentVariables)
+        {
+            startInfo.Environment[name] = value;
+        }
+
+        using var process = new System.Diagnostics.Process { StartInfo = startInfo };
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        Assert.True(process.Start(), $"Failed to start real shard process '{args[0]}'.");
+        process.StandardInput.Close();
+        onStarted(process);
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout);
+        try
+        {
+            await process.WaitForExitAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None);
+            var timedOutOutput = string.Join(Environment.NewLine, await stdout, await stderr);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            return new GoalAcceptanceVerifier.CommandResult(
+                process.ExitCode,
+                timedOutOutput,
+                TimedOut: true,
+                Timeout: timeout,
+                Elapsed: elapsed.Elapsed);
+        }
+
+        return new GoalAcceptanceVerifier.CommandResult(
+            process.ExitCode,
+            string.Join(Environment.NewLine, await stdout, await stderr),
+            Elapsed: elapsed.Elapsed);
+    }
+
+    private static int StableSlotIndex(string path)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            path,
+            @"slot-(?<slot>\d+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success
+            ? int.Parse(match.Groups["slot"].Value, System.Globalization.CultureInfo.InvariantCulture)
+            : throw new InvalidOperationException($"Expected stable slot path, got '{path}'.");
+    }
+
     private static void ResetPartitionVerdictKeyHooks()
     {
         GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
@@ -3928,7 +4558,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     //     call carries no class filter and is excluded.
     //   * runner=vstest (manifest-loaded checks that omit an explicit runner): `dotnet test <csproj>`
     //     with a raw `--filter`.
-    // Either way there is one matching call per shard, so shard-count assertions (== 17) stay stable.
+    // Either way there is one matching call per shard, so assertions derive counts from the lane schema.
     private static bool IsInfrastructurePartitionTestCall(string[] args) =>
         (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") &&
             (args.Contains("--filter-class") || args.Contains("--filter-not-class"))) ||
@@ -4815,6 +5445,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             criteriaJson);
         return root;
     }
+}
+
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class RealProcessShardAlphaSmokeTests
+{
+    [Xunit.Fact]
+    public Task SynchronizesWithBetaShard() =>
+        GoalAcceptanceVerifierDotnetBuildSlotTests.SynchronizeRealProcessShardSmokeAsync(
+            "MCG_SHARD_SMOKE_ALPHA_SIGNAL",
+            "MCG_SHARD_SMOKE_BETA_SIGNAL");
+}
+
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class RealProcessShardBetaSmokeTests
+{
+    [Xunit.Fact]
+    public Task SynchronizesWithAlphaShard() =>
+        GoalAcceptanceVerifierDotnetBuildSlotTests.SynchronizeRealProcessShardSmokeAsync(
+            "MCG_SHARD_SMOKE_BETA_SIGNAL",
+            "MCG_SHARD_SMOKE_ALPHA_SIGNAL");
 }
 
 internal static class AcceptanceManifestTestDefaults

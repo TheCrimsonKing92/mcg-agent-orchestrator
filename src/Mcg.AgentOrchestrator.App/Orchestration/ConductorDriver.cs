@@ -286,8 +286,10 @@ internal sealed class ConductorDriver
             AcceptanceVerificationResult verification;
             try
             {
+                var gateProgressEventWriter = new ConductEventLogWriter(
+                    Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-                    AppendGateProgressEvent(dir, goal.Id, progress));
+                    AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
                 using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
                     () => IsAcceptanceAttemptCancelled(workspace, goal.Id));
                 verification = acceptanceVerifier.RunAsync(
@@ -1589,15 +1591,18 @@ internal sealed class ConductorDriver
         }
     }
 
-    private static void AppendGateProgressEvent(string executionDirectory, GoalId goalId, AcceptanceGateProgress progress)
+    private static void AppendGateProgressEvent(
+        ConductEventLogWriter writer,
+        GoalId goalId,
+        AcceptanceGateProgress progress)
     {
-        try
+        if (!writer.AppendRequired(
+                "gate-progress",
+                goalId.Value[..8],
+                FormatGateProgressConductEvent(progress)))
         {
-            var path = Path.Combine(executionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
-            new ConductEventLogWriter(path).Append("gate-progress", goalId.Value[..8], FormatGateProgressConductEvent(progress));
-        }
-        catch
-        {
+            throw new IOException(
+                $"Required gate progress event could not be appended for goal {goalId.Value[..8]}.");
         }
     }
 

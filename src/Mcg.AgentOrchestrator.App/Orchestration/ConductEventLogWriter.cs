@@ -9,16 +9,26 @@ internal sealed class ConductEventLogWriter
     internal const long DefaultMaxBytes = 1_048_576;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly object RequiredEventDrainGate = new();
     private readonly string _path;
     private readonly long _maxBytes;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Action? _beforeRequiredEventDrain;
+    private readonly Action? _beforeAppendCommit;
     private readonly object _lock = new();
 
-    public ConductEventLogWriter(string path, long maxBytes = DefaultMaxBytes, Func<DateTimeOffset>? utcNow = null)
+    public ConductEventLogWriter(
+        string path,
+        long maxBytes = DefaultMaxBytes,
+        Func<DateTimeOffset>? utcNow = null,
+        Action? beforeRequiredEventDrain = null,
+        Action? beforeAppendCommit = null)
     {
         _path = path;
         _maxBytes = maxBytes;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _beforeRequiredEventDrain = beforeRequiredEventDrain;
+        _beforeAppendCommit = beforeAppendCommit;
     }
 
     public string CurrentPath => _path;
@@ -28,10 +38,14 @@ internal sealed class ConductEventLogWriter
         lock (_lock)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
-            DrainRequiredEvents();
-            RotateIfNeeded();
+            lock (RequiredEventDrainGate)
+            {
+                DrainRequiredEvents();
+                _beforeAppendCommit?.Invoke();
+                RotateIfNeeded();
 
-            File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
+                File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
+            }
         }
     }
 
@@ -74,13 +88,17 @@ internal sealed class ConductEventLogWriter
 
     private void DrainRequiredEvents()
     {
-        var directory = Path.GetDirectoryName(_path) ?? ".";
-        var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
-        foreach (var pendingPath in Directory.GetFiles(directory, pattern).Order(StringComparer.Ordinal))
+        _beforeRequiredEventDrain?.Invoke();
+        lock (RequiredEventDrainGate)
         {
-            RotateIfNeeded();
-            File.AppendAllText(_path, File.ReadAllText(pendingPath));
-            File.Delete(pendingPath);
+            var directory = Path.GetDirectoryName(_path) ?? ".";
+            var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
+            foreach (var pendingPath in Directory.GetFiles(directory, pattern).Order(StringComparer.Ordinal))
+            {
+                RotateIfNeeded();
+                File.AppendAllText(_path, File.ReadAllText(pendingPath));
+                File.Delete(pendingPath);
+            }
         }
     }
 
