@@ -72,6 +72,13 @@ public sealed class DiscordDecisionApplier
             return new DiscordDecisionApplicationResult(false, claim.Duplicate, claim.ErrorMessage, claim.Action?.Command);
 
         var command = PrepareCommand(claim.Action!.Command, decision.FreeText);
+        if (IsOperatorIntentRecoveryCommand(command))
+        {
+            command +=
+                $" --idempotency-key \"{decision.IdempotencyKey.Replace("\"", "\\\"", StringComparison.Ordinal)}\"" +
+                $" --operator-actor \"{decision.ActorId.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+        }
+
         await _dispatch(command, cancellationToken);
         _acknowledge?.Invoke(decision.InboxItemId);
         if (_postResult is not null)
@@ -100,6 +107,16 @@ public sealed class DiscordDecisionApplier
         }
 
         return $"{command} --text-file {quotedPath}";
+    }
+
+    private static bool IsOperatorIntentRecoveryCommand(string command)
+    {
+        var verb = command.TrimStart().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        return verb is not null &&
+            (verb.Equals(OperatorIntentVerbs.Progress, StringComparison.OrdinalIgnoreCase) ||
+             verb.Equals(OperatorIntentVerbs.Retry, StringComparison.OrdinalIgnoreCase) ||
+             verb.Equals(OperatorIntentVerbs.VerifyManual, StringComparison.OrdinalIgnoreCase));
     }
 }
 

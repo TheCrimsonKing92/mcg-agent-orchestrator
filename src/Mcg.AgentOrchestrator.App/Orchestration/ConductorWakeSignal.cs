@@ -18,6 +18,8 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
     private readonly object _trackedGate = new();
     private HashSet<string> _trackedExitCodePaths = new(StringComparer.OrdinalIgnoreCase);
     private int _signaled;
+    private int _watcherFailed;
+    private int _scanWarningEmitted;
 
     public FileSystemWatcherConductorWakeSignal(string exitDirectory, Action<string>? warn = null)
     {
@@ -27,16 +29,22 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
         try
         {
             Directory.CreateDirectory(_watchDirectory);
-            _watcher = new FileSystemWatcher(_watchDirectory, "*")
+            _watcher = new FileSystemWatcher(_watchDirectory)
             {
                 IncludeSubdirectories = false,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.LastWrite
             };
+            _watcher.Filters.Add("*.exit.txt");
+            _watcher.Filters.Add($"*{SqliteOperatorIntentStore.WakeFileSuffix}");
             _watcher.Created += (_, args) => SignalIfTracked(args.FullPath);
             _watcher.Changed += (_, args) => SignalIfTracked(args.FullPath);
             _watcher.Renamed += (_, args) => SignalIfTracked(args.FullPath);
             _watcher.Error += (_, args) =>
+            {
+                Interlocked.Exchange(ref _watcherFailed, 1);
                 _warn($"[conduct --loop --watch] Warning: dispatch exit-file watcher failed; continuing with timed polling. {args.GetException().Message}");
+                Signal();
+            };
             _watcher.EnableRaisingEvents = true;
         }
         catch (Exception ex)
@@ -77,7 +85,7 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
             return true;
         }
 
-        if (_watcher is null)
+        if (_watcher is null || Volatile.Read(ref _watcherFailed) != 0)
         {
             Thread.Sleep(timeout);
             return HasExistingTrackedExitArtifact();
@@ -124,11 +132,55 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
             paths = _trackedExitCodePaths.ToArray();
         }
 
-        return paths.Any(File.Exists) ||
-            Directory.EnumerateFiles(
-                _watchDirectory,
-                $"*{SqliteOperatorIntentStore.WakeFileSuffix}",
-                SearchOption.TopDirectoryOnly).Any();
+        if (paths.Any(File.Exists))
+        {
+            return true;
+        }
+
+        if (!Directory.Exists(_watchDirectory))
+        {
+            return false;
+        }
+
+        try
+        {
+            var wakePaths = Directory.EnumerateFiles(
+                    _watchDirectory,
+                    $"*{SqliteOperatorIntentStore.WakeFileSuffix}",
+                    SearchOption.TopDirectoryOnly)
+                .ToArray();
+            if (wakePaths.Length == 0)
+            {
+                return false;
+            }
+
+            // Wake files are edge notifications only; the durable intent remains in SQLite.
+            // Consume every observed edge so an out-of-scope or invalid goal cannot hot-spin --watch.
+            foreach (var wakePath in wakePaths)
+            {
+                try
+                {
+                    File.Delete(wakePath);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (Interlocked.Exchange(ref _scanWarningEmitted, 1) == 0)
+            {
+                _warn($"[conduct --loop --watch] Warning: wake-file scan failed; continuing with timed polling. {ex.Message}");
+            }
+
+            return false;
+        }
     }
 
     private void Signal()

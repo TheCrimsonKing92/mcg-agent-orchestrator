@@ -677,7 +677,7 @@ public static partial class DashboardRenderer
                 SqliteOperatorIntentStore.DatabaseFileName);
             intents = !File.Exists(databasePath)
                 ? []
-                : new SqliteOperatorIntentStore(databasePath, options.Workspace.LogDirectory)
+                : new SqliteOperatorIntentStore(databasePath, options.Workspace.LogDirectory, readOnly: true)
                     .ListForGoalAsync(goal.Id.Value, limit: 10)
                     .GetAwaiter()
                     .GetResult();

@@ -148,7 +148,8 @@ internal static class CliPersistentStateRunner
 
         if (IsGoalScopedTaskMutationCommand(args))
         {
-            if (IsInboxBackedGoalScopedTaskMutationCommand(args))
+            if (IsInboxBackedGoalScopedTaskMutationCommand(args) &&
+                ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
             {
                 return SubmitGoalScopedTaskOperatorIntent(
                     args,
@@ -459,7 +460,10 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsInboxBackedGoalScopedTaskMutationCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
-        args[0].ToLowerInvariant() is OperatorIntentVerbs.Retry or OperatorIntentVerbs.VerifyManual;
+        args[0].ToLowerInvariant() is
+            OperatorIntentVerbs.Progress or
+            OperatorIntentVerbs.Retry or
+            OperatorIntentVerbs.VerifyManual;
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
@@ -1188,6 +1192,11 @@ internal static class CliPersistentStateRunner
 
         object payload = preparedCommand.Command switch
         {
+            OperatorIntentVerbs.Progress => new ProgressOperatorIntentPayload(
+                preparedCommand.ProgressStatus
+                    ?? throw new InvalidOperationException("Prepared progress command is missing a status."),
+                preparedCommand.Text
+                    ?? throw new InvalidOperationException("Prepared progress command is missing text.")),
             OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
             OperatorIntentVerbs.VerifyManual => new ManualVerificationOperatorIntentPayload(
                 preparedCommand.ManualVerification
@@ -1203,7 +1212,15 @@ internal static class CliPersistentStateRunner
             : [];
         var channelName = channel is null or NullOperatorChannel
             ? "cli"
-            : channel.GetType().Name;
+            : channel.ChannelType;
+        var actor = channelName.Equals("discord", StringComparison.OrdinalIgnoreCase)
+            ? ResolveFlagValue(args, "--operator-actor") ?? "discord:unknown"
+            : "operator";
+        var authenticationAssurance = channelName.Equals("discord", StringComparison.OrdinalIgnoreCase)
+            ? "discord-operator-allowlist"
+            : channel is null or NullOperatorChannel
+                ? "local-process"
+                : "configured-operator-channel";
         var intent = new OperatorIntentRecord(
             intentId,
             idempotencyKey,
@@ -1212,9 +1229,9 @@ internal static class CliPersistentStateRunner
             task.Id.Value,
             JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
             payloadFiles,
-            Actor: "operator",
+            Actor: actor,
             Channel: channelName,
-            AuthenticationAssurance: channel is null or NullOperatorChannel ? "local-process" : "configured-operator-channel",
+            AuthenticationAssurance: authenticationAssurance,
             CreatedAt: DateTimeOffset.UtcNow);
         var persisted = SqliteOperatorIntentStore
             .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
@@ -1234,7 +1251,8 @@ internal static class CliPersistentStateRunner
         command.RetryPolicy.ThrowIfDisallowed(AutonomyAction.Retry, OperatorIntentVerbs.Retry);
         return new RetryOperatorIntentPayload(
             command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text."),
-            command.RetryRoundKind);
+            command.RetryRoundKind,
+            command.RetryPolicy.Name);
     }
 
     private static void PrintOperatorIntentStatus(

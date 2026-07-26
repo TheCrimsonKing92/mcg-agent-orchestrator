@@ -323,21 +323,52 @@ internal sealed class ConductorBatchLoop
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count}{FormatSweepCacheDetail(sweepResult)}"));
 
             var preWalkClock = Stopwatch.StartNew();
-            var actionableIntentGoalIds = (_operatorIntents?.ListActionableGoalIds() ?? [])
-                .ToHashSet(StringComparer.Ordinal);
+            var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
+            var preWalkIntentLines = new List<string>();
+            var preWalkIntentProcessed = false;
+            if (_operatorIntents is not null)
+            {
+                try
+                {
+                    actionableIntentGoalIds.UnionWith(_operatorIntents.ListActionableGoalIds());
+                }
+                catch (Exception ex)
+                {
+                    EmitProgress(
+                        $"OPERATOR_INTENT result=store-unavailable phase=list reason={Sanitize(ex.Message)}");
+                }
+            }
+
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
+            var scopedGoalsById = scopedGoals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
             var preWalkIntentChangedGoalIds = new HashSet<GoalId>();
-            var preWalkIntentLines = new List<string>();
             if (_operatorIntents is not null)
             {
-                foreach (var scopedGoal in scopedGoals)
+                foreach (var actionableGoalId in actionableIntentGoalIds)
                 {
-                    var intentResult = _operatorIntents.ExecutePending(kernel, scopedGoal);
+                    if (!scopedGoalsById.TryGetValue(actionableGoalId, out var scopedGoal))
+                    {
+                        continue;
+                    }
+
+                    OperatorIntentExecutionResult intentResult;
+                    try
+                    {
+                        intentResult = _operatorIntents.ExecutePending(kernel, scopedGoal);
+                    }
+                    catch (Exception ex)
+                    {
+                        EmitProgress(
+                            $"OPERATOR_INTENT goal={ShortGoalId(scopedGoal.Id.Value)} result=store-unavailable phase=execute reason={Sanitize(ex.Message)}");
+                        continue;
+                    }
+
                     preWalkIntentLines.AddRange(intentResult.ProgressLines);
+                    preWalkIntentProcessed |= intentResult.ProgressLines.Count > 0;
                     if (intentResult.MutatedGoalState)
                     {
                         preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
@@ -366,7 +397,7 @@ internal sealed class ConductorBatchLoop
 
             if (eligible.Length == 0)
             {
-                if (preWalkIntentChangedGoalIds.Count > 0)
+                if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
                 {
                     totalTicks++;
                     var intentTickLines = new List<string>();
@@ -378,7 +409,8 @@ internal sealed class ConductorBatchLoop
                     EmitProgress(
                         $"TICK_END tick={totalTicks} advanced=0 held={preWalkIntentChangedGoalIds.Count} escalated=0 done=0",
                         intentTickLines);
-                    if (persistGoalTick is not null)
+                    var intentStatePersisted = preWalkIntentChangedGoalIds.Count == 0;
+                    if (preWalkIntentChangedGoalIds.Count > 0 && persistGoalTick is not null)
                     {
                         PersistGoalTickOrThrow(
                             persistGoalTick,
@@ -387,10 +419,11 @@ internal sealed class ConductorBatchLoop
                             totalTicks,
                             intentTickLines,
                             busyWriteDelay);
+                        intentStatePersisted = true;
                     }
-                    else
+                    else if (preWalkIntentChangedGoalIds.Count > 0)
                     {
-                        TryPersistTick(
+                        intentStatePersisted = TryPersistTick(
                             persistTick,
                             kernel,
                             totalTicks,
@@ -400,9 +433,9 @@ internal sealed class ConductorBatchLoop
                             busyWriteDelay);
                     }
 
-                    if (persistGoalTick is not null || persistTick is not null)
+                    if (intentStatePersisted && preWalkIntentChangedGoalIds.Count > 0)
                     {
-                        _operatorIntents?.CompletePersisted(preWalkIntentChangedGoalIds);
+                        CompletePersistedOperatorIntents(preWalkIntentChangedGoalIds, intentTickLines);
                     }
 
                     totalHeld += preWalkIntentChangedGoalIds.Count;
@@ -750,15 +783,22 @@ internal sealed class ConductorBatchLoop
                 if (changedGoalIds.Count > 0)
                 {
                     PersistGoalTickOrThrow(persistGoalTick, kernel, changedGoalIds.ToArray(), totalTicks, tickLines, busyWriteDelay);
-                    _operatorIntents?.CompletePersisted(changedGoalIds);
+                    CompletePersistedOperatorIntents(changedGoalIds, tickLines);
                 }
             }
             else
             {
-                TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(changedGoalIds, onlyGoalId), "tick", tickLines, busyWriteDelay);
-                if (persistTick is not null && changedGoalIds.Count > 0)
+                var tickPersisted = TryPersistTick(
+                    persistTick,
+                    kernel,
+                    totalTicks,
+                    ResolveGoalContext(changedGoalIds, onlyGoalId),
+                    "tick",
+                    tickLines,
+                    busyWriteDelay);
+                if (tickPersisted && changedGoalIds.Count > 0)
                 {
-                    _operatorIntents?.CompletePersisted(changedGoalIds);
+                    CompletePersistedOperatorIntents(changedGoalIds, tickLines);
                 }
             }
 
@@ -1027,6 +1067,27 @@ internal sealed class ConductorBatchLoop
             busyWriteDelay: null))
         {
             ThrowCriticalPersistFailure("dispatch-start", ShortGoalId(goalId.Value), taskId);
+        }
+    }
+
+    private void CompletePersistedOperatorIntents(
+        IReadOnlyCollection<GoalId> persistedGoalIds,
+        List<string> tickLines)
+    {
+        if (_operatorIntents is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _operatorIntents.CompletePersisted(persistedGoalIds);
+        }
+        catch (Exception ex)
+        {
+            var line =
+                $"OPERATOR_INTENT goals={ResolveGoalContext(persistedGoalIds, onlyGoalId: null)} result=completion-deferred reason={Sanitize(ex.Message)}";
+            EmitProgress(line, tickLines);
         }
     }
 

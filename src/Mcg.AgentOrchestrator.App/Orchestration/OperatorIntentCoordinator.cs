@@ -37,7 +37,7 @@ internal sealed class OperatorIntentCoordinator
         if (_pendingCompletions.TryGetValue(goal.Id.Value, out var uncommitted) && uncommitted.Count > 0)
         {
             return new OperatorIntentExecutionResult(
-                MutatedGoalState: false,
+                MutatedGoalState: true,
                 [$"OPERATOR_INTENT goal={goal.Id.Value[..8]} result=waiting-for-state-commit count={uncommitted.Count}"]);
         }
 
@@ -133,8 +133,22 @@ internal sealed class OperatorIntentCoordinator
 
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.Progress:
+                var progress = Deserialize<ProgressOperatorIntentPayload>(intent);
+                kernel.ReportTaskProgress(goal.Id, taskId, progress.Status, progress.Message);
+                break;
+
             case OperatorIntentVerbs.Retry:
                 var retry = Deserialize<RetryOperatorIntentPayload>(intent);
+                var retryPolicy = AutonomyPolicy.Parse(retry.AutonomyPolicy);
+                retryPolicy.ThrowIfDisallowed(AutonomyAction.Retry, OperatorIntentVerbs.Retry);
+                AutonomyPolicyEvidence.Record(
+                    kernel,
+                    goal,
+                    retryPolicy,
+                    AutonomyAction.Retry,
+                    OperatorIntentVerbs.Retry,
+                    allowed: true);
                 kernel.RetryTask(
                     goal.Id,
                     taskId,

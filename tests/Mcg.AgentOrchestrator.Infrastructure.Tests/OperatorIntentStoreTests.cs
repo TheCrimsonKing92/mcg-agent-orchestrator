@@ -51,6 +51,93 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "OperatorIntentStore_concurrent_tick_drains_and_submissions_leave_every_intent_terminal")]
+    public async Task OperatorIntentStoreConcurrentTickDrainsAndSubmissionsLeaveEveryIntentTerminal()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var kernel = new AgentOrchestratorKernel();
+            var goals = Enumerable.Range(0, 16)
+                .Select(index =>
+                {
+                    var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                        kernel,
+                        AgentCatalog.Default().Agents,
+                        $"Concurrent intent goal {index}");
+                    var task = goal.Tasks.Single();
+                    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+                    return (Goal: goal, Task: task, Index: index);
+                })
+                .ToArray();
+            var coordinator = new OperatorIntentCoordinator(store);
+            using var start = new ManualResetEventSlim(false);
+            using var allSubmitted = new ManualResetEventSlim(false);
+            var failures = new ConcurrentQueue<Exception>();
+
+            var drain = Task.Run(() =>
+            {
+                start.Wait();
+                while (!allSubmitted.IsSet || coordinator.ListActionableGoalIds().Count > 0)
+                {
+                    foreach (var goalId in coordinator.ListActionableGoalIds())
+                    {
+                        try
+                        {
+                            var goal = kernel.Goals.Single(candidate => candidate.Id.Value == goalId);
+                            var result = coordinator.ExecutePending(kernel, goal);
+                            if (result.MutatedGoalState)
+                            {
+                                coordinator.CompletePersisted([goal.Id]);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            failures.Enqueue(ex);
+                        }
+                    }
+
+                    Thread.Yield();
+                }
+            });
+            var submissions = goals.Select(item => Task.Run(async () =>
+            {
+                start.Wait();
+                try
+                {
+                    await store.EnqueueAsync(CreateRetryIntent(
+                        item.Goal.Id.Value,
+                        item.Task.Id.Value,
+                        $"tick-intent-{item.Index}",
+                        $"tick-key-{item.Index}"));
+                }
+                catch (Exception ex)
+                {
+                    failures.Enqueue(ex);
+                }
+            })).ToArray();
+
+            start.Set();
+            await Task.WhenAll(submissions);
+            allSubmitted.Set();
+            await drain;
+
+            Xunit.Assert.Empty(failures);
+            foreach (var item in goals)
+            {
+                var intent = Xunit.Assert.Single(await store.ListForGoalAsync(item.Goal.Id.Value));
+                Xunit.Assert.Equal(OperatorIntentStatus.Applied, intent.Status);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OperatorIntentStore_idempotency_key_returns_one_record_and_rejects_payload_collision")]
     public async Task OperatorIntentStoreIdempotencyKeyReturnsOneRecordAndRejectsPayloadCollision()
     {
@@ -176,6 +263,63 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.Equal("dashboard", outcome.Channel);
             Xunit.Assert.Equal("dashboard-operator-control", outcome.AuthenticationAssurance);
             Xunit.Assert.Equal(Path.Combine(root, "evidence.md"), Xunit.Assert.Single(outcome.PayloadFileReferences));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_rejected_intent_has_pollable_outcome")]
+    public async Task OperatorIntentCoordinatorRejectedIntentHasPollableOutcome()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Reject invalid operator intent");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent(
+                goal.Id.Value,
+                TaskId.New().Value,
+                "rejected-intent",
+                "rejected-key");
+            await store.EnqueueAsync(intent);
+
+            var result = new OperatorIntentCoordinator(store).ExecutePending(kernel, goal);
+            var outcome = await store.GetAsync(intent.Id);
+
+            Xunit.Assert.False(result.MutatedGoalState);
+            Xunit.Assert.Contains(result.ProgressLines, line =>
+                line.Contains("result=rejected", StringComparison.Ordinal));
+            Xunit.Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+            Xunit.Assert.Contains("was not found", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorIntentStore_read_only_open_does_not_create_schema")]
+    public void OperatorIntentStoreReadOnlyOpenDoesNotCreateSchema()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            _ = SqliteOperatorIntentStore.OpenExisting(
+                orchestratorDirectory,
+                Path.Combine(orchestratorDirectory, "logs"));
+
+            Xunit.Assert.False(File.Exists(Path.Combine(
+                orchestratorDirectory,
+                SqliteOperatorIntentStore.DatabaseFileName)));
         }
         finally
         {

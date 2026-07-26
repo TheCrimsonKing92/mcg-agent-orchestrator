@@ -14,13 +14,19 @@ public enum OperatorIntentStatus
 
 public static class OperatorIntentVerbs
 {
+    public const string Progress = "progress";
     public const string Retry = "retry";
     public const string VerifyManual = "verify-manual";
 }
 
+public sealed record ProgressOperatorIntentPayload(
+    WorkTaskStatus Status,
+    string Message);
+
 public sealed record RetryOperatorIntentPayload(
     string Message,
-    RetryRoundKind? RetryRoundKind);
+    RetryRoundKind? RetryRoundKind,
+    string AutonomyPolicy = "supervised-auto");
 
 public sealed record ManualVerificationOperatorIntentPayload(
     TaskVerificationRecord Verification);
@@ -85,18 +91,27 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _dbPath;
     private readonly string _wakeDirectory;
+    private readonly bool _readOnly;
 
-    public SqliteOperatorIntentStore(string dbPath, string wakeDirectory)
+    public SqliteOperatorIntentStore(string dbPath, string wakeDirectory, bool readOnly = false)
     {
         _dbPath = Path.GetFullPath(dbPath);
         _wakeDirectory = Path.GetFullPath(wakeDirectory);
-        EnsureSchema();
+        _readOnly = readOnly;
+        if (!readOnly)
+        {
+            EnsureSchema();
+        }
     }
 
     public static SqliteOperatorIntentStore ForDirectories(string orchestratorDirectory, string logDirectory) =>
         new(Path.Combine(orchestratorDirectory, DatabaseFileName), logDirectory);
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+    public static SqliteOperatorIntentStore OpenExisting(string orchestratorDirectory, string logDirectory) =>
+        new(Path.Combine(orchestratorDirectory, DatabaseFileName), logDirectory, readOnly: true);
+
+    private string ConnectionString =>
+        $"Data Source={_dbPath};Mode={(_readOnly ? "ReadOnly" : "ReadWriteCreate")};Pooling=False;";
 
     public async Task<OperatorIntentRecord> EnqueueAsync(
         OperatorIntentRecord intent,

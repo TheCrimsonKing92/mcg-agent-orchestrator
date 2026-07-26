@@ -130,6 +130,13 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
+        if (!File.Exists(Path.Combine(
+                services.Workspace.OrchestratorDirectory,
+                SqliteOperatorIntentStore.DatabaseFileName)))
+        {
+            return Json(Array.Empty<OperatorIntentDto>());
+        }
+
         var intents = await OperatorIntentStore(services).ListForGoalAsync(goal.Id.Value, limit: 50);
         return Json(intents.Select(DashboardResponseMapper.ToOperatorIntentDto).ToList());
     }
@@ -144,7 +151,7 @@ internal static partial class DashboardEndpoints
     }
 
     private static SqliteOperatorIntentStore OperatorIntentStore(DashboardEndpointServices services) =>
-        SqliteOperatorIntentStore.ForDirectories(
+        SqliteOperatorIntentStore.OpenExisting(
             services.Workspace.OrchestratorDirectory,
             services.Workspace.LogDirectory);
 

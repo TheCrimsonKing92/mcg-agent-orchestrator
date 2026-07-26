@@ -1266,11 +1266,13 @@ public sealed class DashboardRenderingTests
 {
     var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
     var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
-    var parsed = DashboardRequestParser.ParseRetrySubmission("{\"message\":\"Fix failed verification\"}");
+    var parsed = DashboardRequestParser.ParseRetrySubmission(
+        "{\"message\":\"Fix failed verification\",\"idempotencyKey\":\"dashboard-submit-1\"}");
 
     Assert.Contains("Retry note cannot be empty", empty.Message, StringComparison.Ordinal);
     Assert.Contains("non-empty 'message'", json.Message, StringComparison.Ordinal);
     Assert.Equal("Fix failed verification", parsed.Message);
+    Assert.Equal("dashboard-submit-1", parsed.IdempotencyKey);
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_limit_review_confirmation_note")]
     public void DashboardRequestParserRequiresLimitReviewConfirmationNote()
@@ -1768,6 +1770,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/2/refresh", goalHtml, StringComparison.Ordinal);
     Assert.Contains("Advanced task controls", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/retry", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("name=\"idempotencyKey\" value=\"dashboard-retry-", goalHtml, StringComparison.Ordinal);
     Assert.Contains("Retry note", goalHtml, StringComparison.Ordinal);
     Assert.Contains("What changed or what should be tried next?", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/profile-dispatch", goalHtml, StringComparison.Ordinal);
@@ -1783,6 +1786,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains("AgentCatalog|WorkerProfile", goalHtml, StringComparison.Ordinal);
     Assert.Contains("PowerShell: quote filters that contain |", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/verify-manual", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("name=\"idempotencyKey\" value=\"dashboard-verify-manual-", goalHtml, StringComparison.Ordinal);
     Assert.Contains("<option value=\"false\">Failed</option>", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/2/logs", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/human-input-worklist?goal={goalPrefix}", goalHtml, StringComparison.Ordinal);

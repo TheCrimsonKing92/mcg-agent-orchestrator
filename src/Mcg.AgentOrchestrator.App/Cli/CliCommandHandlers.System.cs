@@ -828,8 +828,20 @@ internal static partial class CliCommandHandlers
                 context.Providers,
                 ref workerProfiles,
                 ref currentGoal,
-                NullOperatorChannel.Instance);
+                DiscordDecisionOperatorChannel.Instance);
         }, cancellationToken);
+    }
+
+    private sealed class DiscordDecisionOperatorChannel : IOperatorChannel
+    {
+        public static readonly DiscordDecisionOperatorChannel Instance = new();
+
+        public string ChannelType => "discord";
+
+        public Task SendEscalationAsync(
+            OperatorEscalation escalation,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     internal static async Task RunDiscordRefreshWithRetryAsync(

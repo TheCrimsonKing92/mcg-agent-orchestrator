@@ -77,7 +77,8 @@ public static async Task<object?> ApplyTaskActionAsync(
                 goal,
                 task,
                 OperatorIntentVerbs.VerifyManual,
-                new ManualVerificationOperatorIntentPayload(manualVerification));
+                new ManualVerificationOperatorIntentPayload(manualVerification),
+                manual.IdempotencyKey);
 
         case "complete-verify":
             var complete = DashboardRequestParser.ParseManualVerifySubmission(body);
@@ -104,7 +105,8 @@ public static async Task<object?> ApplyTaskActionAsync(
                 OperatorIntentVerbs.Retry,
                 new RetryOperatorIntentPayload(
                     retry.Message,
-                    retry.Mechanical ? RetryRoundKind.Mechanical : null));
+                    retry.Mechanical ? RetryRoundKind.Mechanical : null),
+                retry.IdempotencyKey);
 
         case "verification-plan":
             var verificationPlan = DashboardRequestParser.ParseVerificationPlanSubmission(body);
@@ -126,12 +128,13 @@ private static async Task<OperatorIntentDto> EnqueueOperatorIntentAsync(
     Goal goal,
     TaskSpec task,
     string verb,
-    object payload)
+    object payload,
+    string? idempotencyKey)
 {
     var intentId = Guid.NewGuid().ToString("N");
     var intent = new OperatorIntentRecord(
         intentId,
-        intentId,
+        string.IsNullOrWhiteSpace(idempotencyKey) ? intentId : idempotencyKey,
         verb,
         goal.Id.Value,
         task.Id.Value,

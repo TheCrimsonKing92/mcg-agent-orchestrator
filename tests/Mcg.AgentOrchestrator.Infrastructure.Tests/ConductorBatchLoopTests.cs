@@ -4793,6 +4793,213 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_does_not_publish_applied_intent_when_tick_persist_fails")]
+    public async Task BatchLoopDoesNotPublishAppliedIntentWhenTickPersistFails()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-persist-failure");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Keep claimed intent after failed persist");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "persist-failure-intent",
+                "persist-failure-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("retry after persistence recovers", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+
+            _ = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                persistTick: _ => throw SqliteBusy(),
+                busyWriteDelay: _ => { });
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Claimed, outcome!.Status);
+            Assert.Null(outcome.CompletedAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_surfaces_rejected_intent_when_no_goal_is_eligible")]
+    public async Task BatchLoopSurfacesRejectedIntentWhenNoGoalIsEligible()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-rejected");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Surface rejected parked-goal intent");
+            kernel.ParkGoal(goal.Id, "operator parked");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "rejected-loop-intent",
+                "rejected-loop-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                TaskId.New().Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("invalid task", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var ticks = new List<BatchTickSummary>();
+
+            _ = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: ticks.Add,
+                persistGoalTick: (_, _) => { });
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+            Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
+                line.Contains("result=rejected", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_fault_isolates_unavailable_operator_intent_store")]
+    public void BatchLoopFaultIsolatesUnavailableOperatorIntentStore()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-unavailable");
+        try
+        {
+            var databasePath = Path.Combine(root, "operator-intents.db");
+            File.WriteAllText(databasePath, "not a sqlite database");
+            var (kernel, _) = SimpleGoal("Advance despite unavailable intent inbox");
+            var workspaceCreates = 0;
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(
+                    new SqliteOperatorIntentStore(
+                        databasePath,
+                        Path.Combine(root, "logs"),
+                        readOnly: true))).Run(
+                kernel,
+                MakeDriver(createWorkspace: _ =>
+                {
+                    workspaceCreates++;
+                    return root;
+                }),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Advanced);
+            Assert.Equal(1, workspaceCreates);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_running_recovery_sequence_applies_retry_progress_and_manual_verification")]
+    public async Task BatchLoopRunningRecoverySequenceAppliesRetryProgressAndManualVerification()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-recovery-sequence");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Apply running-loop recovery sequence");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var coordinator = new OperatorIntentCoordinator(store);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+            async Task SubmitAndTick(string id, string verb, object payload)
+            {
+                await store.EnqueueAsync(new OperatorIntentRecord(
+                    id,
+                    $"{id}-key",
+                    verb,
+                    goal.Id.Value,
+                    task.Id.Value,
+                    JsonSerializer.Serialize(
+                        payload,
+                        payload.GetType(),
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                    [],
+                    "operator",
+                    "cli",
+                    "local-process",
+                    DateTimeOffset.UtcNow));
+                _ = new ConductorBatchLoop(operatorIntents: coordinator).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    persistGoalTick: (_, _) => { });
+                Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(id))!.Status);
+            }
+
+            await SubmitAndTick(
+                "sequence-retry",
+                OperatorIntentVerbs.Retry,
+                new RetryOperatorIntentPayload("mechanical recovery", RetryRoundKind.Mechanical));
+            await SubmitAndTick(
+                "sequence-progress",
+                OperatorIntentVerbs.Progress,
+                new ProgressOperatorIntentPayload(WorkTaskStatus.Completed, "existing work still stands"));
+            var verification = new TaskVerificationRecord(
+                "manual-verification passed",
+                root,
+                0,
+                "operator checked existing result",
+                string.Empty,
+                DateTimeOffset.UtcNow);
+            await SubmitAndTick(
+                "sequence-verify",
+                OperatorIntentVerbs.VerifyManual,
+                new ManualVerificationOperatorIntentPayload(verification));
+
+            Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, task.Id).Status);
+            Assert.Equal(verification, kernel.GetTask(goal.Id, task.Id).LastVerification);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_recovers_claimed_intent_without_duplicate_state_mutation")]
     public async Task OperatorIntentCoordinatorRecoversClaimedIntentWithoutDuplicateStateMutation()
     {

@@ -208,7 +208,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     [Xunit.Theory(DisplayName = "CliPersistentStateRunner_routes_first_recovery_verbs_to_operator_intent_inbox")]
     [Xunit.InlineData(new[] { "retry", "1", "again" }, true)]
     [Xunit.InlineData(new[] { "verify-manual", "1", "passed", "checked" }, true)]
-    [Xunit.InlineData(new[] { "progress", "1", "running", "started" }, false)]
+    [Xunit.InlineData(new[] { "progress", "1", "running", "started" }, true)]
     [Xunit.InlineData(new[] { "verification-plan", "1", "dotnet test" }, false)]
     public void PersistentRunnerRoutesFirstRecoveryVerbsToOperatorIntentInbox(string[] args, bool expected)
     {
@@ -230,6 +230,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
+        using var loopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
 
         var output = CaptureConsole(() =>
         {
