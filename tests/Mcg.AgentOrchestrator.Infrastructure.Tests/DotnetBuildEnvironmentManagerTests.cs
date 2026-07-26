@@ -1466,8 +1466,112 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
         Assert.Contains("LEASE_RECLAIM", output);
         Assert.Contains("reclaimedPid=999999", output);
+        Assert.Contains("decision=preserved", output);
+        Assert.Contains("reason=artifacts-empty", output);
         Assert.Contains("LEASE_ACQUIRE", output);
         Assert.Contains("LEASE_RELEASE", output);
+        Assert.True(File.Exists(LeaseJournalPath(slot0)));
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_reclaim_preserves_intact_incremental_artifacts")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseReclaimPreservesIntactIncrementalArtifacts()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0))
+        {
+        }
+
+        var cachedDll = Path.Combine(slot0.ArtifactsPath, "bin", "Sample", "debug_net10.0", "Sample.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(cachedDll)!);
+        File.WriteAllText(cachedDll, "intact incremental output");
+        File.SetLastWriteTimeUtc(cachedDll, DateTime.UtcNow.AddMinutes(-5));
+        var cachedWriteTime = File.GetLastWriteTimeUtc(cachedDll);
+        File.WriteAllText(slot0.ExecutionLockPath, "999999");
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromSeconds(1));
+        });
+
+        Assert.True(File.Exists(cachedDll));
+        Assert.Equal("intact incremental output", File.ReadAllText(cachedDll));
+        Assert.Equal(cachedWriteTime, File.GetLastWriteTimeUtc(cachedDll));
+        Assert.Contains("decision=preserved", output);
+        Assert.Contains("reason=integrity-ok", output);
+        using var journal = ReadLastLeaseJournalEntry(slot0);
+        Assert.Equal("preserved", journal.RootElement.GetProperty("decision").GetString());
+        Assert.Equal("integrity-ok", journal.RootElement.GetProperty("reason").GetString());
+    }
+
+    [Xunit.Theory(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_reclaim_wipes_torn_artifacts")]
+    [Xunit.InlineData("missing-owner-marker")]
+    [Xunit.InlineData("zero-length-dll")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseReclaimWipesTornArtifacts(string tornWrite)
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0))
+        {
+        }
+
+        var sentinel = Path.Combine(slot0.ArtifactsPath, "cache-sentinel.txt");
+        File.WriteAllText(sentinel, "must be cleared");
+        if (tornWrite == "missing-owner-marker")
+        {
+            File.Delete(Path.Combine(slot0.ArtifactsPath, ".mcg-artifacts-owner.json"));
+        }
+        else
+        {
+            var tornDll = Path.Combine(slot0.ArtifactsPath, "bin", "Sample", "debug_net10.0", "Sample.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(tornDll)!);
+            File.WriteAllBytes(tornDll, []);
+        }
+
+        File.WriteAllText(slot0.ExecutionLockPath, "999999");
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromSeconds(1));
+        });
+
+        Assert.False(File.Exists(sentinel));
+        Assert.Contains("decision=wiped", output);
+        Assert.Contains($"reason={tornWrite}", output);
+        using var journal = ReadLastLeaseJournalEntry(slot0);
+        Assert.Equal("wiped", journal.RootElement.GetProperty("decision").GetString());
+        Assert.Equal(tornWrite, journal.RootElement.GetProperty("reason").GetString());
+        Assert.Contains(
+            tornWrite == "missing-owner-marker" ? ".mcg-artifacts-owner.json" : "Sample.dll",
+            journal.RootElement.GetProperty("triggerPath").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_force_clean_escape_hatch_wipes_intact_artifacts")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseForceCleanEscapeHatchWipesIntactArtifacts()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var forceClean = EnvVarScope.ForVariable(
+            DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable,
+            "1");
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0))
+        {
+        }
+
+        var cachedDll = Path.Combine(slot0.ArtifactsPath, "bin", "Sample.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(cachedDll)!);
+        File.WriteAllText(cachedDll, "intact output");
+        File.WriteAllText(slot0.ExecutionLockPath, "999999");
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.FromSeconds(1));
+        });
+
+        Assert.False(File.Exists(cachedDll));
+        Assert.Contains("decision=wiped", output);
+        Assert.Contains("reason=operator-forced", output);
+        Assert.Contains($"env:{DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable}", output);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_stable_slot_acquirers_get_different_slots")]
@@ -2420,6 +2524,16 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
 
         return $"slot-{Math.Abs(hash % DotnetBuildEnvironmentManager.StableSlotCount)}";
+    }
+
+    private static string LeaseJournalPath(DotnetBuildEnvironment environment) =>
+        Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, "lease.journal.jsonl");
+
+    private static JsonDocument ReadLastLeaseJournalEntry(DotnetBuildEnvironment environment)
+    {
+        var lines = File.ReadAllLines(LeaseJournalPath(environment));
+        Assert.NotEmpty(lines);
+        return JsonDocument.Parse(lines[^1]);
     }
 
     private static (string FixtureRoot, string LockedPath) CreateLandingFixtureLockPath()
