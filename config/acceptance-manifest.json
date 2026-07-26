@@ -2,10 +2,10 @@
   "version": 1,
   "engine": {
     "slotCount": 4,
-    "maxConcurrentShards": 1,
+    "maxConcurrentShards": 2,
     "enforceStructuralCoverage": true,
     "timeouts": {
-      "defaultMinutes": 25,
+      "defaultMinutes": 40,
       "buildServerShutdownMinutes": 5,
       "discoveryMinutes": 10
     },
@@ -26,9 +26,10 @@
       { "name": "Conductor batch loop", "filter": "FullyQualifiedName~ConductorBatchLoopTests" },
       { "name": "Conductor driver", "filter": "FullyQualifiedName~ConductorDriverTests" },
       { "name": "Conduct watch sweep scoping", "filter": "FullyQualifiedName~ConductWatchSweepScopingTests" },
+      { "name": "Chaos gate", "filter": "FullyQualifiedName~ChaosGate&Category!=HostIntegration" },
       {
         "name": "Remainder",
-        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration"
+        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~WorkerDispatchTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GoalWorktreeTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~ChaosGate&Category!=HostIntegration"
       }
     ],
     "mtpInvocations": [
@@ -47,7 +48,9 @@
           "--report-trx-filename",
           "{trxFileName}",
           "--long-running",
-          "120"
+          "120",
+          "--minimum-expected-tests",
+          "1"
         ]
       },
       {
@@ -65,7 +68,9 @@
           "--report-trx-filename",
           "{trxFileName}",
           "--long-running",
-          "120"
+          "120",
+          "--minimum-expected-tests",
+          "1"
         ]
       }
     ]

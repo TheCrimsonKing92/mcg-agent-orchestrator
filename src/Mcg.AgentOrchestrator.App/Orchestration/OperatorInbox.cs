@@ -75,10 +75,24 @@ public sealed record OperatorInboxItem(
 
 internal static class OperatorInbox
 {
+    internal enum LandingEscalationResolution
+    {
+        Resolved,
+        AlreadyResolved,
+        Superseded,
+        Missing
+    }
+
+    internal static Action? BeforeLandingEscalationResolution { get; set; }
+    internal static Action? BeforeLandingEscalationResolutionSave { get; set; }
+
     private const string StoreFileName = "operator-inbox-acks.json";
     private const string LandingEscalationFileName = "landing-escalations.json";
+    private const string LandingEscalationLockFileName = "landing-escalations.lock";
     private const string OwnershipHoldFileName = "ownership-holds.json";
     private const string HoldFailureFileName = "ownership-hold-failures.json";
+    private const int MaxLandingEscalationLockAttempts = 100;
+    private static readonly TimeSpan LandingEscalationLockBackoff = TimeSpan.FromMilliseconds(50);
     internal const int MaxHoldWriteRetries = 5;
     private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
@@ -462,11 +476,33 @@ internal static class OperatorInbox
         IOperatorChannel? channel = null,
         ICollaborationItemStore? collaborationStore = null)
     {
-        var existing = LoadLandingEscalations(workspace)
-            .Where(e => !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        existing.Add(new LandingEscalationRecord(goal.Id.Value, reason, integrationBranch, DateTimeOffset.UtcNow));
-        SaveLandingEscalations(workspace, existing);
+        using (AcquireLandingEscalationLock(workspace))
+        {
+            var existing = LoadLandingEscalationsUnsafe(workspace).ToList();
+            var acceptanceFailureOccurredAt = goal.LatestAcceptanceFailure?.OccurredAt;
+            var staleAcceptanceEscalation = acceptanceFailureOccurredAt is not null &&
+                existing.Any(item =>
+                    item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                    item.ResolvedAtUtc is not null &&
+                    item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt);
+            if (staleAcceptanceEscalation)
+            {
+                return;
+            }
+
+            existing = existing
+                .Where(e =>
+                    !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
+                    e.ResolvedAtUtc is not null)
+                .ToList();
+            existing.Add(new LandingEscalationRecord(
+                goal.Id.Value,
+                reason,
+                integrationBranch,
+                DateTimeOffset.UtcNow,
+                AcceptanceFailureOccurredAt: acceptanceFailureOccurredAt));
+            SaveLandingEscalationsUnsafe(workspace, existing);
+        }
 
         var goalPrefix = goal.Id.Value[..8];
         var sourceKey = $"landing-escalation:{goal.Id.Value}:{reason}";
@@ -518,6 +554,119 @@ internal static class OperatorInbox
         {
             // Best-effort: inbox JSON write already succeeded.
         }
+    }
+
+    public static bool ResolveLandingEscalation(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        string operatorReason,
+        DateTimeOffset acceptanceFailureOccurredAt,
+        DateTimeOffset? resolvedAtUtc = null) =>
+        ResolveLandingEscalationOccurrence(
+            workspace,
+            goal,
+            operatorReason,
+            acceptanceFailureOccurredAt,
+            resolvedAtUtc) is LandingEscalationResolution.Resolved or
+            LandingEscalationResolution.AlreadyResolved;
+
+    internal static LandingEscalationResolution ResolveLandingEscalationOccurrence(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        string operatorReason,
+        DateTimeOffset acceptanceFailureOccurredAt,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        BeforeLandingEscalationResolution?.Invoke();
+        using (AcquireLandingEscalationLock(workspace))
+        {
+            var changed = false;
+            var alreadyResolved = false;
+            var resolvedAt = resolvedAtUtc ?? DateTimeOffset.UtcNow;
+            var items = LoadLandingEscalationsUnsafe(workspace)
+                .Select(item =>
+                {
+                    if (!item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
+                        (item.AcceptanceFailureOccurredAt is not null &&
+                         item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt))
+                    {
+                        return item;
+                    }
+
+                    if (item.ResolvedAtUtc is not null)
+                    {
+                        alreadyResolved |= item.ResolvedBy?.Equals(
+                            "acceptance-retry",
+                            StringComparison.OrdinalIgnoreCase) is true;
+                        return item;
+                    }
+
+                    changed = true;
+                    return item with
+                    {
+                        ResolvedAtUtc = resolvedAt,
+                        ResolvedBy = "acceptance-retry",
+                        ResolutionReason = operatorReason,
+                        AcceptanceFailureOccurredAt = acceptanceFailureOccurredAt
+                    };
+                })
+                .ToArray();
+            if (changed)
+            {
+                BeforeLandingEscalationResolutionSave?.Invoke();
+                SaveLandingEscalationsUnsafe(workspace, items);
+                return LandingEscalationResolution.Resolved;
+            }
+
+            if (alreadyResolved)
+            {
+                return LandingEscalationResolution.AlreadyResolved;
+            }
+
+            return items.Any(item =>
+                    item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                    item.AcceptanceFailureOccurredAt > acceptanceFailureOccurredAt)
+                ? LandingEscalationResolution.Superseded
+                : LandingEscalationResolution.Missing;
+        }
+    }
+
+    public static bool HasUnresolvedLandingEscalation(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        DateTimeOffset acceptanceFailureOccurredAt)
+    {
+        using var escalationLock = AcquireLandingEscalationLock(workspace);
+        var items = LoadLandingEscalationsUnsafe(workspace).ToArray();
+        if (items.Any(item =>
+            item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+            item.ResolvedAtUtc is null &&
+            item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt))
+        {
+            return true;
+        }
+
+        var legacyIndexes = items
+            .Select((item, index) => (item, index))
+            .Where(candidate =>
+                candidate.item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                candidate.item.ResolvedAtUtc is null &&
+                candidate.item.AcceptanceFailureOccurredAt is null)
+            .Select(candidate => candidate.index)
+            .ToArray();
+        if (legacyIndexes.Length == 0)
+        {
+            return false;
+        }
+
+        if (legacyIndexes.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Landing escalation store contains {legacyIndexes.Length} unresolved legacy entries for goal " +
+                $"'{goal.Id.Value[..8]}'; repair the duplicate records before acceptance-retry.");
+        }
+
+        return true;
     }
 
     public static IReadOnlyList<OperatorInboxItem> RecordOwnershipHolds(
@@ -651,7 +800,8 @@ internal static class OperatorInbox
     {
         var escalations = LoadLandingEscalations(workspace);
         foreach (var escalation in escalations.Where(e =>
-            e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase)))
+            e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+            e.ResolvedAtUtc is null))
         {
             Add(items, BuildItem(
                 goal,
@@ -702,6 +852,12 @@ internal static class OperatorInbox
 
     private static IReadOnlyList<LandingEscalationRecord> LoadLandingEscalations(OrchestratorWorkspace workspace)
     {
+        using var escalationLock = AcquireLandingEscalationLock(workspace);
+        return LoadLandingEscalationsUnsafe(workspace);
+    }
+
+    private static IReadOnlyList<LandingEscalationRecord> LoadLandingEscalationsUnsafe(OrchestratorWorkspace workspace)
+    {
         var path = Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName);
         if (!File.Exists(path))
         {
@@ -714,16 +870,46 @@ internal static class OperatorInbox
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            return [];
+            throw new InvalidOperationException(
+                $"Could not read landing escalation store '{path}'. Repair or restore the store before continuing.",
+                ex);
         }
     }
 
-    private static void SaveLandingEscalations(OrchestratorWorkspace workspace, IReadOnlyList<LandingEscalationRecord> items)
+    private static void SaveLandingEscalationsUnsafe(OrchestratorWorkspace workspace, IReadOnlyList<LandingEscalationRecord> items)
     {
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
-        File.WriteAllText(
-            Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName),
-            JsonSerializer.Serialize(new LandingEscalationStore(items), JsonOptions));
+        var path = Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName);
+        var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(new LandingEscalationStore(items), JsonOptions));
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static FileStream AcquireLandingEscalationLock(OrchestratorWorkspace workspace)
+    {
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        var path = Path.Combine(workspace.OrchestratorDirectory, LandingEscalationLockFileName);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (attempt < MaxLandingEscalationLockAttempts)
+            {
+                Thread.Sleep(LandingEscalationLockBackoff);
+            }
+        }
     }
 
     private static OperatorInboxItem BuildOwnershipHoldItem(
@@ -1145,7 +1331,11 @@ internal static class OperatorInbox
         string GoalId,
         string Reason,
         string IntegrationBranch,
-        DateTimeOffset EscalatedAt);
+        DateTimeOffset EscalatedAt,
+        DateTimeOffset? ResolvedAtUtc = null,
+        string? ResolvedBy = null,
+        string? ResolutionReason = null,
+        DateTimeOffset? AcceptanceFailureOccurredAt = null);
 
     private sealed record LandingEscalationStore(IReadOnlyList<LandingEscalationRecord> Items);
 

@@ -21,7 +21,8 @@ internal sealed class CliExecutionContext(
     Action? releaseConductLoopLease = null,
     Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
-    Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
+    Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
+    Action<OrchestratorStateOutboxMessage>? registerStateOutboxMessage = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -42,6 +43,19 @@ public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persi
 
 public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
+
+public void CommitWithState(
+    OrchestratorStateOutboxMessage message,
+    Action applyCommittedSideEffect)
+{
+    if (registerStateOutboxMessage is null)
+    {
+        applyCommittedSideEffect();
+        return;
+    }
+
+    registerStateOutboxMessage(message);
+}
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 

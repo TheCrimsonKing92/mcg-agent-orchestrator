@@ -71,7 +71,6 @@ public static class ReviewFindingConvergence
 
         var nextById = nextRound.Findings.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
         var merged = new List<ReviewFinding>(Math.Max(previous.Count, nextRound.Findings.Count));
-        var regressionReopenCount = 0;
         foreach (var prior in previous)
         {
             if (!nextById.Remove(prior.StableId, out var submitted))
@@ -101,8 +100,6 @@ public static class ReviewFindingConvergence
                         CountOpen(nextRound.Findings),
                         $"Resolved finding '{prior.StableId}' was re-opened without its structural anchor being touched.");
                 }
-
-                regressionReopenCount++;
             }
 
             merged.Add(anchorMoved
@@ -125,17 +122,13 @@ public static class ReviewFindingConvergence
             merged.Add(newFinding);
         }
 
-        var previousOpenCount = CountOpen(previous);
-        var nextOpenCount = CountOpen(merged);
-        if (previous.Count > 0 && nextOpenCount > previousOpenCount + regressionReopenCount)
-        {
-            throw new ReviewFindingConvergenceException(
-                MonotonicityViolationCode,
-                previousOpenCount,
-                nextOpenCount,
-                $"Review finding convergence violated: open findings increased from {previousOpenCount} to {nextOpenCount} without {nextOpenCount - previousOpenCount} exact-anchor regression reopen(s).");
-        }
-
+        // Genuinely NEW stable_ids at fresh anchors may grow the open set: a reviewer discovering a real
+        // defect late is doing its job, and rejecting the growth traps it — the structured report would
+        // fail an open-set-increase check, a prose-only needs-work fails the no-open-findings rule, and
+        // pass would be dishonest. (That trap cost four review rounds on 2026-07-25 before the increase
+        // check was removed.) Re-litigation abuse stays blocked by the remaining guards: a still-open id
+        // cannot move anchors, a resolved id cannot reopen without its anchor being touched, and a retired
+        // anchor cannot be recycled under a new id.
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();

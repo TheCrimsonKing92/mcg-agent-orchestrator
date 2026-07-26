@@ -12,6 +12,7 @@ internal static class CliCommandHelp
     public const string ProgressUsage = "Usage: progress <task-number> <status> <message> | progress <task-number> <status> --text-file <path>";
     public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
+    public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> | answer <request-id> --text-file <path>";
     public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
@@ -112,6 +113,11 @@ internal static class CliCommandHelp
         RecoverUsage,
         "Recover stuck goal/task state with an operator note.",
         ["--text-file", "--autonomy", "--autonomy-policy", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry AcceptanceRetry = new(
+        AcceptanceRetryUsage,
+        "Re-run an environmentally failed acceptance gate without retrying worker tasks.",
+        ["--confirm-acceptance-retry", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Answer = new(
         AnswerUsage,
@@ -419,6 +425,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("recover", StringComparison.OrdinalIgnoreCase))
         {
             entry = Recover;
+            return true;
+        }
+
+        if (args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = AcceptanceRetry;
             return true;
         }
 

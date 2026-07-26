@@ -39,7 +39,11 @@ internal sealed record GoalOperationJournalEntry(
     string? PartitionAttemptId = null,
     IReadOnlyList<string>? PartitionTestResultPaths = null,
     int? PartitionReuseAttemptCount = null,
-    bool? PartitionForcedFullRerun = null)
+    bool? PartitionForcedFullRerun = null,
+    string? OperatorReason = null,
+    string? PriorGateMainSha = null,
+    string? CurrentHeadMainSha = null,
+    int? OperatorRegateCount = null)
 {
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
@@ -61,6 +65,14 @@ internal sealed record GoalAcceptanceAttemptReceipt(
     string? BaseBuildCacheBuiltProjects,
     string? BaseBuildCacheEvictions,
     string? BaseBuildCacheReceipt);
+
+internal sealed record AcceptanceRetryAuditPayload(
+    string GoalId,
+    string OperatorReason,
+    string PriorGateMainSha,
+    string CurrentHeadMainSha,
+    int OperatorRegateCount,
+    DateTimeOffset AcceptanceFailureOccurredAt);
 
 internal sealed record GoalOperationJournalSummary(
     string Path,
@@ -98,9 +110,11 @@ internal sealed record GoalLifecycleJournalEntry(
 
 internal static class GoalOperationJournal
 {
+    internal const string AcceptanceRetryAuditOutboxKind = "acceptance-retry-audit";
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
     public const string LandingIntentOperation = "conductor:landing-intent";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
+    internal static Action? BeforeAcceptanceRetryAppend { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -251,6 +265,108 @@ internal static class GoalOperationJournal
         DateTimeOffset? attemptStartedAt = null,
         GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
         AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt);
+
+    public static void AcceptanceRetried(
+        string executionDirectory,
+        Goal goal,
+        string operatorReason,
+        string? priorGateMainSha,
+        string? currentHeadMainSha,
+        int operatorRegateCount)
+    {
+        var idempotencyKey = $"{Key(goal.Id, "acceptance-retry")}:{operatorRegateCount}";
+        if (Read(executionDirectory, goal.Id).Entries.Any(entry =>
+                entry.IdempotencyKey.Equals(idempotencyKey, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        BeforeAcceptanceRetryAppend?.Invoke();
+        Append(
+            executionDirectory,
+            goal.Id,
+            idempotencyKey,
+            "acceptance-retry",
+            GoalOperationStatus.Completed,
+            $"Operator acceptance re-gate {operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}: {operatorReason}",
+            branchHeadSha: null,
+            mainHeadSha: NormalizeSha(currentHeadMainSha),
+            acceptanceOutcome: "operator-regate",
+            operatorReason: operatorReason,
+            priorGateMainSha: NormalizeSha(priorGateMainSha),
+            currentHeadMainSha: NormalizeSha(currentHeadMainSha),
+            operatorRegateCount: operatorRegateCount);
+    }
+
+    public static OrchestratorStateOutboxMessage CreateAcceptanceRetryAuditMessage(
+        Goal goal,
+        string operatorReason,
+        string priorGateMainSha,
+        string currentHeadMainSha,
+        int operatorRegateCount,
+        DateTimeOffset acceptanceFailureOccurredAt)
+    {
+        var payload = new AcceptanceRetryAuditPayload(
+            goal.Id.Value,
+            operatorReason,
+            priorGateMainSha,
+            currentHeadMainSha,
+            operatorRegateCount,
+            acceptanceFailureOccurredAt);
+        return new OrchestratorStateOutboxMessage(
+            $"{AcceptanceRetryAuditOutboxKind}:{goal.Id.Value}:{operatorRegateCount}",
+            AcceptanceRetryAuditOutboxKind,
+            JsonSerializer.Serialize(payload, JsonOptions),
+            DateTimeOffset.UtcNow);
+    }
+
+    public static OrchestratorStateOutboxProcessingResult ApplyAcceptanceRetryAuditMessage(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        OrchestratorStateOutboxMessage message)
+    {
+        if (!message.Kind.Equals(AcceptanceRetryAuditOutboxKind, StringComparison.Ordinal))
+        {
+            return OrchestratorStateOutboxProcessingResult.Quarantined(
+                $"Cannot apply message kind '{message.Kind}' as an acceptance-retry audit.");
+        }
+
+        var payload = DeserializeAcceptanceRetryAuditMessage(message);
+        if (!payload.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+        {
+            return OrchestratorStateOutboxProcessingResult.Quarantined(
+                $"Message targets goal '{payload.GoalId}', not '{goal.Id.Value}'.");
+        }
+
+        var escalationResolution = OperatorInbox.ResolveLandingEscalationOccurrence(
+            workspace,
+            goal,
+            payload.OperatorReason,
+            payload.AcceptanceFailureOccurredAt);
+        if (escalationResolution == OperatorInbox.LandingEscalationResolution.Missing)
+        {
+            return OrchestratorStateOutboxProcessingResult.Quarantined(
+                $"No landing escalation exists for goal '{goal.Id.Value}' at occurrence " +
+                $"{payload.AcceptanceFailureOccurredAt:O}.");
+        }
+
+        // A newer failure supersedes only the escalation-resolution side effect. The accepted
+        // operator re-gate is still journaled, while the newer escalation remains untouched.
+        AcceptanceRetried(
+            workspace.ExecutionDirectory,
+            goal,
+            payload.OperatorReason,
+            payload.PriorGateMainSha,
+            payload.CurrentHeadMainSha,
+            payload.OperatorRegateCount);
+        return OrchestratorStateOutboxProcessingResult.Completed;
+    }
+
+    public static AcceptanceRetryAuditPayload DeserializeAcceptanceRetryAuditMessage(
+        OrchestratorStateOutboxMessage message) =>
+        JsonSerializer.Deserialize<AcceptanceRetryAuditPayload>(message.PayloadJson, JsonOptions)
+        ?? throw new InvalidOperationException(
+            $"Acceptance-retry audit outbox message '{message.Id}' has an empty payload.");
 
     public static void AcceptanceBlocked(
         string executionDirectory,
@@ -610,7 +726,11 @@ internal static class GoalOperationJournal
         string? mainHeadSha,
         string? acceptanceOutcome,
         DateTimeOffset? at = null,
-        GoalAcceptanceAttemptReceipt? attemptReceipt = null)
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null,
+        string? operatorReason = null,
+        string? priorGateMainSha = null,
+        string? currentHeadMainSha = null,
+        int? operatorRegateCount = null)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -634,7 +754,11 @@ internal static class GoalOperationJournal
             attemptReceipt?.BaseBuildCacheProjects,
             attemptReceipt?.BaseBuildCacheBuiltProjects,
             attemptReceipt?.BaseBuildCacheEvictions,
-            attemptReceipt?.BaseBuildCacheReceipt);
+            attemptReceipt?.BaseBuildCacheReceipt,
+            OperatorReason: operatorReason,
+            PriorGateMainSha: priorGateMainSha,
+            CurrentHeadMainSha: currentHeadMainSha,
+            OperatorRegateCount: operatorRegateCount);
         File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
         TryAppendRunEvent(executionDirectory, entry);
     }

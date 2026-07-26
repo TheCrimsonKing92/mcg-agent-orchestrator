@@ -6120,6 +6120,133 @@ public sealed class ConductorBatchLoopTests
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
+    [Xunit.Fact(DisplayName = "ConductEvents_parallel_required_writers_drain_each_event_exactly_once")]
+    public async Task ConductEventsParallelRequiredWritersDrainEachEventExactlyOnce()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-parallel-required");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        using var drainEntrants = new CountdownEvent(2);
+        using var releaseDrain = new ManualResetEventSlim();
+
+        void BeforeDrain()
+        {
+            drainEntrants.Signal();
+            releaseDrain.Wait();
+        }
+
+        var firstWriter = new ConductEventLogWriter(logPath, beforeRequiredEventDrain: BeforeDrain);
+        var secondWriter = new ConductEventLogWriter(logPath, beforeRequiredEventDrain: BeforeDrain);
+        var writes = new[]
+        {
+            Task.Run(() => firstWriter.AppendRequired(
+                "gate-progress",
+                "goal0001",
+                "PHASE_PROGRESS goal=goal0001 phase=infrastructure-shard target=first")),
+            Task.Run(() => secondWriter.AppendRequired(
+                "gate-progress",
+                "goal0002",
+                "PHASE_PROGRESS goal=goal0002 phase=infrastructure-shard target=second"))
+        };
+
+        try
+        {
+            Assert.True(
+                drainEntrants.Wait(TimeSpan.FromSeconds(5)),
+                "Both writers must enter the drain concurrently before either is released.");
+        }
+        finally
+        {
+            releaseDrain.Set();
+        }
+
+        var appendVerdicts = await Task.WhenAll(writes);
+        Assert.All(appendVerdicts, Assert.True);
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Equal(2, records.Length);
+        Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0001");
+        Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_parallel_append_and_required_write_serialize_forced_rotation")]
+    public async Task ConductEventsParallelAppendAndRequiredWriteSerializeForcedRotation()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-parallel-rotation");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var timestamp = DateTimeOffset.Parse("2026-07-25T18:00:00Z");
+        new ConductEventLogWriter(logPath, maxBytes: 0, utcNow: () => timestamp).Append(
+            "seed",
+            null,
+            new string('x', 128));
+
+        using var appendCommitReached = new ManualResetEventSlim();
+        using var releaseAppendCommit = new ManualResetEventSlim();
+        using var requiredDrainAttempted = new ManualResetEventSlim();
+        var appendWriter = new ConductEventLogWriter(
+            logPath,
+            maxBytes: 32,
+            utcNow: () => timestamp,
+            beforeAppendCommit: () =>
+            {
+                appendCommitReached.Set();
+                releaseAppendCommit.Wait();
+            });
+        var requiredWriter = new ConductEventLogWriter(
+            logPath,
+            maxBytes: 32,
+            utcNow: () => timestamp,
+            beforeRequiredEventDrain: requiredDrainAttempted.Set);
+
+        var append = Task.Run(() => appendWriter.Append(
+            "gate-total",
+            "goal0001",
+            "GATE_TOTAL goal=goal0001 durationMs=100"));
+        Task<bool>? required = null;
+        try
+        {
+            Assert.True(
+                appendCommitReached.Wait(TimeSpan.FromSeconds(5)),
+                "The append writer must reach the forced-rotation commit boundary.");
+            required = Task.Run(() => requiredWriter.AppendRequired(
+                "gate-progress",
+                "goal0002",
+                "PHASE_PROGRESS goal=goal0002 phase=infrastructure-shard target=required"));
+            Assert.True(
+                requiredDrainAttempted.Wait(TimeSpan.FromSeconds(5)),
+                "The required writer must attempt its drain while the append commit is held.");
+            Assert.False(
+                required.IsCompleted,
+                "The required writer must remain serialized behind the append rotation and write.");
+        }
+        finally
+        {
+            releaseAppendCommit.Set();
+        }
+
+        await append;
+        Assert.NotNull(required);
+        Assert.True(await required);
+
+        var records = Directory.GetFiles(Path.GetDirectoryName(logPath)!, "conduct-events*.log")
+            .SelectMany(File.ReadAllLines)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Single(records, record => record.EventKind == "gate-total" && record.GoalId == "goal0001");
+        Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_skips_janitorial_phase_failure_and_journals_event")]
     public void BatchLoopSkipsJanitorialPhaseFailureAndJournalsEvent()
     {

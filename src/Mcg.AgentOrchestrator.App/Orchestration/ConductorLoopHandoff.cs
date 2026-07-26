@@ -9,31 +9,75 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal interface IConductLockPidProbe
+{
+    bool IsRunning(int processId);
+}
+
+internal sealed class ConductLockPidProbe : IConductLockPidProbe
+{
+    public bool IsRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+}
+
 internal sealed class ConductorLoopLease : IDisposable
 {
     private readonly FileStream _stream;
+    private readonly string _path;
     private bool _disposed;
 
-    private ConductorLoopLease(FileStream stream)
+    private ConductorLoopLease(FileStream stream, string path)
     {
         _stream = stream;
+        _path = path;
     }
 
-    public static ConductorLoopLease Acquire(string orchestratorDirectory)
+    public static ConductorLoopLease Acquire(
+        string orchestratorDirectory,
+        IConductLockPidProbe? pidProbe = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         Directory.CreateDirectory(orchestratorDirectory);
         var path = Path.Combine(orchestratorDirectory, "conduct-loop.lock");
+        var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
+        if (File.Exists(path))
+        {
+            var (ownerPid, writtenAt) = ReadOwner(path);
+            var age = FormatAge(now - writtenAt);
+            if ((pidProbe ?? new ConductLockPidProbe()).IsRunning(ownerPid))
+            {
+                throw new InvalidOperationException(
+                    $"Refused: conduct-loop.lock held by pid {ownerPid}, running, written {age} ago — delete to proceed");
+            }
+
+            var staleTakeoverMessage =
+                $"conduct-loop.lock held by pid {ownerPid} (not running), written {age} ago — stale lock removed, proceeding";
+            Console.WriteLine(staleTakeoverMessage);
+            Console.Out.Flush();
+            TryLogStaleTakeover(orchestratorDirectory, staleTakeoverMessage);
+            File.Delete(path);
+        }
+
         try
         {
-            var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            stream.SetLength(0);
+            var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
             using var writer = new StreamWriter(stream, leaveOpen: true);
             writer.WriteLine(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-            writer.WriteLine(DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            writer.WriteLine(now.ToString("O", CultureInfo.InvariantCulture));
             writer.Flush();
             stream.Flush();
             stream.Position = 0;
-            return new ConductorLoopLease(stream);
+            return new ConductorLoopLease(stream, path);
         }
         catch (IOException ex)
         {
@@ -43,13 +87,68 @@ internal sealed class ConductorLoopLease : IDisposable
         }
     }
 
+    private static (int ProcessId, DateTimeOffset WrittenAt) ReadOwner(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var processIdText = reader.ReadLine();
+        var writtenAtText = reader.ReadLine();
+        if (!int.TryParse(processIdText, NumberStyles.None, CultureInfo.InvariantCulture, out var processId) ||
+            !DateTimeOffset.TryParseExact(
+                writtenAtText,
+                "O",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var writtenAt))
+        {
+            throw new InvalidOperationException(
+                $"Refused: conduct-loop.lock has invalid contents: {path} — delete to proceed");
+        }
+
+        return (processId, writtenAt);
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero)
+            age = TimeSpan.Zero;
+        if (age < TimeSpan.FromMinutes(1))
+            return $"{(int)age.TotalSeconds}s";
+        if (age < TimeSpan.FromHours(1))
+            return $"{(int)age.TotalMinutes}m";
+        if (age < TimeSpan.FromDays(1))
+            return $"{(int)age.TotalHours}h {age.Minutes}m";
+        return $"{(int)age.TotalDays}d {age.Hours}h";
+    }
+
+    private static void TryLogStaleTakeover(string orchestratorDirectory, string detail)
+    {
+        try
+        {
+            var path = Path.Combine(
+                orchestratorDirectory,
+                "logs",
+                ConductEventLogWriter.CurrentFileName);
+            new ConductEventLogWriter(path).Append("conduct-lock-stale-takeover", null, detail);
+        }
+        catch
+        {
+            // Lock recovery must not depend on the advisory event stream.
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
             return;
 
-        _disposed = true;
         _stream.Dispose();
+        File.Delete(_path);
+        _disposed = true;
     }
 }
 

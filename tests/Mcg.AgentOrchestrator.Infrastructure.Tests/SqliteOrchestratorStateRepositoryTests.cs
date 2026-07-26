@@ -32,14 +32,17 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         conn.Open();
 
         Xunit.Assert.Equal(
-            ["engineering_practices", "goals", "human_input_requests", "meta", "model_fit_history"],
+            ["engineering_practices", "goals", "human_input_requests", "meta", "model_fit_history", "state_outbox"],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
         Xunit.Assert.Equal(
-            ["ix_engineering_practices_enabled_priority", "ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role"],
-            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND (name = 'ix_goals_status' OR name LIKE 'ix_model_fit_history_%' OR name = 'ix_engineering_practices_enabled_priority') ORDER BY name"));
+            ["ix_engineering_practices_enabled_priority", "ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role", "ix_state_outbox_kind"],
+            QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'index' AND (name = 'ix_goals_status' OR name LIKE 'ix_model_fit_history_%' OR name = 'ix_engineering_practices_enabled_priority' OR name = 'ix_state_outbox_kind') ORDER BY name"));
         Xunit.Assert.Equal(
             ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
+        Xunit.Assert.Equal(
+            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+            QueryStrings(conn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_snapshot_through_SQLite")]
@@ -740,7 +743,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(ModelOutcomeRecommendation.Prefer, best.Recommendation);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_version_and_outcome_columns")]
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_state_and_outbox_columns")]
     public void IdempotentSchemaMigrationAddsVersionAndOutcomeColumns()
     {
         // Simulate a DB created by an old binary (no version column) by creating schema manually.
@@ -754,6 +757,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, source_backlog_item_id TEXT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE human_input_requests (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE model_fit_history (goal_id TEXT NOT NULL, task_id TEXT NOT NULL, role TEXT NOT NULL, provider_name TEXT NOT NULL, model_name TEXT NOT NULL, complexity TEXT NULL, task_shape TEXT NULL, outcome TEXT NOT NULL, self_rating TEXT NOT NULL, timestamp TEXT NOT NULL, PRIMARY KEY (goal_id, task_id, timestamp))");
+        Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
+        Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
         Exec(setupConn, "CREATE INDEX ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
         setupConn.Close();
@@ -769,6 +774,85 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("outcome_rule", historyColumns);
         Assert.Contains("outcome_class", historyColumns);
         Assert.Contains("dispatch_lane", historyColumns);
+        var outboxColumns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid");
+        Assert.Contains("quarantined_at", outboxColumns);
+        Assert.Contains("quarantine_reason", outboxColumns);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_successor_preflight_allows_outbox_quarantine_column_migration")]
+    public void SuccessorPreflightAllowsOutboxQuarantineColumnMigration()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using (var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            setupConn.Open();
+            Exec(setupConn, "DROP INDEX ix_state_outbox_kind");
+            Exec(setupConn, "DROP TABLE state_outbox");
+            Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
+            Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
+        }
+
+        Assert.Equal(
+            SqliteOrchestratorStateRepository.CurrentSchemaVersion,
+            SqliteOrchestratorStateRepository.ValidateReadOnlySchema(db));
+
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        checkConn.Open();
+        Assert.Equal(
+            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+            QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
+
+        static void Exec(SqliteConnection connection, string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_migrates_legacy_outbox_without_index_before_drain")]
+    public async Task MigratesLegacyOutboxWithoutIndexBeforeDrain()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using (var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            setupConn.Open();
+            Exec(setupConn, "DROP INDEX ix_state_outbox_kind");
+            Exec(setupConn, "DROP TABLE state_outbox");
+            Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
+            Exec(setupConn, "INSERT INTO state_outbox (id, kind, payload_json, created_at) VALUES ('legacy-message', 'acceptance-retry-audit', '{}', '2026-07-26T00:00:00.0000000+00:00')");
+        }
+
+        var repository = new SqliteOrchestratorStateRepository(db);
+
+        using (var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            checkConn.Open();
+            Assert.Equal(
+                ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+                QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
+            Assert.Equal(
+                ["ix_state_outbox_kind"],
+                QueryStrings(checkConn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ix_state_outbox_kind'"));
+        }
+
+        Assert.True(await repository.TryProcessOutboxMessageAsync(
+            "legacy-message",
+            (_, _) => Task.FromResult(OrchestratorStateOutboxProcessingResult.Completed)));
+        Assert.Empty(await repository.ListOutboxMessagesAsync("acceptance-retry-audit"));
+
+        static void Exec(SqliteConnection connection, string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
@@ -1017,6 +1101,39 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             evt.Message.Contains("operator retry during conductor tick", StringComparison.Ordinal));
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskDispatchRecorded);
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_acceptance_retry_counters")]
+    public async Task TickMergePreservesAcceptanceRetryCounters()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect acceptance retry counters");
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        var tickSnapshot = baseline with { AutomaticAcceptanceRetryCount = 1 };
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) => Task.FromResult((
+                true,
+                stored! with
+                {
+                    Objective = "Concurrent operator update",
+                    OperatorAcceptanceRegateCount = 1
+                },
+                true)));
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        Assert.Equal(1, restoredGoal.AutomaticAcceptanceRetryCount);
+        Assert.Equal(1, restoredGoal.OperatorAcceptanceRegateCount);
+        Assert.Equal("Concurrent operator update", restoredGoal.Objective);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_store_owned_same_field_conflict_keeps_cli_value")]

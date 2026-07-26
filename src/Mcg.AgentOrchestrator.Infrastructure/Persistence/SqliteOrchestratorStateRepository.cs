@@ -9,13 +9,14 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestratorStateRepository
+public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutboxRepository
 {
     public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
+    private readonly Action? _beforeOutboxCommit;
     private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
     private static readonly string[] CoreSchemaTableNames =
     [
@@ -56,6 +57,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
                 (SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name IN ('version', 'source_backlog_item_id')) +
                 (SELECT COUNT(*) FROM pragma_table_info('model_fit_history') WHERE name IN ('outcome_rule', 'outcome_class', 'dispatch_lane'))
             """;
+        // Keep the read-only successor check compatible with the immediately preceding
+        // outbox schema. The successor runs the idempotent quarantine-column migration
+        // only after this preflight succeeds and it opens the repository for writing.
         if (Convert.ToInt32(requiredColumns.ExecuteScalar(), CultureInfo.InvariantCulture) != 5)
         {
             throw new InvalidOperationException(
@@ -67,12 +71,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             SELECT COUNT(*)
             FROM sqlite_master
             WHERE (type = 'table' AND name = 'engineering_practices')
+               OR (type = 'table' AND name = 'state_outbox')
                OR (type = 'index' AND name IN (
-                    'ix_goals_source_backlog_item_id',
-                    'ix_goals_status',
-                    'ix_model_fit_history_outcome_class'))
+                     'ix_goals_source_backlog_item_id',
+                     'ix_goals_status',
+                     'ix_model_fit_history_outcome_class',
+                     'ix_state_outbox_kind'))
             """;
-        if (Convert.ToInt32(requiredObjects.ExecuteScalar(), CultureInfo.InvariantCulture) != 4)
+        if (Convert.ToInt32(requiredObjects.ExecuteScalar(), CultureInfo.InvariantCulture) != 6)
         {
             throw new InvalidOperationException(
                 "State schema has pending table or index migrations and cannot be opened safely by the successor.");
@@ -89,11 +95,13 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
     internal SqliteOrchestratorStateRepository(
         string dbPath,
         Action<string>? statementObserver,
-        SqliteWriteTelemetryOptions? telemetryOptions)
+        SqliteWriteTelemetryOptions? telemetryOptions,
+        Action? beforeOutboxCommit = null)
     {
         _dbPath = dbPath;
         _statementObserver = statementObserver;
         _writeTelemetry = new SqliteWriteTelemetry(dbPath, telemetryOptions);
+        _beforeOutboxCommit = beforeOutboxCommit;
         EnsureSchema();
     }
 
@@ -246,6 +254,9 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             MigrateVersionColumn(conn);
             if (!PracticeRegistrySchemaExists(conn))
                 PracticeRegistryStore.EnsureSchemaAndSeed(conn);
+            if (!StateOutboxSchemaExists(conn))
+                EnsureStateOutboxSchema(conn);
+            MigrateStateOutboxColumns(conn);
             BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
@@ -298,8 +309,38 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
+        EnsureStateOutboxSchema(conn);
         RunNonQuery(conn, $"INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '{CurrentSchemaVersion}')");
         PracticeRegistryStore.EnsureSchemaAndSeed(conn);
+    }
+
+    private void EnsureStateOutboxSchema(SqliteConnection conn)
+    {
+        RunNonQuery(conn, """
+            CREATE TABLE IF NOT EXISTS state_outbox (
+                id                TEXT PRIMARY KEY,
+                kind              TEXT NOT NULL,
+                payload_json      TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                quarantined_at    TEXT NULL,
+                quarantine_reason TEXT NULL
+            )
+            """);
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_state_outbox_kind ON state_outbox(kind)");
+    }
+
+    private void MigrateStateOutboxColumns(SqliteConnection conn)
+    {
+        AddColumnIfMissing(
+            conn,
+            "state_outbox",
+            "quarantined_at",
+            "ALTER TABLE state_outbox ADD COLUMN quarantined_at TEXT NULL");
+        AddColumnIfMissing(
+            conn,
+            "state_outbox",
+            "quarantine_reason",
+            "ALTER TABLE state_outbox ADD COLUMN quarantine_reason TEXT NULL");
     }
 
     // Idempotent migration: adds metadata columns to existing schemas that pre-date them.
@@ -383,6 +424,18 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'engineering_practices'";
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+    }
+
+    private static bool StateOutboxSchemaExists(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE (type = 'table' AND name = 'state_outbox')
+               OR (type = 'index' AND name = 'ix_state_outbox_kind')
+            """;
+        return Convert.ToInt32(cmd.ExecuteScalar()) == 2;
     }
 
     private static bool IndexExists(SqliteConnection conn, string indexName)
@@ -632,6 +685,174 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             telemetry.Emit("rollback", ex);
             throw;
         }
+    }
+
+    public async Task<T> TransactWithOutboxAsync<T>(
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(
+            bool ShouldSave,
+            T Result,
+            IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(
+            ResolveOperationTag(nameof(TransactWithOutboxAsync)),
+            cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
+        try
+        {
+            var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
+            var (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+
+            if (shouldSave)
+                await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
+
+            foreach (var message in outboxMessages)
+            {
+                await InsertOutboxMessageAsync(conn, message, cancellationToken);
+            }
+
+            _beforeOutboxCommit?.Invoke();
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
+        string kind,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, kind, payload_json, created_at
+            FROM state_outbox
+            WHERE kind = $kind AND quarantined_at IS NULL
+            ORDER BY created_at, id
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var messages = new List<OrchestratorStateOutboxMessage>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            messages.Add(new OrchestratorStateOutboxMessage(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
+        }
+
+        return messages;
+    }
+
+    public async Task<bool> TryProcessOutboxMessageAsync(
+        string id,
+        Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
+        CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(
+            ResolveOperationTag(nameof(TryProcessOutboxMessageAsync)),
+            cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
+        try
+        {
+            OrchestratorStateOutboxMessage? message;
+            await using (var select = conn.CreateCommand())
+            {
+                select.CommandText = """
+                    SELECT id, kind, payload_json, created_at
+                    FROM state_outbox
+                    WHERE id = $id AND quarantined_at IS NULL
+                    """;
+                select.Parameters.AddWithValue("$id", id);
+                await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+                message = await reader.ReadAsync(cancellationToken)
+                    ? new OrchestratorStateOutboxMessage(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        DateTimeOffset.Parse(
+                            reader.GetString(3),
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.RoundtripKind))
+                    : null;
+            }
+
+            if (message is null)
+            {
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                telemetry.Emit("commit");
+                return false;
+            }
+
+            var result = await processor(message, cancellationToken);
+            await using var cmd = conn.CreateCommand();
+            if (result.Disposition == OrchestratorStateOutboxDisposition.Complete)
+            {
+                cmd.CommandText = "DELETE FROM state_outbox WHERE id = $id";
+                cmd.Parameters.AddWithValue("$id", id);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(result.Detail))
+                {
+                    throw new InvalidOperationException(
+                        $"Outbox message '{id}' cannot be quarantined without a reason.");
+                }
+
+                cmd.CommandText = """
+                    UPDATE state_outbox
+                    SET quarantined_at = $quarantined_at,
+                        quarantine_reason = $quarantine_reason
+                    WHERE id = $id
+                    """;
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue(
+                    "$quarantined_at",
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                cmd.Parameters.AddWithValue("$quarantine_reason", result.Detail);
+            }
+
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    private static async Task InsertOutboxMessageAsync(
+        SqliteConnection conn,
+        OrchestratorStateOutboxMessage message,
+        CancellationToken cancellationToken)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO state_outbox (id, kind, payload_json, created_at)
+            VALUES ($id, $kind, $payload_json, $created_at)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at
+            """;
+        cmd.Parameters.AddWithValue("$id", message.Id);
+        cmd.Parameters.AddWithValue("$kind", message.Kind);
+        cmd.Parameters.AddWithValue("$payload_json", message.PayloadJson);
+        cmd.Parameters.AddWithValue("$created_at", message.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
@@ -962,6 +1183,14 @@ public sealed class SqliteOrchestratorStateRepository : ITransactionalOrchestrat
             SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
             RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
+            AutomaticAcceptanceRetryCount = PickStoreOwned(
+                baseline.AutomaticAcceptanceRetryCount,
+                stored.AutomaticAcceptanceRetryCount,
+                current.AutomaticAcceptanceRetryCount),
+            OperatorAcceptanceRegateCount = PickStoreOwned(
+                baseline.OperatorAcceptanceRegateCount,
+                stored.OperatorAcceptanceRegateCount,
+                current.OperatorAcceptanceRegateCount),
             EffectiveAcceptanceCriteriaCorrections = PickStoreOwnedList(
                 baseline.EffectiveAcceptanceCriteriaCorrections,
                 stored.EffectiveAcceptanceCriteriaCorrections,

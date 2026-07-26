@@ -286,8 +286,10 @@ internal sealed class ConductorDriver
             AcceptanceVerificationResult verification;
             try
             {
+                var gateProgressEventWriter = new ConductEventLogWriter(
+                    Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
                 using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-                    AppendGateProgressEvent(dir, goal.Id, progress));
+                    AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
                 using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
                     () => IsAcceptanceAttemptCancelled(workspace, goal.Id));
                 verification = acceptanceVerifier.RunAsync(
@@ -1381,8 +1383,9 @@ internal sealed class ConductorDriver
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&
         goal.Tasks.All(task =>
-            task.Status == WorkTaskStatus.Completed &&
-            task.LastVerification is { Succeeded: true });
+            task.Status == WorkTaskStatus.Cancelled ||
+            (task.Status == WorkTaskStatus.Completed &&
+             task.LastVerification is { Succeeded: true }));
 
     private static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
     {
@@ -1589,15 +1592,18 @@ internal sealed class ConductorDriver
         }
     }
 
-    private static void AppendGateProgressEvent(string executionDirectory, GoalId goalId, AcceptanceGateProgress progress)
+    private static void AppendGateProgressEvent(
+        ConductEventLogWriter writer,
+        GoalId goalId,
+        AcceptanceGateProgress progress)
     {
-        try
+        if (!writer.AppendRequired(
+                "gate-progress",
+                goalId.Value[..8],
+                FormatGateProgressConductEvent(progress)))
         {
-            var path = Path.Combine(executionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
-            new ConductEventLogWriter(path).Append("gate-progress", goalId.Value[..8], FormatGateProgressConductEvent(progress));
-        }
-        catch
-        {
+            throw new IOException(
+                $"Required gate progress event could not be appended for goal {goalId.Value[..8]}.");
         }
     }
 
@@ -2002,7 +2008,7 @@ internal sealed class ConductorDriver
                     $"Acceptance criteria unmet but no completed task is available to retry: {criteria}; review/land manually");
             }
 
-            if (task.CriterionRetryCount < policy.MaxCriterionRetries)
+            if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
                 var retryFeedback = FormatCriterionRetryFeedback(acceptance.RequiredUnmetCriteria);
                 var retryCount = _recordCriterionRetryFeedback(
@@ -2017,7 +2023,7 @@ internal sealed class ConductorDriver
             }
 
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                $"Acceptance criteria unmet after {task.CriterionRetryCount} retries: {criteria}; review/land manually");
+                $"Acceptance criteria unmet after {goal.AutomaticAcceptanceRetryCount} retries: {criteria}; review/land manually");
         }
 
         foreach (var task in goal.Tasks)

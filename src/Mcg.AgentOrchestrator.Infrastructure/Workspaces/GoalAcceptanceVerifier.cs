@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -115,7 +116,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             throw new InvalidOperationException("Acceptance manifest loaded without any checks.");
         }
-
         foreach (var check in manifest.Checks)
         {
             var type = check.Type.Trim().ToLowerInvariant();
@@ -168,6 +168,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static Func<string, string?>? ResolvePartitionVerdictVerifyingCommitShaForTests { get; set; }
     internal static Func<string, string?>? ResolveMainWorktreePathForTests { get; set; }
     internal static Func<string, string[]>? ResolveDeletedTestFilesForTests { get; set; }
+    internal static Func<int>? ResolveShardCoreBudgetForTests { get; set; }
+    internal static Func<int, bool>? IsStableSlotAvailableForShardTests { get; set; }
     internal static int PartitionVerdictFullRerunEveryN { get; set; } = DefaultPartitionVerdictFullRerunEveryN;
     // When true (default), a failed infrastructure-test PARTITION is re-run ONCE within the same
     // acceptance attempt; if the re-run passes, the failure was an intermittent flake and the partition
@@ -268,13 +270,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken).ConfigureAwait(false);
 
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
+        var shardCoreBudget =
+            ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
+        var shardConcurrencyBudget = Math.Min(
+            Math.Min(engineSettings.MaxConcurrentShards, engineSettings.SlotCount),
+            shardCoreBudget);
+        var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
         var policyShardPlan = BuildPolicyShardPlan(changedFiles);
 
         // Apply policy-required checks from the change scope. Focused project checks replace
         // matching unfiltered project checks so a narrow App change does not still run the full
         // Infrastructure project suite from the tracked manifest.
         var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
-        var policyEffectiveChecks = BuildPolicyEffectiveChecks(manifest.Checks, changedFiles, policyRequiredChecks, policyShardPlan);
+        var policyEffectiveChecks = BuildPolicyEffectiveChecks(
+            manifest.Checks,
+            changedFiles,
+            policyRequiredChecks,
+            policyShardPlan,
+            infrastructureTestLanes);
         var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
         var structurallyCompleteChecks = structuralCoverageApplies
             ? EnsureTrustedStructuralCoverageExecutionChecks(
@@ -282,7 +295,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 manifest.Checks,
                 worktreePath)
             : policyEffectiveChecks;
-        var effectiveChecks = ExpandBroadInfrastructureChecks(structurallyCompleteChecks);
+        var effectiveChecks = ExpandBroadInfrastructureChecks(structurallyCompleteChecks, infrastructureTestLanes);
         var partitionVerdictCache = CreatePartitionVerdictCacheContext(worktreePath, goalId, effectiveChecks);
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
@@ -301,7 +314,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var scopedChecks = BuildChangeScopedChecks(solutionCheck, effectiveChecks, changedFiles, policyShardPlan);
+        var scopedChecks = BuildChangeScopedChecks(solutionCheck, effectiveChecks, changedFiles, policyShardPlan, infrastructureTestLanes);
         var runSolutionCheck = solutionCheck is not null && scopedChecks is null;
         var deferredChecks = runSolutionCheck
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
@@ -326,19 +339,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             if (checks.All(check => check.Passed))
             {
-                foreach (var check in effectiveChecks.Where(c =>
-                    c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                    scopedNames.Contains(c.Name)))
-                {
-                    var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
-                    retried |= checkResult.Retried;
-                    checks.Add(checkResult.Result);
-                    if (!checkResult.Result.Passed &&
-                        ShouldStopAfterFailedCheck(partitionVerdictCache, check))
-                    {
-                        break;
-                    }
-                }
+                var batch = await RunCheckBatchAsync(
+                    effectiveChecks.Where(c =>
+                        c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                        scopedNames.Contains(c.Name)).ToArray(),
+                    partitionVerdictCache,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex,
+                    stableSlotLease,
+                    dotnetTestBuildPhase,
+                    shardConcurrencyBudget,
+                    cancellationToken).ConfigureAwait(false);
+                checks.AddRange(batch.Results);
+                retried |= batch.Retried;
             }
         }
         else if (deferredChecks.Count > 0)
@@ -383,36 +397,38 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                 if (slnRun.Result.Passed)
                 {
-                    foreach (var check in effectiveChecks.Where(c =>
-                        c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                        !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
-                        !deferredNames.Contains(c.Name)))
-                    {
-                        var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
-                        retried |= checkResult.Retried;
-                        checks.Add(checkResult.Result);
-                        if (!checkResult.Result.Passed &&
-                            ShouldStopAfterFailedCheck(partitionVerdictCache, check))
-                        {
-                            break;
-                        }
-                    }
+                    var batch = await RunCheckBatchAsync(
+                        effectiveChecks.Where(c =>
+                            c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                            !c.Name.Equals(solutionCheck!.Name, StringComparison.Ordinal) &&
+                            !deferredNames.Contains(c.Name)).ToArray(),
+                        partitionVerdictCache,
+                        worktreePath,
+                        goalId,
+                        stableSlotIndex,
+                        stableSlotLease,
+                        dotnetTestBuildPhase,
+                        shardConcurrencyBudget,
+                        cancellationToken).ConfigureAwait(false);
+                    checks.AddRange(batch.Results);
+                    retried |= batch.Retried;
                 }
             }
         }
         else
         {
-            foreach (var check in effectiveChecks)
-            {
-                var checkResult = await RunCheckWithPartitionVerdictCacheAsync(check, partitionVerdictCache, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
-                retried |= checkResult.Retried;
-                checks.Add(checkResult.Result);
-                if (!checkResult.Result.Passed &&
-                    ShouldStopAfterFailedCheck(partitionVerdictCache, check))
-                {
-                    break;
-                }
-            }
+            var batch = await RunCheckBatchAsync(
+                effectiveChecks,
+                partitionVerdictCache,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                dotnetTestBuildPhase,
+                shardConcurrencyBudget,
+                cancellationToken).ConfigureAwait(false);
+            checks.AddRange(batch.Results);
+            retried |= batch.Retried;
         }
 
         if (FinalizePartitionVerdictCache(partitionVerdictCache, checks) is { } partitionCacheReceipt)
@@ -420,8 +436,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(partitionCacheReceipt);
         }
 
-        AddCoveredBroadInfrastructureResults(checks, policyRequiredChecks, changedFiles);
-        AddCoveredBroadInfrastructureResults(checks, manifest.Checks, changedFiles);
+        AddCoveredBroadInfrastructureResults(checks, policyRequiredChecks, changedFiles, infrastructureTestLanes);
+        AddCoveredBroadInfrastructureResults(checks, manifest.Checks, changedFiles, infrastructureTestLanes);
         AddCoveredPolicyAliasResults(checks, policyRequiredChecks, effectiveChecks);
         AddPolicyShardReceiptResults(checks, manifest.Checks, effectiveChecks, policyShardPlan);
 
@@ -546,6 +562,281 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         cacheContext is null ||
         !TryGetInfrastructurePartitionId(check, out _, out _);
 
+    private async Task<CheckBatchResult> RunCheckBatchAsync(
+        IReadOnlyList<AcceptanceManifestCheck> batchChecks,
+        PartitionVerdictCacheContext? cacheContext,
+        string worktreePath,
+        GoalId? goalId,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? dotnetTestBuildPhase,
+        int maxConcurrentShards,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<AcceptanceCheckResult>(batchChecks.Count);
+        var retried = false;
+        for (var index = 0; index < batchChecks.Count;)
+        {
+            var check = batchChecks[index];
+            if (TryGetInfrastructurePartitionId(check, out _, out _) &&
+                stableSlotIndex.HasValue &&
+                stableSlotLease is not null &&
+                maxConcurrentShards > 1)
+            {
+                var shardChecks = batchChecks
+                    .Skip(index)
+                    .TakeWhile(candidate => TryGetInfrastructurePartitionId(candidate, out _, out _))
+                    .ToArray();
+                var shardBatch = await RunInfrastructureShardBatchAsync(
+                    shardChecks,
+                    cacheContext,
+                    worktreePath,
+                    goalId,
+                    stableSlotIndex.Value,
+                    stableSlotLease,
+                    dotnetTestBuildPhase,
+                    maxConcurrentShards,
+                    cancellationToken).ConfigureAwait(false);
+                results.AddRange(shardBatch.Results);
+                retried |= shardBatch.Retried;
+                index += shardChecks.Length;
+                continue;
+            }
+
+            var checkResult = await RunCheckWithPartitionVerdictCacheAsync(
+                check,
+                cacheContext,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                dotnetTestBuildPhase,
+                cancellationToken).ConfigureAwait(false);
+            retried |= checkResult.Retried;
+            results.Add(checkResult.Result);
+            index++;
+            if (!checkResult.Result.Passed && ShouldStopAfterFailedCheck(cacheContext, check))
+            {
+                break;
+            }
+        }
+
+        return new CheckBatchResult(results, retried);
+    }
+
+    private async Task<CheckBatchResult> RunInfrastructureShardBatchAsync(
+        IReadOnlyList<AcceptanceManifestCheck> shardChecks,
+        PartitionVerdictCacheContext? cacheContext,
+        string worktreePath,
+        GoalId? goalId,
+        int primarySlotIndex,
+        DotnetBuildEnvironmentLease primaryLease,
+        DotnetTestBuildPhase? primaryBuildPhase,
+        int maxConcurrentShards,
+        CancellationToken cancellationToken)
+    {
+        var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
+        if (allShardsUseMtp && primaryBuildPhase is not null)
+        {
+            var prebuild = await EnsureDotnetTestBuildPhaseAsync(
+                primaryBuildPhase,
+                shardChecks[0],
+                worktreePath,
+                goalId,
+                primarySlotIndex,
+                primaryLease,
+                "acceptance-infrastructure-shards-prebuild",
+                cancellationToken).ConfigureAwait(false);
+            if (prebuild.Run.Result.Passed)
+            {
+                VerifyPrebuiltMtpExecutables(shardChecks, primaryBuildPhase);
+            }
+        }
+
+        var wallClock = Stopwatch.StartNew();
+        var queue = new ConcurrentQueue<IndexedShard>(
+            shardChecks
+                .Select((check, index) => new IndexedShard(index, check))
+                .OrderByDescending(shard => ShardPriority(shard.Check))
+                .ThenBy(shard => shard.Index));
+        var outcomes = new ShardRunOutcome?[shardChecks.Count];
+        var workerCount = allShardsUseMtp
+            ? ResolveAvailableShardWorkerCount(
+                primarySlotIndex,
+                maxConcurrentShards,
+                shardChecks.Count)
+            : 1;
+
+        async Task RunShardAsync(IndexedShard shard, ShardWorkerLease worker)
+        {
+            var shardClock = Stopwatch.StartNew();
+            var shardResultsDirectory = Path.Combine(
+                worker.Lease.Environment.ArtifactsPath,
+                "TestResults");
+            var run = await RunCheckWithPartitionVerdictCacheAsync(
+                shard.Check,
+                cacheContext,
+                worktreePath,
+                goalId,
+                worker.SlotIndex,
+                worker.Lease,
+                worker.BuildPhase,
+                cancellationToken,
+                shardResultsDirectory).ConfigureAwait(false);
+            shardClock.Stop();
+            outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
+            EmitShardTimingProgress(
+                goalId,
+                "shard-complete",
+                shard.Check.Name,
+                worker.SlotIndex,
+                shardClock.Elapsed);
+        }
+
+        async Task RunWorkerAsync(int workerIndex)
+        {
+            if (workerIndex == 0)
+            {
+                var primaryWorker = new ShardWorkerLease(
+                    primarySlotIndex,
+                    primaryLease,
+                    primaryBuildPhase);
+                while (queue.TryDequeue(out var primaryShard))
+                {
+                    await RunShardAsync(primaryShard, primaryWorker).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            while (queue.TryDequeue(out var shard))
+            {
+                var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                    TimeSpan.Zero,
+                    cancellationToken: cancellationToken,
+                    slotCount: EngineSettings.SlotCount);
+                if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy)
+                {
+                    queue.Enqueue(shard);
+                    return;
+                }
+                if (acquisition is DotnetBuildLeaseAcquisition.BuildLockBlocked blocked)
+                {
+                    throw new BuildLockBlockedException(blocked.Attribution);
+                }
+
+                var lease = ((DotnetBuildLeaseAcquisition.Acquired)acquisition).Lease;
+                try
+                {
+                    var slotIndex = TryGetStableSlotIndex(lease.Environment)
+                        ?? throw new InvalidOperationException(
+                            $"Acquired stable shard lease '{lease.Environment.LeaseId}' has no stable slot index.");
+                    var worker = new ShardWorkerLease(
+                        slotIndex,
+                        lease,
+                        primaryBuildPhase);
+                    await RunShardAsync(shard, worker).ConfigureAwait(false);
+                }
+                finally
+                {
+                    lease.ReleaseExecutionLock();
+                }
+            }
+        }
+
+        await Task.WhenAll(
+            Enumerable.Range(0, workerCount).Select(RunWorkerAsync)).ConfigureAwait(false);
+        var fallbackWorker = new ShardWorkerLease(
+            primarySlotIndex,
+            primaryLease,
+            primaryBuildPhase);
+        while (queue.TryDequeue(out var fallbackShard))
+        {
+            await RunShardAsync(fallbackShard, fallbackWorker).ConfigureAwait(false);
+        }
+        wallClock.Stop();
+        if (outcomes.Any(outcome => outcome is null))
+        {
+            throw new InvalidOperationException(
+                "Concurrent infrastructure shard execution completed without a verdict for every shard.");
+        }
+
+        EmitShardTimingProgress(
+            goalId,
+            "shards-complete",
+            $"{shardChecks.Count}-infrastructure-shards",
+            primarySlotIndex,
+            wallClock.Elapsed);
+        var completed = outcomes.Select(outcome => outcome!).ToArray();
+        return new CheckBatchResult(
+            completed.Select(outcome => outcome.Result).ToArray(),
+            completed.Any(outcome => outcome.Retried));
+    }
+
+    internal static int ResolveAvailableShardWorkerCount(
+        int primarySlotIndex,
+        int shardConcurrencyBudget,
+        int shardCount)
+    {
+        var isSlotAvailable = IsStableSlotAvailableForShardTests
+            ?? DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable;
+        var availableSlots = 1 + Enumerable.Range(0, EngineSettings.SlotCount)
+            .Where(slotIndex => slotIndex != primarySlotIndex)
+            .Count(isSlotAvailable);
+        return Math.Min(
+            Math.Min(shardConcurrencyBudget, shardCount),
+            availableSlots);
+    }
+
+    private void VerifyPrebuiltMtpExecutables(
+        IReadOnlyList<AcceptanceManifestCheck> shardChecks,
+        DotnetTestBuildPhase buildPhase)
+    {
+        var buildEnvironment = buildPhase.BuildEnvironment
+            ?? throw new InvalidOperationException(
+                "Infrastructure shard prebuild completed without recording its build environment.");
+        foreach (var executablePath in shardChecks
+            .Select(check => EngineSettings.ResolveMtpInvocation(check.Project).ResolveExecutablePath(buildEnvironment))
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(executablePath))
+            {
+                throw new InvalidDataException(
+                    $"Infrastructure shard prebuild did not produce configured MTP executable '{executablePath}'.");
+            }
+        }
+    }
+
+    private static int ShardPriority(AcceptanceManifestCheck check) =>
+        check.Name.Contains("Remainder", StringComparison.OrdinalIgnoreCase) ||
+        check.Name.Contains("Chaos gate", StringComparison.OrdinalIgnoreCase) ? 300 :
+        check.Name.Contains("Goal worktree", StringComparison.OrdinalIgnoreCase) ? 200 :
+        check.Name.Contains("Worker dispatch", StringComparison.OrdinalIgnoreCase) ? 190 :
+        0;
+
+    private static void EmitShardTimingProgress(
+        GoalId? goalId,
+        string phase,
+        string target,
+        int slotIndex,
+        TimeSpan elapsed)
+    {
+        var now = DateTimeOffset.UtcNow;
+        EmitGateProgress(new AcceptanceGateProgress(
+            goalId?.Value,
+            phase,
+            target,
+            slotIndex,
+            Environment.ProcessId,
+            null,
+            now - elapsed,
+            now,
+            now,
+            elapsed,
+            0,
+            GateHeartbeatArtifacts.GetStableSlotPath(slotIndex)));
+    }
+
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithPartitionVerdictCacheAsync(
         AcceptanceManifestCheck check,
         PartitionVerdictCacheContext? cacheContext,
@@ -554,7 +845,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? testResultsDirectoryOverride = null)
     {
         if (cacheContext is not null &&
             TryBuildPartitionCacheKey(cacheContext, check, out var partitionId, out var filterHash, out var cacheKey) &&
@@ -563,7 +855,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             HasReusableStructuralCoverageEvidence(cached))
         {
             var reused = new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey);
-            cacheContext.Reused.Add(reused);
+            cacheContext.RecordReuse(reused);
             return (new AcceptanceCheckResult(
                 check.Name,
                 true,
@@ -581,7 +873,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             dotnetTestBuildPhase,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            testResultsDirectoryOverride).ConfigureAwait(false);
 
         // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
         // (a concurrent test process grabbing a build-slot lease -> SlotsBusy, a live-repo-HEAD race, a
@@ -600,28 +893,30 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 dotnetTestBuildPhase,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                testResultsDirectoryOverride).ConfigureAwait(false);
             fresh = rerun.Result.Passed ? (rerun.Result, true) : fresh;
         }
 
         if (cacheContext is not null &&
             TryBuildPartitionCacheKey(cacheContext, check, out partitionId, out filterHash, out cacheKey))
         {
-            cacheContext.Executed.Add(new PartitionVerdictExecutionReceipt(
-                partitionId,
-                fresh.Result.Passed ? "GREEN" : "RED"));
-            cacheContext.FreshRecords.Add(new PartitionVerdictRecord(
-                cacheContext.GoalId,
-                cacheContext.AttemptId,
-                cacheContext.CandidateTreeSha,
-                cacheContext.MainSha,
-                filterHash,
-                partitionId,
-                cacheKey,
-                fresh.Result.Passed,
-                fresh.Result.Passed ? "GREEN" : "RED",
-                fresh.Result.TestResultPaths ?? [],
-                DateTimeOffset.UtcNow));
+            cacheContext.RecordExecution(
+                new PartitionVerdictExecutionReceipt(
+                    partitionId,
+                    fresh.Result.Passed ? "GREEN" : "RED"),
+                new PartitionVerdictRecord(
+                    cacheContext.GoalId,
+                    cacheContext.AttemptId,
+                    cacheContext.CandidateTreeSha,
+                    cacheContext.MainSha,
+                    filterHash,
+                    partitionId,
+                    cacheKey,
+                    fresh.Result.Passed,
+                    fresh.Result.Passed ? "GREEN" : "RED",
+                    fresh.Result.TestResultPaths ?? [],
+                    DateTimeOffset.UtcNow));
         }
 
         return fresh;
@@ -634,7 +929,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? testResultsDirectoryOverride = null)
     {
         ThrowIfGateCancellationRequested(cancellationToken);
         var result = await RunCheckAsync(
@@ -644,7 +940,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             dotnetTestBuildPhase,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            testResultsDirectoryOverride).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
         return result;
     }
@@ -830,7 +1127,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceManifestCheck? solutionCheck,
         IReadOnlyList<AcceptanceManifestCheck> allChecks,
         IReadOnlyList<string>? changedFiles,
-        PolicyShardPlan policyShardPlan)
+        PolicyShardPlan policyShardPlan,
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes)
     {
         if (solutionCheck is null ||
             changedFiles is null ||
@@ -863,7 +1161,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         foreach (var plannedCheck in plan.Checks)
         {
             var plannedManifestCheck = PolicyCheckToManifestCheck(plannedCheck);
-            foreach (var scopedCheck in ExpandBroadInfrastructureCheck(plannedManifestCheck))
+            foreach (var scopedCheck in ExpandBroadInfrastructureCheck(plannedManifestCheck, infrastructureTestLanes))
             {
                 var existing = allChecks.FirstOrDefault(check =>
                     check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
@@ -905,7 +1203,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles,
         IReadOnlyList<AcceptanceManifestCheck>? policyRequiredChecks = null,
-        PolicyShardPlan? policyShardPlan = null)
+        PolicyShardPlan? policyShardPlan = null,
+        IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return manifestChecks;
@@ -915,7 +1214,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var plannedChecks = requiredPolicyChecks
             .Where(check => !policyShardPlan.ForceFull ||
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
-            .SelectMany(ExpandBroadInfrastructureCheck)
+            .SelectMany(check => ExpandBroadInfrastructureCheck(check, infrastructureTestLanes))
             .ToArray();
         var focusedProjectChecks = plannedChecks
             .Where(IsFocusedProjectDotnetCheck)
@@ -1107,7 +1406,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         project;
 
     private static List<AcceptanceManifestCheck> ExpandBroadInfrastructureChecks(
-        IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes)
     {
         var effective = new List<AcceptanceManifestCheck>();
         foreach (var check in manifestChecks)
@@ -1118,13 +1418,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            effective.AddRange(ExpandBroadInfrastructureCheck(check));
+            effective.AddRange(ExpandBroadInfrastructureCheck(check, infrastructureTestLanes));
         }
 
         return effective;
     }
 
-    private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(AcceptanceManifestCheck check)
+    private static IEnumerable<AcceptanceManifestCheck> ExpandBroadInfrastructureCheck(
+        AcceptanceManifestCheck check,
+        IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null)
     {
         if (!IsBroadInfrastructureTestCheck(check))
         {
@@ -1132,7 +1434,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             yield break;
         }
 
-        foreach (var lane in EngineSettings.InfrastructureTestLanes)
+        foreach (var lane in infrastructureTestLanes ?? EngineSettings.InfrastructureTestLanes)
         {
             yield return BuildInfrastructureShardCheck(check, lane);
         }
@@ -1289,7 +1591,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static void AddCoveredBroadInfrastructureResults(
         List<AcceptanceCheckResult> checks,
         IReadOnlyList<AcceptanceManifestCheck> policyEffectiveChecks,
-        IReadOnlyList<string>? changedFiles)
+        IReadOnlyList<string>? changedFiles,
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return;
@@ -1299,7 +1602,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (checks.Any(result => result.Name.Equals(broadCheck.Name, StringComparison.OrdinalIgnoreCase)))
                 continue;
 
-            var shardResults = ExpandBroadInfrastructureCheck(broadCheck)
+            var shardResults = ExpandBroadInfrastructureCheck(broadCheck, infrastructureTestLanes)
                 .Select(shard => checks.FirstOrDefault(result =>
                     result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase)))
                 .Where(result => result is not null)
@@ -1325,7 +1628,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            if (shardResults.Length != EngineSettings.InfrastructureTestLanes.Count)
+            if (shardResults.Length != infrastructureTestLanes.Count)
                 continue;
 
             var lastShard = shardResults[^1];
@@ -1907,7 +2210,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? testResultsDirectoryOverride = null)
     {
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
@@ -1927,7 +2231,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
 
         return check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)
-            ? await RunDotnetTestCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false)
+            ? await RunDotnetTestCheckAsync(
+                check,
+                worktreePath,
+                goalId,
+                stableSlotIndex,
+                stableSlotLease,
+                dotnetTestBuildPhase,
+                cancellationToken,
+                testResultsDirectoryOverride).ConfigureAwait(false)
             : await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
     }
 
@@ -2061,7 +2373,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? testResultsDirectoryOverride = null)
     {
         if (UsesMicrosoftTestingPlatform(check))
         {
@@ -2072,7 +2385,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 dotnetTestBuildPhase,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                testResultsDirectoryOverride).ConfigureAwait(false);
         }
 
         if (!UsesVstestRunner(check))
@@ -2121,7 +2435,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetTestBuildPhase? dotnetTestBuildPhase,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? testResultsDirectoryOverride = null)
     {
         var attemptName = $"acceptance-{Slug(check.Name)}";
         var buildRun = dotnetTestBuildPhase is null
@@ -2160,8 +2475,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId,
             stableSlotIndex,
             stableSlotLease,
+            dotnetTestBuildPhase?.BuildEnvironment,
             attemptName,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            testResultsDirectoryOverride).ConfigureAwait(false);
 
         var durationMilliseconds = (buildRun.ContributesToCheck ? buildRun.Run.Result.DurationMilliseconds ?? 0 : 0) +
             (testRun.Result.DurationMilliseconds ?? 0);
@@ -2185,8 +2502,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetBuildEnvironment? executableEnvironment,
         string attemptName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? testResultsDirectoryOverride = null)
     {
         var elapsed = Stopwatch.StartNew();
         var environment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
@@ -2199,9 +2518,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, cancellationToken)
                 : null;
 
-            var telemetry = ResolveTestTelemetry(check, environment);
+            var telemetry = ResolveTestTelemetry(
+                check,
+                environment,
+                testResultsDirectoryOverride);
             PrepareTestTelemetryForRun(telemetry);
-            var arguments = BuildMtpTestArguments(check, environment, telemetry);
+            var arguments = BuildMtpTestArguments(check, executableEnvironment ?? environment, telemetry);
             ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
             var result = await RunWithGateHeartbeatAsync(
                 arguments,
@@ -2312,9 +2634,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         if (phase.Run is { } completed)
         {
+            if (phase.BuildEnvironment is null)
+            {
+                throw new InvalidOperationException(
+                    "A completed acceptance build phase has no recorded build environment.");
+            }
+
             return new DotnetTestBuildPhaseResult(completed, ContributesToCheck: false);
         }
 
+        phase.BuildEnvironment = stableSlotLease?.Environment ?? (stableSlotIndex.HasValue
+            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(stableSlotIndex.Value, EngineSettings.SlotCount)
+            : DotnetBuildEnvironmentManager.CreateAttempt(goalId, $"{attemptName}-build", EngineSettings.SlotCount));
         if (phase.CachePlan is not null &&
             await TryRunCachedDotnetTestBuildPhaseAsync(
                 phase,
@@ -3819,13 +4150,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (UsesMicrosoftTestingPlatform(check))
         {
             var invocation = engineSettings.ResolveMtpInvocation(check.Project);
+            // Discovery must mirror the execution-side unattended exclusion: lanes filter out
+            // Category=HostIntegration tests, so listing them here would make the structural
+            // coverage invariant report by-design-excluded tests as missing on every attempt.
             return
             [
                 invocation.ResolveExecutablePath(environment),
                 "--no-ansi",
                 "--progress",
                 "off",
-                "--list-tests"
+                "--list-tests",
+                "--filter-not-trait",
+                "Category=HostIntegration"
             ];
         }
 
@@ -3835,7 +4171,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "test",
             check.Project,
             "--no-build",
-            "--list-tests"
+            "--list-tests",
+            "--filter",
+            "Category!=HostIntegration"
         };
         return WithBuildEnvironmentArguments([.. arguments], environment);
     }
@@ -4423,7 +4761,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return [.. args];
     }
 
-    private static string? ResolveGitText(string worktreePath, params string[] arguments)
+    internal static string? ResolveGitText(string worktreePath, params string[] arguments)
     {
         try
         {
@@ -4442,13 +4780,27 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            if (!process.Start() || !process.WaitForExit(5000) || process.ExitCode != 0)
+            if (!process.Start())
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
                 return null;
             }
 
-            return process.StandardOutput.ReadToEnd();
+            // Drain both pipes concurrently BEFORE waiting for exit. Waiting first deadlocks as soon
+            // as the child's output exceeds the pipe buffer (~4KB): the child blocks writing, the
+            // 5s wait expires, and the caller sees null. The acceptance manifest crossed that size
+            // when the engine section landed, which turned every trusted-manifest read into a refusal.
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(5000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                try { process.WaitForExit(1000); } catch { /* best effort */ }
+                try { Task.WhenAll(standardOutputTask, standardErrorTask).Wait(1000); } catch { /* best effort */ }
+                return null;
+            }
+
+            Task.WhenAll(standardOutputTask, standardErrorTask).GetAwaiter().GetResult();
+            return process.ExitCode == 0 ? standardOutputTask.Result : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -4548,6 +4900,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment)
     {
+        // The build-environment arguments are MSBuild-shaped (--artifacts-path, -maxcpucount,
+        // -p:BuildInParallel=false) and only mean something to dotnet-driven commands. Appending them to a
+        // direct MTP test-executable invocation corrupts the run: every post-landing gate produced an empty
+        // <TestRun /> core-tests receipt and failed structural coverage (backlog 8af9b957, 2026-07-25).
+        if (arguments.Length == 0 ||
+            !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            return arguments;
+        }
+
         return [.. arguments, .. environment.Arguments];
     }
 
@@ -4569,10 +4931,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static DotnetTestTelemetry ResolveTestTelemetry(
         AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment)
+        DotnetBuildEnvironment environment,
+        string? resultsDirectoryOverride = null)
     {
         var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
-        var directory = string.IsNullOrWhiteSpace(attemptPrefix)
+        var directory = !string.IsNullOrWhiteSpace(resultsDirectoryOverride)
+            ? resultsDirectoryOverride
+            : string.IsNullOrWhiteSpace(attemptPrefix)
             ? Path.Combine(environment.ArtifactsPath, "TestResults")
             : Path.GetDirectoryName(attemptPrefix);
         if (string.IsNullOrWhiteSpace(directory))
@@ -5242,7 +5607,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 Checks = plan.Checks
                     .Select(ToAcceptanceCheck)
-                    .SelectMany(ExpandBroadInfrastructureCheck)
+                    .SelectMany(check => ExpandBroadInfrastructureCheck(check))
                     .ToArray()
             };
 
@@ -5398,6 +5763,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int priorReuseAttemptCount,
         bool forceFullRerun)
     {
+        private readonly object _gate = new();
+
         public string GoalId { get; } = goalId;
         public string CandidateTreeSha { get; } = candidateTreeSha;
         public string MainSha { get; } = mainSha;
@@ -5414,14 +5781,47 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         public PartitionVerdictRecord? TryGetGreen(string cacheKey) =>
             LatestGreenPartitionVerdict(journal, GoalId, cacheKey);
+
+        public void RecordReuse(PartitionVerdictReuseReceipt receipt)
+        {
+            lock (_gate)
+            {
+                Reused.Add(receipt);
+            }
+        }
+
+        public void RecordExecution(
+            PartitionVerdictExecutionReceipt execution,
+            PartitionVerdictRecord record)
+        {
+            lock (_gate)
+            {
+                Executed.Add(execution);
+                FreshRecords.Add(record);
+            }
+        }
     }
 
     private sealed class DotnetTestBuildPhase(string[] buildArguments, DotnetBaseBuildCachePlan? cachePlan)
     {
         public string[] BuildArguments { get; } = buildArguments;
         public DotnetBaseBuildCachePlan? CachePlan { get; } = cachePlan;
+        public DotnetBuildEnvironment? BuildEnvironment { get; set; }
         public (AcceptanceCheckResult Result, bool Retried)? Run { get; set; }
     }
+
+    private sealed record IndexedShard(int Index, AcceptanceManifestCheck Check);
+
+    private sealed record ShardRunOutcome(AcceptanceCheckResult Result, bool Retried);
+
+    private sealed record ShardWorkerLease(
+        int SlotIndex,
+        DotnetBuildEnvironmentLease Lease,
+        DotnetTestBuildPhase? BuildPhase);
+
+    private sealed record CheckBatchResult(
+        IReadOnlyList<AcceptanceCheckResult> Results,
+        bool Retried);
 
     private readonly record struct DotnetTestBuildPhaseResult(
         (AcceptanceCheckResult Result, bool Retried) Run,

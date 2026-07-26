@@ -1074,6 +1074,43 @@ public sealed class ConductorDriverTests
         Assert.Contains("docs/usage.md missing", escalationReason!, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_Verified_acceptance_retry_with_cancelled_task_runs_acceptance")]
+    public void ConductorDriverVerifiedAcceptanceRetryWithCancelledTaskRunsAcceptance()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+        Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+            goal.Id,
+            ["environment failure"],
+            "Acceptance environment failed."));
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "Operator deliberately descoped task.");
+        kernel.RetryAcceptanceGate(goal.Id, "Environment repaired.");
+        var acceptanceCalled = false;
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ =>
+            {
+                acceptanceCalled = true;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            land: g => new LandingResult(
+                g.Id.Value,
+                g.Id.Value[..8],
+                new LandingDecision.Promote(),
+                "integration",
+                true,
+                "Landed"));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.True(acceptanceCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(WorkTaskStatus.Cancelled, task.Status);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_all_acceptance_criteria_met_lands")]
     public void ConductorDriverVerifiedAllAcceptanceCriteriaMetLands()
     {

@@ -63,6 +63,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Reviewer Requirements",
                 "- Review in code-review form: findings first, ordered by severity.",
+                "- First-review breadth: cover every in-scope changed file end-to-end before your first verdict, and state your coverage explicitly - every changed file examined, or name exactly what you could not examine and why. A SHALLOW finding surfacing in a later round on unchanged in-scope code is a coverage defect. Going DEEPER on later rounds is desired, not a defect: once surface findings resolve, deeper analysis layers (concurrency, durability, fault ordering, security) are exactly what review is for. Never withhold a finding you have identified, in any round.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
                 "- For independent changed-file scope checks, use git diff main...HEAD; do not use two-dot diffs, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence.",
                 "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
@@ -172,6 +173,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Reviewer Requirements",
                 "- Review in code-review form: findings first, ordered by severity, with file/evidence references.",
+                "- First-review breadth: cover every in-scope changed file end-to-end before your first verdict; state coverage or name exactly what you could not examine. A SHALLOW later-round finding on unchanged in-scope code is a coverage defect; going DEEPER in later rounds (concurrency, durability, fault ordering) is desired. Never withhold a finding you have identified.",
                 "- Use git diff main...HEAD for independent scope checks; reject two-dot or working-tree-only scope verdict evidence.",
                 "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",

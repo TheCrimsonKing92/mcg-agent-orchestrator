@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class Goal
 {
+    public const int OperatorAcceptanceRegateCap = 3;
+
     private readonly List<TaskSpec> _tasks;
     private readonly List<ProgressEvent> _timeline = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
@@ -36,6 +38,10 @@ public sealed class Goal
     public RefinedSpec? RefinedSpec { get; private set; }
 
     public AcceptanceFailureSummary? LatestAcceptanceFailure { get; private set; }
+
+    public int AutomaticAcceptanceRetryCount { get; private set; }
+
+    public int OperatorAcceptanceRegateCount { get; private set; }
 
     public string? SourceBacklogItemId { get; private set; }
 
@@ -125,6 +131,18 @@ public sealed class Goal
     }
 
     internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
+
+    internal void IncrementAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount++;
+
+    internal void ResetAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount = 0;
+
+    internal int IncrementOperatorAcceptanceRegateCount() => ++OperatorAcceptanceRegateCount;
+
+    internal void RestoreAcceptanceRetryCounts(int automaticRetryCount, int operatorRegateCount)
+    {
+        AutomaticAcceptanceRetryCount = Math.Max(0, automaticRetryCount);
+        OperatorAcceptanceRegateCount = Math.Max(0, operatorRegateCount);
+    }
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
 
@@ -216,7 +234,9 @@ public sealed class Goal
                     correction.Actor,
                     correction.RecordedAt,
                     correction.SourceTaskId?.Value,
-                    correction.SourceKind)).ToList());
+                    correction.SourceKind)).ToList(),
+            AutomaticAcceptanceRetryCount: AutomaticAcceptanceRetryCount,
+            OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -289,6 +309,10 @@ public sealed class Goal
                 correction.SourceTaskId is null ? null : new TaskId(correction.SourceTaskId),
                 correction.SourceKind));
         }
+
+        goal.RestoreAcceptanceRetryCounts(
+            snapshot.AutomaticAcceptanceRetryCount,
+            snapshot.OperatorAcceptanceRegateCount);
 
         return goal;
     }

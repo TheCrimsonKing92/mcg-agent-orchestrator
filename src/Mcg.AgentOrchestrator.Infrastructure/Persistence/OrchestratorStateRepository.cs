@@ -101,6 +101,48 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         TransactGoalAsync(goalId, transaction, cancellationToken);
 }
 
+public sealed record OrchestratorStateOutboxMessage(
+    string Id,
+    string Kind,
+    string PayloadJson,
+    DateTimeOffset CreatedAt);
+
+public enum OrchestratorStateOutboxDisposition
+{
+    Complete,
+    Quarantine
+}
+
+public sealed record OrchestratorStateOutboxProcessingResult(
+    OrchestratorStateOutboxDisposition Disposition,
+    string? Detail = null)
+{
+    public static OrchestratorStateOutboxProcessingResult Completed { get; } =
+        new(OrchestratorStateOutboxDisposition.Complete);
+
+    public static OrchestratorStateOutboxProcessingResult Quarantined(string detail) =>
+        new(OrchestratorStateOutboxDisposition.Quarantine, detail);
+}
+
+public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestratorStateRepository
+{
+    Task<T> TransactWithOutboxAsync<T>(
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(
+            bool ShouldSave,
+            T Result,
+            IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
+        string kind,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> TryProcessOutboxMessageAsync(
+        string id,
+        Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record GoalSnapshotSaveRequest(GoalSnapshot Baseline, GoalSnapshot Current);
 
 public sealed record GoalSnapshotSaveResult(

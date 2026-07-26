@@ -18,7 +18,9 @@ public sealed record GoalSnapshot(
     bool IsMetadataOnly = false,
     string? ResultCommit = null,
     DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? TerminatedAt = null);
+    DateTimeOffset? TerminatedAt = null,
+    int AutomaticAcceptanceRetryCount = 0,
+    int OperatorAcceptanceRegateCount = 0);
 
 public sealed record TerminalGoalMetadata(
     GoalId Id,

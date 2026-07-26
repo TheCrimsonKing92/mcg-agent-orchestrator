@@ -802,6 +802,805 @@ public abstract class GoalWorktreeTestBase
     }
 }
 
+public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
+{
+    [Xunit.Fact(DisplayName = "acceptance-retry_returns_failed_goal_to_verified_without_mutating_tasks")]
+    public void AcceptanceRetryReturnsFailedGoalToVerifiedWithoutMutatingTasks()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            const string operatorReason = "Build slot was locked by a stale test host.";
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Re-gate environmental acceptance failure", repo);
+            var task = goal.Tasks.Single();
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.Equal(1, kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["prior automatic retry"]));
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["infrastructure tests: Cli"],
+                "Acceptance failed in the environment.",
+                branchHeadSha: mainHead,
+                mainHeadSha: mainHead));
+
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, "Acceptance failed.", "conductor:acceptance");
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "Build slot was locked", "by a stale test host.", "--confirm-acceptance-retry"],
+                context));
+
+            Assert.Contains("Acceptance retry scheduled", output);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+            Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+            Assert.Equal(1, goal.OperatorAcceptanceRegateCount);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Null(task.LastDispatch);
+            Assert.NotNull(task.LastVerification);
+
+            var journalEntry = GoalOperationJournal.Read(repo, goal.Id).Entries
+                .Last(entry => entry.Operation == "acceptance-retry");
+            Assert.Equal(operatorReason, journalEntry.OperatorReason);
+            Assert.Equal(mainHead, journalEntry.PriorGateMainSha);
+            Assert.Equal(mainHead, journalEntry.CurrentHeadMainSha);
+            Assert.Equal(1, journalEntry.OperatorRegateCount);
+
+            using var escalationDocument = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json")));
+            var escalation = escalationDocument.RootElement.GetProperty("items")[0];
+            Assert.Equal(goal.Id.Value, escalation.GetProperty("goalId").GetString());
+            Assert.Equal("acceptance-retry", escalation.GetProperty("resolvedBy").GetString());
+            Assert.Equal(operatorReason, escalation.GetProperty("resolutionReason").GetString());
+            Assert.False(escalation.GetProperty("resolvedAtUtc").ValueKind == JsonValueKind.Null);
+
+            var restoredGoal = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+            Assert.Equal(0, restoredGoal.AutomaticAcceptanceRetryCount);
+            Assert.Equal(1, restoredGoal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_requires_confirmation_before_goal_validation")]
+    public void AcceptanceRetryRequiresConfirmationBeforeGoalValidation()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Guard acceptance retry", repo);
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+
+            var usageError = Assert.Throws<ArgumentException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired"],
+                context));
+            Assert.Equal(CliCommandHelp.AcceptanceRetryUsage, usageError.Message);
+
+            var stateError = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                context));
+            Assert.Contains("is Verified, not AcceptanceFailed", stateError.Message);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_names_incomplete_task_and_correct_recovery_verb")]
+    public void AcceptanceRetryNamesIncompleteTaskAndCorrectRecoveryVerb()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Reject re-gate over failed work", repo);
+            var task = goal.Tasks.Single();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["environmental failure"],
+                "Acceptance failed."));
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Implementation is now known to be wrong.");
+
+            var error = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "try again", "--confirm-acceptance-retry"],
+                CreateAcceptanceContext(kernel, repo, goal)));
+
+            Assert.Contains("task 1 is Failed", error.Message);
+            Assert.Contains($"retry {goal.Id.Value[..8]} 1 <reason>", error.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_requires_passed_verification_for_completed_tasks")]
+    public void AcceptanceRetryRequiresPassedVerificationForCompletedTasks()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Reject completed work without a passed receipt", repo);
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed."));
+            var snapshot = kernel.ExportSnapshot();
+            var goalSnapshot = Assert.Single(snapshot.Goals);
+            var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+            var corruptKernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals =
+                [
+                    goalSnapshot with
+                    {
+                        Tasks = [taskSnapshot with { LastVerification = null }]
+                    }
+                ]
+            });
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                corruptKernel.ValidateAcceptanceGateRetry(goal.Id, "environment repaired"));
+
+            Assert.Contains("task 1", error.Message);
+            Assert.Contains("Completed but has no verification", error.Message);
+            Assert.Contains("verify-manual", error.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, corruptKernel.GetGoal(goal.Id).Status);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_requires_prior_gate_main_sha_before_mutating_goal")]
+    public void AcceptanceRetryRequiresPriorGateMainShaBeforeMutatingGoal()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Reject unverifiable acceptance retry journal", repo);
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["environmental failure"],
+                "Acceptance failed without a main SHA."));
+
+            var error = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                CreateAcceptanceContext(kernel, repo, goal)));
+
+            Assert.Contains("prior failing gate's main HEAD SHA", error.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_allows_cancelled_task_and_caps_operator_regates_at_three")]
+    public void AcceptanceRetryAllowsCancelledTaskAndCapsOperatorRegatesAtThree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Bound repeated environmental re-gates", repo);
+            var task = goal.Tasks.Single();
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+
+            for (var attempt = 1; attempt <= Goal.OperatorAcceptanceRegateCap; attempt++)
+            {
+                Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, $"Acceptance attempt {attempt}."));
+                Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                    goal.Id,
+                    ["transient environment failure"],
+                    $"Acceptance attempt {attempt} failed.",
+                    mainHeadSha: mainHead));
+                if (attempt == 1)
+                {
+                    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "Operator deliberately descoped task.");
+                    kernel.RecordTaskVerification(
+                        goal.Id,
+                        task.Id,
+                        new TaskVerificationRecord(
+                            "stale verification",
+                            repo,
+                            1,
+                            string.Empty,
+                            "Failed before the task was deliberately cancelled.",
+                            DateTimeOffset.UtcNow));
+                }
+
+                OperatorInbox.RecordLandingEscalation(
+                    context.Workspace,
+                    goal,
+                    $"Acceptance attempt {attempt} failed.",
+                    "conductor:acceptance");
+                CliCommandHandlers.Execute(
+                    ["acceptance-retry", goal.Id.Value[..8], $"environment repair {attempt}", "--confirm-acceptance-retry"],
+                    context);
+                Assert.Equal(attempt, goal.OperatorAcceptanceRegateCount);
+                Assert.Equal(WorkTaskStatus.Cancelled, task.Status);
+            }
+
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance attempt four."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["persistent environment failure"],
+                "Acceptance attempt four failed.",
+                mainHeadSha: mainHead));
+
+            var error = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "fourth repair", "--confirm-acceptance-retry"],
+                context));
+            Assert.Contains("cap of 3 operator re-gates", error.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(Goal.OperatorAcceptanceRegateCap, goal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_refuses_corrupt_escalation_store_without_mutating_goal")]
+    public void AcceptanceRetryRefusesCorruptEscalationStoreWithoutMutatingGoal()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Preserve failed state when escalation audit cannot load", repo);
+            var task = goal.Tasks.Single();
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            Directory.CreateDirectory(context.Workspace.OrchestratorDirectory);
+            File.WriteAllText(
+                Path.Combine(context.Workspace.OrchestratorDirectory, "landing-escalations.json"),
+                "{ malformed");
+
+            var error = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                context));
+
+            Assert.Contains("Could not read landing escalation store", error.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation == "acceptance-retry");
+
+            File.WriteAllText(
+                Path.Combine(context.Workspace.OrchestratorDirectory, "landing-escalations.json"),
+                """{"items":[]}""");
+            var missingError = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                context));
+            Assert.Contains("no unresolved landing escalation", missingError.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_migrates_legacy_escalation_before_resolving_it")]
+    public void AcceptanceRetryMigratesLegacyEscalationBeforeResolvingIt()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Resolve a pre-upgrade landing escalation", repo);
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            var failureOccurredAt = goal.LatestAcceptanceFailure!.OccurredAt;
+            var escalationPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            File.WriteAllText(
+                escalationPath,
+                JsonSerializer.Serialize(new
+                {
+                    items = new[]
+                    {
+                        new
+                        {
+                            goalId = goal.Id.Value,
+                            reason = "Acceptance failed.",
+                            integrationBranch = "conductor:acceptance",
+                            escalatedAt = DateTimeOffset.UtcNow,
+                            resolvedAtUtc = (DateTimeOffset?)null,
+                            resolvedBy = (string?)null,
+                            resolutionReason = (string?)null
+                        }
+                    }
+                }));
+
+            CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                CreateAcceptanceContext(kernel, repo, goal));
+
+            using var document = JsonDocument.Parse(File.ReadAllText(escalationPath));
+            var escalation = Assert.Single(document.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("acceptance-retry", escalation.GetProperty("resolvedBy").GetString());
+            Assert.Equal(
+                "environment repaired",
+                escalation.GetProperty("resolutionReason").GetString());
+            Assert.Equal(
+                failureOccurredAt,
+                escalation.GetProperty("acceptanceFailureOccurredAt").GetDateTimeOffset());
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_stale_acceptance_failed_snapshot_cannot_reopen_resolved_escalation")]
+    public void AcceptanceRetryStaleAcceptanceFailedSnapshotCannotReopenResolvedEscalation()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Do not reopen a resolved acceptance incident", repo);
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            var staleGoal = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "Acceptance failed.",
+                "conductor:acceptance");
+
+            CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                CreateAcceptanceContext(kernel, repo, goal));
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                staleGoal,
+                "Acceptance failed.",
+                "conductor:acceptance");
+
+            using var escalationDocument = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json")));
+            var escalation = Assert.Single(escalationDocument.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("acceptance-retry", escalation.GetProperty("resolvedBy").GetString());
+            Assert.NotEqual(JsonValueKind.Null, escalation.GetProperty("resolvedAtUtc").ValueKind);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_old_resolution_callback_does_not_resolve_newer_failure")]
+    public async Task AcceptanceRetryOldResolutionCallbackDoesNotResolveNewerFailure()
+    {
+        var repo = CreateSeededRepository();
+        var previousHook = OperatorInbox.BeforeLandingEscalationResolution;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var firstFailureAt = new DateTimeOffset(2026, 7, 26, 4, 0, 0, TimeSpan.Zero);
+            var kernel = new AgentOrchestratorKernel(new TestClock(firstFailureAt));
+            var goal = CreateCompletedGoal(kernel, "Preserve a newer live acceptance incident", repo);
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            var oldFailureOccurredAt = goal.LatestAcceptanceFailure!.OccurredAt;
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "Acceptance failed.",
+                "conductor:acceptance");
+
+            var newerKernel = AgentOrchestratorKernel.FromSnapshot(
+                kernel.ExportSnapshot(),
+                new TestClock(firstFailureAt.AddMinutes(1)));
+            Assert.Equal(1, newerKernel.RetryAcceptanceGate(goal.Id, "First environment repair."));
+            Assert.True(newerKernel.BeginGoalAcceptanceVerification(goal.Id, "Re-run acceptance."));
+            Assert.True(newerKernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["second transient environment failure"],
+                "Acceptance failed again.",
+                mainHeadSha: mainHead));
+            var newerGoal = newerKernel.GetGoal(goal.Id);
+            var newerFailureOccurredAt = newerGoal.LatestAcceptanceFailure!.OccurredAt;
+            Assert.NotEqual(oldFailureOccurredAt, newerFailureOccurredAt);
+
+            using var resolutionEntered = new ManualResetEventSlim();
+            using var newerEscalationRecorded = new ManualResetEventSlim();
+            OperatorInbox.BeforeLandingEscalationResolution = () =>
+            {
+                resolutionEntered.Set();
+                Assert.True(newerEscalationRecorded.Wait(TimeSpan.FromSeconds(10)));
+            };
+
+            var resolutionTask = Task.Run(() => OperatorInbox.ResolveLandingEscalation(
+                workspace,
+                goal,
+                "First environment repair.",
+                acceptanceFailureOccurredAt: oldFailureOccurredAt));
+            Assert.True(resolutionEntered.Wait(TimeSpan.FromSeconds(10)));
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                newerGoal,
+                "Acceptance failed again.",
+                "conductor:acceptance");
+            newerEscalationRecorded.Set();
+
+            Assert.False(await resolutionTask);
+            using var escalationDocument = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json")));
+            var escalation = Assert.Single(escalationDocument.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(newerFailureOccurredAt, escalation.GetProperty("acceptanceFailureOccurredAt").GetDateTimeOffset());
+            Assert.Equal(JsonValueKind.Null, escalation.GetProperty("resolvedAtUtc").ValueKind);
+        }
+        finally
+        {
+            OperatorInbox.BeforeLandingEscalationResolution = previousHook;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_outbox_rolls_back_with_commit_and_replays_pending_audit")]
+    public void AcceptanceRetryOutboxRollsBackWithCommitAndReplaysPendingAudit()
+    {
+        var repo = CreateSeededRepository();
+        var previousResolutionHook = OperatorInbox.BeforeLandingEscalationResolution;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var failOutboxCommit = false;
+            var repository = new SqliteOrchestratorStateRepository(
+                workspace.SqliteStatePath,
+                statementObserver: null,
+                telemetryOptions: null,
+                beforeOutboxCommit: () =>
+                {
+                    if (failOutboxCommit)
+                    {
+                        throw new IOException("Injected SQLite commit failure.");
+                    }
+                });
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Roll back re-gate when audit persistence fails", repo);
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "Acceptance failed.",
+                "conductor:acceptance");
+            repository.SaveAsync(kernel).GetAwaiter().GetResult();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            failOutboxCommit = true;
+            var commitError = Assert.Throws<IOException>(() => CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Assert.Contains("Injected SQLite commit failure", commitError.Message);
+            AssertAcceptanceRetryRolledBack(repository, goal.Id);
+            Assert.Empty(repository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult());
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation == "acceptance-retry");
+            using (var unresolvedDocument = JsonDocument.Parse(
+                       File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json"))))
+            {
+                var unresolved = Assert.Single(
+                    unresolvedDocument.RootElement.GetProperty("items").EnumerateArray());
+                Assert.Equal(JsonValueKind.Null, unresolved.GetProperty("resolvedAtUtc").ValueKind);
+            }
+
+            failOutboxCommit = false;
+            OperatorInbox.BeforeLandingEscalationResolution = () =>
+                throw new IOException("Injected post-commit audit failure.");
+            var changedDespiteAuditError = CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Assert.True(changedDespiteAuditError);
+            var committedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+            Assert.Equal(GoalStatus.Verified, committedGoal.Status);
+            Assert.Null(committedGoal.LatestAcceptanceFailure);
+            Assert.Equal(1, committedGoal.OperatorAcceptanceRegateCount);
+            Assert.Single(repository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult());
+
+            OperatorInbox.BeforeLandingEscalationResolution = null;
+            var newerKernel = repository.LoadAsync().GetAwaiter().GetResult();
+            Assert.True(newerKernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance again."));
+            Assert.True(newerKernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["second transient environment failure"],
+                "Acceptance failed again.",
+                mainHeadSha: mainHead));
+            var newerGoal = newerKernel.GetGoal(goal.Id);
+            var newerFailureOccurredAt = newerGoal.LatestAcceptanceFailure!.OccurredAt;
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                newerGoal,
+                "Acceptance failed again.",
+                "conductor:acceptance");
+            repository.SaveAsync(newerKernel).GetAwaiter().GetResult();
+
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["goals"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Assert.False(changed);
+            Assert.Empty(repository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult());
+            Assert.Single(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation == "acceptance-retry");
+            using var resolvedDocument = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json")));
+            var currentEscalation = Assert.Single(
+                resolvedDocument.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(
+                newerFailureOccurredAt,
+                currentEscalation.GetProperty("acceptanceFailureOccurredAt").GetDateTimeOffset());
+            Assert.Equal(JsonValueKind.Null, currentEscalation.GetProperty("resolvedAtUtc").ValueKind);
+        }
+        finally
+        {
+            OperatorInbox.BeforeLandingEscalationResolution = previousResolutionHook;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_outbox_quarantines_poison_without_blocking_unrelated_command")]
+    public void AcceptanceRetryOutboxQuarantinesPoisonWithoutBlockingUnrelatedCommand()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var orphanKernel = new AgentOrchestratorKernel();
+            var orphanGoal = orphanKernel.CreateGoal("Orphaned acceptance retry audit");
+            var messages = new OrchestratorStateOutboxMessage[]
+            {
+                new(
+                    "acceptance-retry-audit:malformed",
+                    GoalOperationJournal.AcceptanceRetryAuditOutboxKind,
+                    "{ malformed",
+                    DateTimeOffset.UtcNow),
+                GoalOperationJournal.CreateAcceptanceRetryAuditMessage(
+                    orphanGoal,
+                    "environment repaired",
+                    new string('a', 40),
+                    new string('b', 40),
+                    1,
+                    DateTimeOffset.UtcNow)
+            };
+            repository.TransactWithOutboxAsync(
+                    (_, _) => Task.FromResult((
+                        ShouldSave: false,
+                        Result: 0,
+                        OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)messages)))
+                .GetAwaiter()
+                .GetResult();
+
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["goals"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Assert.False(changed);
+            Assert.Empty(repository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult());
+            using var connection = new SqliteConnection(
+                $"Data Source={workspace.SqliteStatePath};Mode=ReadOnly;Pooling=False;");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*)
+                FROM state_outbox
+                WHERE quarantined_at IS NOT NULL
+                  AND quarantine_reason IS NOT NULL
+                """;
+            Assert.Equal(2L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_outbox_simultaneous_drainers_apply_audit_once")]
+    public async Task AcceptanceRetryOutboxSimultaneousDrainersApplyAuditOnce()
+    {
+        var repo = CreateSeededRepository();
+        var previousJournalHook = GoalOperationJournal.BeforeAcceptanceRetryAppend;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Claim acceptance retry audit once", repo);
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "Acceptance failed.",
+                "conductor:acceptance");
+            repository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            GoalOperationJournal.BeforeAcceptanceRetryAppend = () =>
+                throw new IOException("Leave the committed audit pending.");
+            RunPersistentCommand(
+                repository,
+                workspace,
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"]);
+            Assert.Single(repository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult());
+
+            using var firstDrainerEnteredJournal = new ManualResetEventSlim();
+            using var releaseFirstDrainer = new ManualResetEventSlim();
+            var journalHookCalls = 0;
+            GoalOperationJournal.BeforeAcceptanceRetryAppend = () =>
+            {
+                Assert.Equal(1, Interlocked.Increment(ref journalHookCalls));
+                firstDrainerEnteredJournal.Set();
+                Assert.True(releaseFirstDrainer.Wait(TimeSpan.FromSeconds(10)));
+            };
+
+            var firstDrainer = Task.Run(() => RunPersistentCommand(repository, workspace, ["goals"]));
+            Assert.True(firstDrainerEnteredJournal.Wait(TimeSpan.FromSeconds(10)));
+            var secondDrainerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondDrainer = Task.Run(() =>
+            {
+                secondDrainerStarted.SetResult();
+                return RunPersistentCommand(
+                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
+                    workspace,
+                    ["goals"]);
+            });
+            await secondDrainerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseFirstDrainer.Set();
+
+            Assert.False(await firstDrainer);
+            Assert.False(await secondDrainer);
+            Assert.Equal(1, journalHookCalls);
+            Assert.Empty(await repository.ListOutboxMessagesAsync(
+                GoalOperationJournal.AcceptanceRetryAuditOutboxKind));
+            Assert.Single(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation == "acceptance-retry");
+        }
+        finally
+        {
+            GoalOperationJournal.BeforeAcceptanceRetryAppend = previousJournalHook;
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static bool RunPersistentCommand(
+        ITransactionalOrchestratorStateRepository repository,
+        OrchestratorWorkspace workspace,
+        IReadOnlyList<string> args)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        return CliPersistentStateRunner.ExecuteCommand(
+            args,
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+    }
+
+    private static void AssertAcceptanceRetryRolledBack(
+        SqliteOrchestratorStateRepository repository,
+        GoalId goalId)
+    {
+        var committedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goalId);
+        Assert.Equal(GoalStatus.AcceptanceFailed, committedGoal.Status);
+        Assert.NotNull(committedGoal.LatestAcceptanceFailure);
+        Assert.Equal(0, committedGoal.OperatorAcceptanceRegateCount);
+    }
+}
+
 public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuses_prebuilt_test_assembly_and_dependency_directory")]

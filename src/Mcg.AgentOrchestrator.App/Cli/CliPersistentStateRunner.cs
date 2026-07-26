@@ -35,6 +35,8 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null)
     {
+        DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
+
         if (IsModelOutcomesScorecard(args))
         {
             var records = stateRepository.BuildModelOutcomeScorecardAsync().GetAwaiter().GetResult();
@@ -156,37 +158,205 @@ internal static class CliPersistentStateRunner
         var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
+        var isAcceptanceRetry = args.Count > 0 &&
+            args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase);
+        bool changed;
+        if (isAcceptanceRetry &&
+            stateRepository is IOrchestratorStateOutboxRepository outboxRepository)
+        {
+            changed = outboxRepository.TransactWithOutboxAsync(
+                    (kernel, _) =>
+                    {
+                        var outboxMessages = new List<OrchestratorStateOutboxMessage>();
+                        var commandAgents = nextAgents;
+                        var commandProfiles = nextWorkerProfiles;
+                        var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
+                        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+                            args,
+                            kernel,
+                            workspace,
+                            ref commandAgents,
+                            providers,
+                            ref commandProfiles,
+                            ref commandGoal,
+                            channel,
+                            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+                            registerStateOutboxMessage: outboxMessages.Add);
 
-        var changed = stateRepository.TransactAsync(
-                (kernel, _) =>
-                {
-                    var commandAgents = nextAgents;
-                    var commandProfiles = nextWorkerProfiles;
-                    var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
-                    var shouldSave = CliCommandDispatcher.ExecuteCommand(
-                        args,
-                        kernel,
-                        workspace,
-                        ref commandAgents,
-                        providers,
-                        ref commandProfiles,
-                        ref commandGoal,
-                        channel,
-                        () => stateRepository.LoadAsync().GetAwaiter().GetResult());
+                        nextAgents = commandAgents;
+                        nextWorkerProfiles = commandProfiles;
+                        nextCurrentGoal = commandGoal;
+                        return Task.FromResult((
+                            shouldSave,
+                            shouldSave,
+                            (IReadOnlyList<OrchestratorStateOutboxMessage>)outboxMessages));
+                    })
+                .GetAwaiter()
+                .GetResult();
+            DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
+        }
+        else
+        {
+            if (isAcceptanceRetry)
+            {
+                throw new InvalidOperationException(
+                    "acceptance-retry requires a state repository with durable outbox support.");
+            }
 
-                    nextAgents = commandAgents;
-                    nextWorkerProfiles = commandProfiles;
-                    nextCurrentGoal = commandGoal;
-                    return Task.FromResult((shouldSave, shouldSave));
-                })
-            .GetAwaiter()
-            .GetResult();
+            changed = stateRepository.TransactAsync(
+                    (kernel, _) =>
+                    {
+                        var commandAgents = nextAgents;
+                        var commandProfiles = nextWorkerProfiles;
+                        var commandGoal = ResolveCurrentGoal(kernel, currentGoalId);
+                        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+                            args,
+                            kernel,
+                            workspace,
+                            ref commandAgents,
+                            providers,
+                            ref commandProfiles,
+                            ref commandGoal,
+                            channel,
+                            () => stateRepository.LoadAsync().GetAwaiter().GetResult());
+
+                        nextAgents = commandAgents;
+                        nextWorkerProfiles = commandProfiles;
+                        nextCurrentGoal = commandGoal;
+                        return Task.FromResult((shouldSave, shouldSave));
+                    })
+                .GetAwaiter()
+                .GetResult();
+        }
 
         agents = nextAgents;
         workerProfiles = nextWorkerProfiles;
         currentGoal = nextCurrentGoal;
         return changed;
     }
+
+    private static void DrainAcceptanceRetryAuditOutbox(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace)
+    {
+        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
+        {
+            return;
+        }
+
+        IReadOnlyList<OrchestratorStateOutboxMessage> messages;
+        try
+        {
+            messages = outboxRepository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            WriteAcceptanceRetryDrainWarning(
+                "could not list pending messages",
+                ex);
+            return;
+        }
+
+        if (messages.Count == 0)
+        {
+            return;
+        }
+
+        AgentOrchestratorKernel kernel;
+        try
+        {
+            kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            WriteAcceptanceRetryDrainWarning(
+                "could not load goal state for pending messages",
+                ex);
+            return;
+        }
+
+        foreach (var message in messages)
+        {
+            try
+            {
+                AcceptanceRetryAuditPayload? appliedPayload = null;
+                Goal? appliedGoal = null;
+                OrchestratorStateOutboxProcessingResult? processingResult = null;
+                var claimed = outboxRepository.TryProcessOutboxMessageAsync(
+                        message.Id,
+                        (claimedMessage, _) =>
+                        {
+                            try
+                            {
+                                var payload = GoalOperationJournal.DeserializeAcceptanceRetryAuditMessage(claimedMessage);
+                                var goal = kernel.GetGoal(new GoalId(payload.GoalId));
+                                appliedPayload = payload;
+                                appliedGoal = goal;
+                                processingResult = GoalOperationJournal.ApplyAcceptanceRetryAuditMessage(
+                                    workspace,
+                                    goal,
+                                    claimedMessage);
+                                return Task.FromResult(processingResult);
+                            }
+                            catch (JsonException ex)
+                            {
+                                processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                    $"Invalid acceptance-retry audit payload: {ex.Message}");
+                                return Task.FromResult(processingResult);
+                            }
+                            catch (KeyNotFoundException ex)
+                            {
+                                processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                    $"Acceptance-retry audit targets a missing goal: {ex.Message}");
+                                return Task.FromResult(processingResult);
+                            }
+                            catch (ArgumentException ex)
+                            {
+                                processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                    $"Acceptance-retry audit contains an invalid goal id: {ex.Message}");
+                                return Task.FromResult(processingResult);
+                            }
+                        })
+                    .GetAwaiter()
+                    .GetResult();
+
+                if (!claimed)
+                {
+                    continue;
+                }
+
+                if (processingResult?.Disposition == OrchestratorStateOutboxDisposition.Quarantine)
+                {
+                    Console.Error.WriteLine(
+                        $"Warning: acceptance-retry audit outbox message '{message.Id}' was quarantined: " +
+                        processingResult.Detail);
+                    continue;
+                }
+
+                if (appliedPayload is not null && appliedGoal is not null)
+                {
+                    Console.WriteLine(
+                        $"Acceptance retry scheduled: goal={appliedGoal.Id.Value[..8]} state={appliedGoal.Status} " +
+                        $"operator-regate={appliedPayload.OperatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; " +
+                        "next conductor tick will re-run acceptance.");
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteAcceptanceRetryDrainWarning(
+                    $"message '{message.Id}' remains pending",
+                    ex);
+            }
+        }
+    }
+
+    private static void WriteAcceptanceRetryDrainWarning(string detail, Exception exception) =>
+        Console.Error.WriteLine(
+            $"Warning: acceptance-retry audit drain {detail}; unrelated command will continue. " +
+            $"{exception.GetType().Name}: {exception.Message}");
 
     // Read-only goal listing: served from indexed metadata (no whole-store hydration, no save, no
     // auto-reconcile sweep). Only the bare `goals` command qualifies — any extra args fall through

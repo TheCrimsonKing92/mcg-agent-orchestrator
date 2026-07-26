@@ -274,7 +274,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verified goals can start acceptance verification.");
         }
 
-        if (!goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed) ||
+        if (!goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled) ||
             !goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
         {
             throw new InvalidOperationException($"Goal '{goalId}' cannot enter Verifying until all task verification gates have passed.");
@@ -353,7 +353,8 @@ public sealed partial class AgentOrchestratorKernel
         var task = goal.FindTask(taskId);
         task.RecordCriterionRetryFeedback(feedback);
         task.IncrementCriterionRetryCount();
-        return task.CriterionRetryCount;
+        goal.IncrementAutomaticAcceptanceRetryCount();
+        return goal.AutomaticAcceptanceRetryCount;
     }
 
     public void RecordAcceptanceFailure(
@@ -370,6 +371,80 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         goal.ClearAcceptanceFailure();
+    }
+
+    public int RetryAcceptanceGate(GoalId goalId, string operatorReason)
+    {
+        var goal = GetGoal(goalId);
+        var reason = ValidateAcceptanceGateRetry(goal, operatorReason);
+
+        goal.ClearAcceptanceFailure();
+        goal.ResetAutomaticAcceptanceRetryCount();
+        var operatorRegateCount = goal.IncrementOperatorAcceptanceRegateCount();
+        goal.SetStatus(GoalStatus.Verified);
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            $"Operator requested acceptance re-gate ({operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}): {reason}");
+        return operatorRegateCount;
+    }
+
+    public void ValidateAcceptanceGateRetry(GoalId goalId, string operatorReason) =>
+        ValidateAcceptanceGateRetry(GetGoal(goalId), operatorReason);
+
+    private static string ValidateAcceptanceGateRetry(Goal goal, string operatorReason)
+    {
+        var reason = operatorReason.Trim();
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new ArgumentException("Acceptance retry reason cannot be empty.", nameof(operatorReason));
+        }
+
+        if (goal.Status != GoalStatus.AcceptanceFailed)
+        {
+            throw new InvalidOperationException(
+                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}, not AcceptanceFailed; acceptance-retry is only valid after a failed acceptance gate.");
+        }
+
+        var incompleteTask = goal.Tasks.FirstOrDefault(task =>
+            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled));
+        if (incompleteTask is not null)
+        {
+            var taskNumber = TaskDisplayNumber.Resolve(goal, incompleteTask.Id);
+            var correctLever = incompleteTask.Status switch
+            {
+                WorkTaskStatus.Failed => $"retry {goal.Id.Value[..8]} {taskNumber} <reason>",
+                WorkTaskStatus.WaitingForHuman => "answer <request-id> <answer>",
+                WorkTaskStatus.Running => $"refresh-dispatch {goal.Id.Value[..8]} {taskNumber}",
+                _ => $"conduct {goal.Id.Value[..8]} --loop"
+            };
+            throw new InvalidOperationException(
+                $"Goal '{goal.Id.Value[..8]}' task {taskNumber} is {incompleteTask.Status}, not Completed or Cancelled; use '{correctLever}' instead of acceptance-retry.");
+        }
+
+        var unverifiedTask = goal.Tasks.FirstOrDefault(task =>
+            task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is not { Succeeded: true });
+        if (unverifiedTask is not null)
+        {
+            var taskNumber = TaskDisplayNumber.Resolve(goal, unverifiedTask.Id);
+            var verificationState = unverifiedTask.LastVerification is null
+                ? "has no verification"
+                : "latest verification did not pass";
+            throw new InvalidOperationException(
+                $"Goal '{goal.Id.Value[..8]}' task {taskNumber} is Completed but {verificationState}; " +
+                $"use 'verify-manual {goal.Id.Value[..8]} {taskNumber} passed <note>' after validating the work, " +
+                "or retry the task if the work is wrong.");
+        }
+
+        if (goal.OperatorAcceptanceRegateCount >= Goal.OperatorAcceptanceRegateCap)
+        {
+            throw new InvalidOperationException(
+                $"Goal '{goal.Id.Value[..8]}' has reached the acceptance-retry cap of {Goal.OperatorAcceptanceRegateCap} operator re-gates; inspect and repair the persistent gate failure before retrying.");
+        }
+
+        return reason;
     }
 
     public void ClearCriterionRetryFeedback(GoalId goalId, TaskId taskId)

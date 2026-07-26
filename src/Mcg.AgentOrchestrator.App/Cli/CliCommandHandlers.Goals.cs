@@ -337,6 +337,74 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
         }
 
+        case "acceptance-retry":
+        {
+            if (!HasCliConfirmation(parts, "--confirm-acceptance-retry"))
+            {
+                throw new ArgumentException(CliCommandHelp.AcceptanceRetryUsage);
+            }
+
+            var retryParts = RemoveStandaloneFlag(parts, "--confirm-acceptance-retry");
+            CliArgumentParser.RequirePartCount(
+                retryParts,
+                3,
+                "acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry");
+            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(
+                context.Kernel,
+                context.CurrentGoal,
+                retryParts[1]);
+            var retryGoal = context.CurrentGoal;
+            var operatorReason = ResolveTextArgument(
+                retryParts,
+                inlineIndex: 2,
+                "acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry");
+            context.Kernel.ValidateAcceptanceGateRetry(retryGoal.Id, operatorReason);
+            var priorGateMainSha = (retryGoal.LatestAcceptanceFailure?.MainHeadSha ??
+                GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, retryGoal.Id).Entries
+                    .LastOrDefault(entry =>
+                        entry.Status == GoalOperationStatus.Failed &&
+                        entry.Operation.Contains("acceptance", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(entry.MainHeadSha))
+                    ?.MainHeadSha)
+                ?? throw new InvalidOperationException(
+                    "acceptance-retry could not resolve the prior failing gate's main HEAD SHA.");
+            var currentHeadMainSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory)
+                ?? throw new InvalidOperationException("acceptance-retry could not resolve current main HEAD.");
+            var acceptanceFailureOccurredAt = retryGoal.LatestAcceptanceFailure?.OccurredAt
+                ?? throw new InvalidOperationException(
+                    "acceptance-retry could not resolve the prior acceptance failure occurrence.");
+            if (!OperatorInbox.HasUnresolvedLandingEscalation(
+                    context.Workspace,
+                    retryGoal,
+                    acceptanceFailureOccurredAt))
+            {
+                throw new InvalidOperationException(
+                    $"acceptance-retry found no unresolved landing escalation for goal {retryGoal.Id.Value[..8]}; " +
+                    "the goal was not changed.");
+            }
+
+            var operatorRegateCount = context.Kernel.RetryAcceptanceGate(retryGoal.Id, operatorReason);
+            var auditMessage = GoalOperationJournal.CreateAcceptanceRetryAuditMessage(
+                retryGoal,
+                operatorReason,
+                priorGateMainSha,
+                currentHeadMainSha,
+                operatorRegateCount,
+                acceptanceFailureOccurredAt);
+            context.CommitWithState(
+                auditMessage,
+                () =>
+                {
+                    GoalOperationJournal.ApplyAcceptanceRetryAuditMessage(
+                        context.Workspace,
+                        retryGoal,
+                        auditMessage);
+                    Console.WriteLine(
+                        $"Acceptance retry scheduled: goal={retryGoal.Id.Value[..8]} state={retryGoal.Status} operator-regate={operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; next conductor tick will re-run acceptance.");
+                });
+            return true;
+        }
+
         case "park-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]");
             context.CurrentGoal = HandleGoalParkCommand(context, parts);

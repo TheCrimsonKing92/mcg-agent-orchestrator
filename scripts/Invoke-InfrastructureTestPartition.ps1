@@ -17,7 +17,7 @@ param(
     [switch]$List,
 
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
-    [ValidateSet('Cli', 'WorkerDispatch', 'GoalWorktree', 'Dashboard', 'Conductor', 'Remainder')]
+    [ValidateSet('Cli', 'WorkerDispatch', 'GoalWorktree', 'Dashboard', 'Conductor', 'ChaosGate', 'Remainder')]
     [string]$Partition,
 
     [Parameter(ParameterSetName = 'Run')]
@@ -66,6 +66,10 @@ $partitions = [ordered]@{
             'FullyQualifiedName~ConductWatchSweepScopingTests'
         )
     }
+    ChaosGate = [pscustomobject]@{
+        Description = 'Chaos-gate acceptance contract coverage split out of the former remainder lane.'
+        Filters = @('FullyQualifiedName~ChaosGate&Category!=HostIntegration')
+    }
     Remainder = [pscustomobject]@{
         Description = 'Acceptance-gate remainder lane: all Infrastructure tests outside the named high-cost partitions.'
         Filters = @(
@@ -77,7 +81,7 @@ $partitions = [ordered]@{
             '&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DashboardHostTests' +
             '&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~AdvanceLoopTests' +
             '&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~ConductorDriverTests' +
-            '&FullyQualifiedName!~ConductWatchSweepScopingTests&Category!=HostIntegration'
+            '&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~ChaosGate&Category!=HostIntegration'
         )
     }
 }
