@@ -491,13 +491,15 @@ public sealed class DiscordCollaborationViewService
 
         overflow.Add(new OverflowAction(
             BuildOverflowIdentifier(item),
+            item.Subject,
             actionLabel));
     }
 
     private static string BuildButtonOverflowNotice(IEnumerable<OverflowAction> overflowActions)
     {
         var named = overflowActions
-            .Select(action => $"`{Truncate(action.Identifier, 16)}` {Truncate(action.Label, 28)}")
+            .Select(action =>
+                $"`{Truncate(action.Identifier, 16)}` {Truncate(action.Subject, 48)} — {Truncate(action.Label, 28)}")
             .ToList();
         return named.Count == 0
             ? string.Empty
@@ -524,7 +526,7 @@ public sealed class DiscordCollaborationViewService
         IReadOnlyList<DiscordButtonDefinition> Buttons,
         string OverflowNotice);
 
-    private sealed record OverflowAction(string Identifier, string Label);
+    private sealed record OverflowAction(string Identifier, string Subject, string Label);
 
     private DiscordCollaborationRefs LoadRefs()
     {
