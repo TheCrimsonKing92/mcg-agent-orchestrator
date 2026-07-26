@@ -53,6 +53,7 @@ if ($Remove) {
 $powerShellPath = (Get-Process -Id $PID).Path
 $arguments = @(
     "-NoProfile",
+    "-WindowStyle", "Hidden",
     "-ExecutionPolicy", "Bypass",
     "-File", (Quote-TaskArgument $resumeScriptPath),
     "-TaskName", (Quote-TaskArgument $TaskName)
