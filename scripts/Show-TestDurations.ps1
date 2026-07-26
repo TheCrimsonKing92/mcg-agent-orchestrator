@@ -3,15 +3,22 @@
   Print the slowest test durations from one or more TRX files.
 
 .DESCRIPTION
-  Reads explicit TRX files, directories, wildcard paths, or the latest
-  acceptance-gate attempt and prints a compact globally ranked table. Output is
-  capped to the top 20 tests by default.
+  Reads explicit TRX files, directories, wildcard paths, or recent
+  acceptance-gate attempts and prints a compact globally ranked table. Output
+  is capped to the top 20 tests by default.
+
+  Use -ByClass to sum test durations by class within each gate receipt set and
+  report the maximum serial duration across the most recent three sets. CSV
+  output is intended as input to deterministic lane-planning tools.
 
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Show-TestDurations.ps1 .\.test-results\*.trx
 
 .EXAMPLE
   .\scripts\Invoke-RepoScript.ps1 scripts\Show-TestDurations.ps1 .\.test-results\*.trx -Top 50
+
+.EXAMPLE
+  .\scripts\Invoke-RepoScript.ps1 scripts\Show-TestDurations.ps1 -Goal b0137830 -ByClass -Format Csv -Top 10000
 #>
 [CmdletBinding()]
 param(
@@ -23,7 +30,15 @@ param(
 
     [string]$Goal,
 
-    [string]$AttemptsRoot
+    [string]$AttemptsRoot,
+
+    [switch]$ByClass,
+
+    [ValidateSet('Table', 'Csv')]
+    [string]$Format = 'Table',
+
+    [ValidateRange(1, 3)]
+    [int]$RecentRuns = 3
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,10 +94,11 @@ function Resolve-AttemptsRoot {
     return Join-Path $repoRoot '.orchestrator\acceptance-gate-attempts'
 }
 
-function Resolve-LatestGateAttemptTrx {
+function Resolve-RecentGateAttemptTrx {
     param(
         [string]$Root,
-        [string]$GoalFilter
+        [string]$GoalFilter,
+        [int]$Count
     )
 
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
@@ -119,54 +135,61 @@ function Resolve-LatestGateAttemptTrx {
         }
     }
 
-    $latest = @($attempts | Sort-Object StartedAt -Descending | Select-Object -First 1)
-    if ($latest.Count -eq 0) {
+    $recent = @($attempts | Sort-Object StartedAt -Descending | Select-Object -First $Count)
+    if ($recent.Count -eq 0) {
         throw "No acceptance gate attempt records found under: $Root"
     }
 
-    $attemptRecord = $latest[0].Attempt
-    $paths = [System.Collections.Generic.List[string]]::new()
-    if ($null -ne $attemptRecord -and $attemptRecord.testResultPaths) {
-        foreach ($path in @($attemptRecord.testResultPaths)) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
-                [void]$paths.Add([string]$path)
-            }
-        }
-    }
-
-    $resultPath = if ($null -ne $attemptRecord -and $attemptRecord.resultPath) {
-        [string]$attemptRecord.resultPath
-    } else {
-        $latest[0].AttemptFile.FullName -replace '\.attempt\.json$', '.result.json'
-    }
-
-    if ($paths.Count -eq 0 -and (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
-        try {
-            $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-            if ($result.acceptance -and $result.acceptance.testResultPaths) {
-                foreach ($path in @($result.acceptance.testResultPaths)) {
-                    if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
-                        [void]$paths.Add([string]$path)
-                    }
+    $allFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    foreach ($attempt in $recent) {
+        $attemptRecord = $attempt.Attempt
+        $paths = [System.Collections.Generic.List[string]]::new()
+        if ($null -ne $attemptRecord -and $attemptRecord.testResultPaths) {
+            foreach ($path in @($attemptRecord.testResultPaths)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+                    [void]$paths.Add([string]$path)
                 }
             }
-        } catch {
-            throw "Latest acceptance gate result is unreadable: $resultPath"
+        }
+
+        $resultPath = if ($null -ne $attemptRecord -and $attemptRecord.resultPath) {
+            [string]$attemptRecord.resultPath
+        } else {
+            $attempt.AttemptFile.FullName -replace '\.attempt\.json$', '.result.json'
+        }
+
+        if ($paths.Count -eq 0 -and (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+            try {
+                $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($result.acceptance -and $result.acceptance.testResultPaths) {
+                    foreach ($path in @($result.acceptance.testResultPaths)) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+                            [void]$paths.Add([string]$path)
+                        }
+                    }
+                }
+            } catch {
+                throw "Acceptance gate result is unreadable: $resultPath"
+            }
+        }
+
+        if ($paths.Count -eq 0) {
+            $prefix = $attempt.AttemptFile.FullName -replace '\.attempt\.json$', ''
+            foreach ($trx in Get-ChildItem -LiteralPath (Split-Path -Parent $prefix) -Filter ((Split-Path -Leaf $prefix) + '*.trx') -File -ErrorAction SilentlyContinue) {
+                [void]$paths.Add($trx.FullName)
+            }
+        }
+
+        if ($paths.Count -eq 0) {
+            throw "Acceptance gate attempt has no referenced TRX paths: $($attempt.AttemptFile.FullName)"
+        }
+
+        foreach ($file in @(Resolve-TrxInput @($paths))) {
+            [void]$allFiles.Add($file)
         }
     }
 
-    if ($paths.Count -eq 0) {
-        $prefix = $latest[0].AttemptFile.FullName -replace '\.attempt\.json$', ''
-        foreach ($trx in Get-ChildItem -LiteralPath (Split-Path -Parent $prefix) -Filter ((Split-Path -Leaf $prefix) + '*.trx') -File -ErrorAction SilentlyContinue) {
-            [void]$paths.Add($trx.FullName)
-        }
-    }
-
-    if ($paths.Count -eq 0) {
-        throw "Latest acceptance gate attempt has no referenced TRX paths: $($latest[0].AttemptFile.FullName)"
-    }
-
-    Resolve-TrxInput @($paths)
+    $allFiles | Sort-Object FullName -Unique
 }
 
 function Convert-TrxOutcome {
@@ -196,6 +219,21 @@ function Read-TrxDurations {
         throw "Invalid TRX XML: missing TestRun/Results in $($File.FullName)"
     }
 
+    $classByTestId = @{}
+    foreach ($definition in @($trx.TestRun.TestDefinitions.UnitTest)) {
+        if ($null -ne $definition -and $null -ne $definition.TestMethod) {
+            $classByTestId[[string]$definition.id] = [string]$definition.TestMethod.className
+        }
+    }
+
+    $fileBaseName = [System.IO.Path]::GetFileNameWithoutExtension($File.Name)
+    $laneMarker = $fileBaseName.IndexOf('.infrastructure-tests-', [StringComparison]::OrdinalIgnoreCase)
+    $runKey = if ($laneMarker -gt 0) {
+        $fileBaseName.Substring(0, $laneMarker)
+    } else {
+        $File.FullName
+    }
+
     foreach ($result in @($trx.TestRun.Results.UnitTestResult)) {
         if ($null -eq $result) {
             continue
@@ -209,8 +247,10 @@ function Read-TrxDurations {
 
         [pscustomobject]@{
             TestName = [string]$result.testName
+            TestClass = $classByTestId[[string]$result.testId]
             Duration = $duration
             Outcome = Convert-TrxOutcome ([string]$result.outcome)
+            RunKey = $runKey
         }
     }
 }
@@ -219,10 +259,55 @@ try {
     $files = if ($Path.Count -gt 0) {
         @(Resolve-TrxInput $Path)
     } else {
-        @(Resolve-LatestGateAttemptTrx (Resolve-AttemptsRoot $AttemptsRoot) $Goal)
+        $runCount = if ($ByClass) { $RecentRuns } else { 1 }
+        @(Resolve-RecentGateAttemptTrx (Resolve-AttemptsRoot $AttemptsRoot) $Goal $runCount)
     }
     $rows = foreach ($file in $files) {
         Read-TrxDurations $file
+    }
+
+    if ($ByClass) {
+        $missingClass = @($rows | Where-Object { [string]::IsNullOrWhiteSpace($_.TestClass) })
+        if ($missingClass.Count -gt 0) {
+            throw "TRX input is missing class metadata for $($missingClass.Count) result(s); TestDefinitions/TestMethod.className is required for -ByClass."
+        }
+
+        $perRun = @($rows |
+            Group-Object RunKey, TestClass |
+            ForEach-Object {
+                [pscustomobject]@{
+                    RunKey = $_.Group[0].RunKey
+                    Class = $_.Group[0].TestClass
+                    Seconds = ($_.Group | Measure-Object -Property { $_.Duration.TotalSeconds } -Sum).Sum
+                }
+            })
+        $rankedClasses = @($perRun |
+            Group-Object Class |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Class = $_.Name
+                    SerialSeconds = [math]::Round(($_.Group | Measure-Object Seconds -Maximum).Maximum, 2)
+                    Runs = @($_.Group | Select-Object -ExpandProperty RunKey -Unique).Count
+                }
+            } |
+            Sort-Object -Property @{ Expression = 'SerialSeconds'; Descending = $true }, @{ Expression = 'Class'; Descending = $false } |
+            Select-Object -First $Top)
+
+        if ($rankedClasses.Count -eq 0) {
+            throw "No UnitTestResult entries found in the provided TRX input."
+        }
+
+        if ($Format -eq 'Csv') {
+            $rankedClasses | ConvertTo-Csv -NoTypeInformation
+            exit 0
+        }
+
+        "{0,9}  {1,4}  {2}" -f 'Serial', 'Runs', 'Class'
+        "{0,9}  {1,4}  {2}" -f '------', '----', '-----'
+        foreach ($row in $rankedClasses) {
+            "{0,9:N2}s  {1,4}  {2}" -f $row.SerialSeconds, $row.Runs, $row.Class
+        }
+        exit 0
     }
 
     $ranked = @($rows | Sort-Object -Property Duration -Descending | Select-Object -First $Top)

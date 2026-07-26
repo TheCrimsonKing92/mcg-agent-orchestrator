@@ -19,12 +19,29 @@ function Write-TrxFixture {
         [array]$Results
     )
 
-    $resultXml = foreach ($result in $Results) {
+    $fixtureResults = foreach ($result in $Results) {
+        [pscustomobject]@{
+            Id = [Guid]::NewGuid().ToString('D')
+            Name = $result.Name
+            Class = if ($result.Class) { $result.Class } else { ($result.Name -replace '\.[^.]+$', '') }
+            Outcome = $result.Outcome
+            Duration = $result.Duration
+        }
+    }
+    $resultXml = foreach ($result in $fixtureResults) {
         '      <UnitTestResult executionId="{0}" testId="{0}" testName="{1}" outcome="{2}" duration="{3}" />' -f (
-            [Guid]::NewGuid().ToString('D'),
+            $result.Id,
             [System.Security.SecurityElement]::Escape($result.Name),
             $result.Outcome,
             $result.Duration
+        )
+    }
+    $definitionXml = foreach ($result in $fixtureResults) {
+        '      <UnitTest id="{0}" name="{1}"><TestMethod className="{2}" name="{3}" /></UnitTest>' -f (
+            $result.Id,
+            [System.Security.SecurityElement]::Escape($result.Name),
+            [System.Security.SecurityElement]::Escape($result.Class),
+            [System.Security.SecurityElement]::Escape(($result.Name -replace '^.*\.', ''))
         )
     }
 
@@ -34,6 +51,9 @@ function Write-TrxFixture {
   <Results>
 $($resultXml -join "`r`n")
   </Results>
+  <TestDefinitions>
+$($definitionXml -join "`r`n")
+  </TestDefinitions>
 </TestRun>
 "@
 
@@ -84,6 +104,25 @@ try {
     Assert-True ($all.ExitCode -eq 0) "Expected glob invocation to pass. Output: $($all.Output -join ' | ')"
     Assert-True (($all.Output -join "`n") -match 'Mcg\.Acceptance\.SkippedTest') 'Expected glob input to include skipped result.'
     Assert-True (($all.Output -join "`n") -match 'Skipped') 'Expected NotExecuted outcome to print as Skipped.'
+
+    $runOneA = Write-TrxFixture 'run-one.infrastructure-tests-a.trx' @(
+        @{ Name = 'Mcg.Acceptance.AlphaTests.First'; Class = 'Mcg.Acceptance.AlphaTests'; Outcome = 'Passed'; Duration = '00:00:03.0000000' }
+    )
+    $runOneB = Write-TrxFixture 'run-one.infrastructure-tests-b.trx' @(
+        @{ Name = 'Mcg.Acceptance.AlphaTests.Second'; Class = 'Mcg.Acceptance.AlphaTests'; Outcome = 'Passed'; Duration = '00:00:04.0000000' },
+        @{ Name = 'Mcg.Acceptance.BetaTests.First'; Class = 'Mcg.Acceptance.BetaTests'; Outcome = 'Passed'; Duration = '00:00:05.0000000' }
+    )
+    $runTwo = Write-TrxFixture 'run-two.infrastructure-tests-a.trx' @(
+        @{ Name = 'Mcg.Acceptance.AlphaTests.First'; Class = 'Mcg.Acceptance.AlphaTests'; Outcome = 'Passed'; Duration = '00:00:06.0000000' },
+        @{ Name = 'Mcg.Acceptance.BetaTests.First'; Class = 'Mcg.Acceptance.BetaTests'; Outcome = 'Passed'; Duration = '00:00:08.0000000' }
+    )
+    $byClass = Invoke-DurationScript @($runOneA, $runOneB, $runTwo, '-ByClass', '-Format', 'Csv', '-Top', '10')
+    Assert-True ($byClass.ExitCode -eq 0) "Expected per-class invocation to pass. Output: $($byClass.Output -join ' | ')"
+    $classRows = @($byClass.Output | ConvertFrom-Csv)
+    Assert-True ($classRows.Count -eq 2) "Expected two per-class rows, got $($classRows.Count)."
+    Assert-True ($classRows[0].Class -eq 'Mcg.Acceptance.BetaTests' -and $classRows[0].SerialSeconds -eq '8') 'Expected Beta max serial duration to be 8 seconds.'
+    Assert-True ($classRows[1].Class -eq 'Mcg.Acceptance.AlphaTests' -and $classRows[1].SerialSeconds -eq '7') 'Expected Alpha tests to sum to 7 seconds within run one.'
+    Assert-True ($classRows[1].Runs -eq '2') 'Expected Alpha timing to report two receipt sets.'
 
     $attemptRoot = Join-Path $work 'acceptance-gate-attempts'
     $goalId = '11112222333344445555666677778888'
