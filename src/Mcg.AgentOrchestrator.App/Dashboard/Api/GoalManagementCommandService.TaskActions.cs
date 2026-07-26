@@ -72,8 +72,12 @@ public static async Task<object?> ApplyTaskActionAsync(
                 manual.Note,
                 workspace.ExecutionDirectory,
                 DateTimeOffset.UtcNow);
-            kernel.RecordTaskVerification(goal.Id, task.Id, manualVerification);
-            return null;
+            return await EnqueueOperatorIntentAsync(
+                workspace,
+                goal,
+                task,
+                OperatorIntentVerbs.VerifyManual,
+                new ManualVerificationOperatorIntentPayload(manualVerification));
 
         case "complete-verify":
             var complete = DashboardRequestParser.ParseManualVerifySubmission(body);
@@ -93,16 +97,14 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "retry":
             var retry = DashboardRequestParser.ParseRetrySubmission(body);
-            kernel.RetryTask(
-                goal.Id,
-                task.Id,
-                retry.Message,
-                retryRoundKind: retry.Mechanical ? RetryRoundKind.Mechanical : null);
-            GoalLifecycleCommands.RecordCapabilityWarnings(
-                kernel,
-                goal.Id,
-                GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
-            return null;
+            return await EnqueueOperatorIntentAsync(
+                workspace,
+                goal,
+                task,
+                OperatorIntentVerbs.Retry,
+                new RetryOperatorIntentPayload(
+                    retry.Message,
+                    retry.Mechanical ? RetryRoundKind.Mechanical : null));
 
         case "verification-plan":
             var verificationPlan = DashboardRequestParser.ParseVerificationPlanSubmission(body);
@@ -117,6 +119,32 @@ public static async Task<object?> ApplyTaskActionAsync(
         default:
             throw new ArgumentException("Task operation must be run, api-run, retry, verification-plan, dispatch, profile-dispatch, subscription-dispatch, start, refresh, cancel, verify, verify-manual, complete-verify, progress, or ask.");
     }
+}
+
+private static async Task<OperatorIntentDto> EnqueueOperatorIntentAsync(
+    OrchestratorWorkspace workspace,
+    Goal goal,
+    TaskSpec task,
+    string verb,
+    object payload)
+{
+    var intentId = Guid.NewGuid().ToString("N");
+    var intent = new OperatorIntentRecord(
+        intentId,
+        intentId,
+        verb,
+        goal.Id.Value,
+        task.Id.Value,
+        System.Text.Json.JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
+        [],
+        Actor: "operator",
+        Channel: "dashboard",
+        AuthenticationAssurance: "dashboard-operator-control",
+        CreatedAt: DateTimeOffset.UtcNow);
+    var persisted = await SqliteOperatorIntentStore
+        .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+        .EnqueueAsync(intent);
+    return DashboardResponseMapper.ToOperatorIntentDto(persisted);
 }
 
 private static void ApplySubscriptionLimitReviewAcknowledgement(

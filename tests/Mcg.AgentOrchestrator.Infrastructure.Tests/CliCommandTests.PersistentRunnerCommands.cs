@@ -205,6 +205,66 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsGoalScopedTaskMutationCommand(args));
     }
 
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_routes_first_recovery_verbs_to_operator_intent_inbox")]
+    [Xunit.InlineData(new[] { "retry", "1", "again" }, true)]
+    [Xunit.InlineData(new[] { "verify-manual", "1", "passed", "checked" }, true)]
+    [Xunit.InlineData(new[] { "progress", "1", "running", "started" }, false)]
+    [Xunit.InlineData(new[] { "verification-plan", "1", "dotnet test" }, false)]
+    public void PersistentRunnerRoutesFirstRecoveryVerbsToOperatorIntentInbox(string[] args, bool expected)
+    {
+        Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsInboxBackedGoalScopedTaskMutationCommand(args));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_retry_appends_intent_without_state_transaction")]
+    public async Task PersistentRunnerRetryAppendsIntentWithoutStateTransaction()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Inbox retry", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed first");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                ["retry", "1", "retry through inbox", "--idempotency-key", "retry-test-key"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        var persistedGoal = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [(await repository.LoadGoalAsync(goal.Id))!],
+            [])).GetGoal(goal.Id);
+        var intents = await SqliteOperatorIntentStore
+            .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .ListForGoalAsync(goal.Id.Value);
+
+        Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+        Xunit.Assert.Equal(0, repository.TransactGoalCount);
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, persistedGoal.Tasks.Single().Status);
+        var intent = Xunit.Assert.Single(intents);
+        Xunit.Assert.Equal(OperatorIntentVerbs.Retry, intent.Verb);
+        Xunit.Assert.Equal(task.Id.Value, intent.TaskId);
+        Xunit.Assert.Equal("retry-test-key", intent.IdempotencyKey);
+        Xunit.Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
+        Xunit.Assert.Contains("Operator intent queued", output, StringComparison.Ordinal);
+        Xunit.Assert.True(Directory.EnumerateFiles(
+            workspace.LogDirectory,
+            $"*{SqliteOperatorIntentStore.WakeFileSuffix}").Any());
+    }
+
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_task_mutation_delegate_has_no_reload_callback")]
     public void PersistentRunnerGoalScopedTaskMutationDelegateHasNoReloadCallback()
@@ -248,25 +308,6 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 {
                     Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
                     Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == "worker started");
-                }),
-            (
-                "verify-manual",
-                ["verify-manual", "1", "passed", "manual pass"],
-                (_, _, _) => { },
-                (_, task) =>
-                {
-                    Xunit.Assert.NotNull(task.LastVerification);
-                    Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
-                    Xunit.Assert.Equal("manual pass", task.LastVerification.StandardOutput);
-                }),
-            (
-                "retry",
-                ["retry", "1", "retry with evidence"],
-                (kernel, goal, task) => kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed first"),
-                (goal, task) =>
-                {
-                    Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
-                    Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == "retry with evidence");
                 }),
             (
                 "verification-plan",
@@ -340,14 +381,6 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 "progress",
                 ["progress", "--goal", "{goal}", "1", "running", "worker started"],
                 (_, _, _) => { }),
-            (
-                "verify-manual",
-                ["verify-manual", "--goal", "{goal}", "1", "passed", "manual pass"],
-                (_, _, _) => { }),
-            (
-                "retry",
-                ["retry", "--goal", "{goal}", "1", "retry with evidence"],
-                (kernel, goal, task) => kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed first")),
             (
                 "verification-plan",
                 ["verification-plan", "--goal", "{goal}", "1", "dotnet test --filter scoped"],
@@ -427,8 +460,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_retry_preserves_pending_human_input_guard")]
-    public void PersistentRunnerGoalScopedRetryPreservesPendingHumanInputGuard()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_scoped_retry_defers_state_guard_to_tick")]
+    public async Task PersistentRunnerGoalScopedRetryDefersStateGuardToTick()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -446,18 +479,22 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ThrowOnLoadAsync = true
         };
 
-        var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliPersistentStateRunner.ExecuteCommand(
+        var changed = CliPersistentStateRunner.ExecuteCommand(
             ["retry", "1", "retry too early"],
             repository,
             workspace,
             ref agents,
             providers,
             ref profiles,
-            ref currentGoal));
+            ref currentGoal);
+        var intents = await SqliteOperatorIntentStore
+            .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .ListForGoalAsync(goal.Id.Value);
 
-        Xunit.Assert.Contains("waiting for human input", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Equal(OperatorIntentStatus.Pending, Xunit.Assert.Single(intents).Status);
         Xunit.Assert.Equal(0, repository.TransactAsyncCount);
-        Xunit.Assert.Equal(1, repository.TransactGoalCount);
+        Xunit.Assert.Equal(0, repository.TransactGoalCount);
         Xunit.Assert.Equal(0, repository.LoadCount);
     }
 

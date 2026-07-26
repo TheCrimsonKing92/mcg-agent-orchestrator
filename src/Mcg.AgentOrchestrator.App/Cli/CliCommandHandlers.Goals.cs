@@ -1072,6 +1072,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); },
                     handoffOnMaxDuration: handoff,
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     selfRelaunch: selfRelaunch,
@@ -1139,6 +1140,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     wk => watchReaper.RequeueInterruptedDispatches(wk),
                     (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal); },
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,

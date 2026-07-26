@@ -72,6 +72,25 @@ public sealed class ConductorWakeSignalTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ConductorWakeSignal_existing_operator_intent_wake_file_wakes_without_exit_tracking")]
+    public void ConductorWakeSignalExistingOperatorIntentWakeFileWakesWithoutExitTracking()
+    {
+        var root = CreateTempDirectory("mcg-conductor-wake-intent");
+        try
+        {
+            var wakePath = Path.Combine(root, $"queued{Mcg.AgentOrchestrator.Infrastructure.SqliteOperatorIntentStore.WakeFileSuffix}");
+            File.WriteAllText(wakePath, "queued");
+            using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
+            wakeSignal.UpdateTrackedExitArtifacts([]);
+
+            Assert.True(wakeSignal.Wait(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static string CreateTempDirectory(string prefix)
     {
         var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");

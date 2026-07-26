@@ -263,10 +263,26 @@ internal sealed record GoalWorkSummaryDto(
     IReadOnlyList<TaskWorkSummaryDto> Tasks,
     string? MonitoringStreamPath = null,
     ParallelExecutionPlanDto? ParallelPlan = null,
-    GoalTestImpactDto? TestImpact = null)
+    GoalTestImpactDto? TestImpact = null,
+    IReadOnlyList<OperatorIntentDto>? OperatorIntents = null)
 {
     public string StatusText { get; init; } = DashboardDisplayNames.Display(Status);
 }
+
+internal sealed record OperatorIntentDto(
+    string Id,
+    string IdempotencyKey,
+    string Verb,
+    string GoalId,
+    string? TaskId,
+    OperatorIntentStatus Status,
+    string Actor,
+    string Channel,
+    string AuthenticationAssurance,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? ClaimedAt,
+    DateTimeOffset? CompletedAt,
+    string? Outcome);
 
 internal sealed record GoalTestImpactDto(
     bool RequiresBuild,

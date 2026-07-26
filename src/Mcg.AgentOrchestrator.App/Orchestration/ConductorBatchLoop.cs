@@ -25,6 +25,7 @@ internal sealed class ConductorBatchLoop
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
+    private readonly OperatorIntentCoordinator? _operatorIntents;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
     private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
@@ -48,6 +49,7 @@ internal sealed class ConductorBatchLoop
         Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? handoffOnMaxDuration = null,
         ConductEventLogWriter? conductEventLogWriter = null,
         Func<DateTimeOffset>? utcNow = null,
+        OperatorIntentCoordinator? operatorIntents = null,
         ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null,
         ProgressiveReviewSteeringCoordinator? progressiveReviewSteering = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? selfRelaunch = null,
@@ -63,6 +65,7 @@ internal sealed class ConductorBatchLoop
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => { });
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
+        _operatorIntents = operatorIntents;
         _progressiveReviewGlances = progressiveReviewGlances;
         _progressiveReviewSteering = progressiveReviewSteering;
         _handoffOnMaxDuration = handoffOnMaxDuration;
@@ -320,11 +323,34 @@ internal sealed class ConductorBatchLoop
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count}{FormatSweepCacheDetail(sweepResult)}"));
 
             var preWalkClock = Stopwatch.StartNew();
+            var actionableIntentGoalIds = (_operatorIntents?.ListActionableGoalIds() ?? [])
+                .ToHashSet(StringComparer.Ordinal);
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
-                    && !excludedGoals.Contains(g.Id.Value)
-                    && !setAsideGoals.ContainsKey(g.Id.Value))
+                    && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
+                    && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
+            var preWalkIntentChangedGoalIds = new HashSet<GoalId>();
+            var preWalkIntentLines = new List<string>();
+            if (_operatorIntents is not null)
+            {
+                foreach (var scopedGoal in scopedGoals)
+                {
+                    var intentResult = _operatorIntents.ExecutePending(kernel, scopedGoal);
+                    preWalkIntentLines.AddRange(intentResult.ProgressLines);
+                    if (intentResult.MutatedGoalState)
+                    {
+                        preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
+                        excludedGoals.Remove(scopedGoal.Id.Value);
+                        setAsideGoals.Remove(scopedGoal.Id.Value);
+                        escalatedGoals.Remove(scopedGoal.Id.Value);
+                        completedGoals.Remove(scopedGoal.Id.Value);
+                        reapedGoals.Remove(scopedGoal.Id.Value);
+                        goalProjectionCache.Invalidate(scopedGoal.Id);
+                    }
+                }
+            }
+
             var parkedExcludedCount = scopedGoals.Count(g => g.Status == GoalStatus.Parked);
             var terminalExcludedCount = scopedGoals.Count(IsPreWalkExcludedTerminalGoal);
             var preWalkCandidates = scopedGoals
@@ -340,6 +366,61 @@ internal sealed class ConductorBatchLoop
 
             if (eligible.Length == 0)
             {
+                if (preWalkIntentChangedGoalIds.Count > 0)
+                {
+                    totalTicks++;
+                    var intentTickLines = new List<string>();
+                    foreach (var line in preTickTimingLines.Concat(preWalkIntentLines))
+                    {
+                        EmitProgress(line, intentTickLines);
+                    }
+
+                    EmitProgress(
+                        $"TICK_END tick={totalTicks} advanced=0 held={preWalkIntentChangedGoalIds.Count} escalated=0 done=0",
+                        intentTickLines);
+                    if (persistGoalTick is not null)
+                    {
+                        PersistGoalTickOrThrow(
+                            persistGoalTick,
+                            kernel,
+                            preWalkIntentChangedGoalIds.ToArray(),
+                            totalTicks,
+                            intentTickLines,
+                            busyWriteDelay);
+                    }
+                    else
+                    {
+                        TryPersistTick(
+                            persistTick,
+                            kernel,
+                            totalTicks,
+                            ResolveGoalContext(preWalkIntentChangedGoalIds, onlyGoalId),
+                            "operator-intent",
+                            intentTickLines,
+                            busyWriteDelay);
+                    }
+
+                    if (persistGoalTick is not null || persistTick is not null)
+                    {
+                        _operatorIntents?.CompletePersisted(preWalkIntentChangedGoalIds);
+                    }
+
+                    totalHeld += preWalkIntentChangedGoalIds.Count;
+                    onTick?.Invoke(new BatchTickSummary(
+                        totalTicks,
+                        Advanced: 0,
+                        Held: preWalkIntentChangedGoalIds.Count,
+                        Escalated: 0,
+                        Retried: 0,
+                        Done: 0,
+                        WatchSleeping: false)
+                    {
+                        ProgressLines = intentTickLines,
+                        OperatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? []
+                    });
+                    continue;
+                }
+
                 // Daemon keep-alive: when configured (and watching), an empty backlog is NOT a reason to
                 // exit — sleep and keep polling so goals submitted later are ingested by the sweep and
                 // driven. A one-shot `conduct --loop` (keepAliveWhenIdle=false) still completes here.
@@ -384,9 +465,13 @@ internal sealed class ConductorBatchLoop
             {
                 EmitProgress(line, tickLines);
             }
+            foreach (var line in preWalkIntentLines)
+            {
+                EmitProgress(line, tickLines);
+            }
 
             var changedGoalLines = new List<string>();
-            var changedGoalIds = new HashSet<GoalId>();
+            var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds);
 
             var tickAdvanced = 0;
             var tickHeld = 0;
@@ -663,11 +748,18 @@ internal sealed class ConductorBatchLoop
             if (persistGoalTick is not null)
             {
                 if (changedGoalIds.Count > 0)
+                {
                     PersistGoalTickOrThrow(persistGoalTick, kernel, changedGoalIds.ToArray(), totalTicks, tickLines, busyWriteDelay);
+                    _operatorIntents?.CompletePersisted(changedGoalIds);
+                }
             }
             else
             {
                 TryPersistTick(persistTick, kernel, totalTicks, ResolveGoalContext(changedGoalIds, onlyGoalId), "tick", tickLines, busyWriteDelay);
+                if (persistTick is not null && changedGoalIds.Count > 0)
+                {
+                    _operatorIntents?.CompletePersisted(changedGoalIds);
+                }
             }
 
             var operatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? [];

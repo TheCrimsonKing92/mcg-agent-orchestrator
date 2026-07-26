@@ -37,6 +37,12 @@ internal static class CliPersistentStateRunner
     {
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
 
+        if (IsOperatorIntentStatusCommand(args))
+        {
+            PrintOperatorIntentStatus(args, workspace);
+            return false;
+        }
+
         if (IsModelOutcomesScorecard(args))
         {
             var records = stateRepository.BuildModelOutcomeScorecardAsync().GetAwaiter().GetResult();
@@ -142,6 +148,19 @@ internal static class CliPersistentStateRunner
 
         if (IsGoalScopedTaskMutationCommand(args))
         {
+            if (IsInboxBackedGoalScopedTaskMutationCommand(args))
+            {
+                return SubmitGoalScopedTaskOperatorIntent(
+                    args,
+                    stateRepository,
+                    workspace,
+                    agents,
+                    providers,
+                    workerProfiles,
+                    ref currentGoal,
+                    channel);
+            }
+
             return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
@@ -438,6 +457,14 @@ internal static class CliPersistentStateRunner
         };
     }
 
+    internal static bool IsInboxBackedGoalScopedTaskMutationCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        args[0].ToLowerInvariant() is OperatorIntentVerbs.Retry or OperatorIntentVerbs.VerifyManual;
+
+    private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        args[0].Equals("operator-intent-status", StringComparison.OrdinalIgnoreCase);
+
     // A conduct command running the batch loop (--loop) or single-goal continuous mode (--watch).
     internal static bool IsConductLoop(IReadOnlyList<string> args)
     {
@@ -696,7 +723,14 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null)
     {
         using var conductLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
-        var kernel = LoadConductLoopKernel(stateRepository);
+        var operatorIntentStore = SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory,
+            workspace.LogDirectory);
+        AgentOrchestratorKernel LoadLoopKernel() =>
+            LoadConductLoopKernel(
+                stateRepository,
+                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult());
+        var kernel = LoadLoopKernel();
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
         try
@@ -718,7 +752,7 @@ internal static class CliPersistentStateRunner
             if (sweep.Changed)
             {
                 PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
-                kernel = LoadConductLoopKernel(stateRepository);
+                kernel = LoadLoopKernel();
                 tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
             }
 
@@ -797,7 +831,7 @@ internal static class CliPersistentStateRunner
             ref workerProfiles,
             ref loopCurrentGoal,
             channel,
-            () => LoadConductLoopKernel(stateRepository),
+            LoadLoopKernel,
             Persist,
             persistGoalKernel: PersistGoals,
             releaseConductLoopLease: conductLoopLease.Release,
@@ -833,7 +867,8 @@ internal static class CliPersistentStateRunner
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
-        ITransactionalOrchestratorStateRepository stateRepository)
+        ITransactionalOrchestratorStateRepository stateRepository,
+        IReadOnlyCollection<string>? additionalHydratedGoalIds = null)
     {
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var terminalSummaries = summaries
@@ -844,6 +879,9 @@ internal static class CliPersistentStateRunner
                 !IsConductLoopTerminalStatus(summary.Status) &&
                 !summary.Status.Equals(GoalStatus.Parked.ToString(), StringComparison.OrdinalIgnoreCase))
             .Select(summary => new GoalId(summary.Id))
+            .Concat((additionalHydratedGoalIds ?? [])
+                .Select(id => new GoalId(id)))
+            .Distinct()
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
@@ -1119,6 +1157,126 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool SubmitGoalScopedTaskOperatorIntent(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel)
+    {
+        var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, args);
+        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, args);
+        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
+        var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        var kernel = KernelFromGoalSnapshot(snapshot, []);
+        var goal = kernel.GetGoal(goalId);
+        var context = new CliExecutionContext(
+            kernel,
+            workspace,
+            providers,
+            agents,
+            workerProfiles,
+            goal,
+            channel);
+        var task = CliCommandHandlers.ResolveGoalScopedTaskMutationTarget(preparedCommand, context);
+
+        object payload = preparedCommand.Command switch
+        {
+            OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
+            OperatorIntentVerbs.VerifyManual => new ManualVerificationOperatorIntentPayload(
+                preparedCommand.ManualVerification
+                    ?? throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence.")),
+            _ => throw new InvalidOperationException(
+                $"Goal-scoped mutation '{preparedCommand.Command}' is not backed by the operator intent inbox.")
+        };
+
+        var intentId = Guid.NewGuid().ToString("N");
+        var idempotencyKey = ResolveFlagValue(args, "--idempotency-key") ?? intentId;
+        var payloadFiles = ResolveFlagValue(args, "--text-file") is { } payloadFile
+            ? new[] { Path.GetFullPath(payloadFile) }
+            : [];
+        var channelName = channel is null or NullOperatorChannel
+            ? "cli"
+            : channel.GetType().Name;
+        var intent = new OperatorIntentRecord(
+            intentId,
+            idempotencyKey,
+            preparedCommand.Command,
+            goal.Id.Value,
+            task.Id.Value,
+            JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
+            payloadFiles,
+            Actor: "operator",
+            Channel: channelName,
+            AuthenticationAssurance: channel is null or NullOperatorChannel ? "local-process" : "configured-operator-channel",
+            CreatedAt: DateTimeOffset.UtcNow);
+        var persisted = SqliteOperatorIntentStore
+            .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .EnqueueAsync(intent)
+            .GetAwaiter()
+            .GetResult();
+        currentGoal = goal;
+        Console.WriteLine(
+            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goal.Id.Value[..8]} " +
+            $"task={task.Id.Value[..8]} status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+        return false;
+    }
+
+    private static RetryOperatorIntentPayload BuildRetryPayload(
+        CliCommandHandlers.GoalScopedTaskMutationCommand command)
+    {
+        command.RetryPolicy.ThrowIfDisallowed(AutonomyAction.Retry, OperatorIntentVerbs.Retry);
+        return new RetryOperatorIntentPayload(
+            command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text."),
+            command.RetryRoundKind);
+    }
+
+    private static void PrintOperatorIntentStatus(
+        IReadOnlyList<string> args,
+        OrchestratorWorkspace workspace)
+    {
+        if (args.Count != 2)
+        {
+            throw new ArgumentException("Usage: operator-intent-status <intent-id>");
+        }
+
+        var intent = SqliteOperatorIntentStore
+            .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .GetAsync(args[1])
+            .GetAwaiter()
+            .GetResult()
+            ?? throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
+        Console.WriteLine(
+            $"Operator intent {intent.Id}: verb={intent.Verb} goal={intent.GoalId[..Math.Min(8, intent.GoalId.Length)]} " +
+            $"task={(intent.TaskId is null ? "none" : intent.TaskId[..Math.Min(8, intent.TaskId.Length)])} " +
+            $"status={intent.Status} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance} " +
+            $"outcome={intent.Outcome ?? "pending"}");
+    }
+
+    private static string? ResolveFlagValue(IReadOnlyList<string> args, string flag)
+    {
+        for (var index = 0; index < args.Count; index++)
+        {
+            if (!args[index].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 >= args.Count || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"{flag} requires a value.");
+            }
+
+            return args[index + 1];
+        }
+
+        return null;
     }
 
     private static bool ExecuteGoalScopedTaskMutationCommand(

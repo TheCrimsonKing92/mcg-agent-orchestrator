@@ -118,6 +118,22 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
     }
 }
 
+internal static TaskSpec ResolveGoalScopedTaskMutationTarget(
+    GoalScopedTaskMutationCommand command,
+    CliExecutionContext context)
+{
+    var usage = command.Command switch
+    {
+        "progress" => "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>",
+        "verify-manual" => "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>",
+        "retry" => "retry <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>",
+        "verification-plan" => "verification-plan <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [plan]",
+        "note" => "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>",
+        _ => throw new ArgumentException($"Unsupported goal-scoped task mutation command: {command.Command}")
+    };
+    return ResolveCommandTaskTarget(command.Parts, context, usage).Task;
+}
+
 internal static void RenderGoalScopedTaskMutation(GoalScopedTaskMutationOutcome outcome)
 {
     switch (outcome.RenderKind)

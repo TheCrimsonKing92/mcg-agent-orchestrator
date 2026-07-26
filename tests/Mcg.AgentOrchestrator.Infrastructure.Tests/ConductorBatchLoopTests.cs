@@ -4731,6 +4731,122 @@ public sealed class ConductorBatchLoopTests
             evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_applies_retry_intent_and_publishes_outcome_after_tick_persist")]
+    public async Task BatchLoopAppliesRetryIntentAndPublishesOutcomeAfterTickPersist()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-loop-operator-intent-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Apply operator retry");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "loop-retry-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Operator repaired through inbox.", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var persistedGoalIds = new List<GoalId>();
+
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                persistGoalTick: (_, goalIds) => persistedGoalIds.AddRange(goalIds));
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+            Assert.Contains(goal.Id, persistedGoalIds);
+            Assert.Contains(goal.Timeline, item =>
+                item.Kind == ProgressKind.GoalPolicyDecision &&
+                item.Message.Contains($"operator-intent:{intent.Id}", StringComparison.Ordinal));
+            Assert.NotNull(outcome);
+            Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Assert.Contains("Applied retry", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_recovers_claimed_intent_without_duplicate_state_mutation")]
+    public async Task OperatorIntentCoordinatorRecoversClaimedIntentWithoutDuplicateStateMutation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-loop-operator-intent-recovery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Recover claimed operator retry");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "loop-recovery-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Apply once.", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+
+            var first = new OperatorIntentCoordinator(store).ExecutePending(kernel, goal);
+            Assert.True(first.MutatedGoalState);
+            var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            var restoredGoal = restored.GetGoal(goal.Id);
+
+            var replay = new OperatorIntentCoordinator(store).ExecutePending(restored, restoredGoal);
+            var outcome = await store.GetAsync(intent.Id);
+
+            Assert.False(replay.MutatedGoalState);
+            Assert.Single(restoredGoal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+            Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Assert.Contains("recovered durable goal marker", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_keeps_unchanged_escalated_goal_set_aside_without_reescalating")]
     public void BatchLoopKeepsUnchangedEscalatedGoalSetAsideWithoutReescalating()
     {

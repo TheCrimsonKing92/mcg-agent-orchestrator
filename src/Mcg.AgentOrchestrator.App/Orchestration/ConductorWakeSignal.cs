@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal interface IConductorWakeSignal : IDisposable
@@ -12,6 +14,7 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
     private readonly SemaphoreSlim _signal = new(0, 1);
     private readonly Action<string> _warn;
     private readonly FileSystemWatcher? _watcher;
+    private readonly string _watchDirectory;
     private readonly object _trackedGate = new();
     private HashSet<string> _trackedExitCodePaths = new(StringComparer.OrdinalIgnoreCase);
     private int _signaled;
@@ -19,11 +22,12 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
     public FileSystemWatcherConductorWakeSignal(string exitDirectory, Action<string>? warn = null)
     {
         _warn = warn ?? (message => Console.Error.WriteLine(message));
+        _watchDirectory = Path.GetFullPath(exitDirectory);
 
         try
         {
-            Directory.CreateDirectory(exitDirectory);
-            _watcher = new FileSystemWatcher(exitDirectory, "*.exit.txt")
+            Directory.CreateDirectory(_watchDirectory);
+            _watcher = new FileSystemWatcher(_watchDirectory, "*")
             {
                 IncludeSubdirectories = false,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.LastWrite
@@ -100,6 +104,11 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
 
     private bool IsTracked(string path)
     {
+        if (path.EndsWith(SqliteOperatorIntentStore.WakeFileSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         var normalizedPath = NormalizePath(path);
         lock (_trackedGate)
         {
@@ -120,7 +129,11 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
             paths = _trackedExitCodePaths.ToArray();
         }
 
-        return paths.Any(File.Exists);
+        return paths.Any(File.Exists) ||
+            Directory.EnumerateFiles(
+                _watchDirectory,
+                $"*{SqliteOperatorIntentStore.WakeFileSuffix}",
+                SearchOption.TopDirectoryOnly).Any();
     }
 
     private void Signal()
