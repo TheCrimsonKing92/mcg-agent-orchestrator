@@ -1838,6 +1838,55 @@ public sealed class DispatchProcessHostTests
         Assert.Contains(sandboxRoot, labeler.QueryCalls);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_workspace_boundary_labels_parent_non_inheritable_single_node")]
+    public void DispatchProcessHostWorkspaceBoundaryLabelsParentNonInheritableSingleNode()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), "mcg-boundary-tests", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(parent, "goal-worktree");
+        Directory.CreateDirectory(worktree);
+        var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: false, Inheritable: false));
+        try
+        {
+            DispatchProcessHost.IntegrityLabelerOverrideForTests = labeler;
+
+            DispatchProcessHost.ProtectWorkspaceBoundary(worktree);
+
+            var parentCall = Assert.Single(labeler.SetCalls, call => call.Path == parent);
+            Assert.Equal("M", parentCall.Level);
+            Assert.False(parentCall.Recursive);
+        }
+        finally
+        {
+            DispatchProcessHost.IntegrityLabelerOverrideForTests = null;
+            try { Directory.Delete(parent, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_workspace_boundary_fails_closed_when_labeling_fails")]
+    public void DispatchProcessHostWorkspaceBoundaryFailsClosedWhenLabelingFails()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), "mcg-boundary-tests", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(parent, "goal-worktree");
+        Directory.CreateDirectory(worktree);
+        var labeler = new RecordingIntegrityLabeler(
+            new IntegrityLabelState(Exists: true, Low: false, Inheritable: false),
+            setResult: false);
+        try
+        {
+            DispatchProcessHost.IntegrityLabelerOverrideForTests = labeler;
+
+            var failure = Assert.Throws<InvalidOperationException>(
+                () => DispatchProcessHost.ProtectWorkspaceBoundary(worktree));
+
+            Assert.Contains("workspace boundary", failure.Message);
+        }
+        finally
+        {
+            DispatchProcessHost.IntegrityLabelerOverrideForTests = null;
+            try { Directory.Delete(parent, recursive: true); } catch { }
+        }
+    }
+
     private sealed class RecordingIntegrityLabeler(IntegrityLabelState queryState, bool setResult = true) : IWorkerIntegrityLabeler
     {
         public List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];

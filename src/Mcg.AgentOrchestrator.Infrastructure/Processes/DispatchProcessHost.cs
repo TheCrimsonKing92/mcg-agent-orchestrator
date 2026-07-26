@@ -787,7 +787,12 @@ public static class DispatchProcessHost
         }
     }
 
-    private static void ProtectWorkspaceBoundary(string worktree)
+    internal static IWorkerIntegrityLabeler? IntegrityLabelerOverrideForTests;
+
+    private static IWorkerIntegrityLabeler ResolveIntegrityLabeler() =>
+        IntegrityLabelerOverrideForTests ?? IntegrityLabeler;
+
+    internal static void ProtectWorkspaceBoundary(string worktree)
     {
         var parent = Directory.GetParent(worktree);
         if (parent is null || !parent.Exists)
@@ -795,7 +800,15 @@ public static class DispatchProcessHost
             return;
         }
 
-        _ = SetMediumIntegrity(parent.FullName);
+        // Label ONLY the parent directory node, non-inheritable. An inheritable (OI)(CI) label makes
+        // Windows re-propagate labels through every existing descendant (~20k nodes/sec measured),
+        // which blew the two-minute icacls cap on large worktree groves and silently left the
+        // boundary UNLABELED. Create/delete under the parent is governed by the parent's own label,
+        // so one node suffices; sibling worktree interiors are covered by their own labels.
+        if (!ResolveIntegrityLabeler().SetIntegrity(parent.FullName, "M", recursive: false))
+        {
+            throw new InvalidOperationException($"Failed to protect workspace boundary '{parent.FullName}'.");
+        }
 
         foreach (var file in parent.EnumerateFiles())
         {
@@ -867,7 +880,7 @@ public static void DropToLow() {
 
     private static bool SetMediumIntegrity(string path)
     {
-        return IntegrityLabeler.SetIntegrity(path, Directory.Exists(path) ? "(OI)(CI)M" : "M", recursive: false);
+        return ResolveIntegrityLabeler().SetIntegrity(path, Directory.Exists(path) ? "(OI)(CI)M" : "M", recursive: false);
     }
 
     internal static bool WaitForIntegrityLabeler(Process process, TimeSpan timeout)
