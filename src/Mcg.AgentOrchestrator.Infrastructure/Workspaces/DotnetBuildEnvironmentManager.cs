@@ -953,7 +953,7 @@ public static class DotnetBuildEnvironmentManager
 
     private static int? TryReadStableSlotExecutionOwner(int slotIndex)
     {
-        var environment = CreateStableSlotEnvironment(slotIndex);
+        var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         return TryFindActiveSlotArtifactConsumer(environment)?.ProcessId ??
             metadata?.OwnerProcessId ??

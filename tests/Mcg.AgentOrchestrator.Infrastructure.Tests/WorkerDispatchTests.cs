@@ -9,6 +9,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
@@ -956,21 +957,25 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             "main");
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-admission-{Guid.NewGuid():N}");
+        var readyPath = Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, $"holder-ready-{Guid.NewGuid():N}.txt");
+        var releasePath = Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, $"holder-release-{Guid.NewGuid():N}.txt");
+        using var incumbent = StartLeaseHolder(environment.ExecutionLockPath, readyPath, releasePath);
+        var earlyChecks = 0;
         var preflightRuns = 0;
         var paidStarts = 0;
 
         try
         {
-            using var incumbent = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
-                environment,
-                TimeSpan.Zero);
+            Xunit.Assert.True(
+                SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)),
+                "Incumbent lease holder did not signal readiness.");
             Directory.Delete(environment.ArtifactsPath, recursive: true);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 runInline: true,
                 tryRunPreSlot: (_, _) =>
                 {
-                    preflightRuns++;
+                    earlyChecks++;
                     return null;
                 });
 
@@ -979,6 +984,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
                 ConductorAutonomyPolicy.Conservative,
                 (attemptCandidate, _, _, _) =>
                 {
+                    preflightRuns++;
                     paidStarts++;
                     return ConductorParallelAcceptanceRunResult.Accepted(
                         attemptCandidate,
@@ -988,6 +994,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             Xunit.Assert.Equal(
                 ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot,
                 decision.Attempt.Outcome);
+            Xunit.Assert.Equal(1, earlyChecks);
             Xunit.Assert.Equal(0, preflightRuns);
             Xunit.Assert.Equal(0, paidStarts);
             Xunit.Assert.False(
@@ -996,12 +1003,55 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
         }
         finally
         {
+            File.WriteAllText(releasePath, "release");
+            if (!incumbent.WaitForExit(5000))
+            {
+                incumbent.Kill(entireProcessTree: true);
+                incumbent.WaitForExit(5000);
+            }
+
             if (Directory.Exists(attemptRoot))
             {
                 Directory.Delete(attemptRoot, recursive: true);
             }
         }
     }
+
+    private static Process StartLeaseHolder(string lockPath, string readyPath, string releasePath)
+    {
+        var script = $$"""
+            $stream = [System.IO.File]::Open('{{EscapePowerShell(lockPath)}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            $stream.Lock(0, 1)
+            [System.IO.File]::WriteAllText('{{EscapePowerShell(readyPath)}}', 'ready')
+            try {
+                while (-not [System.IO.File]::Exists('{{EscapePowerShell(releasePath)}}')) {
+                    Start-Sleep -Milliseconds 50
+                }
+            }
+            finally {
+                $stream.Unlock(0, 1)
+                $stream.Dispose()
+            }
+            """;
+        return Process.Start(new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                Convert.ToBase64String(Encoding.Unicode.GetBytes(script))
+            }
+        }) ?? throw new InvalidOperationException("Failed to start incumbent lease holder process.");
+    }
+
+    private static string EscapePowerShell(string value) =>
+        value.Replace("'", "''", StringComparison.Ordinal);
 
     private sealed class IsolatedDotnetRootScope : IDisposable
     {
