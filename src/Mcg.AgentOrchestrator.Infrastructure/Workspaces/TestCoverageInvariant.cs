@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed record TestPartitionCoverage(
     string Name,
     bool Completed,
-    IReadOnlyList<string> TestResultPaths);
+    IReadOnlyList<string> TestResultPaths,
+    bool HasEnvironmentInterferenceEvidence = false);
 
 internal sealed record TestCoverageInvariantResult(
     bool Passed,
@@ -221,7 +222,9 @@ internal static class TestCoverageInvariant
             : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={completedTests.Count}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
         var failureClassification = passed
             ? null
-            : emptyPartitions.Count > 0
+            : partitions.Any(partition =>
+                emptyPartitions.Contains(partition.Name, StringComparer.OrdinalIgnoreCase) &&
+                partition.HasEnvironmentInterferenceEvidence)
                 ? AcceptanceFailureClassifications.GateEnvironmentInterference
                 : AcceptanceFailureClassifications.StructuralCoverageFailed;
         return new TestCoverageInvariantResult(passed, summary, missing, emptyPartitions, failureClassification);

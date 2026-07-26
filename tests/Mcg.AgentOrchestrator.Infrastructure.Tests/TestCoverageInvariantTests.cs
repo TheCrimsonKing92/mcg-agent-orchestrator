@@ -44,7 +44,7 @@ public sealed class TestCoverageInvariantTests
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Equal(["empty", "skipped"], result.EmptyPartitions);
             Xunit.Assert.Equal(
-                AcceptanceFailureClassifications.GateEnvironmentInterference,
+                AcceptanceFailureClassifications.StructuralCoverageFailed,
                 result.FailureClassification);
         }
         finally
@@ -84,6 +84,28 @@ public sealed class TestCoverageInvariantTests
         finally
         {
             File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_classifies_empty_partition_as_environmental_only_with_positive_evidence")]
+    public void TestCoverageInvariantClassifiesEmptyPartitionAsEnvironmentalOnlyWithPositiveEvidence()
+    {
+        var emptyTrx = WriteTrx();
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["ExampleTests.Runs"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("interfered", true, [emptyTrx], HasEnvironmentInterferenceEvidence: true)]);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Equal(["interfered"], result.EmptyPartitions);
+            Xunit.Assert.Equal(
+                AcceptanceFailureClassifications.GateEnvironmentInterference,
+                result.FailureClassification);
+        }
+        finally
+        {
+            File.Delete(emptyTrx);
         }
     }
 

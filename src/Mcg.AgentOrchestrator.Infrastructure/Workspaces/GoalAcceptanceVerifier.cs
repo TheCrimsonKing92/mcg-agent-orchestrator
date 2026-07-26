@@ -3974,7 +3974,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     return new TestPartitionCoverage(
                         shard.Name,
                         result?.Passed == true,
-                        result?.TestResultPaths ?? []);
+                        result?.TestResultPaths ?? [],
+                        result?.LockRemediationApplied == true);
                 })
                 .ToArray();
             var coverage = TestCoverageInvariant.Evaluate(

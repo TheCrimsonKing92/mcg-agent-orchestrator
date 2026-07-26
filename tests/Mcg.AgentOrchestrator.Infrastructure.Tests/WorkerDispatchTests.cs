@@ -943,6 +943,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
     [Xunit.Fact(DisplayName = "Dispatch_admission_rejects_contending_gate_before_preflight_or_paid_start")]
     public void DispatchAdmissionRejectsContendingGateBeforePreflightOrPaidStart()
     {
+        using var isolatedRoot = new IsolatedDotnetRootScope("worker-dispatch-admission");
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Verify acceptance admission isolation.",
@@ -955,7 +956,6 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             "main");
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-admission-{Guid.NewGuid():N}");
-        var sentinelPath = Path.Combine(environment.ArtifactsPath, "incumbent.txt");
         var preflightRuns = 0;
         var paidStarts = 0;
 
@@ -964,8 +964,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             using var incumbent = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
                 environment,
                 TimeSpan.Zero);
-            Directory.CreateDirectory(environment.ArtifactsPath);
-            File.WriteAllText(sentinelPath, "incumbent");
+            Directory.Delete(environment.ArtifactsPath, recursive: true);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 runInline: true,
@@ -991,13 +990,39 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
                 decision.Attempt.Outcome);
             Xunit.Assert.Equal(0, preflightRuns);
             Xunit.Assert.Equal(0, paidStarts);
-            Xunit.Assert.Equal("incumbent", File.ReadAllText(sentinelPath));
+            Xunit.Assert.False(
+                Directory.Exists(environment.ArtifactsPath),
+                "Contending admission recreated the incumbent slot artifact directory before acquiring its lease.");
         }
         finally
         {
             if (Directory.Exists(attemptRoot))
             {
                 Directory.Delete(attemptRoot, recursive: true);
+            }
+        }
+    }
+
+    private sealed class IsolatedDotnetRootScope : IDisposable
+    {
+        private readonly string? _previous;
+        private readonly string _root;
+
+        public IsolatedDotnetRootScope(string suffix)
+        {
+            _root = Path.Combine(
+                Path.GetTempPath(),
+                $"{DotnetBuildEnvironmentManager.RootDirectoryName}-{suffix}-{Guid.NewGuid():N}");
+            _previous = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previous);
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
             }
         }
     }

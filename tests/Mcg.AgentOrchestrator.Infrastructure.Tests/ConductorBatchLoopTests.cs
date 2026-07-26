@@ -1664,6 +1664,48 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_environmental_interference_restores_Verified_for_regate")]
+    public void BatchLoopEnvironmentalInterferenceRestoresVerifiedForRegate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Regate.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var interference = new AcceptanceCheckResult(
+            "structural test coverage: core tests",
+            false,
+            1,
+            "classification: gate-environment-interference",
+            FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(false, [interference]),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Regate.cs"],
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true));
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Held);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+            Assert.Null(goal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_fast_child_terminal_outcome_survives_parent_pid_update")]
     public void ParallelAcceptanceFastChildTerminalOutcomeSurvivesParentPidUpdate()
     {

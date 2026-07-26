@@ -221,6 +221,17 @@ public static class DotnetBuildEnvironmentManager
         return CreateStableSlotEnvironment(slotIndex);
     }
 
+    public static DotnetBuildLeaseAcquisition TryAcquireStableSlotExecutionLock(
+        int slotIndex,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken = default,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null)
+    {
+        var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
+        return TryAcquireLeaseExecutionLock(environment, timeout, cancellationToken, timeProvider, sleep);
+    }
+
     public static bool IsStableSlotExecutionLeaseAvailable(int slotIndex)
     {
         var environment = CreateStableSlotEnvironment(slotIndex);
@@ -843,14 +854,19 @@ public static class DotnetBuildEnvironmentManager
     private static int ParseStableSlotIndex(string slotName) =>
         int.Parse(slotName["slot-".Length..], System.Globalization.CultureInfo.InvariantCulture);
 
-    private static DotnetBuildEnvironment CreateStableSlotEnvironment(int slotIndex)
+    private static DotnetBuildEnvironment CreateStableSlotEnvironment(
+        int slotIndex,
+        bool createArtifactsDirectory = true)
     {
         ValidateStableSlotIndex(slotIndex);
         var slotName = $"slot-{slotIndex}";
         var root = StableSlotRoot(slotName);
         var artifactsPath = StableSlotArtifactsPath(slotName);
         var executionLockPath = StableSlotExecutionLockPath(slotName);
-        Directory.CreateDirectory(artifactsPath);
+        if (createArtifactsDirectory)
+        {
+            Directory.CreateDirectory(artifactsPath);
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
 
         return new DotnetBuildEnvironment(
