@@ -123,7 +123,7 @@ public sealed class OperatorIntentStoreTests
             start.Set();
             await Task.WhenAll(submissions);
             allSubmitted.Set();
-            await drain;
+            await drain.WaitAsync(TimeSpan.FromSeconds(10));
 
             Xunit.Assert.Empty(failures);
             foreach (var item in goals)

@@ -112,7 +112,9 @@ internal static partial class DashboardEndpoints
         var agents = services.LoadAgentCatalog().Agents;
         var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(services.Workspace.RunEventStorePath, goal);
-        var operatorIntents = await OperatorIntentStore(services).ListForGoalAsync(goal.Id.Value, limit: 20);
+        var operatorIntents = OperatorIntentDatabaseExists(services)
+            ? await OperatorIntentStore(services).ListForGoalAsync(goal.Id.Value, limit: 20)
+            : [];
         return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(
             current,
             goal,
@@ -130,9 +132,7 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services);
         var goal = ResolveGoal(current, goalId);
-        if (!File.Exists(Path.Combine(
-                services.Workspace.OrchestratorDirectory,
-                SqliteOperatorIntentStore.DatabaseFileName)))
+        if (!OperatorIntentDatabaseExists(services))
         {
             return Json(Array.Empty<OperatorIntentDto>());
         }
@@ -145,10 +145,20 @@ internal static partial class DashboardEndpoints
         string intentId,
         DashboardEndpointServices services)
     {
+        if (!OperatorIntentDatabaseExists(services))
+        {
+            throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
+        }
+
         var intent = await OperatorIntentStore(services).GetAsync(intentId)
             ?? throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
         return Json(DashboardResponseMapper.ToOperatorIntentDto(intent));
     }
+
+    private static bool OperatorIntentDatabaseExists(DashboardEndpointServices services) =>
+        File.Exists(Path.Combine(
+            services.Workspace.OrchestratorDirectory,
+            SqliteOperatorIntentStore.DatabaseFileName));
 
     private static SqliteOperatorIntentStore OperatorIntentStore(DashboardEndpointServices services) =>
         SqliteOperatorIntentStore.OpenExisting(

@@ -352,6 +352,21 @@ internal sealed class ConductorBatchLoop
                 {
                     if (!scopedGoalsById.TryGetValue(actionableGoalId, out var scopedGoal))
                     {
+                        var reason = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId)
+                            ? $"goal is outside conductor scope {ShortGoalId(onlyGoalId!)}"
+                            : "goal was not found in conductor state";
+                        try
+                        {
+                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, reason);
+                            preWalkIntentLines.AddRange(rejectedLines);
+                            preWalkIntentProcessed |= rejectedLines.Count > 0;
+                        }
+                        catch (Exception ex)
+                        {
+                            EmitProgress(
+                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=store-unavailable phase=reject reason={Sanitize(ex.Message)}");
+                        }
+
                         continue;
                     }
 
@@ -451,7 +466,17 @@ internal sealed class ConductorBatchLoop
                         ProgressLines = intentTickLines,
                         OperatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? []
                     });
-                    continue;
+                    if (IsStopRequested(stopFilePath))
+                    {
+                        stopRequested = true;
+                        EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-after-operator-intent");
+                        break;
+                    }
+
+                    if (!(keepAliveWhenIdle && watchInterval is not null))
+                    {
+                        continue;
+                    }
                 }
 
                 // Daemon keep-alive: when configured (and watching), an empty backlog is NOT a reason to

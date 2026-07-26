@@ -72,6 +72,12 @@ public static async Task<object?> ApplyTaskActionAsync(
                 manual.Note,
                 workspace.ExecutionDirectory,
                 DateTimeOffset.UtcNow);
+            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
+            {
+                kernel.RecordTaskVerification(goal.Id, task.Id, manualVerification);
+                return null;
+            }
+
             return await EnqueueOperatorIntentAsync(
                 workspace,
                 goal,
@@ -93,11 +99,37 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "progress":
             var progress = DashboardRequestParser.ParseProgressSubmission(body);
-            kernel.ReportTaskProgress(goal.Id, task.Id, CliArgumentParser.ParseReportableStatus(progress.Status), progress.Message);
-            return null;
+            var progressStatus = CliArgumentParser.ParseReportableStatus(progress.Status);
+            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
+            {
+                kernel.ReportTaskProgress(goal.Id, task.Id, progressStatus, progress.Message);
+                return null;
+            }
+
+            return await EnqueueOperatorIntentAsync(
+                workspace,
+                goal,
+                task,
+                OperatorIntentVerbs.Progress,
+                new ProgressOperatorIntentPayload(progressStatus, progress.Message),
+                idempotencyKey: null);
 
         case "retry":
             var retry = DashboardRequestParser.ParseRetrySubmission(body);
+            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
+            {
+                kernel.RetryTask(
+                    goal.Id,
+                    task.Id,
+                    retry.Message,
+                    retryRoundKind: retry.Mechanical ? RetryRoundKind.Mechanical : null);
+                GoalLifecycleCommands.RecordCapabilityWarnings(
+                    kernel,
+                    goal.Id,
+                    GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
+                return null;
+            }
+
             return await EnqueueOperatorIntentAsync(
                 workspace,
                 goal,

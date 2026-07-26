@@ -4820,6 +4820,7 @@ public sealed class ConductorBatchLoopTests
                 "test",
                 DateTimeOffset.UtcNow);
             await store.EnqueueAsync(intent);
+            var sleepCalls = 0;
 
             _ = new ConductorBatchLoop(
                 operatorIntents: new OperatorIntentCoordinator(store)).Run(
@@ -4827,15 +4828,80 @@ public sealed class ConductorBatchLoopTests
                 MakeDriver(
                     getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                     getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1,
-                persistTick: _ => throw SqliteBusy(),
-                busyWriteDelay: _ => { });
+                 ConductorAutonomyPolicy.Conservative,
+                 NoStopPath(),
+                 maxIterations: 2,
+                 watchInterval: TimeSpan.FromSeconds(1),
+                 sleepFunc: _ =>
+                 {
+                     sleepCalls++;
+                     return true;
+                 },
+                 persistTick: _ => throw SqliteBusy(),
+                 keepAliveWhenIdle: true,
+                 busyWriteDelay: _ => { });
 
             var outcome = await store.GetAsync(intent.Id);
             Assert.Equal(OperatorIntentStatus.Claimed, outcome!.Status);
             Assert.Null(outcome.CompletedAt);
+            Assert.Equal(1, sleepCalls);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_rejects_operator_intent_outside_configured_goal_scope")]
+    public async Task BatchLoopRejectsOperatorIntentOutsideConfiguredGoalScope()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-scope");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var agents = AgentCatalog.Default().Agents;
+            var scopedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                agents,
+                "Scoped conductor goal");
+            var outsideGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                agents,
+                "Outside conductor goal");
+            var outsideTask = outsideGoal.Tasks.Single();
+            kernel.ReportTaskProgress(outsideGoal.Id, outsideTask.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "outside-scope-intent",
+                "outside-scope-key",
+                OperatorIntentVerbs.Retry,
+                outsideGoal.Id.Value,
+                outsideTask.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("retry outside scope", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+
+            _ = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onlyGoalId: scopedGoal.Id.Value);
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+            Assert.Contains("outside conductor scope", outcome.Outcome, StringComparison.Ordinal);
+            Assert.Equal(WorkTaskStatus.Failed, outsideTask.Status);
         }
         finally
         {

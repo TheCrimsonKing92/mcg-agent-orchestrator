@@ -1264,8 +1264,16 @@ internal static class CliPersistentStateRunner
             throw new ArgumentException("Usage: operator-intent-status <intent-id>");
         }
 
+        var databasePath = Path.Combine(
+            workspace.OrchestratorDirectory,
+            SqliteOperatorIntentStore.DatabaseFileName);
+        if (!File.Exists(databasePath))
+        {
+            throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
+        }
+
         var intent = SqliteOperatorIntentStore
-            .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .GetAsync(args[1])
             .GetAwaiter()
             .GetResult()

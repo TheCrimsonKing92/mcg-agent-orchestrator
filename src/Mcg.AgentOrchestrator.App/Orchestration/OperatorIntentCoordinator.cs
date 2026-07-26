@@ -94,23 +94,57 @@ internal sealed class OperatorIntentCoordinator
         return new OperatorIntentExecutionResult(mutated, lines);
     }
 
+    public IReadOnlyList<string> RejectPending(string goalId, string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        var lines = new List<string>();
+        for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
+        {
+            var intent = _store.ClaimNextAsync(goalId, ClaimOwner).GetAwaiter().GetResult();
+            if (intent is null)
+            {
+                break;
+            }
+
+            var outcome = $"Rejected {intent.Verb}: {Sanitize(reason)}";
+            _store.CompleteAsync(
+                intent.Id,
+                ClaimOwner,
+                OperatorIntentStatus.Rejected,
+                outcome,
+                _utcNow()).GetAwaiter().GetResult();
+            lines.Add(
+                $"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={ShortGoalId(goalId)} result=rejected reason={Sanitize(reason)}");
+        }
+
+        return lines;
+    }
+
     public void CompletePersisted(IReadOnlyCollection<GoalId> persistedGoalIds)
     {
         foreach (var goalId in persistedGoalIds)
         {
-            if (!_pendingCompletions.Remove(goalId.Value, out var completions))
+            if (!_pendingCompletions.TryGetValue(goalId.Value, out var completions))
             {
                 continue;
             }
 
-            foreach (var completion in completions)
+            while (completions.Count > 0)
             {
+                var completion = completions[0];
                 _store.CompleteAsync(
                     completion.IntentId,
                     ClaimOwner,
                     OperatorIntentStatus.Applied,
                     completion.Outcome,
                     _utcNow()).GetAwaiter().GetResult();
+                completions.RemoveAt(0);
+            }
+
+            if (completions.Count == 0)
+            {
+                _pendingCompletions.Remove(goalId.Value);
             }
         }
     }
@@ -183,6 +217,9 @@ internal sealed class OperatorIntentCoordinator
 
     internal static string BuildApplicationMarker(OperatorIntentRecord intent) =>
         $"operator-intent:{intent.Id}";
+
+    private static string ShortGoalId(string goalId) =>
+        goalId[..Math.Min(8, goalId.Length)];
 
     private static T Deserialize<T>(OperatorIntentRecord intent)
     {

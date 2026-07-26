@@ -111,7 +111,9 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         new(Path.Combine(orchestratorDirectory, DatabaseFileName), logDirectory, readOnly: true);
 
     private string ConnectionString =>
-        $"Data Source={_dbPath};Mode={(_readOnly ? "ReadOnly" : "ReadWriteCreate")};Pooling=False;";
+        // ReadWrite opens only an existing database while still allowing SQLite to recreate
+        // WAL shared-memory state. The public read surface never issues mutations or schema DDL.
+        $"Data Source={_dbPath};Mode={(_readOnly ? "ReadWrite" : "ReadWriteCreate")};Pooling=False;";
 
     public async Task<OperatorIntentRecord> EnqueueAsync(
         OperatorIntentRecord intent,

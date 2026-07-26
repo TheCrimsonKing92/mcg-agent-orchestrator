@@ -148,6 +148,68 @@ public sealed class DashboardRenderingTests
         Assert.Equal("Applied retry in tick 4.", dtoIntent.Outcome);
     }
 
+    [Xunit.Fact(DisplayName = "Dashboard_recovery_actions_use_inbox_only_while_conductor_is_active")]
+    public async Task DashboardRecoveryActionsUseInboxOnlyWhileConductorIsActive()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var agents = (IReadOnlyList<AgentDefinition>)AgentCatalog.Default().Agents;
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Dashboard recovery routing");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var providers = new InMemoryModelProviderRegistry([]);
+
+            var direct = await GoalManagementCommandService.ApplyTaskActionAsync(
+                kernel,
+                agents,
+                providers,
+                workspace,
+                goal,
+                task,
+                "retry",
+                "retry while loop is down");
+
+            Assert.Null(direct);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.False(File.Exists(Path.Combine(
+                workspace.OrchestratorDirectory,
+                SqliteOperatorIntentStore.DatabaseFileName)));
+
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed again");
+            using var loopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+            var queued = await GoalManagementCommandService.ApplyTaskActionAsync(
+                kernel,
+                agents,
+                providers,
+                workspace,
+                goal,
+                task,
+                "progress",
+                """{"status":"completed","message":"verified while loop runs"}""");
+
+            var dto = Assert.IsType<OperatorIntentDto>(queued);
+            Assert.Equal(OperatorIntentStatus.Pending, dto.Status);
+            Assert.Equal(WorkTaskStatus.Failed, task.Status);
+            var intent = Assert.Single(await SqliteOperatorIntentStore
+                .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
+                .ListForGoalAsync(goal.Id.Value));
+            Assert.Equal(OperatorIntentVerbs.Progress, intent.Verb);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_renders_goal_tasks_and_attention")]
     public void DashboardRendererRendersGoalTasksAndAttention()
 {
