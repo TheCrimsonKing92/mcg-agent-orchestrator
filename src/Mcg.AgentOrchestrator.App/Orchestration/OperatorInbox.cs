@@ -751,7 +751,9 @@ internal static class OperatorInbox
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            return [];
+            throw new InvalidOperationException(
+                $"Could not read landing escalation store '{path}'. Repair or restore the store before continuing.",
+                ex);
         }
     }
 

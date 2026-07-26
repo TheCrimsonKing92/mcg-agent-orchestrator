@@ -979,6 +979,11 @@ public sealed class GoalWorktreeAcceptanceRetryTests : GoalWorktreeTestBase
                     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "Operator deliberately descoped task.");
                 }
 
+                OperatorInbox.RecordLandingEscalation(
+                    context.Workspace,
+                    goal,
+                    $"Acceptance attempt {attempt} failed.",
+                    "conductor:acceptance");
                 CliCommandHandlers.Execute(
                     ["acceptance-retry", goal.Id.Value[..8], $"environment repair {attempt}", "--confirm-acceptance-retry"],
                     context);
@@ -999,6 +1004,57 @@ public sealed class GoalWorktreeAcceptanceRetryTests : GoalWorktreeTestBase
             Assert.Contains("cap of 3 operator re-gates", error.Message);
             Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
             Assert.Equal(Goal.OperatorAcceptanceRegateCap, goal.OperatorAcceptanceRegateCount);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "acceptance-retry_refuses_corrupt_escalation_store_without_mutating_goal")]
+    public void AcceptanceRetryRefusesCorruptEscalationStoreWithoutMutatingGoal()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Preserve failed state when escalation audit cannot load", repo);
+            var task = goal.Tasks.Single();
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Run acceptance."));
+            Assert.True(kernel.ReconcileGoalAcceptanceFailed(
+                goal.Id,
+                ["transient environment failure"],
+                "Acceptance failed.",
+                mainHeadSha: mainHead));
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+            Directory.CreateDirectory(context.Workspace.OrchestratorDirectory);
+            File.WriteAllText(
+                Path.Combine(context.Workspace.OrchestratorDirectory, "landing-escalations.json"),
+                "{ malformed");
+
+            var error = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                context));
+
+            Assert.Contains("Could not read landing escalation store", error.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.NotNull(goal.LatestAcceptanceFailure);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation == "acceptance-retry");
+
+            File.WriteAllText(
+                Path.Combine(context.Workspace.OrchestratorDirectory, "landing-escalations.json"),
+                """{"items":[]}""");
+            var missingError = Assert.Throws<InvalidOperationException>(() => CliCommandHandlers.Execute(
+                ["acceptance-retry", goal.Id.Value[..8], "environment repaired", "--confirm-acceptance-retry"],
+                context));
+            Assert.Contains("no unresolved landing escalation", missingError.Message);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Equal(0, goal.OperatorAcceptanceRegateCount);
         }
         finally
         {

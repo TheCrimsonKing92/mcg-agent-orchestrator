@@ -370,6 +370,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "acceptance-retry could not resolve the prior failing gate's main HEAD SHA.");
             var currentHeadMainSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory)
                 ?? throw new InvalidOperationException("acceptance-retry could not resolve current main HEAD.");
+            if (!OperatorInbox.ResolveLandingEscalation(
+                    context.Workspace,
+                    retryGoal,
+                    operatorReason))
+            {
+                throw new InvalidOperationException(
+                    $"acceptance-retry found no unresolved landing escalation for goal {retryGoal.Id.Value[..8]}; " +
+                    "the goal was not changed.");
+            }
+
             var operatorRegateCount = context.Kernel.RetryAcceptanceGate(retryGoal.Id, operatorReason);
 
             GoalOperationJournal.AcceptanceRetried(
@@ -379,10 +389,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 priorGateMainSha,
                 currentHeadMainSha,
                 operatorRegateCount);
-            OperatorInbox.ResolveLandingEscalation(
-                context.Workspace,
-                retryGoal,
-                operatorReason);
 
             Console.WriteLine(
                 $"Acceptance retry scheduled: goal={retryGoal.Id.Value[..8]} state={retryGoal.Status} operator-regate={operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; next conductor tick will re-run acceptance.");
