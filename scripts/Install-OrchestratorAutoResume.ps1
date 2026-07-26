@@ -51,7 +51,20 @@ if ($Remove) {
 }
 
 $powerShellPath = (Get-Process -Id $PID).Path
+
+# pwsh is a console app: even with -WindowStyle Hidden, conhost flashes a
+# window before the flag is honored. Routing the launch through the WinExe
+# hidden launcher never creates a console at all.
+$launcherProject = Join-Path $repoRoot "tools\Mcg.HiddenLauncher\Mcg.HiddenLauncher.csproj"
+$launcherPublishDirectory = Join-Path $repoRoot ".orchestrator\tools\hidden-launcher"
+$launcherPath = Join-Path $launcherPublishDirectory "Mcg.HiddenLauncher.exe"
+& dotnet publish $launcherProject --nologo --configuration Release --output $launcherPublishDirectory --verbosity quiet | Out-Null
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+    throw "Failed to publish hidden launcher: $launcherProject"
+}
+
 $arguments = @(
+    (Quote-TaskArgument $powerShellPath),
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
     "-File", (Quote-TaskArgument $resumeScriptPath),
@@ -59,7 +72,7 @@ $arguments = @(
 ) -join " "
 
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute $powerShellPath -Argument $arguments
+$action = New-ScheduledTaskAction -Execute $launcherPath -Argument $arguments
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
 $repetitionTrigger = New-ScheduledTaskTrigger `
     -Once `

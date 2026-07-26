@@ -518,8 +518,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(candidate.SlotIndex);
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(
+            candidate.SlotIndex,
+            TimeSpan.Zero);
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
             EmitAttemptLeaseReceipt("acquire", attempt, candidate, Environment.ProcessId);

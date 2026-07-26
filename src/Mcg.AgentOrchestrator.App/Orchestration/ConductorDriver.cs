@@ -1977,6 +1977,21 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
+        if (acceptance.RequiredUnmetCriteria.Any(check =>
+            string.Equals(
+                check.FailureClassification,
+                AcceptanceFailureClassifications.GateEnvironmentInterference,
+                StringComparison.Ordinal)))
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    "Acceptance gate environmental interference; re-gate on the next conduct tick without dispatching a worker."));
+        }
+
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
         {
             var failedChecks = acceptance.FailedChecks ?? [];

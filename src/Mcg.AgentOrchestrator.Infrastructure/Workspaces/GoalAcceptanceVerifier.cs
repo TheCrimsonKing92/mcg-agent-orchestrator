@@ -22,7 +22,17 @@ public sealed record AcceptanceCheckResult(
     bool LockRemediationApplied = false,
     string? ResultSummary = null,
     bool Advisory = false,
-    IReadOnlyList<string>? TestResultPaths = null);
+    IReadOnlyList<string>? TestResultPaths = null,
+    string? FailureClassification = null,
+    string? TestResultAttemptId = null,
+    int TestResultRunOrdinal = 0,
+    bool TestResultIsExplicitCrossAttemptReuse = false);
+
+public static class AcceptanceFailureClassifications
+{
+    public const string GateEnvironmentInterference = "gate-environment-interference";
+    public const string StructuralCoverageFailed = "structural-coverage-failed";
+}
 
 public sealed record AcceptanceVerificationResult(
     bool Passed,
@@ -455,6 +465,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 changedFiles,
                 stableSlotIndex,
                 stableSlotLease,
+                partitionVerdictCache?.AttemptId,
                 cancellationToken).ConfigureAwait(false));
         }
 
@@ -670,9 +681,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         async Task RunShardAsync(IndexedShard shard, ShardWorkerLease worker)
         {
             var shardClock = Stopwatch.StartNew();
-            var shardResultsDirectory = Path.Combine(
-                worker.Lease.Environment.ArtifactsPath,
-                "TestResults");
+            var shardResultsDirectory = ResolveInfrastructureShardResultsDirectory(
+                worker.Lease.Environment);
             var run = await RunCheckWithPartitionVerdictCacheAsync(
                 shard.Check,
                 cacheContext,
@@ -773,6 +783,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             completed.Any(outcome => outcome.Retried));
     }
 
+    internal static string ResolveInfrastructureShardResultsDirectory(
+        DotnetBuildEnvironment environment)
+    {
+        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        var attemptDirectory = string.IsNullOrWhiteSpace(attemptPrefix)
+            ? null
+            : Path.GetDirectoryName(attemptPrefix);
+        return string.IsNullOrWhiteSpace(attemptDirectory)
+            ? Path.Combine(environment.ArtifactsPath, "TestResults")
+            : attemptDirectory;
+    }
+
     internal static int ResolveAvailableShardWorkerCount(
         int primarySlotIndex,
         int shardConcurrencyBudget,
@@ -863,7 +885,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 null,
                 ResultSummary:
                     $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey}",
-                TestResultPaths: cached.TestResultPaths), false);
+                TestResultPaths: cached.TestResultPaths,
+                TestResultAttemptId: cached.AttemptId,
+                TestResultIsExplicitCrossAttemptReuse: true), false);
         }
 
         var fresh = await RunCheckWithCancellationProbeAsync(
@@ -875,6 +899,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             dotnetTestBuildPhase,
             cancellationToken,
             testResultsDirectoryOverride).ConfigureAwait(false);
+        var currentAttemptId = cacheContext?.AttemptId ?? CurrentAcceptanceAttemptIdOrNull();
+        fresh = (fresh.Result with
+        {
+            TestResultAttemptId = currentAttemptId,
+            TestResultRunOrdinal = 0
+        }, fresh.Retried);
 
         // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
         // (a concurrent test process grabbing a build-slot lease -> SlotsBusy, a live-repo-HEAD race, a
@@ -895,7 +925,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 dotnetTestBuildPhase,
                 cancellationToken,
                 testResultsDirectoryOverride).ConfigureAwait(false);
-            fresh = rerun.Result.Passed ? (rerun.Result, true) : fresh;
+            fresh = (rerun.Result with
+            {
+                TestResultAttemptId = currentAttemptId,
+                TestResultRunOrdinal = 1
+            }, true);
         }
 
         if (cacheContext is not null &&
@@ -2107,15 +2141,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string CurrentAcceptanceAttemptId()
     {
-        var prefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
-        if (!string.IsNullOrWhiteSpace(prefix))
+        if (CurrentAcceptanceAttemptIdOrNull() is { } attemptId)
         {
-            var name = Path.GetFileName(prefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (!string.IsNullOrWhiteSpace(name))
-                return name;
+            return attemptId;
         }
 
         return $"manual-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+    }
+
+    private static string? CurrentAcceptanceAttemptIdOrNull()
+    {
+        var prefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            return null;
+        }
+
+        var name = Path.GetFileName(prefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        return string.IsNullOrWhiteSpace(name) ? null : name;
     }
 
     private static string ShortHash(string value) =>
@@ -3848,6 +3891,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        string? currentAttemptId,
         CancellationToken cancellationToken)
     {
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
@@ -3881,7 +3925,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var allSummaries = new List<string>();
         foreach (var broadCheck in broadChecks)
         {
-            var candidateDiscoveryArguments = BuildDiscoveryArguments(
+            var candidateDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                 broadCheck,
                 EngineSettings,
                 environment);
@@ -3932,7 +3976,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         ResultSummary: "trusted main baseline build failed");
                 }
 
-                var mainDiscoveryArguments = BuildDiscoveryArguments(
+                var mainDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                     broadCheck,
                     EngineSettings,
                     environment with { ArtifactsPath = mainArtifactsPath });
@@ -3962,12 +4006,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var partitions = partitionChecks
                 .Select(shard =>
                 {
-                    var result = completedChecks.FirstOrDefault(candidate =>
+                    var result = completedChecks.LastOrDefault(candidate =>
                         candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
                     return new TestPartitionCoverage(
                         shard.Name,
                         result?.Passed == true,
-                        result?.TestResultPaths ?? []);
+                        result?.TestResultPaths ?? [],
+                        result?.LockRemediationApplied == true,
+                        result?.TestResultAttemptId,
+                        result?.TestResultRunOrdinal ?? 0,
+                        result?.TestResultIsExplicitCrossAttemptReuse == true);
                 })
                 .ToArray();
             var coverage = TestCoverageInvariant.Evaluate(
@@ -3976,10 +4024,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
                 partitions,
                 mainDiscoveredTests,
-                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!));
+                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
+                currentAttemptId);
             if (!coverage.Passed)
             {
-                var details = new List<string> { coverage.Summary };
+                var details = new List<string>
+                {
+                    $"classification: {coverage.FailureClassification}",
+                    coverage.Summary
+                };
                 details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
                 details.AddRange(coverage.MissingTests.Take(10).Select(name => $"missing test: {name}"));
                 return new AcceptanceCheckResult(
@@ -3987,7 +4040,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     false,
                     1,
                     string.Join(Environment.NewLine, details),
-                    ResultSummary: coverage.Summary);
+                    ResultSummary: coverage.Summary,
+                    FailureClassification: coverage.FailureClassification);
             }
 
             allSummaries.Add(coverage.Summary);
@@ -4176,6 +4230,32 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "Category!=HostIntegration"
         };
         return WithBuildEnvironmentArguments([.. arguments], environment);
+    }
+
+    private static string[] BuildUnattendedDiscoveryArguments(
+        AcceptanceManifestCheck check,
+        AcceptanceGateEngineSettings engineSettings,
+        DotnetBuildEnvironment environment)
+    {
+        var arguments = BuildDiscoveryArguments(check, engineSettings, environment).ToList();
+        if (UsesMicrosoftTestingPlatform(check))
+        {
+            arguments.Add("--filter-not-trait");
+            arguments.Add("Category=AcceptanceOptIn");
+        }
+        else
+        {
+            var filterIndex = arguments.IndexOf("--filter");
+            if (filterIndex < 0 || filterIndex == arguments.Count - 1)
+            {
+                throw new InvalidDataException(
+                    $"Acceptance check '{check.Name}' produced no discovery filter.");
+            }
+
+            arguments[filterIndex + 1] += "&Category!=AcceptanceOptIn";
+        }
+
+        return [.. arguments];
     }
 
     private static string? ResolveMainWorktreePath(string worktreePath)

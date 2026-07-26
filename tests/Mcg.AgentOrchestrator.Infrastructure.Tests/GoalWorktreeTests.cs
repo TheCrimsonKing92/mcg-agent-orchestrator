@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -1850,6 +1851,203 @@ public sealed class IsolatedDotnetVSTestBypassProbeTests
         if (!string.IsNullOrWhiteSpace(receiptPath))
         {
             File.WriteAllText(receiptPath, "xUnit executed");
+        }
+    }
+}
+
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
+{
+    [Xunit.Fact(DisplayName = "GoalWorktree_acceptance_contention_reconciles_blocked_attempt_before_clean_regate")]
+    public void GoalWorktreeAcceptanceContentionReconcilesBlockedAttemptBeforeCleanRegate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateCompletedGoal(kernel, "Verify clean acceptance re-gate.", Environment.CurrentDirectory);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/Regate.cs"],
+            "branch",
+            "main");
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-regate-{Guid.NewGuid():N}");
+
+        try
+        {
+            ConductorParallelAcceptanceAttemptDecision blocked;
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero))
+            {
+                var blockedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot,
+                    runInline: true);
+                blocked = blockedCoordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+                Xunit.Assert.Equal(
+                    ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot,
+                    blocked.Attempt.Outcome);
+                blockedCoordinator.MarkReconciled(blocked.Attempt);
+            }
+
+            var regateCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true);
+            var regated = regateCoordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, _, lease, _) =>
+                {
+                    Xunit.Assert.NotNull(lease);
+                    return ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+                });
+
+            Xunit.Assert.Equal(
+                ConductorParallelAcceptanceAttemptOutcome.Passed,
+                regated.Attempt.Outcome);
+            Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+        }
+        finally
+        {
+            if (Directory.Exists(attemptRoot))
+            {
+                Directory.Delete(attemptRoot, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktree_concurrent_verified_goals_produce_complete_isolated_partition_sets")]
+    public async Task GoalWorktreeConcurrentVerifiedGoalsProduceCompleteIsolatedPartitionSets()
+    {
+        using var isolatedRoot = new IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = CreateCompletedGoal(kernel, "Verify isolated acceptance A.", Environment.CurrentDirectory);
+        var goalB = CreateCompletedGoal(kernel, "Verify isolated acceptance B.", Environment.CurrentDirectory);
+        var candidateA = ConductorParallelAcceptanceCandidate.Create(
+            goalA,
+            0,
+            ["src/AcceptanceA.cs"],
+            "branch-a",
+            "main");
+        var candidateB = ConductorParallelAcceptanceCandidate.Create(
+            goalB,
+            1,
+            ["src/AcceptanceB.cs"],
+            "branch-b",
+            "main");
+        var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-concurrent-gates-{Guid.NewGuid():N}");
+        var bothExecuting = new CountdownEvent(2);
+        var release = new ManualResetEventSlim();
+        var coverageByGoal = new ConcurrentDictionary<string, TestCoverageInvariantResult>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+
+        try
+        {
+            ConductorParallelAcceptanceRunResult RunPartition(
+                ConductorParallelAcceptanceCandidate candidate,
+                DotnetBuildEnvironmentLease? lease)
+            {
+                Xunit.Assert.NotNull(lease);
+                bothExecuting.Signal();
+                Xunit.Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                var testName = $"{candidate.GoalPrefix}.PartitionRuns";
+                var trx = WritePassingTrx(lease!.Environment.ArtifactsPath, testName);
+                var coverage = TestCoverageInvariant.Evaluate(
+                    new HashSet<string>([testName], StringComparer.OrdinalIgnoreCase),
+                    [new TestPartitionCoverage($"{candidate.GoalPrefix}-partition", true, [trx])]);
+                coverageByGoal[candidate.Goal.Id.Value] = coverage;
+                return ConductorParallelAcceptanceRunResult.Accepted(
+                    candidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+            }
+
+            var attemptA = Task.Run(() => coordinator.Evaluate(
+                candidateA,
+                ConductorAutonomyPolicy.Conservative,
+                (candidate, _, lease, _) => RunPartition(candidate, lease)));
+            var attemptB = Task.Run(() => coordinator.Evaluate(
+                candidateB,
+                ConductorAutonomyPolicy.Conservative,
+                (candidate, _, lease, _) => RunPartition(candidate, lease)));
+
+            Xunit.Assert.True(bothExecuting.Wait(TimeSpan.FromSeconds(5)));
+            release.Set();
+            var decisions = await Task.WhenAll(attemptA, attemptB);
+
+            Xunit.Assert.All(
+                decisions,
+                decision => Xunit.Assert.Equal(
+                    ConductorParallelAcceptanceAttemptOutcome.Passed,
+                    decision.Attempt.Outcome));
+            Xunit.Assert.Equal(2, coverageByGoal.Count);
+            Xunit.Assert.All(coverageByGoal.Values, coverage =>
+            {
+                Xunit.Assert.True(coverage.Passed);
+                Xunit.Assert.Empty(coverage.EmptyPartitions);
+            });
+            Xunit.Assert.Equal(
+                GoalStatus.Verified,
+                goalA.Status);
+            Xunit.Assert.Equal(GoalStatus.Verified, goalB.Status);
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(1));
+        }
+        finally
+        {
+            release.Set();
+            if (Directory.Exists(attemptRoot))
+            {
+                Directory.Delete(attemptRoot, recursive: true);
+            }
+        }
+    }
+
+    private static string WritePassingTrx(string directory, string testName)
+    {
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, $"{Guid.NewGuid():N}.trx");
+        File.WriteAllText(
+            path,
+            $"""
+            <TestRun>
+              <TestDefinitions>
+                <UnitTest id="1" name="{testName}" />
+              </TestDefinitions>
+              <Results>
+                <UnitTestResult testId="1" testName="{testName}" outcome="Passed" />
+              </Results>
+            </TestRun>
+            """);
+        return path;
+    }
+
+    private sealed class IsolatedDotnetRootScope : IDisposable
+    {
+        private readonly string? _previous;
+        private readonly string _root;
+
+        public IsolatedDotnetRootScope()
+        {
+            _root = Path.Combine(
+                Path.GetTempPath(),
+                $"{DotnetBuildEnvironmentManager.RootDirectoryName}-goal-contention-{Guid.NewGuid():N}");
+            _previous = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previous);
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
         }
     }
 }

@@ -30,8 +30,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_claude_cli_only_auth_under_low_integrity_before_dispatch")]
-    public void WorkerProfileDispatcherPreflightBlocksClaudeCliOnlyAuthUnderLowIntegrityBeforeDispatch()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_claude_cli_only_auth_via_sandbox_credential_seeding")]
+    public void WorkerProfileDispatcherPreflightAllowsClaudeCliOnlyAuthViaSandboxCredentialSeeding()
 {
     var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
@@ -63,32 +63,15 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
         sandboxOptions: sandbox);
-    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel,
-        goal,
-        task,
-        [agent],
-        WorkerProfileCatalog.Default(),
-        promptRoot,
-        worktree,
-        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
-        claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox));
-
     var findings = string.Join("\n", preflight.Findings);
-    Assert.False(preflight.Allowed);
-    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
-    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
-    Assert.Contains("Low-IL Claude subscription dispatch is refused before worker start", findings);
-    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
-    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
-    Assert.False(Directory.Exists(promptRoot));
-    Assert.Null(task.LastDispatch);
-    Assert.Null(task.LastProcess);
+    Assert.True(preflight.Allowed);
+    Assert.Null(preflight.ErrorCode);
+    Assert.Contains("ok: Claude CLI Low-IL auth preflight will seed CLI credentials", findings);
+    Assert.DoesNotContain("Low-IL Claude subscription dispatch is refused before worker start", findings);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_light_role_claude_auth_under_low_integrity_before_dispatch")]
-    public void WorkerProfileDispatcherPreflightBlocksLightRoleClaudeAuthUnderLowIntegrityBeforeDispatch()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_light_role_claude_auth_via_sandbox_credential_seeding")]
+    public void WorkerProfileDispatcherPreflightAllowsLightRoleClaudeAuthViaSandboxCredentialSeeding()
 {
     var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
@@ -114,29 +97,12 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
         claudeAuthProbe: authProbe,
         sandboxOptions: sandbox);
-    var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel,
-        goal,
-        task,
-        agents,
-        WorkerProfileCatalog.Default(),
-        promptRoot,
-        worktree,
-        DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
-        claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox));
-
     var findings = string.Join("\n", preflight.Findings);
-    Assert.False(preflight.Allowed);
+    Assert.True(preflight.Allowed);
     Assert.Equal("claude-cli", preflight.ProfileName);
-    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, preflight.ErrorCode);
-    Assert.Contains("model-selection: full-profile: light-role profile unavailable (Claude CLI Low-IL auth unavailable)", findings, StringComparison.Ordinal);
-    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, findings);
-    Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, ex.Message);
-    Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, Assert.IsType<WorkerSubscriptionPreflightException>(ex).ErrorCode);
-    Assert.False(Directory.Exists(promptRoot));
-    Assert.Null(task.LastDispatch);
-    Assert.Null(task.LastProcess);
+    Assert.Null(preflight.ErrorCode);
+    Assert.Contains("ok: Claude CLI Low-IL auth preflight will seed CLI credentials", findings);
+    Assert.DoesNotContain("light-role profile unavailable (Claude CLI Low-IL auth unavailable)", findings);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_skips_claude_auth_guard_for_codex_low_integrity_dispatch")]

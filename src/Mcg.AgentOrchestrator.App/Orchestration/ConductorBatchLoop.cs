@@ -1511,6 +1511,14 @@ internal sealed class ConductorBatchLoop
             return;
         }
 
+        if (IsEnvironmentInterferenceAcceptanceRun(run))
+        {
+            kernel.ReconcileGoalAcceptanceVerified(
+                goal.Id,
+                $"Batch loop reconciled background acceptance gate {attempt.AttemptId} environmental interference ({disposition}); goal returned to Verified for re-gating.");
+            return;
+        }
+
         if (IsRetryableAcceptanceRun(run))
         {
             return;
@@ -1554,6 +1562,13 @@ internal sealed class ConductorBatchLoop
     private static bool IsRetryableAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
         run.EarlyResult is not null ||
         run.Exception is DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException;
+
+    private static bool IsEnvironmentInterferenceAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
+        run.Acceptance?.RequiredUnmetCriteria.Any(check =>
+            string.Equals(
+                check.FailureClassification,
+                AcceptanceFailureClassifications.GateEnvironmentInterference,
+                StringComparison.Ordinal)) == true;
 
     private static bool IsRetryableTerminalAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot

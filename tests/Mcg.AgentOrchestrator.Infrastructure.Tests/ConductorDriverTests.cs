@@ -974,6 +974,47 @@ public sealed class ConductorDriverTests
         Assert.Contains("focused conductor tests failed", brief.Content, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_gate_environment_interference_regates_without_developer_retry")]
+    public void ConductorDriverGateEnvironmentInterferenceRegatesWithoutDeveloperRetry()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var retryCalled = false;
+        var landCalled = false;
+        var interference = new AcceptanceCheckResult(
+            "structural test coverage: core tests",
+            false,
+            1,
+            "classification: gate-environment-interference\nstructural coverage failed: discovered=615, executed=0, missing=615, emptyPartitions=1",
+            ResultSummary: "structural coverage failed: discovered=615, executed=0, missing=615, emptyPartitions=1",
+            FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference);
+
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(false, [interference]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalled = true;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Xunit.Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Xunit.Assert.Contains("re-gate", held.Reason, StringComparison.Ordinal);
+        Xunit.Assert.False(retryCalled);
+        Xunit.Assert.False(landCalled);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.Equal(0, task.CriterionRetryCount);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_caps_concrete_evidence")]
     public void ConductorDriverVerifiedUnmetAcceptanceRetryFeedbackCapsConcreteEvidence()
     {

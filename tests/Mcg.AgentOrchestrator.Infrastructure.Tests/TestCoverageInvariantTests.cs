@@ -17,6 +17,9 @@ public sealed class TestCoverageInvariantTests
 
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Contains("ExampleTests.WasFilteredOut", result.MissingTests);
+            Xunit.Assert.Equal(
+                AcceptanceFailureClassifications.StructuralCoverageFailed,
+                result.FailureClassification);
         }
         finally
         {
@@ -40,6 +43,9 @@ public sealed class TestCoverageInvariantTests
 
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Equal(["empty", "skipped"], result.EmptyPartitions);
+            Xunit.Assert.Equal(
+                AcceptanceFailureClassifications.StructuralCoverageFailed,
+                result.FailureClassification);
         }
         finally
         {
@@ -105,6 +111,85 @@ public sealed class TestCoverageInvariantTests
         finally
         {
             File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_classifies_empty_partition_as_environmental_only_with_positive_evidence")]
+    public void TestCoverageInvariantClassifiesEmptyPartitionAsEnvironmentalOnlyWithPositiveEvidence()
+    {
+        var emptyTrx = WriteTrx();
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["ExampleTests.Runs"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("interfered", true, [emptyTrx], HasEnvironmentInterferenceEvidence: true)]);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Equal(["interfered"], result.EmptyPartitions);
+            Xunit.Assert.Equal(
+                AcceptanceFailureClassifications.GateEnvironmentInterference,
+                result.FailureClassification);
+        }
+        finally
+        {
+            File.Delete(emptyTrx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_scopes_receipts_to_attempt_and_latest_partition_run")]
+    public void TestCoverageInvariantScopesReceiptsToAttemptAndLatestPartitionRun()
+    {
+        var attemptFolder = Path.Combine(Path.GetTempPath(), $"coverage-attempts-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(attemptFolder);
+        var priorAttempt = WriteTrxAt(
+            Path.Combine(attemptFolder, "attempt-prior.lane.trx"),
+            ("1", "PriorAttemptTests.MustNotCount", "Passed"));
+        var firstRun = WriteTrxAt(
+            Path.Combine(attemptFolder, "attempt-current.lane.run-0.trx"),
+            ("2", "FirstRunTests.MustBeReplaced", "Passed"));
+        var latestRun = WriteTrxAt(
+            Path.Combine(attemptFolder, "attempt-current.lane.run-1.trx"),
+            ("3", "EligibleTests.One", "Passed"),
+            ("4", "EligibleTests.Two", "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(
+                    ["EligibleTests.One", "EligibleTests.Two"],
+                    StringComparer.OrdinalIgnoreCase),
+                [
+                    new TestPartitionCoverage(
+                        "lane",
+                        true,
+                        [priorAttempt],
+                        AttemptId: "attempt-prior",
+                        RunOrdinal: 0),
+                    new TestPartitionCoverage(
+                        "lane",
+                        true,
+                        [firstRun],
+                        AttemptId: "attempt-current",
+                        RunOrdinal: 0),
+                    new TestPartitionCoverage(
+                        "lane",
+                        true,
+                        [latestRun],
+                        AttemptId: "attempt-current",
+                        RunOrdinal: 1)
+                ],
+                currentAttemptId: "attempt-current");
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Equal(["EligibleTests.One", "EligibleTests.Two"], result.ExecutedTests);
+            Xunit.Assert.Empty(result.MissingTests);
+            Xunit.Assert.Contains("discovered=2, executed=2", result.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(priorAttempt);
+            File.Delete(firstRun);
+            File.Delete(latestRun);
+            Directory.Delete(attemptFolder);
         }
     }
 
@@ -263,13 +348,27 @@ public sealed class TestCoverageInvariantTests
     }
 
     private static string WriteTrx(params (string Id, string Name, string Outcome)[] tests) =>
-        WriteTrxWithMethodIdentity(
+        WriteTrxWithMethodIdentityAt(
+            Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx"),
+            tests.Select(test => (test.Id, test.Name, test.Outcome, test.Name)).ToArray());
+
+    private static string WriteTrxAt(
+        string path,
+        params (string Id, string Name, string Outcome)[] tests) =>
+        WriteTrxWithMethodIdentityAt(
+            path,
             tests.Select(test => (test.Id, test.Name, test.Outcome, test.Name)).ToArray());
 
     private static string WriteTrxWithMethodIdentity(
+        params (string Id, string Name, string Outcome, string MethodIdentity)[] tests) =>
+        WriteTrxWithMethodIdentityAt(
+            Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx"),
+            tests);
+
+    private static string WriteTrxWithMethodIdentityAt(
+        string path,
         params (string Id, string Name, string Outcome, string MethodIdentity)[] tests)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx");
         var definitions = string.Join(
             "",
             tests.Select(test =>
