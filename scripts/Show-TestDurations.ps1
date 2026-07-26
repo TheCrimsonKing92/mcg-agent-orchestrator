@@ -120,7 +120,8 @@ function Resolve-RecentGateAttemptTrx {
         foreach ($attemptFile in Get-ChildItem -LiteralPath $goalDirectory.FullName -Filter '*.attempt.json' -File -ErrorAction SilentlyContinue) {
             try {
                 $attempt = Get-Content -LiteralPath $attemptFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                if (-not ([string]$attempt.outcome).Equals('Passed', [StringComparison]::OrdinalIgnoreCase)) {
+                if (-not ([string]$attempt.outcome).Equals('Passed', [StringComparison]::OrdinalIgnoreCase) -or
+                    $null -eq $attempt.completedAt) {
                     continue
                 }
 
@@ -134,18 +135,30 @@ function Resolve-RecentGateAttemptTrx {
                 }
 
                 $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                if ($result.acceptance.passed -ne $true) {
+                if (-not ([string]$result.kind).Equals('accepted', [StringComparison]::OrdinalIgnoreCase) -or
+                    $result.acceptance.passed -ne $true) {
                     continue
                 }
 
-                $paths = @($result.acceptance.testResultPaths | Where-Object {
-                    -not [string]::IsNullOrWhiteSpace([string]$_)
-                })
-                if ($paths.Count -eq 0) {
+                $attemptPathSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                foreach ($path in @($attempt.testResultPaths)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+                        [void]$attemptPathSet.Add([string]$path)
+                    }
+                }
+                $resultPathSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                foreach ($path in @($result.acceptance.testResultPaths)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+                        [void]$resultPathSet.Add([string]$path)
+                    }
+                }
+                if ($attemptPathSet.Count -eq 0 -or
+                    $attemptPathSet.Count -ne $resultPathSet.Count -or
+                    -not $attemptPathSet.SetEquals($resultPathSet)) {
                     continue
                 }
 
-                $trxFiles = @(Resolve-TrxInput $paths)
+                $trxFiles = @(Resolve-TrxInput @($resultPathSet))
                 foreach ($trxFile in $trxFiles) {
                     $trx = [xml](Get-Content -LiteralPath $trxFile.FullName -Raw -ErrorAction Stop)
                     if ($null -eq $trx.TestRun) {
