@@ -977,6 +977,16 @@ public sealed class GoalWorktreeAcceptanceRetryTests : GoalWorktreeTestBase
                 if (attempt == 1)
                 {
                     kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "Operator deliberately descoped task.");
+                    kernel.RecordTaskVerification(
+                        goal.Id,
+                        task.Id,
+                        new TaskVerificationRecord(
+                            "stale verification",
+                            repo,
+                            1,
+                            string.Empty,
+                            "Failed before the task was deliberately cancelled.",
+                            DateTimeOffset.UtcNow));
                 }
 
                 OperatorInbox.RecordLandingEscalation(

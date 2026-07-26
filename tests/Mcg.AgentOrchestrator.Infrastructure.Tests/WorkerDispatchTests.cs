@@ -821,6 +821,11 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
                 mainHeadSha: ReadGit(root, ["rev-parse", "HEAD"])));
 
             var workspace = OrchestratorWorkspace.ForDirectory(root);
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "Acceptance environment failed.",
+                "conductor:acceptance");
             var context = new CliExecutionContext(
                 kernel,
                 workspace,

@@ -39,6 +39,18 @@ public sealed partial class AgentOrchestratorKernel
 
     private static TaskVerificationGate BuildTaskVerificationGate(Goal goal, TaskSpec task)
     {
+        if (task.Status == WorkTaskStatus.Cancelled)
+        {
+            return new TaskVerificationGate(
+                task.Id,
+                task.RequiredRole,
+                task.Description,
+                task.Status,
+                VerificationGateStatus.Passed,
+                "Task was deliberately cancelled and is excluded from acceptance.",
+                VerificationGateReason.Passed);
+        }
+
         if (task.LastVerification is { Succeeded: false })
         {
             var isDirty = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
@@ -83,18 +95,6 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateStatus.FailedVerification,
                 $"Reviewer WORKER_RESULT reported blocker: {effectiveReviewerBlocker}",
                 VerificationGateReason.ReviewerWorkerResultBlocker);
-        }
-
-        if (task.Status == WorkTaskStatus.Cancelled)
-        {
-            return new TaskVerificationGate(
-                task.Id,
-                task.RequiredRole,
-                task.Description,
-                task.Status,
-                VerificationGateStatus.Passed,
-                "Task was deliberately cancelled and is excluded from acceptance.",
-                VerificationGateReason.Passed);
         }
 
         if (task.Status != WorkTaskStatus.Completed)
