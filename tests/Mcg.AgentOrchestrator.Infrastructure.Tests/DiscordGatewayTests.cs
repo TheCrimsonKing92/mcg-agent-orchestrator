@@ -392,6 +392,37 @@ public sealed class DiscordGatewayTests
         Assert.Contains("+1 more (no button)", message.Content);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_preserves_all_twenty_overflow_actions_within_discord_limit")]
+    public async Task DiscordCollaborationViewPreservesAllTwentyOverflowActionsWithinDiscordLimit()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        var actions = Enumerable.Range(1, 25)
+            .Select(index => new CollaborationActionBinding(
+                $"A{index:D2}-" + new string('a', 80),
+                $"next goal-max-actions {index}"))
+            .ToList();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-max-actions",
+            new string('s', 200),
+            new string('b', 300),
+            "corr-max-actions-" + new string('c', 40),
+            actions);
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        var message = api.SentMessages.Single();
+        Assert.Equal(5, message.Buttons.Count);
+        Assert.Contains("+20 more (no button)", message.Content);
+        for (var index = 6; index <= 25; index++)
+            Assert.Contains($"A{index:D2}-", message.Content);
+        Assert.Contains("answer via attention verbs or terminal.", message.Content);
+        Assert.True(message.Content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_six_open_items_names_button_overflow")]
     public async Task DiscordCollaborationViewSixOpenItemsNamesButtonOverflow()
     {

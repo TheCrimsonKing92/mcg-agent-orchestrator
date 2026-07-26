@@ -499,7 +499,10 @@ public sealed class DiscordCollaborationViewService
     {
         var named = overflowActions
             .Select(action =>
-                $"`{Truncate(action.Identifier, 16)}` {Truncate(action.Subject, 48)} — {Truncate(action.Label, 28)}")
+                // Keep the complete 20-action overflow inventory below the space left after the
+                // goal header and its first rendered item. The identifier, subject, and action
+                // remain recognizable without letting the final Discord safety cap erase tail entries.
+                $"`{Truncate(action.Identifier, 16)}` {Truncate(action.Subject, 24)} — {Truncate(action.Label, 16)}")
             .ToList();
         return named.Count == 0
             ? string.Empty
