@@ -583,7 +583,7 @@ public static class WorkerProfileDispatcher
             ? "canonical Claude CLI credential path"
             : authState.CredentialArtifactPath;
         findings.Add(
-            $"blocked: {ClaudeCliAuthProbe.AuthUnavailableErrorCode}: Claude CLI credentials exist at {artifact}, but ANTHROPIC_API_KEY is not set; Low-IL Claude subscription dispatch is refused before worker start because persisted CLI login/trust is not available inside the sandbox");
+            $"ok: Claude CLI Low-IL auth preflight will seed CLI credentials from {artifact} into the sandbox CLAUDE_CONFIG_DIR (subscription auth, proven at Low IL by live probe 2026-07-24)");
     }
 
     private static string? ResolvePreflightErrorCode(IReadOnlyList<string> findings)
@@ -1548,9 +1548,9 @@ public static class WorkerProfileDispatcher
         if (sandbox.Enabled)
         {
             var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
-            if (!authState.HasAnthropicApiKey && authState.HasCliCredentialArtifact)
+            if (!authState.HasAnthropicApiKey && !authState.HasCliCredentialArtifact)
             {
-                unavailableReason = "Claude CLI Low-IL auth unavailable";
+                unavailableReason = "Claude CLI auth unavailable: no ANTHROPIC_API_KEY and no CLI credential artifact to seed";
                 return false;
             }
         }

@@ -455,22 +455,43 @@ public static class DispatchProcessHost
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
         Directory.CreateDirectory(claudeConfigDir);
-        var settingsPath = Path.Combine(claudeConfigDir, "settings.json");
-        if (!File.Exists(settingsPath))
-        {
-            File.WriteAllText(settingsPath, "{}\n");
-        }
 
         var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
         }
-        else if (!string.IsNullOrWhiteSpace(stderrPath))
+        else
         {
-            AppendDispatchStderrDiagnostic(
-                stderrPath,
-                "Claude worker sandbox diagnostic: ANTHROPIC_API_KEY is not set; Claude may fail to authenticate.");
+            // Subscription auth: seed the sandbox config with the operator's persisted CLI login so
+            // the Low-IL worker authenticates without an API key. claude-cli reads credentials from
+            // the ROOT of CLAUDE_CONFIG_DIR; a Low-IL process can read the Medium-labeled copies.
+            var userClaudeDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".claude");
+            var seededCredentials = false;
+            foreach (var fileName in new[] { ".credentials.json", "settings.json" })
+            {
+                var source = Path.Combine(userClaudeDir, fileName);
+                if (File.Exists(source))
+                {
+                    File.Copy(source, Path.Combine(claudeConfigDir, fileName), overwrite: true);
+                    seededCredentials = seededCredentials || fileName == ".credentials.json";
+                }
+            }
+
+            if (!seededCredentials && !string.IsNullOrWhiteSpace(stderrPath))
+            {
+                AppendDispatchStderrDiagnostic(
+                    stderrPath,
+                    "Claude worker sandbox diagnostic: no ANTHROPIC_API_KEY and no CLI credentials to seed; Claude may fail to authenticate.");
+            }
+        }
+
+        var settingsPath = Path.Combine(claudeConfigDir, "settings.json");
+        if (!File.Exists(settingsPath))
+        {
+            File.WriteAllText(settingsPath, "{}\n");
         }
 
         startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
