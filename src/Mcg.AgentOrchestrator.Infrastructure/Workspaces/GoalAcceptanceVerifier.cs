@@ -786,13 +786,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string ResolveInfrastructureShardResultsDirectory(
         DotnetBuildEnvironment environment)
     {
-        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
-        var attemptDirectory = string.IsNullOrWhiteSpace(attemptPrefix)
-            ? null
-            : Path.GetDirectoryName(attemptPrefix);
-        return string.IsNullOrWhiteSpace(attemptDirectory)
-            ? Path.Combine(environment.ArtifactsPath, "TestResults")
-            : attemptDirectory;
+        return Path.Combine(environment.ArtifactsPath, "TestResults");
     }
 
     internal static int ResolveAvailableShardWorkerCount(
@@ -5020,9 +5014,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
         var directory = !string.IsNullOrWhiteSpace(resultsDirectoryOverride)
             ? resultsDirectoryOverride
-            : string.IsNullOrWhiteSpace(attemptPrefix)
-            ? Path.Combine(environment.ArtifactsPath, "TestResults")
-            : Path.GetDirectoryName(attemptPrefix);
+            : Path.Combine(environment.ArtifactsPath, "TestResults");
         if (string.IsNullOrWhiteSpace(directory))
         {
             directory = Path.Combine(environment.ArtifactsPath, "TestResults");

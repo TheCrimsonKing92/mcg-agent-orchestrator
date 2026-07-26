@@ -200,6 +200,9 @@ public static class DotnetBuildEnvironmentManager
         return StableSlotArtifactsPath($"slot-{slotIndex}");
     }
 
+    internal static string ManualSlotArtifactsPath() =>
+        StableSlotArtifactsPath("manual");
+
     public static IReadOnlyList<string> StableSlotBuildArguments(int slotIndex)
     {
         return BuildArguments(StableSlotArtifactsPath(slotIndex));
@@ -1038,6 +1041,18 @@ public static class DotnetBuildEnvironmentManager
         ref bool attemptedOwnedProcessRemediation,
         out BuildLockAttribution attribution)
     {
+        if (exception is AcceptanceAttemptArtifactCustodyException custody)
+        {
+            attribution = new BuildLockAttribution(
+                custody.ArtifactsPath,
+                [],
+                "acceptance-attempt-custody",
+                "artifact-prep",
+                "prepare-artifacts");
+            LockAttribution.EmitReceipt(attribution);
+            return ArtifactPrepLockRemediation.SlotBusy;
+        }
+
         var lockedPath = LockAttribution.TryExtractLockedPath(exception.ToString()) ?? environment.ArtifactsPath;
         if (LockAttribution.IsLeaseLockPath(lockedPath))
         {

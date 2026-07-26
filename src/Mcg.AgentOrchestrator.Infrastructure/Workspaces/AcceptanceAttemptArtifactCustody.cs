@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class AcceptanceAttemptArtifactCustodyException : InvalidOperationException
+public sealed class AcceptanceAttemptArtifactCustodyException : IOException
 {
     public AcceptanceAttemptArtifactCustodyException(string attemptId, string artifactsPath)
         : base(
@@ -24,6 +24,8 @@ public static class AcceptanceAttemptArtifactCustody
     public const string MarkerFileName = ".mcg-artifacts-custody.json";
     public const string AttemptIdVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_ID";
     public const string LivenessCheckHintVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_LIVENESS_HINT";
+    private static readonly TimeSpan RemoteHeartbeatFreshness = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan OrphanMarkerMaxAge = TimeSpan.FromHours(6);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -78,7 +80,16 @@ public static class AcceptanceAttemptArtifactCustody
             return;
         }
 
-        File.Delete(MarkerPath(artifactsPath));
+        var path = MarkerPath(artifactsPath);
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(
+                $"CUSTODY_RELEASE_FAILED attempt={attemptId} path=\"{path}\" error=\"{ex.Message}\"");
+        }
     }
 
     public static void ReleaseStableSlots(string attemptId)
@@ -87,6 +98,8 @@ public static class AcceptanceAttemptArtifactCustody
         {
             Release(DotnetBuildEnvironmentManager.StableSlotArtifactsPath(slotIndex), attemptId);
         }
+
+        Release(DotnetBuildEnvironmentManager.ManualSlotArtifactsPath(), attemptId);
     }
 
     internal static string MarkerPath(string artifactsPath) =>
@@ -112,6 +125,7 @@ public static class AcceptanceAttemptArtifactCustody
 
     private static bool IsLive(CustodyMarker marker)
     {
+        var now = DateTimeOffset.UtcNow;
         try
         {
             if (File.Exists(marker.LivenessCheckHint))
@@ -126,8 +140,8 @@ public static class AcceptanceAttemptArtifactCustody
                 }
 
                 if (root.TryGetProperty("outcome", out var outcome) &&
-                    outcome.ValueKind == JsonValueKind.String &&
-                    !string.Equals(outcome.GetString(), "running", StringComparison.OrdinalIgnoreCase))
+                    TryReadRunningState(outcome, out var running) &&
+                    !running)
                 {
                     return false;
                 }
@@ -136,8 +150,15 @@ public static class AcceptanceAttemptArtifactCustody
                     ownerProcess.TryGetInt32(out var persistedOwnerProcessId)
                         ? persistedOwnerProcessId
                         : marker.OwnerProcessId;
-                return !marker.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase) ||
-                    IsProcessAlive(ownerProcessId);
+                if (marker.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return IsOriginalProcessAlive(ownerProcessId, marker.AcquiredAt);
+                }
+
+                return root.TryGetProperty("lastHeartbeatAt", out var heartbeat) &&
+                    heartbeat.TryGetDateTimeOffset(out var lastHeartbeatAt)
+                        ? now - lastHeartbeatAt <= RemoteHeartbeatFreshness
+                        : now - marker.AcquiredAt <= OrphanMarkerMaxAge;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -145,11 +166,33 @@ public static class AcceptanceAttemptArtifactCustody
             // A live owner remains protected while its atomic lifecycle record is briefly unavailable.
         }
 
-        return !marker.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase) ||
-            IsProcessAlive(marker.OwnerProcessId);
+        return marker.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)
+            ? IsOriginalProcessAlive(marker.OwnerProcessId, marker.AcquiredAt)
+            : now - marker.AcquiredAt <= OrphanMarkerMaxAge;
     }
 
-    private static bool IsProcessAlive(int processId)
+    private static bool TryReadRunningState(JsonElement outcome, out bool running)
+    {
+        if (outcome.ValueKind == JsonValueKind.Number && outcome.TryGetInt32(out var numericOutcome))
+        {
+            running = numericOutcome == 0;
+            return true;
+        }
+
+        if (outcome.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(outcome.GetString()))
+        {
+            var text = outcome.GetString()!;
+            running = text.Equals("running", StringComparison.OrdinalIgnoreCase) ||
+                (int.TryParse(text, out numericOutcome) && numericOutcome == 0);
+            return true;
+        }
+
+        running = false;
+        return false;
+    }
+
+    private static bool IsOriginalProcessAlive(int processId, DateTimeOffset acquiredAt)
     {
         if (processId <= 0)
         {
@@ -159,7 +202,8 @@ public static class AcceptanceAttemptArtifactCustody
         try
         {
             using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            return !process.HasExited &&
+                process.StartTime.ToUniversalTime() <= acquiredAt.UtcDateTime.AddSeconds(1);
         }
         catch (Exception ex) when (
             ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)

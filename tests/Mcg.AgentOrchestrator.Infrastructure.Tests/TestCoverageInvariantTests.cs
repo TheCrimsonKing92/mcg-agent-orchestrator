@@ -6,12 +6,20 @@ public sealed class TestCoverageInvariantTests
     public void TestCoverageInvariantAttemptReceiptCopySurvivesOriginatingSlotClear()
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-attempt-receipts-{Guid.NewGuid():N}");
-        var sourcePath = Path.Combine(root, "slot-3", "artifacts", "TestResults", "lane.trx");
         var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
         var previousPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         try
         {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                root);
+            var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(3);
+            var sourcePath = Path.Combine(
+                GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment),
+                "lane.trx");
             Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
             WriteTrxAt(sourcePath, ("1", "ExampleTests.Runs", "Passed"));
             Environment.SetEnvironmentVariable(
@@ -19,7 +27,7 @@ public sealed class TestCoverageInvariantTests
                 attemptPrefix);
 
             var durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath])!;
-            Directory.Delete(Path.Combine(root, "slot-3", "artifacts"), recursive: true);
+            Directory.Delete(environment.ArtifactsPath, recursive: true);
             var coverage = TestCoverageInvariant.Evaluate(
                 new HashSet<string>(["ExampleTests.Runs"], StringComparer.OrdinalIgnoreCase),
                 [new TestPartitionCoverage("lane", true, durablePaths, AttemptId: "attempt-123")],
@@ -39,6 +47,9 @@ public sealed class TestCoverageInvariantTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);

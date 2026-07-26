@@ -427,13 +427,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             run = _tryRunPreSlot?.Invoke(candidate, policy);
             if (run is null)
             {
-                stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
-                AcceptanceAttemptArtifactCustody.Write(
-                    stableSlotLease.Environment.ArtifactsPath,
-                    attempt.AttemptId,
-                    attempt.MetadataPath,
-                    Environment.ProcessId);
-                run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+                run = RunWithAttemptTelemetryContext(
+                    attempt,
+                    candidate,
+                    policy,
+                    runAcceptance,
+                    lease =>
+                    {
+                        stableSlotLease = lease;
+                        AcceptanceAttemptArtifactCustody.Write(
+                            lease.Environment.ArtifactsPath,
+                            attempt.AttemptId,
+                            attempt.MetadataPath,
+                            Environment.ProcessId);
+                    });
             }
         }
         catch (OperationCanceledException ex)
@@ -555,12 +562,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         throw new InvalidOperationException("Unknown dotnet build lease acquisition result.");
     }
 
-    private static ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
+    private ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        DotnetBuildEnvironmentLease stableSlotLease,
-        ConductorParallelAcceptanceRunAcceptance runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance,
+        Action<DotnetBuildEnvironmentLease> leaseAcquired)
     {
         var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var previousAttemptId = Environment.GetEnvironmentVariable(
@@ -577,6 +584,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             attempt.MetadataPath);
         try
         {
+            var stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
+            leaseAcquired(stableSlotLease);
             return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
         }
         finally
@@ -1369,7 +1378,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var receiptDirectory = prefix + ".receipts";
             if (Directory.Exists(receiptDirectory))
             {
-                try { Directory.Delete(receiptDirectory, recursive: true); } catch { }
+                try
+                {
+                    Directory.Delete(receiptDirectory, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Console.Error.WriteLine(
+                        $"ATTEMPT_RECEIPT_PRUNE_FAILED path=\"{receiptDirectory}\" error=\"{ex.Message}\"");
+                }
             }
         }
     }

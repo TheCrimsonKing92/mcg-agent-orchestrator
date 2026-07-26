@@ -279,7 +279,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
         File.WriteAllText(evidencePath, "receipt");
         WriteForeignOwnerMarker(environment.ArtifactsPath);
-        WriteAttemptMetadata(metadataPath, attemptId, "Running", Environment.ProcessId);
+        WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
         AcceptanceAttemptArtifactCustody.Write(
             environment.ArtifactsPath,
             attemptId,
@@ -287,11 +287,15 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Environment.ProcessId);
 
         var exception = Assert.Throws<AcceptanceAttemptArtifactCustodyException>(
+            () => AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
+                environment.ArtifactsPath));
+        var slotsBusy = Assert.Throws<DotnetBuildSlotsBusyException>(
             () => DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero));
 
         Assert.Equal(attemptId, exception.AttemptId);
         Assert.Contains(attemptId, exception.Message, StringComparison.Ordinal);
         Assert.Contains(environment.ArtifactsPath, exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(environment.LeaseId, slotsBusy.SlotsBusy.WantedBy);
         Assert.True(File.Exists(evidencePath));
     }
 
@@ -307,7 +311,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
         File.WriteAllText(evidencePath, "stale");
         WriteForeignOwnerMarker(environment.ArtifactsPath);
-        WriteAttemptMetadata(metadataPath, attemptId, "Failed", Environment.ProcessId);
+        WriteAttemptMetadata(metadataPath, attemptId, 2, Environment.ProcessId);
         AcceptanceAttemptArtifactCustody.Write(
             environment.ArtifactsPath,
             attemptId,
@@ -318,6 +322,56 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
         Assert.False(File.Exists(evidencePath));
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_remote_custody_marker_allows_foreign_owner_takeover")]
+    public void DotnetBuildEnvironmentManagerStaleRemoteCustodyMarkerAllowsForeignOwnerTakeover()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var evidencePath = Path.Combine(environment.ArtifactsPath, "stale.txt");
+        File.WriteAllText(evidencePath, "stale");
+        WriteForeignOwnerMarker(environment.ArtifactsPath);
+        File.WriteAllText(
+            AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                attemptId = "orphaned-remote-attempt",
+                livenessCheckHint = Path.Combine(environment.RootPath, "missing.attempt.json"),
+                ownerProcessId = Environment.ProcessId,
+                machineName = "other-machine",
+                acquiredAt = DateTimeOffset.UtcNow.AddHours(-7)
+            }));
+
+        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+
+        Assert.False(File.Exists(evidencePath));
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_custody_cleanup_failure_does_not_mask_terminal_outcome")]
+    public void DotnetBuildEnvironmentManagerCustodyCleanupFailureDoesNotMaskTerminalOutcome()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptId = "locked-marker-attempt";
+        var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
+        WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
+        AcceptanceAttemptArtifactCustody.Write(
+            environment.ArtifactsPath,
+            attemptId,
+            metadataPath,
+            Environment.ProcessId);
+        using var markerLock = new FileStream(
+            AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.None);
+
+        AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId);
+
+        Assert.True(markerLock.CanRead);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_missing_custody_marker_preserves_foreign_owner_takeover")]
@@ -335,13 +389,34 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(evidencePath));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_terminal_cleanup_releases_manual_slot_custody")]
+    public void DotnetBuildEnvironmentManagerTerminalCleanupReleasesManualSlotCustody()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(null, "coverage-discovery");
+        var attemptId = "manual-slot-attempt";
+        var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
+        WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
+        AcceptanceAttemptArtifactCustody.Write(
+            environment.ArtifactsPath,
+            attemptId,
+            metadataPath,
+            Environment.ProcessId);
+
+        AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId);
+
+        Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+    }
+
     [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_uses_operator_build_namespace_outside_firewall_test_slots")]
     public void InvokeWorkerBuildCheckUsesOperatorBuildNamespaceOutsideFirewallTestSlots()
     {
         var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-WorkerBuildCheck.ps1"));
 
-        Assert.Contains(@"slots\operator-build\$safeGoalPrefix", source, StringComparison.Ordinal);
-        Assert.Contains(@"operators\worker-build\$safeGoalPrefix", source, StringComparison.Ordinal);
+        Assert.Contains(@"slots\operator-build""", source, StringComparison.Ordinal);
+        Assert.Contains(@"operators\worker-build""", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"slots\operator-build\$safeGoalPrefix", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"operators\worker-build\$safeGoalPrefix", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
     }
 
@@ -1814,6 +1889,106 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_numeric_running_attempt_custody_refuses_slot_takeover")]
+    public void InvokeIsolatedDotnetNumericRunningAttemptCustodyRefusesSlotTakeover()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string goalPrefix = "custody-live";
+        const string attemptId = "numeric-running-attempt";
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var isolatedRoot = Path.Combine(root, "isolated-dotnet");
+        var slotName = StableSlotNameForScript(goalPrefix);
+        var artifactsPath = Path.Combine(isolatedRoot, "slots", slotName, "artifacts");
+        var evidencePath = Path.Combine(artifactsPath, "TestResults", "completed-lane.trx");
+        var metadataPath = Path.Combine(root, $"{attemptId}.attempt.json");
+        var shimDirectory = Path.Combine(root, "shim");
+        Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+        Directory.CreateDirectory(shimDirectory);
+        File.WriteAllText(evidencePath, "receipt");
+        WriteForeignOwnerMarker(artifactsPath);
+        WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
+        File.WriteAllText(
+            AcceptanceAttemptArtifactCustody.MarkerPath(artifactsPath),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                attemptId,
+                livenessCheckHint = metadataPath,
+                ownerProcessId = Environment.ProcessId,
+                machineName = Environment.MachineName,
+                acquiredAt = DateTimeOffset.UtcNow
+            }));
+        File.WriteAllText(Path.Combine(shimDirectory, "dotnet.cmd"), "@echo off\r\nexit /b 0\r\n");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var argument in new[]
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-InputFormat",
+                "None",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                scriptPath,
+                "-GoalPrefix",
+                goalPrefix,
+                "-AttemptName",
+                "Custody Test",
+                "test",
+                "Fake.Tests.csproj",
+                "--no-restore"
+            })
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            startInfo.Environment["PATH"] =
+                shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
+            startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            var output = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult();
+
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.Contains(attemptId, output, StringComparison.Ordinal);
+            Assert.Contains(artifactsPath, output, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(evidencePath));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_updates_AppDll_git_head_marker_after_successful_rebuild")]
     public void InvokeIsolatedDotnetUpdatesAppDllGitHeadMarkerAfterSuccessfulRebuild()
     {
@@ -2166,7 +2341,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     private static void WriteAttemptMetadata(
         string path,
         string attemptId,
-        string outcome,
+        int outcome,
         int ownerProcessId)
     {
         File.WriteAllText(
@@ -2175,8 +2350,20 @@ public sealed class DotnetBuildEnvironmentManagerTests
             {
                 attemptId,
                 outcome,
-                ownerProcessId
+                ownerProcessId,
+                lastHeartbeatAt = DateTimeOffset.UtcNow
             }));
+    }
+
+    private static string StableSlotNameForScript(string value)
+    {
+        long hash = 0;
+        foreach (var character in value.ToLowerInvariant())
+        {
+            hash = ((hash * 31) + character) % int.MaxValue;
+        }
+
+        return $"slot-{Math.Abs(hash % DotnetBuildEnvironmentManager.StableSlotCount)}";
     }
 
     private static (string FixtureRoot, string LockedPath) CreateLandingFixtureLockPath()

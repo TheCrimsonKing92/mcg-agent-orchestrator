@@ -192,9 +192,9 @@ if ($missingProjects.Count -gt 0) {
 
 $safeGoalPrefix = ConvertTo-SafePathSegment -Value (Get-GoalPrefix)
 $isolatedRoot = Get-IsolatedRootBase
-$leaseId = "operator-build-$safeGoalPrefix"
-$runRoot = Join-Path $isolatedRoot "operators\worker-build\$safeGoalPrefix"
-$slotRoot = Join-Path $isolatedRoot "slots\operator-build\$safeGoalPrefix"
+$leaseId = "operator-build"
+$runRoot = Join-Path $isolatedRoot "operators\worker-build"
+$slotRoot = Join-Path $isolatedRoot "slots\operator-build"
 $leaseRoot = Join-Path $runRoot "lease"
 $artifactsPath = Join-Path $slotRoot "artifacts"
 $executionLockPath = Join-Path $slotRoot "lease.execution.lock"

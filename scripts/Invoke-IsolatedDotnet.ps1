@@ -207,15 +207,35 @@ function Test-CustodyMarkerIsLive {
                 return $false
             }
 
-            if (-not [string]::Equals(
-                    [string]$attempt.outcome,
-                    "Running",
-                    [System.StringComparison]::OrdinalIgnoreCase)) {
+            $numericOutcome = 0
+            $outcomeText = [string]$attempt.outcome
+            $isRunning = [string]::Equals(
+                $outcomeText,
+                "Running",
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([int]::TryParse($outcomeText, [ref]$numericOutcome) -and $numericOutcome -eq 0)
+            if (-not $isRunning) {
                 return $false
             }
 
             $ownerProcessId = [int]$attempt.ownerProcessId
-            return $null -ne (Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue)
+            if (-not [string]::Equals(
+                    [string]$Marker.machineName,
+                    [Environment]::MachineName,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                $lastHeartbeatAt = [DateTimeOffset]::MinValue
+                return [DateTimeOffset]::TryParse([string]$attempt.lastHeartbeatAt, [ref]$lastHeartbeatAt) -and
+                    ([DateTimeOffset]::UtcNow - $lastHeartbeatAt) -le [TimeSpan]::FromMinutes(2)
+            }
+
+            $owner = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+            if ($null -eq $owner) {
+                return $false
+            }
+
+            $acquiredAt = [DateTimeOffset]::MinValue
+            return -not [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt) -or
+                $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
         }
         catch {
             # Protect a live owner while its atomic lifecycle record is briefly unavailable.
@@ -223,7 +243,23 @@ function Test-CustodyMarkerIsLive {
     }
 
     try {
-        return $null -ne (Get-Process -Id ([int]$Marker.ownerProcessId) -ErrorAction SilentlyContinue)
+        $acquiredAt = [DateTimeOffset]::MinValue
+        $hasAcquiredAt = [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt)
+        if (-not [string]::Equals(
+                [string]$Marker.machineName,
+                [Environment]::MachineName,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $hasAcquiredAt -and
+                ([DateTimeOffset]::UtcNow - $acquiredAt) -le [TimeSpan]::FromHours(6)
+        }
+
+        $owner = Get-Process -Id ([int]$Marker.ownerProcessId) -ErrorAction SilentlyContinue
+        if ($null -eq $owner) {
+            return $false
+        }
+
+        return -not $hasAcquiredAt -or
+            $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
     }
     catch {
         return $false
