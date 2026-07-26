@@ -45,6 +45,56 @@ public sealed class OperatorChannelTests
         Assert.True(catalog.IsNull);
     }
 
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_empty_operator_allowlist_logs_loud_startup_warning")]
+    public void OperatorChannelFactoryEmptyOperatorAllowlistLogsLoudStartupWarning()
+    {
+        var error = new StringWriter();
+        var catalog = new OperatorChannelCatalog(
+            "discord",
+            ForumChannelId: "42",
+            OperatorUserIds: []);
+
+        OperatorChannelFactory.WriteStartupConfigurationWarnings(catalog, error);
+
+        Assert.Contains("ERROR", error.ToString());
+        Assert.Contains("OperatorUserIds", error.ToString());
+        Assert.Contains("no Discord interactions will be processed", error.ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannel_set_merge_preserves_progress_and_dead_man_fields")]
+    public void OperatorChannelSetMergePreservesProgressAndDeadManFields()
+    {
+        var mutedUntil = DateTimeOffset.Parse("2026-07-26T05:00:00Z");
+        var existing = new OperatorChannelCatalog(
+            "discord",
+            "https://old.example",
+            "41",
+            ["old-user"],
+            ProgressThreadId: "progress-thread",
+            ProgressStatusMessageId: "progress-message",
+            ProgressStatusContentHash: "progress-hash",
+            ControlPlaneMutedUntil: mutedUntil,
+            DeadManHeartbeatEnabled: true,
+            DeadManHeartbeatUrl: "https://heartbeat.example");
+
+        var merged = CliCommandHandlers.MergeOperatorChannelCatalog(
+            existing,
+            "discord",
+            "https://new.example",
+            "42",
+            ["new-user"]);
+
+        Assert.Equal("https://new.example", merged.DashboardBaseUrl);
+        Assert.Equal("42", merged.ForumChannelId);
+        Assert.Equal(["new-user"], merged.OperatorUserIds);
+        Assert.Equal("progress-thread", merged.ProgressThreadId);
+        Assert.Equal("progress-message", merged.ProgressStatusMessageId);
+        Assert.Equal("progress-hash", merged.ProgressStatusContentHash);
+        Assert.Equal(mutedUntil, merged.ControlPlaneMutedUntil);
+        Assert.True(merged.DeadManHeartbeatEnabled);
+        Assert.Equal("https://heartbeat.example", merged.DeadManHeartbeatUrl);
+    }
+
     // ---- NullOperatorChannel ----
 
     [Xunit.Fact(DisplayName = "NullOperatorChannel_send_is_noop")]

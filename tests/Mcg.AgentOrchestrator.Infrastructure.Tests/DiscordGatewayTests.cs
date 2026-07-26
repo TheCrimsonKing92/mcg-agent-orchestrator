@@ -361,6 +361,33 @@ public sealed class DiscordGatewayTests
         Assert.True(api.SentMessages[0].Content.Contains("Second escalation"));
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_six_open_items_names_button_overflow")]
+    public async Task DiscordCollaborationViewSixOpenItemsNamesButtonOverflow()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        for (var i = 0; i < 6; i++)
+        {
+            await store.RaiseWithActionsAsync(
+                CollaborationItemType.Decision,
+                "goal-six-items",
+                $"Decision {i}",
+                "Body",
+                $"corr-{i}",
+                [new CollaborationActionBinding($"Apply {i}", $"next goal-six-items {i}")]);
+        }
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        var message = api.SentMessages.Single();
+        Assert.Equal(5, message.Buttons.Count);
+        Assert.Contains("+1 more (no button)", message.Content);
+        Assert.Contains("corr-0", message.Content);
+        Assert.Contains("Decision 0", message.Content);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_caps_oversized_goal_message_to_discord_limit")]
     public async Task DiscordCollaborationViewCapsOversizedGoalMessageToDiscordLimit()
     {
@@ -405,6 +432,51 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, api.SentMessages.Count);
         Assert.True(api.EditedMessages.Count >= 1);
         Assert.Equal(0, api.EditedMessages[^1].Buttons.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_applied_action_acks_inbox_and_returns_ephemeral_reply_text")]
+    public async Task DiscordCollaborationViewAppliedActionAcksInboxAndReturnsReplyText()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        var acknowledged = new List<string>();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-live-ack",
+            "Apply live action",
+            "Body",
+            "corr-live-ack",
+            [new CollaborationActionBinding("Apply", "next goal-live-ack")]);
+        var view = new DiscordCollaborationViewService(
+            store,
+            api,
+            42UL,
+            root,
+            ["user1"],
+            dispatchAction: (_, _) => Task.CompletedTask,
+            acknowledge: acknowledged.Add);
+        await view.ReconcileAsync();
+
+        var result = await view.ApplyInteractionAsync(
+            api.SentMessages.Single().Buttons.Single().CustomId,
+            "user1",
+            "interaction-live-ack");
+
+        Assert.Equal(["corr-live-ack"], acknowledged);
+        Assert.Contains("Applied", result.AcknowledgementMessage);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_rejects_task_scoped_dispatch_verbs_at_bind_composition")]
+    public void DiscordOperatorChannelRejectsTaskScopedDispatchVerbsAtBindComposition()
+    {
+        foreach (var verb in new[] { "subscription-dispatch", "execute-dispatch", "start-dispatch" })
+        {
+            var exception = Assert.Throws<ArgumentException>(
+                () => DiscordOperatorChannel.BindTaskScopedCommandToGoal($"{verb} 7", "goal1234"));
+            Assert.Contains(verb, exception.Message);
+            Assert.Contains("Forbidden verbs", exception.Message);
+        }
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_non_allowlisted_user_rejected_and_logged")]
@@ -909,6 +981,35 @@ public sealed class DiscordGatewayTests
         Assert.Equal(1, api.CreatedThreads.Count);
         Assert.Equal(1, api.SentMessages.Count);
         Assert.Equal(0, api.EditedMessages.Count);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordProgressView_truncates_oversized_content_before_api_call_with_omission_counts")]
+    public async Task DiscordProgressViewTruncatesOversizedContentBeforeApiCallWithOmissionCounts()
+    {
+        var root = CreateTempDirectory();
+        var catalogPath = Path.Combine(root, "operator-channel.json");
+        OperatorChannelStore.Save(catalogPath, new OperatorChannelCatalog("discord", ForumChannelId: "42"));
+        var api = new FakeDiscordForumApi();
+        var longContent = "**Progress**" + Environment.NewLine +
+            string.Join(
+                Environment.NewLine,
+                Enumerable.Range(0, 30).Select(index => $"- goal-{index:00} developing / running: {new string('x', 120)}"));
+        var projection = new StatusProjection(
+            longContent,
+            Unchanged: false,
+            new StatusProjectionBuckets([], [], []),
+            OpenEscalationCount: 0);
+        var view = new DiscordProgressViewService(api, 42UL, catalogPath);
+
+        await view.ReconcileAsync(projection);
+
+        var content = api.SentMessages.Single().Content;
+        Assert.True(content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+        Assert.Contains("truncated:", content);
+        Assert.Contains("goal(s)", content);
+        Assert.Contains("line(s)", content);
+        Assert.Contains("goal-00", content);
+        Assert.DoesNotContain("goal-29", content);
     }
 
     private sealed class FakeDiscordForumApi : IDiscordForumApi

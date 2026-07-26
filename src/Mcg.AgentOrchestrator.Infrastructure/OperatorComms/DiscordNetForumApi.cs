@@ -51,8 +51,9 @@ public sealed class DiscordNetForumApi : IDiscordForumApi, IAsyncDisposable
         if (buttons.Count > 0)
         {
             var builder = new ComponentBuilder();
-            foreach (var button in buttons.Take(5))
+            for (var index = 0; index < buttons.Count && index < 25; index++)
             {
+                var button = buttons[index];
                 var style = button.Style switch
                 {
                     DiscordButtonStyle.Danger => ButtonStyle.Danger,
@@ -60,7 +61,12 @@ public sealed class DiscordNetForumApi : IDiscordForumApi, IAsyncDisposable
                     DiscordButtonStyle.Secondary => ButtonStyle.Secondary,
                     _ => ButtonStyle.Primary
                 };
-                builder.WithButton(button.Label, button.CustomId, style, disabled: button.Disabled);
+                builder.WithButton(
+                    button.Label,
+                    button.CustomId,
+                    style,
+                    disabled: button.Disabled,
+                    row: index / 5);
             }
             components = builder.Build();
         }
@@ -84,8 +90,9 @@ public sealed class DiscordNetForumApi : IDiscordForumApi, IAsyncDisposable
         if (buttons.Count > 0)
         {
             var builder = new ComponentBuilder();
-            foreach (var button in buttons.Take(5))
+            for (var index = 0; index < buttons.Count && index < 25; index++)
             {
+                var button = buttons[index];
                 var style = button.Style switch
                 {
                     DiscordButtonStyle.Danger => ButtonStyle.Danger,
@@ -93,7 +100,12 @@ public sealed class DiscordNetForumApi : IDiscordForumApi, IAsyncDisposable
                     DiscordButtonStyle.Secondary => ButtonStyle.Secondary,
                     _ => ButtonStyle.Primary
                 };
-                builder.WithButton(button.Label, button.CustomId, style, disabled: button.Disabled);
+                builder.WithButton(
+                    button.Label,
+                    button.CustomId,
+                    style,
+                    disabled: button.Disabled,
+                    row: index / 5);
             }
             components = builder.Build();
         }

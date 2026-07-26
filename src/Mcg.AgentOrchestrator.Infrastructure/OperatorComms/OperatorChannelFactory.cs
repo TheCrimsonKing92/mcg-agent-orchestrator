@@ -65,7 +65,8 @@ public static class OperatorChannelFactory
         ICollaborationItemStore store,
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
-        Func<string, CancellationToken, Task>? dispatchAction = null)
+        Func<string, CancellationToken, Task>? dispatchAction = null,
+        Action<string>? acknowledge = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
@@ -80,7 +81,8 @@ public static class OperatorChannelFactory
             allowedUserIds,
             resolveClarificationAnswer,
             BuildCorrelationGoalStateVersionReader(store, stateDirectory),
-            dispatchAction);
+            dispatchAction,
+            acknowledge);
         var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
         var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view, heartbeat, heartbeatOptions.EffectiveInterval)
@@ -94,7 +96,8 @@ public static class OperatorChannelFactory
         ICollaborationItemStore store,
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
-        Func<string, CancellationToken, Task>? dispatchAction = null)
+        Func<string, CancellationToken, Task>? dispatchAction = null,
+        Action<string>? acknowledge = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
@@ -109,7 +112,8 @@ public static class OperatorChannelFactory
             allowedUserIds,
             resolveClarificationAnswer,
             BuildCorrelationGoalStateVersionReader(store, stateDirectory),
-            dispatchAction);
+            dispatchAction,
+            acknowledge);
         var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
         var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
         var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView, heartbeat, heartbeatOptions.EffectiveInterval)
@@ -141,6 +145,20 @@ public static class OperatorChannelFactory
 
         await channel.SendEscalationAsync(testEscalation);
         await output.WriteLineAsync($"Test escalation queued via {channel.ChannelType}. The operator-listen collaboration view will render it in Discord.");
+    }
+
+    public static void WriteStartupConfigurationWarnings(
+        OperatorChannelCatalog catalog,
+        TextWriter error)
+    {
+        if (!catalog.ChannelType.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
+            catalog.OperatorUserIds is { Count: > 0 })
+        {
+            return;
+        }
+
+        error.WriteLine(
+            "ERROR operator-listen: configuration key OperatorUserIds is empty; no Discord interactions will be processed.");
     }
 
     private static bool IsDiscordConfigured(OperatorChannelCatalog catalog, string? botToken, out ulong forumChannelId)

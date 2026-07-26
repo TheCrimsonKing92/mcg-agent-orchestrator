@@ -110,7 +110,7 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                     ephemeral: true);
                 return;
             }
-            await component.FollowupAsync("Resolved.", ephemeral: true);
+            await component.FollowupAsync(result.AcknowledgementMessage ?? "Applied.", ephemeral: true);
         }
         catch
         {
@@ -136,7 +136,9 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                     modalText,
                     modal.User.Id.ToString(),
                     modal.Id.ToString());
-                await modal.FollowupAsync(actionResult.ErrorMessage ?? "Action applied.", ephemeral: true);
+                await modal.FollowupAsync(
+                    actionResult.ErrorMessage ?? actionResult.AcknowledgementMessage ?? "Applied.",
+                    ephemeral: true);
                 return;
             }
 

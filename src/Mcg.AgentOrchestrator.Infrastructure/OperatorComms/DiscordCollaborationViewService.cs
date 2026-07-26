@@ -12,6 +12,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DiscordCollaborationViewService
 {
     private const string RefsFileName = "discord-collaboration-refs.json";
+    private const int MaxActionButtons = 5;
     private readonly ICollaborationItemStore _store;
     private readonly IDiscordForumApi _api;
     private readonly ulong _forumChannelId;
@@ -20,6 +21,7 @@ public sealed class DiscordCollaborationViewService
     private readonly Func<string, string, CancellationToken, Task<bool>>? _resolveClarificationAnswer;
     private readonly Func<string, CancellationToken, Task<long?>>? _currentGoalStateVersion;
     private readonly Func<string, CancellationToken, Task> _dispatchAction;
+    private readonly Action<string>? _acknowledge;
     private readonly Func<DateTimeOffset> _clock;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -37,6 +39,7 @@ public sealed class DiscordCollaborationViewService
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
         Func<string, CancellationToken, Task<long?>>? currentGoalStateVersion = null,
         Func<string, CancellationToken, Task>? dispatchAction = null,
+        Action<string>? acknowledge = null,
         Func<DateTimeOffset>? clock = null)
     {
         _store = store;
@@ -47,6 +50,7 @@ public sealed class DiscordCollaborationViewService
         _resolveClarificationAnswer = resolveClarificationAnswer;
         _currentGoalStateVersion = currentGoalStateVersion;
         _dispatchAction = dispatchAction ?? ((_, _) => Task.CompletedTask);
+        _acknowledge = acknowledge;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -134,7 +138,7 @@ public sealed class DiscordCollaborationViewService
 
         var refresh = await RefreshResolvedGoalMessageAsync(decision.InboxItemId, userId, cancellationToken);
         return refresh.ErrorMessage is null
-            ? new DiscordInteractionResult(decision, false, null, null)
+            ? new DiscordInteractionResult(decision, false, null, null, $"Applied: {apply.Command}")
             : refresh;
     }
 
@@ -230,7 +234,9 @@ public sealed class DiscordCollaborationViewService
                 : new DiscordInteractionResult(null, false, null, apply.ErrorMessage ?? "Action rejected.");
 
         var refresh = await RefreshResolvedGoalMessageAsync(result.Decision.InboxItemId, userId, cancellationToken);
-        return refresh.ErrorMessage is null ? result : refresh;
+        return refresh.ErrorMessage is null
+            ? result with { AcknowledgementMessage = $"Applied: {apply.Command}" }
+            : refresh;
     }
 
     private Task<DiscordDecisionApplicationResult> ApplyDecisionAsync(
@@ -242,6 +248,7 @@ public sealed class DiscordCollaborationViewService
             _dispatchAction,
             _store,
             _allowedUserIds,
+            acknowledge: _acknowledge,
             currentGoalStateVersion: _currentGoalStateVersion,
             clock: _clock);
         return applier.ApplyDetailedAsync(decision, cancellationToken);
@@ -330,7 +337,7 @@ public sealed class DiscordCollaborationViewService
     private static IReadOnlyList<CollaborationItem> OrderItems(IEnumerable<CollaborationItem> items) =>
         items
             .OrderBy(item => CollaborationItemLifecycle.AttentionPriority(item.Type))
-            .ThenBy(item => item.RaisedAt)
+            .ThenByDescending(item => item.RaisedAt)
             // Collapse duplicate escalations: a conductor that re-raises the same goal+reason each tick
             // produces many items sharing one correlation key — which would render as duplicate Discord
             // button customIds (Discord rejects with 50035) and a wall of repeated text. Show one per
@@ -350,13 +357,15 @@ public sealed class DiscordCollaborationViewService
 
     private static string BuildGoalContent(string goalKey, IReadOnlyList<CollaborationItem> items, string? footer)
     {
-        // Reserve headroom for the footer + the truncation notice so the rendered body stays under the limit.
-        var budget = DiscordMessageLimit - 220;
+        var overflow = BuildButtonOverflowNotice(items.Skip(MaxActionButtons));
+        // Reserve headroom for the footer, truncation notice, and button-overflow inventory so none
+        // of the open items hidden from the five-button surface become invisible.
+        var budget = DiscordMessageLimit - 220 - overflow.Length;
         var sb = new StringBuilder();
         sb.AppendLine($"**Goal `{GoalLabel(goalKey)}` — {items.Count} item(s) need attention:**");
         sb.AppendLine();
         var rendered = 0;
-        for (var i = 0; i < items.Count; i++)
+        for (var i = 0; i < Math.Min(items.Count, MaxActionButtons); i++)
         {
             var item = items[i];
             var line = $"{i + 1}. **[{item.Type}]** {Truncate(item.Subject, 180)}";
@@ -373,6 +382,12 @@ public sealed class DiscordCollaborationViewService
             rendered++;
         }
 
+        if (overflow.Length > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine(overflow);
+        }
+
         if (!string.IsNullOrWhiteSpace(footer))
         {
             sb.AppendLine();
@@ -387,14 +402,15 @@ public sealed class DiscordCollaborationViewService
     private static string BuildAllResolvedContent(string goalKey, string? resolvedBy) =>
         $"✅ Goal `{GoalLabel(goalKey)}` — all attention items resolved{(resolvedBy is null ? "" : $" (last by {resolvedBy})")}.";
 
-    // One button per open item (numbered to match the list). Capped at Discord's 25-button limit; a
-    // single goal essentially never exceeds it, but if it does the overflow stays in the text list.
+    // One button per open item (numbered to match the list). A goal card intentionally exposes the
+    // five highest-priority items; every remaining item is named in the text overflow inventory so
+    // the API cannot silently hide it.
     private async Task<IReadOnlyList<DiscordButtonDefinition>> BuildGoalButtonsAsync(
         IReadOnlyList<CollaborationItem> items,
         CancellationToken cancellationToken)
     {
         var buttons = new List<DiscordButtonDefinition>();
-        for (var i = 0; i < items.Count && buttons.Count < 25; i++)
+        for (var i = 0; i < items.Count && buttons.Count < MaxActionButtons; i++)
         {
             var item = items[i];
             if (string.IsNullOrWhiteSpace(item.CorrelationKey))
@@ -416,21 +432,38 @@ public sealed class DiscordCollaborationViewService
             }
 
             var actions = await _store.ListActionsAsync(item.CorrelationKey, cancellationToken);
-            foreach (var action in actions.Where(action => action.ConsumedAt is null).Take(25 - buttons.Count))
-            {
-                var customId = action.RequiresInput
-                    ? DiscordInteractionHandler.BuildActionInputCustomId(item.CorrelationKey, action.ActionIndex)
-                    : action.RequiresConfirmation
-                    ? DiscordInteractionHandler.BuildConfirmCustomId(item.CorrelationKey, action.ActionIndex)
-                    : DiscordInteractionHandler.BuildDirectCustomId(item.CorrelationKey, action.ActionIndex);
-                buttons.Add(new DiscordButtonDefinition(
-                    $"{action.Label} #{i + 1}",
-                    customId,
-                    action.RequiresConfirmation ? DiscordButtonStyle.Danger : DiscordButtonStyle.Success));
-            }
+            var action = actions.FirstOrDefault(action => action.ConsumedAt is null);
+            if (action is null)
+                continue;
+
+            var customId = action.RequiresInput
+                ? DiscordInteractionHandler.BuildActionInputCustomId(item.CorrelationKey, action.ActionIndex)
+                : action.RequiresConfirmation
+                ? DiscordInteractionHandler.BuildConfirmCustomId(item.CorrelationKey, action.ActionIndex)
+                : DiscordInteractionHandler.BuildDirectCustomId(item.CorrelationKey, action.ActionIndex);
+            buttons.Add(new DiscordButtonDefinition(
+                $"{action.Label} #{i + 1}",
+                customId,
+                action.RequiresConfirmation ? DiscordButtonStyle.Danger : DiscordButtonStyle.Success));
         }
 
         return buttons;
+    }
+
+    private static string BuildButtonOverflowNotice(IEnumerable<CollaborationItem> overflowItems)
+    {
+        var named = overflowItems
+            .Select(item =>
+            {
+                var id = Truncate(
+                    string.IsNullOrWhiteSpace(item.CorrelationKey) ? item.Id : item.CorrelationKey!,
+                    16);
+                return $"`{id}` {Truncate(item.Subject, 32)}";
+            })
+            .ToList();
+        return named.Count == 0
+            ? string.Empty
+            : $"+{named.Count} more (no button): {string.Join(", ", named)} — answer via attention verbs or terminal.";
     }
 
     internal static string ComputeContentHash(string content) =>

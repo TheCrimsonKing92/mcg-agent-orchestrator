@@ -515,6 +515,7 @@ internal static partial class CliCommandHandlers
             case "operator-listen":
             {
                 var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
+                OperatorChannelFactory.WriteStartupConfigurationWarnings(catalog, Console.Error);
                 var botToken = OperatorChannelFactory.ResolveBotToken();
                 var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
                 OperatorChannelFactory.DiscordOperatorRuntime? runtime;
@@ -545,7 +546,8 @@ internal static partial class CliCommandHandlers
                                 cancellationToken);
                         },
                         (command, cancellationToken) =>
-                            DispatchOperatorDecisionCommandAsync(command, context, cancellationToken));
+                            DispatchOperatorDecisionCommandAsync(command, context, cancellationToken),
+                        itemId => OperatorInbox.AppendAcknowledgement(context.Workspace, itemId));
                 }
                 catch (Exception ex) when (DiscordOperatorFaultClassifier.IsAuthError(ex))
                 {
@@ -921,7 +923,13 @@ internal static partial class CliCommandHandlers
                 if (!string.IsNullOrWhiteSpace(csvIds))
                     userIdList.AddRange(csvIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
                 IReadOnlyList<string>? operatorUserIds = userIdList.Count > 0 ? userIdList : null;
-                var catalog = new OperatorChannelCatalog(channelType, dashboardUrl, forumChannelId, operatorUserIds);
+                var existing = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
+                var catalog = MergeOperatorChannelCatalog(
+                    existing,
+                    channelType,
+                    dashboardUrl,
+                    forumChannelId,
+                    operatorUserIds);
                 OperatorChannelStore.Save(context.Workspace.OperatorChannelPath, catalog);
                 Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"} operatorUserIds={operatorUserIds?.Count ?? 0}");
                 Console.WriteLine("Note: bot token (MCGO_DISCORD_BOT_TOKEN) is read from env at startup and is not stored.");
@@ -965,6 +973,20 @@ internal static partial class CliCommandHandlers
                 throw new ArgumentException($"Unknown operator-channel sub-command '{sub}'. Usage: operator-channel set|show|test");
         }
     }
+
+    internal static OperatorChannelCatalog MergeOperatorChannelCatalog(
+        OperatorChannelCatalog existing,
+        string channelType,
+        string? dashboardUrl,
+        string? forumChannelId,
+        IReadOnlyList<string>? operatorUserIds) =>
+        existing with
+        {
+            ChannelType = channelType,
+            DashboardBaseUrl = dashboardUrl ?? existing.DashboardBaseUrl,
+            ForumChannelId = forumChannelId ?? existing.ForumChannelId,
+            OperatorUserIds = operatorUserIds ?? existing.OperatorUserIds
+        };
 
     private static bool? HandleOperatorControlPlaneCommand(IReadOnlyList<string> parts, CliExecutionContext context)
     {
