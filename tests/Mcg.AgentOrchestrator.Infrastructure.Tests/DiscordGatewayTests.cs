@@ -361,13 +361,39 @@ public sealed class DiscordGatewayTests
         Assert.True(api.SentMessages[0].Content.Contains("Second escalation"));
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_preserves_multiple_action_buttons_for_one_item")]
+    public async Task DiscordCollaborationViewPreservesMultipleActionButtonsForOneItem()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        await store.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            "goal-two-actions",
+            "Acceptance decision",
+            "Body",
+            "corr-two-actions",
+            [
+                new CollaborationActionBinding("Accept", "next goal-two-actions"),
+                new CollaborationActionBinding("Acknowledge", "doctor")
+            ]);
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+
+        await view.ReconcileAsync();
+
+        var buttons = api.SentMessages.Single().Buttons;
+        Assert.Equal(2, buttons.Count);
+        Assert.Contains(buttons, button => button.Label.StartsWith("Accept", StringComparison.Ordinal));
+        Assert.Contains(buttons, button => button.Label.StartsWith("Acknowledge", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_six_open_items_names_button_overflow")]
     public async Task DiscordCollaborationViewSixOpenItemsNamesButtonOverflow()
     {
         var root = CreateTempDirectory();
         var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
         var api = new FakeDiscordForumApi();
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 5; i++)
         {
             await store.RaiseWithActionsAsync(
                 CollaborationItemType.Decision,
@@ -377,6 +403,13 @@ public sealed class DiscordGatewayTests
                 $"corr-{i}",
                 [new CollaborationActionBinding($"Apply {i}", $"next goal-six-items {i}")]);
         }
+        const string overflowKey = "spec-clarification:goal-six-items:scope:deadbeefcafebabe";
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            "goal-six-items",
+            "Overflow clarification",
+            "Body",
+            overflowKey);
         var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
 
         await view.ReconcileAsync();
@@ -384,8 +417,9 @@ public sealed class DiscordGatewayTests
         var message = api.SentMessages.Single();
         Assert.Equal(5, message.Buttons.Count);
         Assert.Contains("+1 more (no button)", message.Content);
-        Assert.Contains("corr-0", message.Content);
-        Assert.Contains("Decision 0", message.Content);
+        Assert.Contains("deadbeef", message.Content);
+        Assert.Contains("Overflow clarification", message.Content);
+        Assert.DoesNotContain("spec-clarificati…", message.Content);
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_caps_oversized_goal_message_to_discord_limit")]
@@ -448,23 +482,27 @@ public sealed class DiscordGatewayTests
             "Body",
             "corr-live-ack",
             [new CollaborationActionBinding("Apply", "next goal-live-ack")]);
-        var view = new DiscordCollaborationViewService(
-            store,
+        var catalog = new OperatorChannelCatalog(
+            "discord",
+            ForumChannelId: "42",
+            OperatorUserIds: ["user1"]);
+        var view = OperatorChannelFactory.CreateCollaborationViewWithApi(
+            catalog,
             api,
-            42UL,
+            store,
             root,
-            ["user1"],
             dispatchAction: (_, _) => Task.CompletedTask,
-            acknowledge: acknowledged.Add);
+            acknowledge: acknowledged.Add)!;
         await view.ReconcileAsync();
 
-        var result = await view.ApplyInteractionAsync(
+        var result = await DiscordGatewayListener.ApplyGatewayInteractionAsync(
+            view,
             api.SentMessages.Single().Buttons.Single().CustomId,
             "user1",
             "interaction-live-ack");
 
         Assert.Equal(["corr-live-ack"], acknowledged);
-        Assert.Contains("Applied", result.AcknowledgementMessage);
+        Assert.Contains("Applied", DiscordGatewayListener.BuildAcknowledgementMessage(result));
     }
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_rejects_task_scoped_dispatch_verbs_at_bind_composition")]

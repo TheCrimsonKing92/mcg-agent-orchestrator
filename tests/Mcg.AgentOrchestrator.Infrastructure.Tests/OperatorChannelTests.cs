@@ -10,7 +10,7 @@ using Org.BouncyCastle.Security;
 using System.Text;
 using System.Text.Json;
 
-public sealed class OperatorChannelTests
+public sealed class OperatorChannelTests : CliCommandTestBase
 {
     // ---- OperatorChannelCatalog / Store ----
 
@@ -46,24 +46,28 @@ public sealed class OperatorChannelTests
     }
 
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_empty_operator_allowlist_logs_loud_startup_warning")]
-    public void OperatorChannelFactoryEmptyOperatorAllowlistLogsLoudStartupWarning()
+    public void OperatorListenEmptyOperatorAllowlistLogsLoudStartupWarning()
     {
-        var error = new StringWriter();
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
         var catalog = new OperatorChannelCatalog(
             "discord",
-            ForumChannelId: "42",
             OperatorUserIds: []);
+        OperatorChannelStore.Save(workspace.OperatorChannelPath, catalog);
 
-        OperatorChannelFactory.WriteStartupConfigurationWarnings(catalog, error);
+        var result = RunAppCommand(root, "operator-listen");
 
-        Assert.Contains("ERROR", error.ToString());
-        Assert.Contains("OperatorUserIds", error.ToString());
-        Assert.Contains("no Discord interactions will be processed", error.ToString());
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("ERROR", result.Stderr);
+        Assert.Contains("OperatorUserIds", result.Stderr);
+        Assert.Contains("no Discord interactions will be processed", result.Stderr);
     }
 
     [Xunit.Fact(DisplayName = "OperatorChannel_set_merge_preserves_progress_and_dead_man_fields")]
     public void OperatorChannelSetMergePreservesProgressAndDeadManFields()
     {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
         var mutedUntil = DateTimeOffset.Parse("2026-07-26T05:00:00Z");
         var existing = new OperatorChannelCatalog(
             "discord",
@@ -76,17 +80,22 @@ public sealed class OperatorChannelTests
             ControlPlaneMutedUntil: mutedUntil,
             DeadManHeartbeatEnabled: true,
             DeadManHeartbeatUrl: "https://heartbeat.example");
+        OperatorChannelStore.Save(workspace.OperatorChannelPath, existing);
 
-        var merged = CliCommandHandlers.MergeOperatorChannelCatalog(
-            existing,
+        var result = RunAppCommand(
+            root,
+            "operator-channel",
+            "set",
             "discord",
-            "https://new.example",
-            "42",
-            ["new-user"]);
+            "--dashboard-url",
+            "https://new.example");
+        var merged = OperatorChannelStore.Load(workspace.OperatorChannelPath);
 
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("operatorUserIds=1", result.Stdout);
         Assert.Equal("https://new.example", merged.DashboardBaseUrl);
-        Assert.Equal("42", merged.ForumChannelId);
-        Assert.Equal(["new-user"], merged.OperatorUserIds);
+        Assert.Equal("41", merged.ForumChannelId);
+        Assert.Equal(["old-user"], merged.OperatorUserIds);
         Assert.Equal("progress-thread", merged.ProgressThreadId);
         Assert.Equal("progress-message", merged.ProgressStatusMessageId);
         Assert.Equal("progress-hash", merged.ProgressStatusContentHash);

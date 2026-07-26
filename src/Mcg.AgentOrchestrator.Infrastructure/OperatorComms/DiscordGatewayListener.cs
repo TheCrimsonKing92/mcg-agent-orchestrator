@@ -92,7 +92,7 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
 
             // Acknowledge within Discord's 3-second window before doing any non-modal work.
             await component.DeferAsync(ephemeral: true);
-            var result = await _view.ApplyInteractionAsync(customId, userId, interactionId);
+            var result = await ApplyGatewayInteractionAsync(_view, customId, userId, interactionId);
 
             if (result.ErrorMessage is not null)
             {
@@ -110,13 +110,23 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                     ephemeral: true);
                 return;
             }
-            await component.FollowupAsync(result.AcknowledgementMessage ?? "Applied.", ephemeral: true);
+            await component.FollowupAsync(BuildAcknowledgementMessage(result), ephemeral: true);
         }
         catch
         {
             try { await component.FollowupAsync("The interaction could not be applied. The thread remains unresolved; retry the button.", ephemeral: true); } catch { }
         }
     }
+
+    internal static Task<DiscordInteractionResult> ApplyGatewayInteractionAsync(
+        DiscordCollaborationViewService view,
+        string customId,
+        string userId,
+        string interactionId) =>
+        view.ApplyInteractionAsync(customId, userId, interactionId);
+
+    internal static string BuildAcknowledgementMessage(DiscordInteractionResult result) =>
+        result.AcknowledgementMessage ?? "Applied.";
 
     private async Task OnModalSubmittedAsync(SocketModal modal)
     {

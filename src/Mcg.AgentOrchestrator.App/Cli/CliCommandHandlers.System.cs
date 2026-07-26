@@ -931,7 +931,7 @@ internal static partial class CliCommandHandlers
                     forumChannelId,
                     operatorUserIds);
                 OperatorChannelStore.Save(context.Workspace.OperatorChannelPath, catalog);
-                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"} operatorUserIds={operatorUserIds?.Count ?? 0}");
+                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"} operatorUserIds={catalog.OperatorUserIds?.Count ?? 0}");
                 Console.WriteLine("Note: bot token (MCGO_DISCORD_BOT_TOKEN) is read from env at startup and is not stored.");
                 return false;
             }
