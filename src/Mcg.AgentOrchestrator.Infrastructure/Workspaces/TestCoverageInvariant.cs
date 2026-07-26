@@ -174,7 +174,7 @@ internal static class TestCoverageInvariant
                 []);
         }
 
-        var effectivePartitions = partitions
+        partitions = partitions
             .Select((partition, index) => (Partition: partition, Index: index))
             .Where(item =>
                 string.IsNullOrWhiteSpace(currentAttemptId) ||
@@ -189,9 +189,9 @@ internal static class TestCoverageInvariant
                 .Partition)
             .ToArray();
         var emptyPartitions = new List<string>();
-        var receiptTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var completedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var accountedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var partition in effectivePartitions)
+        foreach (var partition in partitions)
         {
             var executed = ReadCompletedTests(partition.TestResultPaths);
             if (!partition.Completed || executed.Count == 0)
@@ -200,12 +200,12 @@ internal static class TestCoverageInvariant
                 continue;
             }
 
-            receiptTests.UnionWith(executed);
+            completedTests.UnionWith(executed);
             accountedTests.UnionWith(ReadRecordedTests(partition.TestResultPaths));
         }
 
         var executedTests = candidateDiscoveredTests
-            .Where(discovered => receiptTests.Any(completed => IdentitiesMatch(discovered, completed)))
+            .Where(discovered => completedTests.Any(completed => IdentitiesMatch(discovered, completed)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var missing = candidateDiscoveredTests
@@ -242,11 +242,11 @@ internal static class TestCoverageInvariant
 
         var passed = emptyPartitions.Count == 0 && missing.Count == 0;
         var summary = passed
-            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={effectivePartitions.Length}"
+            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={partitions.Count}"
             : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
         var failureClassification = passed
             ? null
-            : effectivePartitions.Any(partition =>
+            : partitions.Any(partition =>
                 emptyPartitions.Contains(partition.Name, StringComparer.OrdinalIgnoreCase) &&
                 partition.HasEnvironmentInterferenceEvidence)
                 ? AcceptanceFailureClassifications.GateEnvironmentInterference

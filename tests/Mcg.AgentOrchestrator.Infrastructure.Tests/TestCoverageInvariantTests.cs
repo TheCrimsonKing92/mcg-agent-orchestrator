@@ -87,6 +87,33 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_cross_generation_drop_unless_test_file_was_deleted")]
+    public void TestCoverageInvariantRejectsCrossGenerationDropUnlessTestFileWasDeleted()
+    {
+        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        try
+        {
+            var candidate = new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase);
+            var main = new HashSet<string>(
+                ["CurrentTests.Runs", "RemovedTests.WasPresentOnMain"],
+                StringComparer.OrdinalIgnoreCase);
+            var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
+
+            var rejected = TestCoverageInvariant.Evaluate(candidate, partitions, main, []);
+            var allowed = TestCoverageInvariant.Evaluate(candidate, partitions, main, ["tests/RemovedTests.cs"]);
+
+            Xunit.Assert.False(rejected.Passed);
+            Xunit.Assert.Contains(
+                rejected.MissingTests,
+                missing => missing.StartsWith("cross-generation-count:", StringComparison.Ordinal));
+            Xunit.Assert.True(allowed.Passed);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_classifies_empty_partition_as_environmental_only_with_positive_evidence")]
     public void TestCoverageInvariantClassifiesEmptyPartitionAsEnvironmentalOnlyWithPositiveEvidence()
     {
@@ -163,33 +190,6 @@ public sealed class TestCoverageInvariantTests
             File.Delete(firstRun);
             File.Delete(latestRun);
             Directory.Delete(attemptFolder);
-        }
-    }
-
-    [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_cross_generation_drop_unless_test_file_was_deleted")]
-    public void TestCoverageInvariantRejectsCrossGenerationDropUnlessTestFileWasDeleted()
-    {
-        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
-        try
-        {
-            var candidate = new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase);
-            var main = new HashSet<string>(
-                ["CurrentTests.Runs", "RemovedTests.WasPresentOnMain"],
-                StringComparer.OrdinalIgnoreCase);
-            var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
-
-            var rejected = TestCoverageInvariant.Evaluate(candidate, partitions, main, []);
-            var allowed = TestCoverageInvariant.Evaluate(candidate, partitions, main, ["tests/RemovedTests.cs"]);
-
-            Xunit.Assert.False(rejected.Passed);
-            Xunit.Assert.Contains(
-                rejected.MissingTests,
-                missing => missing.StartsWith("cross-generation-count:", StringComparison.Ordinal));
-            Xunit.Assert.True(allowed.Passed);
-        }
-        finally
-        {
-            File.Delete(trx);
         }
     }
 

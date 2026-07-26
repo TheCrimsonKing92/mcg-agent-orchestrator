@@ -3914,7 +3914,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var allSummaries = new List<string>();
         foreach (var broadCheck in broadChecks)
         {
-            var candidateDiscoveryArguments = BuildDiscoveryArguments(
+            var candidateDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                 broadCheck,
                 EngineSettings,
                 environment);
@@ -3965,7 +3965,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         ResultSummary: "trusted main baseline build failed");
                 }
 
-                var mainDiscoveryArguments = BuildDiscoveryArguments(
+                var mainDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                     broadCheck,
                     EngineSettings,
                     environment with { ArtifactsPath = mainArtifactsPath });
@@ -4193,8 +4193,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (UsesMicrosoftTestingPlatform(check))
         {
             var invocation = engineSettings.ResolveMtpInvocation(check.Project);
-            // Discovery must mirror tests intentionally excluded from unattended execution.
-            // Otherwise by-design host-integration and opt-in tests are reported as missing.
+            // Discovery must mirror the execution-side unattended exclusion: lanes filter out
+            // Category=HostIntegration tests, so listing them here would make the structural
+            // coverage invariant report by-design-excluded tests as missing on every attempt.
             return
             [
                 invocation.ResolveExecutablePath(environment),
@@ -4203,9 +4204,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 "off",
                 "--list-tests",
                 "--filter-not-trait",
-                "Category=HostIntegration",
-                "--filter-not-trait",
-                "Category=AcceptanceOptIn"
+                "Category=HostIntegration"
             ];
         }
 
@@ -4217,9 +4216,35 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "--no-build",
             "--list-tests",
             "--filter",
-            "Category!=HostIntegration&Category!=AcceptanceOptIn"
+            "Category!=HostIntegration"
         };
         return WithBuildEnvironmentArguments([.. arguments], environment);
+    }
+
+    private static string[] BuildUnattendedDiscoveryArguments(
+        AcceptanceManifestCheck check,
+        AcceptanceGateEngineSettings engineSettings,
+        DotnetBuildEnvironment environment)
+    {
+        var arguments = BuildDiscoveryArguments(check, engineSettings, environment).ToList();
+        if (UsesMicrosoftTestingPlatform(check))
+        {
+            arguments.Add("--filter-not-trait");
+            arguments.Add("Category=AcceptanceOptIn");
+        }
+        else
+        {
+            var filterIndex = arguments.IndexOf("--filter");
+            if (filterIndex < 0 || filterIndex == arguments.Count - 1)
+            {
+                throw new InvalidDataException(
+                    $"Acceptance check '{check.Name}' produced no discovery filter.");
+            }
+
+            arguments[filterIndex + 1] += "&Category!=AcceptanceOptIn";
+        }
+
+        return [.. arguments];
     }
 
     private static string? ResolveMainWorktreePath(string worktreePath)
