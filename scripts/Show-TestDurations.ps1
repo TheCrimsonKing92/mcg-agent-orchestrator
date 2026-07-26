@@ -94,6 +94,13 @@ function Resolve-AttemptsRoot {
     return Join-Path $repoRoot '.orchestrator\acceptance-gate-attempts'
 }
 
+function Test-PassedGateAttemptOutcome {
+    param([object]$Outcome)
+
+    $value = [string]$Outcome
+    return $value.Equals('Passed', [StringComparison]::OrdinalIgnoreCase) -or $value -eq '1'
+}
+
 function Resolve-RecentGateAttemptTrx {
     param(
         [string]$Root,
@@ -120,7 +127,7 @@ function Resolve-RecentGateAttemptTrx {
         foreach ($attemptFile in Get-ChildItem -LiteralPath $goalDirectory.FullName -Filter '*.attempt.json' -File -ErrorAction SilentlyContinue) {
             try {
                 $attempt = Get-Content -LiteralPath $attemptFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                if (-not ([string]$attempt.outcome).Equals('Passed', [StringComparison]::OrdinalIgnoreCase) -or
+                if (-not (Test-PassedGateAttemptOutcome $attempt.outcome) -or
                     $null -eq $attempt.completedAt) {
                     continue
                 }
@@ -161,8 +168,15 @@ function Resolve-RecentGateAttemptTrx {
                 $trxFiles = @(Resolve-TrxInput @($resultPathSet))
                 foreach ($trxFile in $trxFiles) {
                     $trx = [xml](Get-Content -LiteralPath $trxFile.FullName -Raw -ErrorAction Stop)
-                    if ($null -eq $trx.TestRun) {
-                        throw "TRX receipt has no TestRun root: $($trxFile.FullName)"
+                    $counters = $trx.TestRun.ResultSummary.Counters
+                    $testResults = @($trx.TestRun.Results.UnitTestResult)
+                    if ($null -eq $trx.TestRun -or
+                        $null -eq $counters -or
+                        -not ([string]$trx.TestRun.ResultSummary.outcome).Equals('Completed', [StringComparison]::OrdinalIgnoreCase) -or
+                        [int]$counters.total -le 0 -or
+                        $testResults.Count -ne [int]$counters.total -or
+                        [int]$counters.failed -gt 0) {
+                        throw "TRX receipt is not clean and complete: $($trxFile.FullName)"
                     }
                 }
 

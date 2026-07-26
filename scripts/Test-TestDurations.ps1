@@ -44,6 +44,9 @@ function Write-TrxFixture {
             [System.Security.SecurityElement]::Escape(($result.Name -replace '^.*\.', ''))
         )
     }
+    $passed = @($fixtureResults | Where-Object Outcome -eq 'Passed').Count
+    $failed = @($fixtureResults | Where-Object Outcome -eq 'Failed').Count
+    $notExecuted = @($fixtureResults | Where-Object Outcome -eq 'NotExecuted').Count
 
     $content = @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -54,6 +57,9 @@ $($resultXml -join "`r`n")
   <TestDefinitions>
 $($definitionXml -join "`r`n")
   </TestDefinitions>
+  <ResultSummary outcome="Completed">
+    <Counters total="$($fixtureResults.Count)" executed="$($passed + $failed)" passed="$passed" failed="$failed" notExecuted="$notExecuted" />
+  </ResultSummary>
 </TestRun>
 "@
 
@@ -140,7 +146,7 @@ try {
         goalPrefix = '11112222'
         startedAt = '2026-07-17T12:00:00.0000000+00:00'
         completedAt = '2026-07-17T12:01:00.0000000+00:00'
-        outcome = 'Passed'
+        outcome = 1
         resultPath = $resultPath
         testResultPaths = @($gateTrx)
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $attemptPath -Encoding UTF8
@@ -165,7 +171,7 @@ try {
         goalPrefix = '11112222'
         startedAt = '2026-07-17T13:00:00.0000000+00:00'
         completedAt = '2026-07-17T13:01:00.0000000+00:00'
-        outcome = 'Failed'
+        outcome = 2
         resultPath = $failedResultPath
         testResultPaths = @($failedTrx)
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $failedAttemptPath -Encoding UTF8
@@ -191,7 +197,7 @@ try {
         goalPrefix = '11112222'
         startedAt = '2026-07-17T14:00:00.0000000+00:00'
         completedAt = '2026-07-17T14:01:00.0000000+00:00'
-        outcome = 'Passed'
+        outcome = 1
         resultPath = $partialResultPath
         testResultPaths = @($partialTrx, $missingTrx)
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $partialAttemptPath -Encoding UTF8
@@ -216,7 +222,7 @@ try {
         goalPrefix = '11112222'
         startedAt = '2026-07-17T15:00:00.0000000+00:00'
         completedAt = '2026-07-17T15:01:00.0000000+00:00'
-        outcome = 'Passed'
+        outcome = 1
         resultPath = $mismatchedResultPath
         testResultPaths = @($mismatchedTrx, $missingTrx)
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $mismatchedAttemptPath -Encoding UTF8
@@ -229,6 +235,30 @@ try {
         }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $mismatchedResultPath -Encoding UTF8
 
+    $cachedAttemptId = '11112222-0-20260717160000000-ccddee'
+    $cachedAttemptPath = Join-Path $goalDirectory "$cachedAttemptId.attempt.json"
+    $cachedResultPath = Join-Path $goalDirectory "$cachedAttemptId.result.json"
+    $cachedTrx = Join-Path $work 'cached-newest.dotnet-test.trx'
+    Set-Content -LiteralPath $cachedTrx -Value '<TestRun />' -Encoding UTF8
+    @{
+        attemptId = $cachedAttemptId
+        goalId = $goalId
+        goalPrefix = '11112222'
+        startedAt = '2026-07-17T16:00:00.0000000+00:00'
+        completedAt = '2026-07-17T16:01:00.0000000+00:00'
+        outcome = 1
+        resultPath = $cachedResultPath
+        testResultPaths = @($cachedTrx)
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $cachedAttemptPath -Encoding UTF8
+    @{
+        kind = 'accepted'
+        acceptance = @{
+            passed = $true
+            unmetCriteria = @()
+            testResultPaths = @($cachedTrx)
+        }
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $cachedResultPath -Encoding UTF8
+
     $latestGate = Invoke-DurationScript @('-AttemptsRoot', $attemptRoot, '-Goal', '11112222', '-Top', '1')
     Assert-True ($latestGate.ExitCode -eq 0) "Expected latest gate attempt invocation to pass. Output: $($latestGate.Output -join ' | ')"
     $latestGateOutput = $latestGate.Output -join "`n"
@@ -236,6 +266,7 @@ try {
     Assert-True ($latestGateOutput -notmatch 'FailedNewer') 'Expected a newer failed attempt not to displace a clean receipt set.'
     Assert-True ($latestGateOutput -notmatch 'PartialNewer') 'Expected a newer partial receipt set not to displace a complete receipt set.'
     Assert-True ($latestGateOutput -notmatch 'MismatchedNewer') 'Expected a newer mismatched receipt set not to displace a complete receipt set.'
+    Assert-True ($latestGateOutput -notmatch 'CachedNewest') 'Expected a newer cached placeholder receipt not to displace a complete timing receipt set.'
 
     $missing = Invoke-DurationScript @((Join-Path $work 'missing.trx'))
     Assert-True ($missing.ExitCode -ne 0) 'Expected missing input to fail.'
