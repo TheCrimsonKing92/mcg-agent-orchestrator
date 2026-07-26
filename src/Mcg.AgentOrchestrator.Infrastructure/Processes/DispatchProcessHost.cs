@@ -451,6 +451,8 @@ public static class DispatchProcessHost
         }
     }
 
+    internal static string? ClaudeCredentialSourceOverrideForTests;
+
     private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath)
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
@@ -466,7 +468,7 @@ public static class DispatchProcessHost
             // Subscription auth: seed the sandbox config with the operator's persisted CLI login so
             // the Low-IL worker authenticates without an API key. claude-cli reads credentials from
             // the ROOT of CLAUDE_CONFIG_DIR; a Low-IL process can read the Medium-labeled copies.
-            var userClaudeDir = Path.Combine(
+            var userClaudeDir = ClaudeCredentialSourceOverrideForTests ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".claude");
             var seededCredentials = false;
@@ -484,7 +486,7 @@ public static class DispatchProcessHost
             {
                 AppendDispatchStderrDiagnostic(
                     stderrPath,
-                    "Claude worker sandbox diagnostic: no ANTHROPIC_API_KEY and no CLI credentials to seed; Claude may fail to authenticate.");
+                    "Claude worker sandbox diagnostic: ANTHROPIC_API_KEY is not set and no CLI credentials were found to seed; Claude may fail to authenticate.");
             }
         }
 

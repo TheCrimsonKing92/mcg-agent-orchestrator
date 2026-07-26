@@ -705,6 +705,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     try
     {
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = Path.Combine(root, "no-cli-credentials");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
@@ -722,6 +723,44 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
     finally
     {
+        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = null;
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_cli_credentials_into_sandbox_config_without_diagnostic")]
+    public void DispatchProcessHostSeedsCliCredentialsIntoSandboxConfigWithoutDiagnostic()
+{
+    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+    var root = CreateTempDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        var credentialSource = Path.Combine(root, "operator-claude");
+        Directory.CreateDirectory(credentialSource);
+        File.WriteAllText(Path.Combine(credentialSource, ".credentials.json"), "{\"token\":\"subscription\"}");
+        File.WriteAllText(Path.Combine(credentialSource, "settings.json"), "{\"theme\":\"dark\"}");
+        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = credentialSource;
+        var startInfo = CreateSandboxStartInfo(root);
+        var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+        var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, stderrPath);
+
+        Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
+        Assert.Equal(
+            "{\"token\":\"subscription\"}",
+            File.ReadAllText(Path.Combine(claudeConfigDir!, ".credentials.json")));
+        Assert.Equal(
+            "{\"theme\":\"dark\"}",
+            File.ReadAllText(Path.Combine(claudeConfigDir!, "settings.json")));
+        Assert.False(File.Exists(stderrPath));
+    }
+    finally
+    {
+        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = null;
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
         try { Directory.Delete(root, recursive: true); } catch { }
     }
@@ -735,6 +774,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     try
     {
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
+        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = Path.Combine(root, "no-cli-credentials");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
@@ -757,6 +797,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
     finally
     {
+        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = null;
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
         try { Directory.Delete(root, recursive: true); } catch { }
     }
