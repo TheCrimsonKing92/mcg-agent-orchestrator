@@ -691,6 +691,11 @@ internal sealed class RecordingTimeProvider : TimeProvider
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
+    private const string CheckedInCliLaneFilter =
+        "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCommands&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands&FullyQualifiedName!~CliCommandTestsTerminalSweepCommands";
+    private const string CheckedInGoalAcceptanceVerifierLaneFilter =
+        "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests";
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_surfaces_hung_child_without_process_inspection")]
     public async Task GoalAcceptanceVerifierGateHeartbeatSurfacesHungChildWithoutProcessInspection()
     {
@@ -1803,9 +1808,30 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             Assert.True(result.Passed);
             var checks = result.Checks ?? throw new InvalidOperationException("Expected acceptance checks.");
-            Assert.True(checks.Any(check => check.Name == "infrastructure tests: Cli"));
-            Assert.True(checks.Any(check => check.Name == "infrastructure tests: Goal acceptance verifier"));
-            Assert.True(checks.Any(check => check.Name == "infrastructure tests: Remainder"));
+            string[] expectedInfrastructureChecks =
+            [
+                "infrastructure tests: Cli",
+                "infrastructure tests: Worker shell",
+                "infrastructure tests: Worker sandbox planner",
+                "infrastructure tests: Dashboard validation",
+                "infrastructure tests: Conduct watch sweep scoping",
+                "infrastructure tests: Goal worktree cleanup",
+                "infrastructure tests: Worker profiles",
+                "infrastructure tests: Process spawning",
+                "infrastructure tests: Chaos gate",
+                "infrastructure tests: Dotnet build slots",
+                "infrastructure tests: Goal acceptance verifier",
+                "infrastructure tests: Provider environment",
+                "infrastructure tests: Remainder balance A",
+                "infrastructure tests: Remainder balance B",
+                "infrastructure tests: Remainder"
+            ];
+            Assert.Equal(
+                expectedInfrastructureChecks.Order(StringComparer.Ordinal),
+                checks
+                    .Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal))
+                    .Select(check => check.Name)
+                    .Order(StringComparer.Ordinal));
             Assert.False(checks.Any(check => check.Name == "infrastructure tests"));
 
             var infrastructureCalls = calls
@@ -1816,8 +1842,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 .ToList();
 
             Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
-            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~CliCommandTests"));
-            Assert.Contains(infrastructureCalls, call => call.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests"));
+            Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInCliLaneFilter));
+            Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceVerifierLaneFilter));
             Assert.DoesNotContain(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"));
             Assert.Contains(infrastructureCalls, call =>
                 call.Any(argument =>
@@ -2341,7 +2367,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
-                    args.Any(arg => arg.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal)))
+                    args.Contains(CheckedInCliLaneFilter))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         1,
@@ -2387,7 +2413,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
-                    args.Any(arg => arg.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal)))
+                    args.Contains(CheckedInCliLaneFilter))
                 {
                     cliRuns++;
                     // Intermittent flake: fail the first run, pass the within-attempt re-run.
@@ -2625,7 +2651,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 calls.Add(args);
                 if (failFirstPartitionOnForcedRerun &&
                     IsInfrastructurePartitionTestCall(args) &&
-                    args.Any(arg => arg.Contains("FullyQualifiedName~CliCommandTests", StringComparison.Ordinal)))
+                    args.Contains(CheckedInCliLaneFilter))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         1,
