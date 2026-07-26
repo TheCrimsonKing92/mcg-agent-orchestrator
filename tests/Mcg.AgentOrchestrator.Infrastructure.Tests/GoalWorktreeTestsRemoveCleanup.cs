@@ -23,18 +23,12 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
 
         var scratchRoot = Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-long-wt", Guid.NewGuid().ToString("n"));
-        var repo = scratchRoot;
-        while (Path.Combine(repo, GoalWorktrees.DirectoryName, "12345678").Length <= 260)
-        {
-            repo = Path.Combine(repo, "long-path-segment-0123456789");
-        }
+        var repo = Path.Combine(scratchRoot, "repo");
 
         try
         {
-            Assert.True(repo.Length < 260, $"Repository root must remain process-launchable, got {repo.Length}: {repo}");
             Directory.CreateDirectory(repo);
             RunGit(repo, "init");
-            RunGit(repo, "config", "core.longpaths", "true");
             RunGit(repo, "config", "user.email", "tests@example.com");
             RunGit(repo, "config", "user.name", "Worktree Tests");
             File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
@@ -46,7 +40,15 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             var goal = kernel.CreateGoal("Long-path cleanup", [task]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var worktree = GoalWorktrees.Ensure(repo, goal.Id);
-            Assert.True(worktree.Length > 260, $"Expected a path longer than 260 characters, got {worktree.Length}: {worktree}");
+            var deepPath = Path.Combine(worktree, "long-path-segment-0123456789");
+            while (deepPath.Length <= 260)
+            {
+                deepPath = Path.Combine(deepPath, "long-path-segment-0123456789");
+            }
+
+            var extendedDeepPath = @"\\?\" + deepPath;
+            Directory.CreateDirectory(extendedDeepPath);
+            Assert.True(Directory.Exists(extendedDeepPath));
             kernel.CancelGoal(goal.Id, "Test terminal cleanup.");
 
             var result = GoalWorktrees.RemoveTerminal(repo, goal.Id, kernel);
