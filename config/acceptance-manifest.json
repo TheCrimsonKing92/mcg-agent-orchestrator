@@ -2,10 +2,10 @@
   "version": 1,
   "engine": {
     "slotCount": 4,
-    "maxConcurrentShards": 3,
+    "maxConcurrentShards": 2,
     "enforceStructuralCoverage": true,
     "timeouts": {
-      "defaultMinutes": 25,
+      "defaultMinutes": 40,
       "buildServerShutdownMinutes": 5,
       "discoveryMinutes": 10
     },
