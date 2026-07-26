@@ -48,7 +48,9 @@
           "--report-trx-filename",
           "{trxFileName}",
           "--long-running",
-          "120"
+          "120",
+          "--minimum-expected-tests",
+          "1"
         ]
       },
       {
@@ -66,7 +68,9 @@
           "--report-trx-filename",
           "{trxFileName}",
           "--long-running",
-          "120"
+          "120",
+          "--minimum-expected-tests",
+          "1"
         ]
       }
     ]
