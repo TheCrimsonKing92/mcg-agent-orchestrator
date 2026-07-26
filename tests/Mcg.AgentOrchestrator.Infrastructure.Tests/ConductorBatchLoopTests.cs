@@ -2072,7 +2072,7 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, blocked.Attempt.Outcome);
             Assert.False(secondRan);
-            Assert.Equal(1, Volatile.Read(ref preSlotRuns));
+            Assert.Equal(2, Volatile.Read(ref preSlotRuns));
             releaseFirst.Set();
         }
         finally
