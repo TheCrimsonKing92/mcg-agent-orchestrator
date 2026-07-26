@@ -361,8 +361,8 @@ public sealed class DiscordGatewayTests
         Assert.True(api.SentMessages[0].Content.Contains("Second escalation"));
     }
 
-    [Xunit.Fact(DisplayName = "DiscordCollaborationView_preserves_multiple_action_buttons_for_one_item")]
-    public async Task DiscordCollaborationViewPreservesMultipleActionButtonsForOneItem()
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_names_action_overflow_beyond_five_buttons")]
+    public async Task DiscordCollaborationViewNamesActionOverflowBeyondFiveButtons()
     {
         var root = CreateTempDirectory();
         var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
@@ -374,17 +374,22 @@ public sealed class DiscordGatewayTests
             "Body",
             "corr-two-actions",
             [
-                new CollaborationActionBinding("Accept", "next goal-two-actions"),
-                new CollaborationActionBinding("Acknowledge", "doctor")
+                new CollaborationActionBinding("Apply 1", "next goal-two-actions 1"),
+                new CollaborationActionBinding("Apply 2", "next goal-two-actions 2"),
+                new CollaborationActionBinding("Apply 3", "next goal-two-actions 3"),
+                new CollaborationActionBinding("Apply 4", "next goal-two-actions 4"),
+                new CollaborationActionBinding("Apply 5", "next goal-two-actions 5"),
+                new CollaborationActionBinding("Apply 6", "next goal-two-actions 6")
             ]);
         var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
 
         await view.ReconcileAsync();
 
-        var buttons = api.SentMessages.Single().Buttons;
-        Assert.Equal(2, buttons.Count);
-        Assert.Contains(buttons, button => button.Label.StartsWith("Accept", StringComparison.Ordinal));
-        Assert.Contains(buttons, button => button.Label.StartsWith("Acknowledge", StringComparison.Ordinal));
+        var message = api.SentMessages.Single();
+        Assert.Equal(5, message.Buttons.Count);
+        Assert.Contains("Apply 6", message.Content);
+        Assert.Contains("corr-two-actions", message.Content);
+        Assert.Contains("+1 more (no button)", message.Content);
     }
 
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_six_open_items_names_button_overflow")]
@@ -495,14 +500,35 @@ public sealed class DiscordGatewayTests
             acknowledge: acknowledged.Add)!;
         await view.ReconcileAsync();
 
-        var result = await DiscordGatewayListener.ApplyGatewayInteractionAsync(
-            view,
+        var deferredEphemerally = false;
+        var followups = new List<(string Message, bool Ephemeral)>();
+        var component = new DiscordGatewayListener.ButtonInteractionContext(
             api.SentMessages.Single().Buttons.Single().CustomId,
             "user1",
-            "interaction-live-ack");
+            "interaction-live-ack",
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            ephemeral =>
+            {
+                deferredEphemerally = ephemeral;
+                return Task.CompletedTask;
+            },
+            (message, ephemeral) =>
+            {
+                followups.Add((message, ephemeral));
+                return Task.CompletedTask;
+            },
+            (_, _, _) => Task.CompletedTask);
+
+        await DiscordGatewayListener.HandleButtonExecutedAsync(
+            view,
+            component);
 
         Assert.Equal(["corr-live-ack"], acknowledged);
-        Assert.Contains("Applied", DiscordGatewayListener.BuildAcknowledgementMessage(result));
+        Assert.True(deferredEphemerally);
+        var followup = Assert.Single(followups);
+        Assert.Contains("Applied", followup.Message);
+        Assert.True(followup.Ephemeral);
     }
 
     [Xunit.Fact(DisplayName = "DiscordOperatorChannel_rejects_task_scoped_dispatch_verbs_at_bind_composition")]
