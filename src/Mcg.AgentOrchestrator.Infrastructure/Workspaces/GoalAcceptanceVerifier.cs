@@ -681,9 +681,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         async Task RunShardAsync(IndexedShard shard, ShardWorkerLease worker)
         {
             var shardClock = Stopwatch.StartNew();
-            var shardResultsDirectory = Path.Combine(
-                worker.Lease.Environment.ArtifactsPath,
-                "TestResults");
+            var shardResultsDirectory = ResolveInfrastructureShardResultsDirectory(
+                worker.Lease.Environment);
             var run = await RunCheckWithPartitionVerdictCacheAsync(
                 shard.Check,
                 cacheContext,
@@ -782,6 +781,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new CheckBatchResult(
             completed.Select(outcome => outcome.Result).ToArray(),
             completed.Any(outcome => outcome.Retried));
+    }
+
+    internal static string ResolveInfrastructureShardResultsDirectory(
+        DotnetBuildEnvironment environment)
+    {
+        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        var attemptDirectory = string.IsNullOrWhiteSpace(attemptPrefix)
+            ? null
+            : Path.GetDirectoryName(attemptPrefix);
+        return string.IsNullOrWhiteSpace(attemptDirectory)
+            ? Path.Combine(environment.ArtifactsPath, "TestResults")
+            : attemptDirectory;
     }
 
     internal static int ResolveAvailableShardWorkerCount(

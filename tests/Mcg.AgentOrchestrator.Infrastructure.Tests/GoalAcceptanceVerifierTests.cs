@@ -2159,8 +2159,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_real_process_shards_acquire_isolated_slots_and_release_them")]
-    public async Task GoalAcceptanceVerifierRealProcessShardsAcquireIsolatedSlotsAndReleaseThem()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_real_process_shards_keep_receipts_in_attempt_artifacts_after_releasing_slots")]
+    public async Task GoalAcceptanceVerifierRealProcessShardsKeepReceiptsInAttemptArtifactsAfterReleasingSlots()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -2251,15 +2251,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call => call.Length > 0 && call[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase));
             Assert.Single(executablePaths.Distinct(StringComparer.OrdinalIgnoreCase));
             Assert.All(executablePaths, path => Assert.True(File.Exists(path), $"Missing prebuilt MTP executable '{path}'."));
-            Assert.DoesNotContain(
+            var attemptResultsDirectory = Path.GetDirectoryName(ambientAttemptPrefix)!;
+            Assert.All(
                 resultsDirectories,
-                path => path.StartsWith(
-                    Path.GetDirectoryName(ambientAttemptPrefix)!,
+                path => Assert.Equal(attemptResultsDirectory, path, ignoreCase: true));
+            Assert.All(
+                result.TestResultPaths!,
+                path => Assert.StartsWith(
+                    attemptResultsDirectory + Path.DirectorySeparatorChar,
+                    path,
                     StringComparison.OrdinalIgnoreCase));
-            var usedSlots = resultsDirectories.Select(StableSlotIndex).Distinct().ToArray();
-            Assert.Equal(2, usedSlots.Length);
-            var secondarySlot = Assert.Single(usedSlots, slot => slot != primarySlot);
-            Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(secondarySlot));
+            Assert.All(
+                Enumerable.Range(0, AcceptanceGateEngineSettings.Load(root).SlotCount)
+                    .Where(slot => slot != primarySlot),
+                slot => Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(slot)));
 
             primaryLease.Dispose();
             primaryLease = null;
@@ -2273,6 +2278,44 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             primaryLease?.Dispose();
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_receipts_use_attempt_artifacts_instead_of_releasable_slot")]
+    public void GoalAcceptanceVerifierShardReceiptsUseAttemptArtifactsInsteadOfReleasableSlot()
+    {
+        var attemptDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"mcg-shard-attempt-{Guid.NewGuid():N}");
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var environment = new DotnetBuildEnvironment(
+            "run-slot-1",
+            Path.Combine(Path.GetTempPath(), "slot-1"),
+            Path.Combine(Path.GetTempPath(), "slot-1", "artifacts"),
+            Path.Combine(Path.GetTempPath(), "slot-1", "lease.lock"),
+            [],
+            "slot-1");
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(attemptDirectory, "attempt-123"));
+
+            var resultsDirectory =
+                GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
+
+            Assert.Equal(attemptDirectory, resultsDirectory, ignoreCase: true);
+            Assert.False(
+                resultsDirectory.StartsWith(
+                    environment.ArtifactsPath,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
         }
     }
 
