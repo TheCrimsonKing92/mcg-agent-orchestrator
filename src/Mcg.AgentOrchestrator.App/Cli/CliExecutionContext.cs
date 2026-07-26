@@ -22,7 +22,7 @@ internal sealed class CliExecutionContext(
     Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
-    Action<Action>? registerPostCommitAction = null)
+    Action<Action>? registerPreCommitAction = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -45,18 +45,19 @@ public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IRea
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
 
 /// <summary>
-/// Runs a side effect after the surrounding state transaction commits. Direct handler callers have
-/// no surrounding transaction, so the action executes immediately.
+/// Runs a side effect before the surrounding state transaction commits. A failure therefore rolls
+/// back the state mutation instead of leaving a partially audited durable command. Direct handler
+/// callers have no surrounding transaction, so the action executes immediately.
 /// </summary>
-public void AfterStateCommit(Action action)
+public void BeforeStateCommit(Action action)
 {
-    if (registerPostCommitAction is null)
+    if (registerPreCommitAction is null)
     {
         action();
         return;
     }
 
-    registerPostCommitAction(action);
+    registerPreCommitAction(action);
 }
 
 public OrchestratorWorkspace Workspace { get; } = workspace;

@@ -265,11 +265,18 @@ internal static class GoalOperationJournal
         string? currentHeadMainSha,
         int operatorRegateCount)
     {
+        var idempotencyKey = $"{Key(goal.Id, "acceptance-retry")}:{operatorRegateCount}";
+        if (Read(executionDirectory, goal.Id).Entries.Any(entry =>
+                entry.IdempotencyKey.Equals(idempotencyKey, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
         BeforeAcceptanceRetryAppend?.Invoke();
         Append(
             executionDirectory,
             goal.Id,
-            $"{Key(goal.Id, "acceptance-retry")}:{operatorRegateCount}",
+            idempotencyKey,
             "acceptance-retry",
             GoalOperationStatus.Completed,
             $"Operator acceptance re-gate {operatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}: {operatorReason}",

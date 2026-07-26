@@ -27,7 +27,7 @@ public static bool ExecuteCommand(
     Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
-    Action<Action>? registerPostCommitAction = null)
+    Action<Action>? registerPreCommitAction = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -48,7 +48,7 @@ public static bool ExecuteCommand(
         reacquireConductLoopLease: reacquireConductLoopLease,
         reloadResolvedParkedHumanWaitKernel: reloadResolvedParkedHumanWaitKernel,
         reloadParkedGoalSafetyNetKernel: reloadParkedGoalSafetyNetKernel,
-        registerPostCommitAction: registerPostCommitAction)
+        registerPreCommitAction: registerPreCommitAction)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

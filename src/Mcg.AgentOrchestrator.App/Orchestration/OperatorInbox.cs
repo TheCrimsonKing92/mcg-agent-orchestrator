@@ -75,6 +75,9 @@ public sealed record OperatorInboxItem(
 
 internal static class OperatorInbox
 {
+    internal static Action? BeforeLandingEscalationResolution { get; set; }
+    internal static Action? BeforeLandingEscalationResolutionSave { get; set; }
+
     private const string StoreFileName = "operator-inbox-acks.json";
     private const string LandingEscalationFileName = "landing-escalations.json";
     private const string LandingEscalationLockFileName = "landing-escalations.lock";
@@ -549,19 +552,20 @@ internal static class OperatorInbox
         OrchestratorWorkspace workspace,
         Goal goal,
         string operatorReason,
-        DateTimeOffset? resolvedAtUtc = null,
-        DateTimeOffset? acceptanceFailureOccurredAt = null)
+        DateTimeOffset acceptanceFailureOccurredAt,
+        DateTimeOffset? resolvedAtUtc = null)
     {
+        BeforeLandingEscalationResolution?.Invoke();
         using (AcquireLandingEscalationLock(workspace))
         {
             var changed = false;
             var resolvedAt = resolvedAtUtc ?? DateTimeOffset.UtcNow;
-            var failureOccurredAt = acceptanceFailureOccurredAt ?? goal.LatestAcceptanceFailure?.OccurredAt;
             var items = LoadLandingEscalationsUnsafe(workspace)
                 .Select(item =>
                 {
                     if (!item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
-                        item.ResolvedAtUtc is not null)
+                        item.ResolvedAtUtc is not null ||
+                        item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt)
                     {
                         return item;
                     }
@@ -572,12 +576,13 @@ internal static class OperatorInbox
                         ResolvedAtUtc = resolvedAt,
                         ResolvedBy = "acceptance-retry",
                         ResolutionReason = operatorReason,
-                        AcceptanceFailureOccurredAt = item.AcceptanceFailureOccurredAt ?? failureOccurredAt
+                        AcceptanceFailureOccurredAt = acceptanceFailureOccurredAt
                     };
                 })
                 .ToArray();
             if (changed)
             {
+                BeforeLandingEscalationResolutionSave?.Invoke();
                 SaveLandingEscalationsUnsafe(workspace, items);
             }
 
@@ -587,12 +592,14 @@ internal static class OperatorInbox
 
     public static bool HasUnresolvedLandingEscalation(
         OrchestratorWorkspace workspace,
-        Goal goal)
+        Goal goal,
+        DateTimeOffset acceptanceFailureOccurredAt)
     {
         using var escalationLock = AcquireLandingEscalationLock(workspace);
         return LoadLandingEscalationsUnsafe(workspace).Any(item =>
             item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
-            item.ResolvedAtUtc is null);
+            item.ResolvedAtUtc is null &&
+            item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt);
     }
 
     public static IReadOnlyList<OperatorInboxItem> RecordOwnershipHolds(

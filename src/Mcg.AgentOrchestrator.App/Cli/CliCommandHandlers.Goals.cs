@@ -370,16 +370,21 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "acceptance-retry could not resolve the prior failing gate's main HEAD SHA.");
             var currentHeadMainSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory)
                 ?? throw new InvalidOperationException("acceptance-retry could not resolve current main HEAD.");
-            if (!OperatorInbox.HasUnresolvedLandingEscalation(context.Workspace, retryGoal))
+            var acceptanceFailureOccurredAt = retryGoal.LatestAcceptanceFailure?.OccurredAt
+                ?? throw new InvalidOperationException(
+                    "acceptance-retry could not resolve the prior acceptance failure occurrence.");
+            if (!OperatorInbox.HasUnresolvedLandingEscalation(
+                    context.Workspace,
+                    retryGoal,
+                    acceptanceFailureOccurredAt))
             {
                 throw new InvalidOperationException(
                     $"acceptance-retry found no unresolved landing escalation for goal {retryGoal.Id.Value[..8]}; " +
                     "the goal was not changed.");
             }
 
-            var acceptanceFailureOccurredAt = retryGoal.LatestAcceptanceFailure?.OccurredAt;
             var operatorRegateCount = context.Kernel.RetryAcceptanceGate(retryGoal.Id, operatorReason);
-            context.AfterStateCommit(() =>
+            context.BeforeStateCommit(() =>
             {
                 GoalOperationJournal.AcceptanceRetried(
                     context.Workspace.ExecutionDirectory,
@@ -396,7 +401,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 {
                     throw new InvalidOperationException(
                         $"acceptance-retry could not resolve the landing escalation for goal {retryGoal.Id.Value[..8]} " +
-                        "after the goal-state transaction committed.");
+                        "before the goal-state transaction committed.");
                 }
 
                 Console.WriteLine(
