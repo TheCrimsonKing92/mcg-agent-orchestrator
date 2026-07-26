@@ -11,7 +11,8 @@ internal sealed record TestCoverageInvariantResult(
     bool Passed,
     string Summary,
     IReadOnlyList<string> MissingTests,
-    IReadOnlyList<string> EmptyPartitions);
+    IReadOnlyList<string> EmptyPartitions,
+    string? FailureClassification);
 
 internal static class TestCoverageInvariant
 {
@@ -162,7 +163,8 @@ internal static class TestCoverageInvariant
                 false,
                 "trusted discovery returned zero tests",
                 [],
-                []);
+                [],
+                AcceptanceFailureClassifications.StructuralCoverageFailed);
         }
 
         var emptyPartitions = new List<string>();
@@ -217,7 +219,12 @@ internal static class TestCoverageInvariant
         var summary = passed
             ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={completedTests.Count}, partitions={partitions.Count}"
             : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={completedTests.Count}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
-        return new TestCoverageInvariantResult(passed, summary, missing, emptyPartitions);
+        var failureClassification = passed
+            ? null
+            : emptyPartitions.Count > 0
+                ? AcceptanceFailureClassifications.GateEnvironmentInterference
+                : AcceptanceFailureClassifications.StructuralCoverageFailed;
+        return new TestCoverageInvariantResult(passed, summary, missing, emptyPartitions, failureClassification);
     }
 
     private static bool IdentitiesMatch(string left, string right)

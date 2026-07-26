@@ -1989,7 +1989,15 @@ public sealed class ConductorBatchLoopTests
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         using var releaseFirst = new ManualResetEventSlim(false);
         using var firstHasLease = new ManualResetEventSlim(false);
-        var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out var waitForAttempts);
+        var preSlotRuns = 0;
+        var coordinator = ThreadedAcceptanceAttemptCoordinator(
+            attemptRoot,
+            out var waitForAttempts,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref preSlotRuns);
+                return null;
+            });
         var candidateA = ConductorParallelAcceptanceCandidate.Create(goalA, 0, ["src/HoldA.cs"], "branch-a", "main");
         var candidateB = ConductorParallelAcceptanceCandidate.Create(goalB, 0, ["src/HoldB.cs"], "branch-b", "main");
         var secondRan = false;
@@ -2022,6 +2030,7 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, blocked.Attempt.Outcome);
             Assert.False(secondRan);
+            Assert.Equal(1, Volatile.Read(ref preSlotRuns));
             releaseFirst.Set();
         }
         finally
@@ -2435,7 +2444,8 @@ public sealed class ConductorBatchLoopTests
 
     private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
         string attemptRoot,
-        out Action waitForAttempts)
+        out Action waitForAttempts,
+        ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null)
     {
         var nextPid = 8000;
         var alive = new ConcurrentDictionary<int, byte>();
@@ -2455,6 +2465,7 @@ public sealed class ConductorBatchLoopTests
         return new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
             isProcessAlive: pid => alive.ContainsKey(pid),
+            tryRunPreSlot: tryRunPreSlot,
             launchOwnedProcess: launch =>
             {
                 var pid = Interlocked.Increment(ref nextPid);

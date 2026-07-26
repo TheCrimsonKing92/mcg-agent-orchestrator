@@ -1853,3 +1853,71 @@ public sealed class IsolatedDotnetVSTestBypassProbeTests
         }
     }
 }
+
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
+{
+    [Xunit.Fact(DisplayName = "GoalWorktree_acceptance_contention_reconciles_blocked_attempt_before_clean_regate")]
+    public void GoalWorktreeAcceptanceContentionReconcilesBlockedAttemptBeforeCleanRegate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateCompletedGoal(kernel, "Verify clean acceptance re-gate.", Environment.CurrentDirectory);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/Regate.cs"],
+            "branch",
+            "main");
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-regate-{Guid.NewGuid():N}");
+
+        try
+        {
+            ConductorParallelAcceptanceAttemptDecision blocked;
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero))
+            {
+                var blockedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot,
+                    runInline: true);
+                blocked = blockedCoordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+                Xunit.Assert.Equal(
+                    ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot,
+                    blocked.Attempt.Outcome);
+                blockedCoordinator.MarkReconciled(blocked.Attempt);
+            }
+
+            var regateCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true);
+            var regated = regateCoordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, _, lease, _) =>
+                {
+                    Xunit.Assert.NotNull(lease);
+                    return ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+                });
+
+            Xunit.Assert.Equal(
+                ConductorParallelAcceptanceAttemptOutcome.Passed,
+                regated.Attempt.Outcome);
+            Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+        }
+        finally
+        {
+            if (Directory.Exists(attemptRoot))
+            {
+                Directory.Delete(attemptRoot, recursive: true);
+            }
+        }
+    }
+}

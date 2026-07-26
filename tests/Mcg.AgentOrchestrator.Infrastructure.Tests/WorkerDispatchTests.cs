@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -933,5 +934,71 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
             int fundamentalMisdirection,
             int invalid,
             int totalTokens) { }
+    }
+}
+
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestSupport
+{
+    [Xunit.Fact(DisplayName = "Dispatch_admission_rejects_contending_gate_before_preflight_or_paid_start")]
+    public void DispatchAdmissionRejectsContendingGateBeforePreflightOrPaidStart()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Verify acceptance admission isolation.",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/Admission.cs"],
+            "branch",
+            "main");
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-admission-{Guid.NewGuid():N}");
+        var sentinelPath = Path.Combine(environment.ArtifactsPath, "incumbent.txt");
+        var preflightRuns = 0;
+        var paidStarts = 0;
+
+        try
+        {
+            using var incumbent = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                environment,
+                TimeSpan.Zero);
+            Directory.CreateDirectory(environment.ArtifactsPath);
+            File.WriteAllText(sentinelPath, "incumbent");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                runInline: true,
+                tryRunPreSlot: (_, _) =>
+                {
+                    preflightRuns++;
+                    return null;
+                });
+
+            var decision = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                (attemptCandidate, _, _, _) =>
+                {
+                    paidStarts++;
+                    return ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+                });
+
+            Xunit.Assert.Equal(
+                ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot,
+                decision.Attempt.Outcome);
+            Xunit.Assert.Equal(0, preflightRuns);
+            Xunit.Assert.Equal(0, paidStarts);
+            Xunit.Assert.Equal("incumbent", File.ReadAllText(sentinelPath));
+        }
+        finally
+        {
+            if (Directory.Exists(attemptRoot))
+            {
+                Directory.Delete(attemptRoot, recursive: true);
+            }
+        }
     }
 }

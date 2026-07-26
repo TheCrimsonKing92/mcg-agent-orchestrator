@@ -424,10 +424,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             WriteHeartbeat(attempt, "running");
             heartbeatTimer.Change(_heartbeatInterval, _heartbeatInterval);
+            stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
             run = _tryRunPreSlot?.Invoke(candidate, policy);
             if (run is null)
             {
-                stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
                 run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
             }
         }

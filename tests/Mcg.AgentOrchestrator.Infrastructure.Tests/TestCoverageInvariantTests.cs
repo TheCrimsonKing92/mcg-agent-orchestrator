@@ -17,6 +17,9 @@ public sealed class TestCoverageInvariantTests
 
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Contains("ExampleTests.WasFilteredOut", result.MissingTests);
+            Xunit.Assert.Equal(
+                AcceptanceFailureClassifications.StructuralCoverageFailed,
+                result.FailureClassification);
         }
         finally
         {
@@ -40,6 +43,9 @@ public sealed class TestCoverageInvariantTests
 
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Equal(["empty", "skipped"], result.EmptyPartitions);
+            Xunit.Assert.Equal(
+                AcceptanceFailureClassifications.GateEnvironmentInterference,
+                result.FailureClassification);
         }
         finally
         {

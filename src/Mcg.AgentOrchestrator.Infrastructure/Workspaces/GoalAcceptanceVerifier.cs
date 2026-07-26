@@ -22,7 +22,14 @@ public sealed record AcceptanceCheckResult(
     bool LockRemediationApplied = false,
     string? ResultSummary = null,
     bool Advisory = false,
-    IReadOnlyList<string>? TestResultPaths = null);
+    IReadOnlyList<string>? TestResultPaths = null,
+    string? FailureClassification = null);
+
+public static class AcceptanceFailureClassifications
+{
+    public const string GateEnvironmentInterference = "gate-environment-interference";
+    public const string StructuralCoverageFailed = "structural-coverage-failed";
+}
 
 public sealed record AcceptanceVerificationResult(
     bool Passed,
@@ -3979,7 +3986,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!));
             if (!coverage.Passed)
             {
-                var details = new List<string> { coverage.Summary };
+                var details = new List<string>
+                {
+                    $"classification: {coverage.FailureClassification}",
+                    coverage.Summary
+                };
                 details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
                 details.AddRange(coverage.MissingTests.Take(10).Select(name => $"missing test: {name}"));
                 return new AcceptanceCheckResult(
@@ -3987,7 +3998,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     false,
                     1,
                     string.Join(Environment.NewLine, details),
-                    ResultSummary: coverage.Summary);
+                    ResultSummary: coverage.Summary,
+                    FailureClassification: coverage.FailureClassification);
             }
 
             allSummaries.Add(coverage.Summary);
