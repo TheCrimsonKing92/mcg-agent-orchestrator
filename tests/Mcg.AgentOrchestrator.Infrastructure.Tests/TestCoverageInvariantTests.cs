@@ -48,6 +48,39 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_accounts_skip_marked_tests_recorded_as_NotExecuted")]
+    public void TestCoverageInvariantAccountsSkipMarkedTestsRecordedAsNotExecuted()
+    {
+        var trx = WriteTrx(
+            ("1", "ExampleTests.Runs", "Passed"),
+            ("2", "ExampleTests.SkippedByDesign", "NotExecuted"));
+        try
+        {
+            var discovered = new HashSet<string>(
+                ["ExampleTests.Runs", "ExampleTests.SkippedByDesign"],
+                StringComparer.OrdinalIgnoreCase);
+            var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
+
+            var accounted = TestCoverageInvariant.Evaluate(discovered, partitions);
+
+            Xunit.Assert.True(accounted.Passed);
+
+            var withUnrecorded = new HashSet<string>(
+                ["ExampleTests.Runs", "ExampleTests.SkippedByDesign", "ExampleTests.NeverRecorded"],
+                StringComparer.OrdinalIgnoreCase);
+
+            var rejected = TestCoverageInvariant.Evaluate(withUnrecorded, partitions);
+
+            Xunit.Assert.False(rejected.Passed);
+            Xunit.Assert.Contains("ExampleTests.NeverRecorded", rejected.MissingTests);
+            Xunit.Assert.DoesNotContain("ExampleTests.SkippedByDesign", rejected.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_cross_generation_drop_unless_test_file_was_deleted")]
     public void TestCoverageInvariantRejectsCrossGenerationDropUnlessTestFileWasDeleted()
     {

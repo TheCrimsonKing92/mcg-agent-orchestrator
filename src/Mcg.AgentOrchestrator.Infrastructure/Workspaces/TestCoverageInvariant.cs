@@ -92,7 +92,16 @@ internal static class TestCoverageInvariant
         return tests;
     }
 
-    public static IReadOnlySet<string> ReadCompletedTests(IEnumerable<string> trxPaths)
+    public static IReadOnlySet<string> ReadCompletedTests(IEnumerable<string> trxPaths) =>
+        ReadTests(trxPaths, passedOnly: true);
+
+    // Any-outcome variant: a test recorded in a TRX with outcome NotExecuted was selected by the
+    // run and deliberately skipped (static Skip, opt-in fact). It is ACCOUNTED FOR in coverage -
+    // present in the run's report - without counting as executed evidence.
+    public static IReadOnlySet<string> ReadRecordedTests(IEnumerable<string> trxPaths) =>
+        ReadTests(trxPaths, passedOnly: false);
+
+    private static IReadOnlySet<string> ReadTests(IEnumerable<string> trxPaths, bool passedOnly)
     {
         var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in trxPaths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -123,7 +132,7 @@ internal static class TestCoverageInvariant
             foreach (var result in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
             {
                 var outcome = (string?)result.Attribute("outcome");
-                if (!string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase))
+                if (passedOnly && !string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -158,6 +167,7 @@ internal static class TestCoverageInvariant
 
         var emptyPartitions = new List<string>();
         var completedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var accountedTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var partition in partitions)
         {
             var executed = ReadCompletedTests(partition.TestResultPaths);
@@ -168,10 +178,11 @@ internal static class TestCoverageInvariant
             }
 
             completedTests.UnionWith(executed);
+            accountedTests.UnionWith(ReadRecordedTests(partition.TestResultPaths));
         }
 
         var missing = candidateDiscoveredTests
-            .Where(discovered => !completedTests.Any(completed => IdentitiesMatch(discovered, completed)))
+            .Where(discovered => !accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToList();
 

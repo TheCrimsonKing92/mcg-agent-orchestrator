@@ -4150,13 +4150,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (UsesMicrosoftTestingPlatform(check))
         {
             var invocation = engineSettings.ResolveMtpInvocation(check.Project);
+            // Discovery must mirror the execution-side unattended exclusion: lanes filter out
+            // Category=HostIntegration tests, so listing them here would make the structural
+            // coverage invariant report by-design-excluded tests as missing on every attempt.
             return
             [
                 invocation.ResolveExecutablePath(environment),
                 "--no-ansi",
                 "--progress",
                 "off",
-                "--list-tests"
+                "--list-tests",
+                "--filter-not-trait",
+                "Category=HostIntegration"
             ];
         }
 
@@ -4166,7 +4171,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "test",
             check.Project,
             "--no-build",
-            "--list-tests"
+            "--list-tests",
+            "--filter",
+            "Category!=HostIntegration"
         };
         return WithBuildEnvironmentArguments([.. arguments], environment);
     }
