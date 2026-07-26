@@ -120,71 +120,58 @@ function Resolve-RecentGateAttemptTrx {
         foreach ($attemptFile in Get-ChildItem -LiteralPath $goalDirectory.FullName -Filter '*.attempt.json' -File -ErrorAction SilentlyContinue) {
             try {
                 $attempt = Get-Content -LiteralPath $attemptFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if (-not ([string]$attempt.outcome).Equals('Passed', [StringComparison]::OrdinalIgnoreCase)) {
+                    continue
+                }
+
+                $resultPath = if ($attempt.resultPath) {
+                    [string]$attempt.resultPath
+                } else {
+                    $attemptFile.FullName -replace '\.attempt\.json$', '.result.json'
+                }
+                if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+                    continue
+                }
+
+                $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($result.acceptance.passed -ne $true) {
+                    continue
+                }
+
+                $paths = @($result.acceptance.testResultPaths | Where-Object {
+                    -not [string]::IsNullOrWhiteSpace([string]$_)
+                })
+                if ($paths.Count -eq 0) {
+                    continue
+                }
+
+                $trxFiles = @(Resolve-TrxInput $paths)
+                foreach ($trxFile in $trxFiles) {
+                    $trx = [xml](Get-Content -LiteralPath $trxFile.FullName -Raw -ErrorAction Stop)
+                    if ($null -eq $trx.TestRun) {
+                        throw "TRX receipt has no TestRun root: $($trxFile.FullName)"
+                    }
+                }
+
                 [pscustomobject]@{
-                    Attempt = $attempt
                     AttemptFile = $attemptFile
                     StartedAt = if ($attempt.startedAt) { [datetimeoffset]::Parse([string]$attempt.startedAt) } else { [datetimeoffset]$attemptFile.LastWriteTimeUtc }
+                    TrxFiles = $trxFiles
                 }
             } catch {
-                [pscustomobject]@{
-                    Attempt = $null
-                    AttemptFile = $attemptFile
-                    StartedAt = [datetimeoffset]$attemptFile.LastWriteTimeUtc
-                }
+                continue
             }
         }
     }
 
     $recent = @($attempts | Sort-Object StartedAt -Descending | Select-Object -First $Count)
     if ($recent.Count -eq 0) {
-        throw "No acceptance gate attempt records found under: $Root"
+        throw "No clean, complete acceptance gate TRX receipt sets found under: $Root"
     }
 
     $allFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     foreach ($attempt in $recent) {
-        $attemptRecord = $attempt.Attempt
-        $paths = [System.Collections.Generic.List[string]]::new()
-        if ($null -ne $attemptRecord -and $attemptRecord.testResultPaths) {
-            foreach ($path in @($attemptRecord.testResultPaths)) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
-                    [void]$paths.Add([string]$path)
-                }
-            }
-        }
-
-        $resultPath = if ($null -ne $attemptRecord -and $attemptRecord.resultPath) {
-            [string]$attemptRecord.resultPath
-        } else {
-            $attempt.AttemptFile.FullName -replace '\.attempt\.json$', '.result.json'
-        }
-
-        if ($paths.Count -eq 0 -and (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
-            try {
-                $result = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                if ($result.acceptance -and $result.acceptance.testResultPaths) {
-                    foreach ($path in @($result.acceptance.testResultPaths)) {
-                        if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
-                            [void]$paths.Add([string]$path)
-                        }
-                    }
-                }
-            } catch {
-                throw "Acceptance gate result is unreadable: $resultPath"
-            }
-        }
-
-        if ($paths.Count -eq 0) {
-            $prefix = $attempt.AttemptFile.FullName -replace '\.attempt\.json$', ''
-            foreach ($trx in Get-ChildItem -LiteralPath (Split-Path -Parent $prefix) -Filter ((Split-Path -Leaf $prefix) + '*.trx') -File -ErrorAction SilentlyContinue) {
-                [void]$paths.Add($trx.FullName)
-            }
-        }
-
-        if ($paths.Count -eq 0) {
-            throw "Acceptance gate attempt has no referenced TRX paths: $($attempt.AttemptFile.FullName)"
-        }
-
-        foreach ($file in @(Resolve-TrxInput @($paths))) {
+        foreach ($file in $attempt.TrxFiles) {
             [void]$allFiles.Add($file)
         }
     }
