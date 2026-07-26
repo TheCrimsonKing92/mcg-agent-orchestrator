@@ -256,8 +256,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 PracticeRegistryStore.EnsureSchemaAndSeed(conn);
             if (!StateOutboxSchemaExists(conn))
                 EnsureStateOutboxSchema(conn);
-            else
-                MigrateStateOutboxColumns(conn);
+            MigrateStateOutboxColumns(conn);
             BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }

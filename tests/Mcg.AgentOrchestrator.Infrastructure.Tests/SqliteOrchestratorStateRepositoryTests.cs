@@ -814,6 +814,47 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_migrates_legacy_outbox_without_index_before_drain")]
+    public async Task MigratesLegacyOutboxWithoutIndexBeforeDrain()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using (var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            setupConn.Open();
+            Exec(setupConn, "DROP INDEX ix_state_outbox_kind");
+            Exec(setupConn, "DROP TABLE state_outbox");
+            Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
+            Exec(setupConn, "INSERT INTO state_outbox (id, kind, payload_json, created_at) VALUES ('legacy-message', 'acceptance-retry-audit', '{}', '2026-07-26T00:00:00.0000000+00:00')");
+        }
+
+        var repository = new SqliteOrchestratorStateRepository(db);
+
+        using (var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            checkConn.Open();
+            Assert.Equal(
+                ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+                QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
+            Assert.Equal(
+                ["ix_state_outbox_kind"],
+                QueryStrings(checkConn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ix_state_outbox_kind'"));
+        }
+
+        Assert.True(await repository.TryProcessOutboxMessageAsync(
+            "legacy-message",
+            (_, _) => Task.FromResult(OrchestratorStateOutboxProcessingResult.Completed)));
+        Assert.Empty(await repository.ListOutboxMessagesAsync("acceptance-retry-audit"));
+
+        static void Exec(SqliteConnection connection, string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
     public async Task BackfillsOutcomeColumnsFromClassifierTimeline()
     {
