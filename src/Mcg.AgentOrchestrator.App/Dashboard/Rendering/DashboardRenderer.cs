@@ -701,7 +701,7 @@ public static partial class DashboardRenderer
             foreach (var intent in intents)
             {
                 html.AppendLine(
-                    $"<tr><td><code>{Encode(intent.Id[..Math.Min(8, intent.Id.Length)])}</code></td>" +
+                    $"<tr><td><code>{Encode(intent.Id)}</code></td>" +
                     $"<td>{Encode(intent.Verb)}</td><td>{Encode(intent.Status.ToString())}</td>" +
                     $"<td><span class=\"meta\">actor={Encode(intent.Actor)}; channel={Encode(intent.Channel)}; auth={Encode(intent.AuthenticationAssurance)}</span></td>" +
                     $"<td>{Encode(intent.Outcome ?? "pending")}</td></tr>");

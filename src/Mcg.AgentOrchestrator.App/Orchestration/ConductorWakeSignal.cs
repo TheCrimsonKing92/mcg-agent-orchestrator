@@ -121,11 +121,6 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
         string[] paths;
         lock (_trackedGate)
         {
-            if (_trackedExitCodePaths.Count == 0)
-            {
-                return false;
-            }
-
             paths = _trackedExitCodePaths.ToArray();
         }
 
