@@ -57,6 +57,49 @@ public sealed class RepositoryChangeClassifierTests
         Assert.StartsWith("positive evidence:", decision.Evidence, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_allows_minimum_expected_tests_in_mtp_arguments")]
+    public void RepositoryChangeClassifierAllowsMinimumExpectedTestsInMtpArguments()
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": [
+                "{executable}",
+                "--no-ansi",
+                "--progress", "off",
+                "--results-directory", "{resultsDirectory}",
+                "--report-trx",
+                "--report-trx-filename", "{trxFileName}",
+                "--long-running", "120"
+              ]
+            }] } }
+            """;
+        const string candidate = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": [
+                "{executable}",
+                "--no-ansi",
+                "--progress", "off",
+                "--results-directory", "{resultsDirectory}",
+                "--report-trx",
+                "--report-trx-filename", "{trxFileName}",
+                "--long-running", "120",
+                "--minimum-expected-tests", "1"
+              ]
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.False(decision.RequiresTrustedReview);
+        Assert.Empty(decision.SecurityCriticalChanges);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_manifest_executable_or_firewall_path_changes_to_trusted_review")]
     public void RepositoryChangeClassifierRoutesManifestExecutableOrFirewallPathChangesToTrustedReview()
     {

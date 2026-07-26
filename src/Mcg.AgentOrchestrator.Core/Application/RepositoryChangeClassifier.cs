@@ -386,6 +386,7 @@ public static class RepositoryChangeClassifier
 
                     break;
                 case "--long-running":
+                case "--minimum-expected-tests":
                     if (!TryReadPositiveMtpArgumentValue(values, ref index))
                     {
                         return false;
