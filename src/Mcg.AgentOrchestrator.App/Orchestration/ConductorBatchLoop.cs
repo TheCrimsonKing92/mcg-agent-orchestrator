@@ -470,6 +470,16 @@ internal sealed class ConductorBatchLoop
                     {
                         stopRequested = true;
                         EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-after-operator-intent");
+                        DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                        TryPersistCheckpoint(
+                            persistTick,
+                            persistGoalTick,
+                            kernel,
+                            totalTicks,
+                            onlyGoalId,
+                            "stop-after-operator-intent",
+                            null,
+                            busyWriteDelay);
                         break;
                     }
 

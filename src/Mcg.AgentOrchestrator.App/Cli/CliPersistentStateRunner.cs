@@ -148,8 +148,7 @@ internal static class CliPersistentStateRunner
 
         if (IsGoalScopedTaskMutationCommand(args))
         {
-            if (IsInboxBackedGoalScopedTaskMutationCommand(args) &&
-                ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
+            if (IsInboxBackedGoalScopedTaskMutationCommand(args))
             {
                 return SubmitGoalScopedTaskOperatorIntent(
                     args,

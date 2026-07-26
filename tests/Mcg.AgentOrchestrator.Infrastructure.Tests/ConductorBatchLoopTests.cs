@@ -4958,6 +4958,64 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_after_operator_intent_detaches_and_checkpoints")]
+    public async Task BatchLoopStopAfterOperatorIntentDetachesAndCheckpoints()
+    {
+        var root = CreateTempDirectory("mcg-loop-stop-after-operator-intent");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Stop after rejected operator intent");
+            kernel.ParkGoal(goal.Id, "parked for operator");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "stop-after-intent",
+                "stop-after-intent-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                TaskId.New().Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("invalid task", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var stopFile = Path.Combine(root, ConductorBatchLoop.StopFileName);
+            var detachCalls = 0;
+            var checkpointCalls = 0;
+
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store),
+                detachGoalRunningDispatches: (_, detachedGoal) =>
+                {
+                    Assert.Equal(goal.Id, detachedGoal.Id);
+                    detachCalls++;
+                }).Run(
+                    kernel,
+                    MakeDriver(),
+                    ConductorAutonomyPolicy.Conservative,
+                    stopFile,
+                    maxIterations: 2,
+                    onTick: _ => File.WriteAllText(stopFile, "stop"),
+                    persistTick: _ => checkpointCalls++);
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.True(summary.StopRequested);
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal(1, detachCalls);
+            Assert.Equal(1, checkpointCalls);
+            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_fault_isolates_unavailable_operator_intent_store")]
     public void BatchLoopFaultIsolatesUnavailableOperatorIntentStore()
     {

@@ -324,8 +324,7 @@ internal static partial class DashboardEndpoints
             return await RefreshTaskOutsideTransactionAsync(context, goalId, taskId, services, agents, policy);
         }
 
-        if (operation.Equals(OperatorIntentVerbs.Retry, StringComparison.OrdinalIgnoreCase) ||
-            operation.Equals(OperatorIntentVerbs.VerifyManual, StringComparison.OrdinalIgnoreCase))
+        if (GoalManagementCommandService.IsInboxBackedTaskAction(operation))
         {
             var current = await LoadAsync(services, context.RequestAborted);
             var goal = ResolveGoal(current, goalId);

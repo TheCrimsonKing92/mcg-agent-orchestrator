@@ -6,6 +6,11 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class GoalManagementCommandService
 {
+internal static bool IsInboxBackedTaskAction(string operation) =>
+    operation.Equals(OperatorIntentVerbs.Retry, StringComparison.OrdinalIgnoreCase) ||
+    operation.Equals(OperatorIntentVerbs.Progress, StringComparison.OrdinalIgnoreCase) ||
+    operation.Equals(OperatorIntentVerbs.VerifyManual, StringComparison.OrdinalIgnoreCase);
+
 public static async Task<object?> ApplyTaskActionAsync(
     AgentOrchestratorKernel kernel,
     IReadOnlyList<AgentDefinition> agents,
@@ -72,12 +77,6 @@ public static async Task<object?> ApplyTaskActionAsync(
                 manual.Note,
                 workspace.ExecutionDirectory,
                 DateTimeOffset.UtcNow);
-            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-            {
-                kernel.RecordTaskVerification(goal.Id, task.Id, manualVerification);
-                return null;
-            }
-
             return await EnqueueOperatorIntentAsync(
                 workspace,
                 goal,
@@ -100,12 +99,6 @@ public static async Task<object?> ApplyTaskActionAsync(
         case "progress":
             var progress = DashboardRequestParser.ParseProgressSubmission(body);
             var progressStatus = CliArgumentParser.ParseReportableStatus(progress.Status);
-            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-            {
-                kernel.ReportTaskProgress(goal.Id, task.Id, progressStatus, progress.Message);
-                return null;
-            }
-
             return await EnqueueOperatorIntentAsync(
                 workspace,
                 goal,
@@ -116,20 +109,6 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "retry":
             var retry = DashboardRequestParser.ParseRetrySubmission(body);
-            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-            {
-                kernel.RetryTask(
-                    goal.Id,
-                    task.Id,
-                    retry.Message,
-                    retryRoundKind: retry.Mechanical ? RetryRoundKind.Mechanical : null);
-                GoalLifecycleCommands.RecordCapabilityWarnings(
-                    kernel,
-                    goal.Id,
-                    GoalObjectivePlanner.BuildCapabilityWarnings(retry.Message));
-                return null;
-            }
-
             return await EnqueueOperatorIntentAsync(
                 workspace,
                 goal,

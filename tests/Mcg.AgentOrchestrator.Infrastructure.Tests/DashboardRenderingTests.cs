@@ -148,8 +148,18 @@ public sealed class DashboardRenderingTests
         Assert.Equal("Applied retry in tick 4.", dtoIntent.Outcome);
     }
 
-    [Xunit.Fact(DisplayName = "Dashboard_recovery_actions_use_inbox_only_while_conductor_is_active")]
-    public async Task DashboardRecoveryActionsUseInboxOnlyWhileConductorIsActive()
+    [Xunit.Theory(DisplayName = "Dashboard_recovery_actions_route_outside_state_mutation_transaction")]
+    [Xunit.InlineData(OperatorIntentVerbs.Retry, true)]
+    [Xunit.InlineData(OperatorIntentVerbs.Progress, true)]
+    [Xunit.InlineData(OperatorIntentVerbs.VerifyManual, true)]
+    [Xunit.InlineData("complete-verify", false)]
+    public void DashboardRecoveryActionsRouteOutsideStateMutationTransaction(string operation, bool expected)
+    {
+        Assert.Equal(expected, GoalManagementCommandService.IsInboxBackedTaskAction(operation));
+    }
+
+    [Xunit.Fact(DisplayName = "Dashboard_recovery_actions_always_use_inbox")]
+    public async Task DashboardRecoveryActionsAlwaysUseInbox()
     {
         var root = CreateTempDirectory();
         try
@@ -162,7 +172,7 @@ public sealed class DashboardRenderingTests
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
             var providers = new InMemoryModelProviderRegistry([]);
 
-            var direct = await GoalManagementCommandService.ApplyTaskActionAsync(
+            var queuedRetry = await GoalManagementCommandService.ApplyTaskActionAsync(
                 kernel,
                 agents,
                 providers,
@@ -172,15 +182,14 @@ public sealed class DashboardRenderingTests
                 "retry",
                 "retry while loop is down");
 
-            Assert.Null(direct);
-            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
-            Assert.False(File.Exists(Path.Combine(
+            var retryDto = Assert.IsType<OperatorIntentDto>(queuedRetry);
+            Assert.Equal(OperatorIntentStatus.Pending, retryDto.Status);
+            Assert.Equal(WorkTaskStatus.Failed, task.Status);
+            Assert.True(File.Exists(Path.Combine(
                 workspace.OrchestratorDirectory,
                 SqliteOperatorIntentStore.DatabaseFileName)));
 
-            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed again");
-            using var loopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
-            var queued = await GoalManagementCommandService.ApplyTaskActionAsync(
+            var queuedProgress = await GoalManagementCommandService.ApplyTaskActionAsync(
                 kernel,
                 agents,
                 providers,
@@ -190,13 +199,15 @@ public sealed class DashboardRenderingTests
                 "progress",
                 """{"status":"completed","message":"verified while loop runs"}""");
 
-            var dto = Assert.IsType<OperatorIntentDto>(queued);
-            Assert.Equal(OperatorIntentStatus.Pending, dto.Status);
+            var progressDto = Assert.IsType<OperatorIntentDto>(queuedProgress);
+            Assert.Equal(OperatorIntentStatus.Pending, progressDto.Status);
             Assert.Equal(WorkTaskStatus.Failed, task.Status);
-            var intent = Assert.Single(await SqliteOperatorIntentStore
+            var intents = await SqliteOperatorIntentStore
                 .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
-                .ListForGoalAsync(goal.Id.Value));
-            Assert.Equal(OperatorIntentVerbs.Progress, intent.Verb);
+                .ListForGoalAsync(goal.Id.Value);
+            Assert.Equal(2, intents.Count);
+            Assert.Contains(intents, intent => intent.Verb == OperatorIntentVerbs.Retry);
+            Assert.Contains(intents, intent => intent.Verb == OperatorIntentVerbs.Progress);
         }
         finally
         {
