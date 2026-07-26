@@ -225,13 +225,12 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
 
         foreach (var verification in verifications)
         {
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var nextRound, out var diagnostic))
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var nextRound, out _))
             {
-                throw new ReviewFindingConvergenceException(
-                    "ERR_REVIEW_FINDINGS_INVALID",
-                    ReviewFindingConvergence.CountOpen(state),
-                    ReviewFindingConvergence.CountOpen(state),
-                    $"Reviewer structured findings are missing or invalid: {diagnostic}");
+                // Reviewer history legitimately contains records without a structured findings round - manual
+                // verifications (verify-manual) carry only the operator note. Current-round validity is enforced
+                // when the round is recorded; replaying history here must skip such records, not strand the goal.
+                continue;
             }
 
             try

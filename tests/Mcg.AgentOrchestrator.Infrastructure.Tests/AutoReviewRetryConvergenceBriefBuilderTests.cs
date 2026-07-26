@@ -497,6 +497,41 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Xunit.Assert.DoesNotContain("ConductorDriverTests", brief);
     }
 
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_skips_manual_verification_records_in_reviewer_history")]
+    public void SkipsManualVerificationRecordsInReviewerHistory()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Manual verification must not strand the retry brief");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            ManualVerificationRecorder.Create(
+                true,
+                "verdict stands after environment-caused gate failure",
+                @"C:\tmp",
+                DateTimeOffset.UtcNow.AddMinutes(-1)));
+        kernel.RetryTask(goal.Id, reviewer.Id, "reviewer re-run after manual verification");
+
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a");
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [new ReviewFinding("F-A", ReviewFindingState.Open, anchor, "A is missing its guard.")],
+            []);
+
+        var state = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
+        var finding = Assert.Single(state);
+        Assert.Equal(ReviewFindingState.Open, finding.State);
+        Assert.Equal(anchor, finding.Location);
+    }
+
     private static void DispatchTask(
         AgentOrchestratorKernel kernel,
         Goal goal,
