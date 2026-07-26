@@ -95,6 +95,9 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName);
+GoalWorktreeOrphanSweepScheduler.Configure(
+    WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
+    workspace.OrchestratorDirectory);
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))

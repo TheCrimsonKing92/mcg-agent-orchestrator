@@ -1310,7 +1310,8 @@ internal static partial class CliCommandHandlers
             Console.WriteLine(
                 $"  path=\"{debt.Path}\" age={FormatCleanupStatusDuration(debt.Age)} reason={debt.Reason} " +
                 $"last_operation={debt.LastOperation} skip_until_utc={debt.SkipUntilUtc:O} " +
-                $"remaining_wait={FormatCleanupStatusDuration(debt.RemainingWait)} skip_count={debt.SkipCount} escalated={escalated}");
+                $"remaining_wait={FormatCleanupStatusDuration(debt.RemainingWait)} " +
+                $"consecutive_failures={debt.ConsecutiveFailureCount} escalated={escalated}");
         }
     }
 

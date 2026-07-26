@@ -454,6 +454,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             ConsoleViews.PrintGoals(context.Kernel);
+            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(context.Workspace.ExecutionDirectory));
             return false;
 
         case "agents":

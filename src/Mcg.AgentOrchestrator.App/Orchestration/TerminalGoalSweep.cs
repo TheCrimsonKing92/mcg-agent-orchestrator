@@ -424,6 +424,9 @@ internal static class TerminalGoalSweep
             else if (!blockedByDirtyWorktree &&
                      !branchFacts.BranchAlreadyLanded &&
                      onlyGoalId is null &&
+                     !branchFacts.HasRegisteredWorktree &&
+                     !branchFacts.HasGoalBranch &&
+                     !Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)) &&
                      TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var staleTerminalExclusionEvidence))
             {
                 blockers.Add(new TerminalGoalSweepBlocker(
@@ -475,12 +478,19 @@ internal static class TerminalGoalSweep
                 !skipMergedCleanupThisPass &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
-                var removeResult = GoalWorktrees.Remove(
-                    executionDirectory,
-                    goal.Id,
-                    kernel,
-                    branchFacts.HasRegisteredWorktree,
-                    branchFacts.HasGoalBranch);
+                var removeResult = goal.Status == GoalStatus.Verified
+                    ? GoalWorktrees.Remove(
+                        executionDirectory,
+                        goal.Id,
+                        kernel,
+                        branchFacts.HasRegisteredWorktree,
+                        branchFacts.HasGoalBranch)
+                    : GoalWorktrees.RemoveTerminal(
+                        executionDirectory,
+                        goal.Id,
+                        kernel,
+                        branchFacts.HasRegisteredWorktree,
+                        branchFacts.HasGoalBranch);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -508,6 +518,35 @@ internal static class TerminalGoalSweep
                         removeResult.Message,
                         $"workspace remove {prefix}"));
                     goal = kernel.GetGoal(originalGoal.Id);
+                }
+
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
+            }
+            else if (goal.Status is GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded &&
+                     !blockers.Any(IsTerminalCleanupBlockingBlocker) &&
+                     (branchFacts.HasRegisteredWorktree ||
+                      branchFacts.HasGoalBranch ||
+                      Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id))))
+            {
+                var removeResult = GoalWorktrees.RemoveTerminal(
+                    executionDirectory,
+                    goal.Id,
+                    kernel,
+                    branchFacts.HasRegisteredWorktree,
+                    branchFacts.HasGoalBranch);
+                if (!removeResult.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "terminal-worktree-cleanup-needed",
+                        removeResult.Message,
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                }
+                else
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "terminal-worktree-cleanup",
+                        removeResult.Message,
+                        $"workspace remove {prefix}"));
                 }
 
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);

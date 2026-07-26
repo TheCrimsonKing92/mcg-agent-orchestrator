@@ -14,6 +14,88 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalWorktrees_terminal_remove_deletes_long_path_and_prunes_registration")]
+    public void GoalWorktreesTerminalRemoveDeletesLongPathAndPrunesRegistration()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var scratchRoot = Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-long-wt", Guid.NewGuid().ToString("n"));
+        var repo = scratchRoot;
+        while (Path.Combine(repo, GoalWorktrees.DirectoryName, "12345678").Length <= 280)
+        {
+            repo = Path.Combine(repo, "long-path-segment-0123456789");
+        }
+
+        try
+        {
+            Directory.CreateDirectory(repo);
+            RunGit(repo, "init");
+            RunGit(repo, "config", "core.longpaths", "true");
+            RunGit(repo, "config", "user.email", "tests@example.com");
+            RunGit(repo, "config", "user.name", "Worktree Tests");
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Seed");
+
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Exercise long-path cleanup.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Long-path cleanup", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            Assert.True(worktree.Length > 260, $"Expected a path longer than 260 characters, got {worktree.Length}: {worktree}");
+            kernel.CancelGoal(goal.Id, "Test terminal cleanup.");
+
+            var result = GoalWorktrees.RemoveTerminal(repo, goal.Id, kernel);
+
+            Assert.True(result.IsComplete, result.Message);
+            Assert.False(Directory.Exists(worktree));
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.DoesNotContain(
+                NormalizePath(worktree),
+                RunGitOutput(repo, "worktree", "list", "--porcelain"),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _ = GoalWorktrees.DeleteDirectory(scratchRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAbandon_removes_terminal_worktree_in_one_cleanup_cycle")]
+    public void GoalAbandonRemovesTerminalWorktreeInOneCleanupCycle()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Abandon clean worktree.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Abandon cleanup", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            _ = GoalWorktrees.Ensure(repo, goal.Id);
+
+            var result = GoalAbandonPlanner.Apply(
+                kernel,
+                goal,
+                OrchestratorWorkspace.ForDirectory(repo),
+                "No longer required.");
+
+            Assert.True(result.CanApply);
+            Assert.Equal(GoalStatus.Cancelled, kernel.GetGoal(goal.Id).Status);
+            var worktreesRoot = Path.Combine(repo, GoalWorktrees.DirectoryName);
+            Assert.Empty(Directory.Exists(worktreesRoot)
+                ? Directory.EnumerateDirectories(worktreesRoot)
+                : []);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_resumes_after_unregistered_worktree_leaves_directory")]
     public void GoalWorktreesRemoveResumesAfterUnregisteredWorktreeLeavesDirectory()
     {
