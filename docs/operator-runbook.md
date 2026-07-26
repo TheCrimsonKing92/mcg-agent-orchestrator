@@ -195,7 +195,7 @@ This is the most important section. Match the **observable symptom** to its caus
 | Verb | Use when | Effect |
 |---|---|---|
 | `recover <goal> <note>` | A task or lifecycle record is stuck, orphaned, or out of sync. | Repairs task/lifecycle state and may make tasks dispatchable again. |
-| `acceptance-retry <goal> <reason> --confirm-acceptance-retry` | The goal is `AcceptanceFailed`, every task is already `Completed` or deliberately `Cancelled`, and the gate failed for an environmental reason. | Returns the goal to `Verified` for the next conductor tick, preserves task and dispatch evidence, resets the automatic acceptance retry budget, and records the operator re-gate. It is capped at three calls per goal. |
+| `acceptance-retry <goal> <reason> --confirm-acceptance-retry` | The goal is `AcceptanceFailed`, every task is already `Completed` or deliberately `Cancelled`, and the gate failed for an environmental reason. | Returns the goal to `Verified` for the next conductor tick, preserves task and dispatch evidence, resets the automatic acceptance retry budget, and records the operator re-gate. It does not reopen a task or emit `WorkerDispatch`, and is capped at three calls per goal. |
 | `retry <goal> <task-number> <reason>` | The implementation or verification evidence is wrong and a worker must revise it. | Reopens that task, clears its latest gate evidence, and allows another worker round; downstream tasks may also be invalidated. |
 
 Additional recovery notes:

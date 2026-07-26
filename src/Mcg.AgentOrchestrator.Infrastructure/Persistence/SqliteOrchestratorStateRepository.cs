@@ -55,10 +55,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         requiredColumns.CommandText = """
             SELECT
                 (SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name IN ('version', 'source_backlog_item_id')) +
-                (SELECT COUNT(*) FROM pragma_table_info('model_fit_history') WHERE name IN ('outcome_rule', 'outcome_class', 'dispatch_lane')) +
-                (SELECT COUNT(*) FROM pragma_table_info('state_outbox') WHERE name IN ('quarantined_at', 'quarantine_reason'))
+                (SELECT COUNT(*) FROM pragma_table_info('model_fit_history') WHERE name IN ('outcome_rule', 'outcome_class', 'dispatch_lane'))
             """;
-        if (Convert.ToInt32(requiredColumns.ExecuteScalar(), CultureInfo.InvariantCulture) != 7)
+        // Keep the read-only successor check compatible with the immediately preceding
+        // outbox schema. The successor runs the idempotent quarantine-column migration
+        // only after this preflight succeeds and it opens the repository for writing.
+        if (Convert.ToInt32(requiredColumns.ExecuteScalar(), CultureInfo.InvariantCulture) != 5)
         {
             throw new InvalidOperationException(
                 "State schema has pending column migrations and cannot be opened safely by the successor.");

@@ -779,6 +779,41 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("quarantine_reason", outboxColumns);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_successor_preflight_allows_outbox_quarantine_column_migration")]
+    public void SuccessorPreflightAllowsOutboxQuarantineColumnMigration()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using (var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            setupConn.Open();
+            Exec(setupConn, "DROP INDEX ix_state_outbox_kind");
+            Exec(setupConn, "DROP TABLE state_outbox");
+            Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
+            Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
+        }
+
+        Assert.Equal(
+            SqliteOrchestratorStateRepository.CurrentSchemaVersion,
+            SqliteOrchestratorStateRepository.ValidateReadOnlySchema(db));
+
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        checkConn.Open();
+        Assert.Equal(
+            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+            QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
+
+        static void Exec(SqliteConnection connection, string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
     public async Task BackfillsOutcomeColumnsFromClassifierTimeline()
     {

@@ -802,7 +802,7 @@ public abstract class GoalWorktreeTestBase
     }
 }
 
-public sealed class GoalWorktreeAcceptanceRetryTests : GoalWorktreeTestBase
+public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "acceptance-retry_returns_failed_goal_to_verified_without_mutating_tasks")]
     public void AcceptanceRetryReturnsFailedGoalToVerifiedWithoutMutatingTasks()
