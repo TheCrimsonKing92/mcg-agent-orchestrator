@@ -156,6 +156,7 @@ internal static class CliPersistentStateRunner
         var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
+        var postCommitActions = new List<Action>();
 
         var changed = stateRepository.TransactAsync(
                 (kernel, _) =>
@@ -172,7 +173,8 @@ internal static class CliPersistentStateRunner
                         ref commandProfiles,
                         ref commandGoal,
                         channel,
-                        () => stateRepository.LoadAsync().GetAwaiter().GetResult());
+                        () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+                        registerPostCommitAction: postCommitActions.Add);
 
                     nextAgents = commandAgents;
                     nextWorkerProfiles = commandProfiles;
@@ -185,6 +187,11 @@ internal static class CliPersistentStateRunner
         agents = nextAgents;
         workerProfiles = nextWorkerProfiles;
         currentGoal = nextCurrentGoal;
+        foreach (var postCommitAction in postCommitActions)
+        {
+            postCommitAction();
+        }
+
         return changed;
     }
 

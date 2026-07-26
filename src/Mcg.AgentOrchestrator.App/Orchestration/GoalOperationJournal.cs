@@ -105,6 +105,7 @@ internal static class GoalOperationJournal
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
     public const string LandingIntentOperation = "conductor:landing-intent";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
+    internal static Action? BeforeAcceptanceRetryAppend { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -262,7 +263,9 @@ internal static class GoalOperationJournal
         string operatorReason,
         string? priorGateMainSha,
         string? currentHeadMainSha,
-        int operatorRegateCount) =>
+        int operatorRegateCount)
+    {
+        BeforeAcceptanceRetryAppend?.Invoke();
         Append(
             executionDirectory,
             goal.Id,
@@ -277,6 +280,7 @@ internal static class GoalOperationJournal
             priorGateMainSha: NormalizeSha(priorGateMainSha),
             currentHeadMainSha: NormalizeSha(currentHeadMainSha),
             operatorRegateCount: operatorRegateCount);
+    }
 
     public static void AcceptanceBlocked(
         string executionDirectory,

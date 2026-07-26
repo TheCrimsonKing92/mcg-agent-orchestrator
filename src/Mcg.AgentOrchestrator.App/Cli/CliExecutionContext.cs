@@ -21,7 +21,8 @@ internal sealed class CliExecutionContext(
     Action? releaseConductLoopLease = null,
     Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
-    Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null)
+    Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
+    Action<Action>? registerPostCommitAction = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -42,6 +43,21 @@ public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persi
 
 public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
+
+/// <summary>
+/// Runs a side effect after the surrounding state transaction commits. Direct handler callers have
+/// no surrounding transaction, so the action executes immediately.
+/// </summary>
+public void AfterStateCommit(Action action)
+{
+    if (registerPostCommitAction is null)
+    {
+        action();
+        return;
+    }
+
+    registerPostCommitAction(action);
+}
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 
