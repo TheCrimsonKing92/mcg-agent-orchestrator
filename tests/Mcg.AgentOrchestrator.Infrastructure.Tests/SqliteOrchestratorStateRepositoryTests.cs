@@ -40,6 +40,9 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Xunit.Assert.Equal(
             ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
+        Xunit.Assert.Equal(
+            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+            QueryStrings(conn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_snapshot_through_SQLite")]
@@ -740,7 +743,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(ModelOutcomeRecommendation.Prefer, best.Recommendation);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_version_and_outcome_columns")]
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_idempotent_schema_migration_adds_state_and_outbox_columns")]
     public void IdempotentSchemaMigrationAddsVersionAndOutcomeColumns()
     {
         // Simulate a DB created by an old binary (no version column) by creating schema manually.
@@ -754,6 +757,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Exec(setupConn, "CREATE TABLE goals (id TEXT PRIMARY KEY, status TEXT NOT NULL, objective TEXT NOT NULL, source_backlog_item_id TEXT NULL, updated_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE human_input_requests (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
         Exec(setupConn, "CREATE TABLE model_fit_history (goal_id TEXT NOT NULL, task_id TEXT NOT NULL, role TEXT NOT NULL, provider_name TEXT NOT NULL, model_name TEXT NOT NULL, complexity TEXT NULL, task_shape TEXT NULL, outcome TEXT NOT NULL, self_rating TEXT NOT NULL, timestamp TEXT NOT NULL, PRIMARY KEY (goal_id, task_id, timestamp))");
+        Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
+        Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
         Exec(setupConn, "CREATE INDEX ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
         setupConn.Close();
@@ -769,6 +774,9 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("outcome_rule", historyColumns);
         Assert.Contains("outcome_class", historyColumns);
         Assert.Contains("dispatch_lane", historyColumns);
+        var outboxColumns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid");
+        Assert.Contains("quarantined_at", outboxColumns);
+        Assert.Contains("quarantine_reason", outboxColumns);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]

@@ -107,6 +107,23 @@ public sealed record OrchestratorStateOutboxMessage(
     string PayloadJson,
     DateTimeOffset CreatedAt);
 
+public enum OrchestratorStateOutboxDisposition
+{
+    Complete,
+    Quarantine
+}
+
+public sealed record OrchestratorStateOutboxProcessingResult(
+    OrchestratorStateOutboxDisposition Disposition,
+    string? Detail = null)
+{
+    public static OrchestratorStateOutboxProcessingResult Completed { get; } =
+        new(OrchestratorStateOutboxDisposition.Complete);
+
+    public static OrchestratorStateOutboxProcessingResult Quarantined(string detail) =>
+        new(OrchestratorStateOutboxDisposition.Quarantine, detail);
+}
+
 public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestratorStateRepository
 {
     Task<T> TransactWithOutboxAsync<T>(
@@ -120,8 +137,9 @@ public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestrator
         string kind,
         CancellationToken cancellationToken = default);
 
-    Task DeleteOutboxMessageAsync(
+    Task<bool> TryProcessOutboxMessageAsync(
         string id,
+        Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
         CancellationToken cancellationToken = default);
 }
 

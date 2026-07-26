@@ -244,36 +244,119 @@ internal static class CliPersistentStateRunner
             return;
         }
 
-        var messages = outboxRepository
-            .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
-            .GetAwaiter()
-            .GetResult();
+        IReadOnlyList<OrchestratorStateOutboxMessage> messages;
+        try
+        {
+            messages = outboxRepository
+                .ListOutboxMessagesAsync(GoalOperationJournal.AcceptanceRetryAuditOutboxKind)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            WriteAcceptanceRetryDrainWarning(
+                "could not list pending messages",
+                ex);
+            return;
+        }
+
         if (messages.Count == 0)
         {
             return;
         }
 
-        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        AgentOrchestratorKernel kernel;
+        try
+        {
+            kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            WriteAcceptanceRetryDrainWarning(
+                "could not load goal state for pending messages",
+                ex);
+            return;
+        }
+
         foreach (var message in messages)
         {
             try
             {
-                var payload = GoalOperationJournal.DeserializeAcceptanceRetryAuditMessage(message);
-                var goal = kernel.GetGoal(new GoalId(payload.GoalId));
-                GoalOperationJournal.ApplyAcceptanceRetryAuditMessage(workspace, goal, message);
-                Console.WriteLine(
-                    $"Acceptance retry scheduled: goal={goal.Id.Value[..8]} state={goal.Status} operator-regate={payload.OperatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; next conductor tick will re-run acceptance.");
+                AcceptanceRetryAuditPayload? appliedPayload = null;
+                Goal? appliedGoal = null;
+                OrchestratorStateOutboxProcessingResult? processingResult = null;
+                var claimed = outboxRepository.TryProcessOutboxMessageAsync(
+                        message.Id,
+                        (claimedMessage, _) =>
+                        {
+                            try
+                            {
+                                var payload = GoalOperationJournal.DeserializeAcceptanceRetryAuditMessage(claimedMessage);
+                                var goal = kernel.GetGoal(new GoalId(payload.GoalId));
+                                appliedPayload = payload;
+                                appliedGoal = goal;
+                                processingResult = GoalOperationJournal.ApplyAcceptanceRetryAuditMessage(
+                                    workspace,
+                                    goal,
+                                    claimedMessage);
+                                return Task.FromResult(processingResult);
+                            }
+                            catch (JsonException ex)
+                            {
+                                processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                    $"Invalid acceptance-retry audit payload: {ex.Message}");
+                                return Task.FromResult(processingResult);
+                            }
+                            catch (KeyNotFoundException ex)
+                            {
+                                processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                    $"Acceptance-retry audit targets a missing goal: {ex.Message}");
+                                return Task.FromResult(processingResult);
+                            }
+                            catch (ArgumentException ex)
+                            {
+                                processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                    $"Acceptance-retry audit contains an invalid goal id: {ex.Message}");
+                                return Task.FromResult(processingResult);
+                            }
+                        })
+                    .GetAwaiter()
+                    .GetResult();
+
+                if (!claimed)
+                {
+                    continue;
+                }
+
+                if (processingResult?.Disposition == OrchestratorStateOutboxDisposition.Quarantine)
+                {
+                    Console.Error.WriteLine(
+                        $"Warning: acceptance-retry audit outbox message '{message.Id}' was quarantined: " +
+                        processingResult.Detail);
+                    continue;
+                }
+
+                if (appliedPayload is not null && appliedGoal is not null)
+                {
+                    Console.WriteLine(
+                        $"Acceptance retry scheduled: goal={appliedGoal.Id.Value[..8]} state={appliedGoal.Status} " +
+                        $"operator-regate={appliedPayload.OperatorRegateCount}/{Goal.OperatorAcceptanceRegateCap}; " +
+                        "next conductor tick will re-run acceptance.");
+                }
             }
-            catch (JsonException ex)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException(
-                    $"Acceptance-retry audit outbox message '{message.Id}' is invalid and cannot be drained.",
+                WriteAcceptanceRetryDrainWarning(
+                    $"message '{message.Id}' remains pending",
                     ex);
             }
-
-            outboxRepository.DeleteOutboxMessageAsync(message.Id).GetAwaiter().GetResult();
         }
     }
+
+    private static void WriteAcceptanceRetryDrainWarning(string detail, Exception exception) =>
+        Console.Error.WriteLine(
+            $"Warning: acceptance-retry audit drain {detail}; unrelated command will continue. " +
+            $"{exception.GetType().Name}: {exception.Message}");
 
     // Read-only goal listing: served from indexed metadata (no whole-store hydration, no save, no
     // auto-reconcile sweep). Only the bare `goals` command qualifies — any extra args fall through

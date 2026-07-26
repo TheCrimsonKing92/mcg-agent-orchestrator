@@ -320,24 +320,38 @@ internal static class GoalOperationJournal
             DateTimeOffset.UtcNow);
     }
 
-    public static void ApplyAcceptanceRetryAuditMessage(
+    public static OrchestratorStateOutboxProcessingResult ApplyAcceptanceRetryAuditMessage(
         OrchestratorWorkspace workspace,
         Goal goal,
         OrchestratorStateOutboxMessage message)
     {
         if (!message.Kind.Equals(AcceptanceRetryAuditOutboxKind, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(
-                $"Cannot apply outbox message '{message.Id}' of kind '{message.Kind}' as an acceptance-retry audit.");
+            return OrchestratorStateOutboxProcessingResult.Quarantined(
+                $"Cannot apply message kind '{message.Kind}' as an acceptance-retry audit.");
         }
 
         var payload = DeserializeAcceptanceRetryAuditMessage(message);
         if (!payload.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException(
-                $"Acceptance-retry audit outbox message '{message.Id}' targets goal '{payload.GoalId}', not '{goal.Id.Value}'.");
+            return OrchestratorStateOutboxProcessingResult.Quarantined(
+                $"Message targets goal '{payload.GoalId}', not '{goal.Id.Value}'.");
         }
 
+        var escalationResolution = OperatorInbox.ResolveLandingEscalationOccurrence(
+            workspace,
+            goal,
+            payload.OperatorReason,
+            payload.AcceptanceFailureOccurredAt);
+        if (escalationResolution == OperatorInbox.LandingEscalationResolution.Missing)
+        {
+            return OrchestratorStateOutboxProcessingResult.Quarantined(
+                $"No landing escalation exists for goal '{goal.Id.Value}' at occurrence " +
+                $"{payload.AcceptanceFailureOccurredAt:O}.");
+        }
+
+        // A newer failure supersedes only the escalation-resolution side effect. The accepted
+        // operator re-gate is still journaled, while the newer escalation remains untouched.
         AcceptanceRetried(
             workspace.ExecutionDirectory,
             goal,
@@ -345,16 +359,7 @@ internal static class GoalOperationJournal
             payload.PriorGateMainSha,
             payload.CurrentHeadMainSha,
             payload.OperatorRegateCount);
-        if (!OperatorInbox.ResolveLandingEscalation(
-                workspace,
-                goal,
-                payload.OperatorReason,
-                payload.AcceptanceFailureOccurredAt))
-        {
-            throw new InvalidOperationException(
-                $"acceptance-retry could not resolve the landing escalation for goal {goal.Id.Value[..8]} " +
-                $"at occurrence {payload.AcceptanceFailureOccurredAt:O}; the durable audit remains pending.");
-        }
+        return OrchestratorStateOutboxProcessingResult.Completed;
     }
 
     public static AcceptanceRetryAuditPayload DeserializeAcceptanceRetryAuditMessage(

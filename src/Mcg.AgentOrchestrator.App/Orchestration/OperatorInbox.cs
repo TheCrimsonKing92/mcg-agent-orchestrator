@@ -75,6 +75,14 @@ public sealed record OperatorInboxItem(
 
 internal static class OperatorInbox
 {
+    internal enum LandingEscalationResolution
+    {
+        Resolved,
+        AlreadyResolved,
+        Superseded,
+        Missing
+    }
+
     internal static Action? BeforeLandingEscalationResolution { get; set; }
     internal static Action? BeforeLandingEscalationResolutionSave { get; set; }
 
@@ -553,13 +561,27 @@ internal static class OperatorInbox
         Goal goal,
         string operatorReason,
         DateTimeOffset acceptanceFailureOccurredAt,
+        DateTimeOffset? resolvedAtUtc = null) =>
+        ResolveLandingEscalationOccurrence(
+            workspace,
+            goal,
+            operatorReason,
+            acceptanceFailureOccurredAt,
+            resolvedAtUtc) is LandingEscalationResolution.Resolved or
+            LandingEscalationResolution.AlreadyResolved;
+
+    internal static LandingEscalationResolution ResolveLandingEscalationOccurrence(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        string operatorReason,
+        DateTimeOffset acceptanceFailureOccurredAt,
         DateTimeOffset? resolvedAtUtc = null)
     {
         BeforeLandingEscalationResolution?.Invoke();
         using (AcquireLandingEscalationLock(workspace))
         {
             var changed = false;
-            var matched = false;
+            var alreadyResolved = false;
             var resolvedAt = resolvedAtUtc ?? DateTimeOffset.UtcNow;
             var items = LoadLandingEscalationsUnsafe(workspace)
                 .Select(item =>
@@ -573,13 +595,12 @@ internal static class OperatorInbox
 
                     if (item.ResolvedAtUtc is not null)
                     {
-                        matched |= item.ResolvedBy?.Equals(
+                        alreadyResolved |= item.ResolvedBy?.Equals(
                             "acceptance-retry",
                             StringComparison.OrdinalIgnoreCase) is true;
                         return item;
                     }
 
-                    matched = true;
                     changed = true;
                     return item with
                     {
@@ -594,9 +615,19 @@ internal static class OperatorInbox
             {
                 BeforeLandingEscalationResolutionSave?.Invoke();
                 SaveLandingEscalationsUnsafe(workspace, items);
+                return LandingEscalationResolution.Resolved;
             }
 
-            return matched;
+            if (alreadyResolved)
+            {
+                return LandingEscalationResolution.AlreadyResolved;
+            }
+
+            return items.Any(item =>
+                    item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                    item.AcceptanceFailureOccurredAt > acceptanceFailureOccurredAt)
+                ? LandingEscalationResolution.Superseded
+                : LandingEscalationResolution.Missing;
         }
     }
 

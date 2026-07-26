@@ -55,9 +55,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         requiredColumns.CommandText = """
             SELECT
                 (SELECT COUNT(*) FROM pragma_table_info('goals') WHERE name IN ('version', 'source_backlog_item_id')) +
-                (SELECT COUNT(*) FROM pragma_table_info('model_fit_history') WHERE name IN ('outcome_rule', 'outcome_class', 'dispatch_lane'))
+                (SELECT COUNT(*) FROM pragma_table_info('model_fit_history') WHERE name IN ('outcome_rule', 'outcome_class', 'dispatch_lane')) +
+                (SELECT COUNT(*) FROM pragma_table_info('state_outbox') WHERE name IN ('quarantined_at', 'quarantine_reason'))
             """;
-        if (Convert.ToInt32(requiredColumns.ExecuteScalar(), CultureInfo.InvariantCulture) != 5)
+        if (Convert.ToInt32(requiredColumns.ExecuteScalar(), CultureInfo.InvariantCulture) != 7)
         {
             throw new InvalidOperationException(
                 "State schema has pending column migrations and cannot be opened safely by the successor.");
@@ -253,6 +254,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 PracticeRegistryStore.EnsureSchemaAndSeed(conn);
             if (!StateOutboxSchemaExists(conn))
                 EnsureStateOutboxSchema(conn);
+            else
+                MigrateStateOutboxColumns(conn);
             BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
@@ -314,13 +317,29 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     {
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS state_outbox (
-                id           TEXT PRIMARY KEY,
-                kind         TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at   TEXT NOT NULL
+                id                TEXT PRIMARY KEY,
+                kind              TEXT NOT NULL,
+                payload_json      TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                quarantined_at    TEXT NULL,
+                quarantine_reason TEXT NULL
             )
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_state_outbox_kind ON state_outbox(kind)");
+    }
+
+    private void MigrateStateOutboxColumns(SqliteConnection conn)
+    {
+        AddColumnIfMissing(
+            conn,
+            "state_outbox",
+            "quarantined_at",
+            "ALTER TABLE state_outbox ADD COLUMN quarantined_at TEXT NULL");
+        AddColumnIfMissing(
+            conn,
+            "state_outbox",
+            "quarantine_reason",
+            "ALTER TABLE state_outbox ADD COLUMN quarantine_reason TEXT NULL");
     }
 
     // Idempotent migration: adds metadata columns to existing schemas that pre-date them.
@@ -714,7 +733,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         cmd.CommandText = """
             SELECT id, kind, payload_json, created_at
             FROM state_outbox
-            WHERE kind = $kind
+            WHERE kind = $kind AND quarantined_at IS NULL
             ORDER BY created_at, id
             """;
         cmd.Parameters.AddWithValue("$kind", kind);
@@ -732,23 +751,79 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return messages;
     }
 
-    public async Task DeleteOutboxMessageAsync(
+    public async Task<bool> TryProcessOutboxMessageAsync(
         string id,
+        Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
         CancellationToken cancellationToken = default)
     {
         var write = await BeginWriteAsync(
-            ResolveOperationTag(nameof(DeleteOutboxMessageAsync)),
+            ResolveOperationTag(nameof(TryProcessOutboxMessageAsync)),
             cancellationToken);
         await using var conn = write.Connection;
         var telemetry = write.Telemetry;
         try
         {
+            OrchestratorStateOutboxMessage? message;
+            await using (var select = conn.CreateCommand())
+            {
+                select.CommandText = """
+                    SELECT id, kind, payload_json, created_at
+                    FROM state_outbox
+                    WHERE id = $id AND quarantined_at IS NULL
+                    """;
+                select.Parameters.AddWithValue("$id", id);
+                await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+                message = await reader.ReadAsync(cancellationToken)
+                    ? new OrchestratorStateOutboxMessage(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        DateTimeOffset.Parse(
+                            reader.GetString(3),
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.RoundtripKind))
+                    : null;
+            }
+
+            if (message is null)
+            {
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                telemetry.Emit("commit");
+                return false;
+            }
+
+            var result = await processor(message, cancellationToken);
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "DELETE FROM state_outbox WHERE id = $id";
-            cmd.Parameters.AddWithValue("$id", id);
+            if (result.Disposition == OrchestratorStateOutboxDisposition.Complete)
+            {
+                cmd.CommandText = "DELETE FROM state_outbox WHERE id = $id";
+                cmd.Parameters.AddWithValue("$id", id);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(result.Detail))
+                {
+                    throw new InvalidOperationException(
+                        $"Outbox message '{id}' cannot be quarantined without a reason.");
+                }
+
+                cmd.CommandText = """
+                    UPDATE state_outbox
+                    SET quarantined_at = $quarantined_at,
+                        quarantine_reason = $quarantine_reason
+                    WHERE id = $id
+                    """;
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue(
+                    "$quarantined_at",
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                cmd.Parameters.AddWithValue("$quarantine_reason", result.Detail);
+            }
+
             await cmd.ExecuteNonQueryAsync(cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");
+            return true;
         }
         catch (Exception ex)
         {
