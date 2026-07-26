@@ -54,19 +54,30 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
             : bindings;
     }
 
-    private static string BindTaskScopedCommandToGoal(string command, string goalPrefix)
+    internal static string BindTaskScopedCommandToGoal(string command, string goalPrefix)
     {
-        if (string.IsNullOrWhiteSpace(goalPrefix) || string.IsNullOrWhiteSpace(command))
+        if (string.IsNullOrWhiteSpace(command))
             return command;
 
         var parts = command.Trim().Split([' ', '\t'], 3, StringSplitOptions.RemoveEmptyEntries);
+        var verb = parts[0].ToLowerInvariant();
+        if (verb is "subscription-dispatch" or "execute-dispatch" or "start-dispatch")
+        {
+            throw new ArgumentException(
+                $"Cannot bind dispatch verb '{verb}' as a task-scoped goal command. " +
+                "Forbidden verbs: subscription-dispatch, execute-dispatch, start-dispatch.",
+                nameof(command));
+        }
+
+        if (string.IsNullOrWhiteSpace(goalPrefix))
+            return command.Trim();
+
         if (parts.Length < 2 || !int.TryParse(parts[1], out _))
             return command.Trim();
 
-        return parts[0].ToLowerInvariant() switch
+        return verb switch
         {
             "retry" or "re-delegate" or "redelegate" or "refresh-dispatch" or
-            "subscription-dispatch" or "execute-dispatch" or "start-dispatch" or
             "verify" => parts.Length == 2
                 ? $"{parts[0]} {goalPrefix} {parts[1]}"
                 : $"{parts[0]} {goalPrefix} {parts[1]} {parts[2]}",

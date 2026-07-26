@@ -54,7 +54,8 @@ public sealed class DiscordProgressViewService
         CancellationToken cancellationToken)
     {
         var catalog = OperatorChannelStore.Load(_catalogPath);
-        var contentHash = Hash(projection.RenderedContent);
+        var content = TruncateContent(projection.RenderedContent);
+        var contentHash = Hash(content);
         if (string.Equals(catalog.ProgressStatusContentHash, contentHash, StringComparison.Ordinal) &&
             !string.IsNullOrWhiteSpace(catalog.ProgressThreadId) &&
             !string.IsNullOrWhiteSpace(catalog.ProgressStatusMessageId))
@@ -88,7 +89,7 @@ public sealed class DiscordProgressViewService
         {
             messageId = await _api.SendMessageAsync(
                 threadId.Value,
-                projection.RenderedContent,
+                content,
                 [],
                 cancellationToken);
             sentMessage = true;
@@ -98,7 +99,7 @@ public sealed class DiscordProgressViewService
             await _api.EditMessageAsync(
                 threadId.Value,
                 messageId.Value,
-                projection.RenderedContent,
+                content,
                 [],
                 cancellationToken);
             editedMessage = true;
@@ -138,5 +139,28 @@ public sealed class DiscordProgressViewService
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(content));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    internal static string TruncateContent(string content)
+    {
+        const int limit = DiscordCollaborationViewService.DiscordMessageLimit;
+        if (content.Length <= limit)
+            return content;
+
+        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var kept = lines.Length;
+        while (kept > 0)
+        {
+            var omitted = lines[kept..];
+            var omittedGoals = omitted.Count(line => line.StartsWith("- ", StringComparison.Ordinal));
+            var indicator =
+                $"_…truncated: {omittedGoals} goal(s) / {omitted.Length} line(s) omitted to fit Discord's {limit}-character limit._";
+            var candidate = string.Join('\n', lines[..kept]).TrimEnd() + Environment.NewLine + indicator;
+            if (candidate.Length <= limit)
+                return candidate;
+            kept--;
+        }
+
+        return $"_…truncated: content omitted to fit Discord's {limit}-character limit._";
     }
 }

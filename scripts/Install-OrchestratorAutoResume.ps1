@@ -66,7 +66,7 @@ $repetitionTrigger = New-ScheduledTaskTrigger `
     -At (Get-Date).Date `
     -RepetitionInterval (New-TimeSpan -Minutes 10) `
     -RepetitionDuration (New-TimeSpan -Days 3650)
-$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel LeastPrivilege
+$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 
 Register-ScheduledTask `

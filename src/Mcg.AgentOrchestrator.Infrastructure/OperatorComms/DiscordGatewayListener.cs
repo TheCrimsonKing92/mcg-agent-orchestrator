@@ -43,18 +43,41 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
             deadManHeartbeatInterval ?? TimeSpan.FromMinutes(5));
     }
 
-    private async Task OnButtonExecutedAsync(SocketMessageComponent component)
+    private Task OnButtonExecutedAsync(SocketMessageComponent component) =>
+        HandleButtonExecutedAsync(
+            _view,
+            new ButtonInteractionContext(
+                component.Data.CustomId,
+                component.User.Id.ToString(),
+                component.Id.ToString(),
+                async (message, ephemeral) => await component.RespondAsync(message, ephemeral: ephemeral),
+                async modal => await component.RespondWithModalAsync(modal),
+                async ephemeral => await component.DeferAsync(ephemeral: ephemeral),
+                async (message, ephemeral) => await component.FollowupAsync(message, ephemeral: ephemeral),
+                async (message, confirmationCustomId, ephemeral) =>
+                {
+                    var builder = new ComponentBuilder();
+                    builder.WithButton("Confirm", confirmationCustomId, ButtonStyle.Danger);
+                    await component.FollowupAsync(
+                        message,
+                        components: builder.Build(),
+                        ephemeral: ephemeral);
+                }));
+
+    internal static async Task HandleButtonExecutedAsync(
+        DiscordCollaborationViewService view,
+        ButtonInteractionContext component)
     {
         try
         {
-            var customId = component.Data.CustomId;
-            var userId = component.User.Id.ToString();
-            var interactionId = component.Id.ToString();
+            var customId = component.CustomId;
+            var userId = component.UserId;
+            var interactionId = component.InteractionId;
 
-            var modal = _view.TryBuildAnswerModalRequest(customId, userId, out var modalError);
+            var modal = view.TryBuildAnswerModalRequest(customId, userId, out var modalError);
             if (modalError is not null)
             {
-                await component.RespondAsync(modalError, ephemeral: true);
+                await component.RespondAsync(modalError, true);
                 return;
             }
 
@@ -68,15 +91,15 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                 return;
             }
 
-            var actionInput = _view.TryBuildActionInputModalRequest(customId, userId, out var actionInputError);
+            var actionInput = view.TryBuildActionInputModalRequest(customId, userId, out var actionInputError);
             if (actionInputError is not null)
             {
-                await _view.RecordRejectedActionReferenceAsync(
+                await view.RecordRejectedActionReferenceAsync(
                     customId,
                     userId,
                     interactionId,
                     actionInputError);
-                await component.RespondAsync(actionInputError, ephemeral: true);
+                await component.RespondAsync(actionInputError, true);
                 return;
             }
 
@@ -91,31 +114,50 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
             }
 
             // Acknowledge within Discord's 3-second window before doing any non-modal work.
-            await component.DeferAsync(ephemeral: true);
-            var result = await _view.ApplyInteractionAsync(customId, userId, interactionId);
+            await component.DeferAsync(true);
+            var result = await view.ApplyInteractionAsync(customId, userId, interactionId);
 
             if (result.ErrorMessage is not null)
             {
-                await component.FollowupAsync(result.ErrorMessage, ephemeral: true);
+                await component.FollowupAsync(result.ErrorMessage, true);
                 return;
             }
 
             if (result.RequiresConfirmation && result.ConfirmationCustomId is not null)
             {
-                var builder = new ComponentBuilder();
-                builder.WithButton("Confirm", result.ConfirmationCustomId, ButtonStyle.Danger);
-                await component.FollowupAsync(
+                await component.FollowupWithConfirmationAsync(
                     "Please confirm this action:",
-                    components: builder.Build(),
-                    ephemeral: true);
+                    result.ConfirmationCustomId,
+                    true);
                 return;
             }
-            await component.FollowupAsync("Resolved.", ephemeral: true);
+            await component.FollowupAsync(result.AcknowledgementMessage ?? "Applied.", true);
         }
         catch
         {
-            try { await component.FollowupAsync("The interaction could not be applied. The thread remains unresolved; retry the button.", ephemeral: true); } catch { }
+            try
+            {
+                await component.FollowupAsync(
+                    "The interaction could not be applied. The thread remains unresolved; retry the button.",
+                    true);
+            }
+            catch { }
         }
+    }
+
+    internal sealed record ButtonInteractionContext(
+        string customId,
+        string userId,
+        string interactionId,
+        Func<string, bool, Task> RespondAsync,
+        Func<Modal, Task> RespondWithModalAsync,
+        Func<bool, Task> DeferAsync,
+        Func<string, bool, Task> FollowupAsync,
+        Func<string, string, bool, Task> FollowupWithConfirmationAsync)
+    {
+        public string CustomId { get; } = customId;
+        public string UserId { get; } = userId;
+        public string InteractionId { get; } = interactionId;
     }
 
     private async Task OnModalSubmittedAsync(SocketModal modal)
@@ -136,7 +178,9 @@ public sealed class DiscordGatewayListener : IAsyncDisposable
                     modalText,
                     modal.User.Id.ToString(),
                     modal.Id.ToString());
-                await modal.FollowupAsync(actionResult.ErrorMessage ?? "Action applied.", ephemeral: true);
+                await modal.FollowupAsync(
+                    actionResult.ErrorMessage ?? actionResult.AcknowledgementMessage ?? "Applied.",
+                    ephemeral: true);
                 return;
             }
 

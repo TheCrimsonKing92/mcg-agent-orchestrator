@@ -65,22 +65,21 @@ public static class OperatorChannelFactory
         ICollaborationItemStore store,
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
-        Func<string, CancellationToken, Task>? dispatchAction = null)
+        Func<string, CancellationToken, Task>? dispatchAction = null,
+        Action<string>? acknowledge = null)
     {
-        if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
+        if (!IsDiscordConfigured(catalog, botToken, out _))
             return null;
 
-        var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var view = new DiscordCollaborationViewService(
-            store,
+        var view = CreateCollaborationViewWithApi(
+            catalog,
             api,
-            forumChannelId,
+            store,
             stateDirectory,
-            allowedUserIds,
             resolveClarificationAnswer,
-            BuildCorrelationGoalStateVersionReader(store, stateDirectory),
-            dispatchAction);
+            dispatchAction,
+            acknowledge)!;
         var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
         var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
         return DiscordGatewayListener.CreateAndConnectAsync(botToken!, view, heartbeat, heartbeatOptions.EffectiveInterval)
@@ -94,28 +93,56 @@ public static class OperatorChannelFactory
         ICollaborationItemStore store,
         string stateDirectory,
         Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
-        Func<string, CancellationToken, Task>? dispatchAction = null)
+        Func<string, CancellationToken, Task>? dispatchAction = null,
+        Action<string>? acknowledge = null)
     {
         if (!IsDiscordConfigured(catalog, botToken, out var forumChannelId))
             return null;
 
-        var allowedUserIds = catalog.OperatorUserIds ?? [];
         var api = DiscordNetForumApi.CreateAsync(botToken!).GetAwaiter().GetResult();
-        var collaborationView = new DiscordCollaborationViewService(
-            store,
+        var collaborationView = CreateCollaborationViewWithApi(
+            catalog,
             api,
-            forumChannelId,
+            store,
             stateDirectory,
-            allowedUserIds,
             resolveClarificationAnswer,
-            BuildCorrelationGoalStateVersionReader(store, stateDirectory),
-            dispatchAction);
+            dispatchAction,
+            acknowledge)!;
         var heartbeatOptions = BuildDeadManHeartbeatOptions(catalog);
         var heartbeat = CreateDeadManHeartbeatClient(heartbeatOptions);
         var listener = DiscordGatewayListener.CreateAndConnectAsync(botToken!, collaborationView, heartbeat, heartbeatOptions.EffectiveInterval)
             .GetAwaiter().GetResult();
         var progressView = new DiscordProgressViewService(api, forumChannelId, catalogPath);
         return new DiscordOperatorRuntime(listener, collaborationView, progressView, api);
+    }
+
+    internal static DiscordCollaborationViewService? CreateCollaborationViewWithApi(
+        OperatorChannelCatalog catalog,
+        IDiscordForumApi api,
+        ICollaborationItemStore store,
+        string stateDirectory,
+        Func<string, string, CancellationToken, Task<bool>>? resolveClarificationAnswer = null,
+        Func<string, CancellationToken, Task>? dispatchAction = null,
+        Action<string>? acknowledge = null)
+    {
+        if (catalog.IsNull ||
+            !catalog.ChannelType.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(catalog.ForumChannelId) ||
+            !ulong.TryParse(catalog.ForumChannelId, out var forumChannelId))
+        {
+            return null;
+        }
+
+        return new DiscordCollaborationViewService(
+            store,
+            api,
+            forumChannelId,
+            stateDirectory,
+            catalog.OperatorUserIds ?? [],
+            resolveClarificationAnswer,
+            BuildCorrelationGoalStateVersionReader(store, stateDirectory),
+            dispatchAction,
+            acknowledge);
     }
 
     public static async Task SendTestEscalationAsync(IOperatorChannel channel, TextWriter output)
@@ -141,6 +168,20 @@ public static class OperatorChannelFactory
 
         await channel.SendEscalationAsync(testEscalation);
         await output.WriteLineAsync($"Test escalation queued via {channel.ChannelType}. The operator-listen collaboration view will render it in Discord.");
+    }
+
+    public static void WriteStartupConfigurationWarnings(
+        OperatorChannelCatalog catalog,
+        TextWriter error)
+    {
+        if (!catalog.ChannelType.Equals("discord", StringComparison.OrdinalIgnoreCase) ||
+            catalog.OperatorUserIds is { Count: > 0 })
+        {
+            return;
+        }
+
+        error.WriteLine(
+            "ERROR operator-listen: configuration key OperatorUserIds is empty; no Discord interactions will be processed.");
     }
 
     private static bool IsDiscordConfigured(OperatorChannelCatalog catalog, string? botToken, out ulong forumChannelId)

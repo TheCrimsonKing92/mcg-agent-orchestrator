@@ -7,7 +7,8 @@ public sealed record DiscordInteractionResult(
     OperatorDecision? Decision,
     bool RequiresConfirmation,
     string? ConfirmationCustomId,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    string? AcknowledgementMessage = null);
 
 public sealed record DiscordClarificationAnswerModalRequest(
     string CorrelationKey,
