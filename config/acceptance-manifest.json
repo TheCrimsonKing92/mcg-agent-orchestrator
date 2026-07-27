@@ -1,6 +1,7 @@
 {
   "version": 1,
   "engine": {
+    "slotCount": 4,
     "maxConcurrentShards": 2,
     "enforceStructuralCoverage": true,
     "laneEstimateComment": "estimatedSerialSeconds uses the conservative per-class maximum from clean receipts; the ~8-minute serial planning ceiling uses a 1.0x multiplier, while live two-wide contention remains a receipt-level acceptance check.",
@@ -90,6 +91,7 @@
       {
         "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
         "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
         "arguments": [
           "{executable}",
           "--no-ansi",
@@ -109,6 +111,7 @@
       {
         "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
         "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
         "arguments": [
           "{executable}",
           "--no-ansi",
