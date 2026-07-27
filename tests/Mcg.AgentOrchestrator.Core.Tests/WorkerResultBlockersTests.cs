@@ -299,15 +299,20 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
     }
 
-    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_compares_file_identity_with_ordinal_casing")]
-    public void ReviewFindingConvergenceComparesFileIdentityWithOrdinalCasing()
+    [Xunit.Theory(DisplayName = "ReviewFindingConvergence_does_not_collapse_region_identity_to_empty")]
+    [Xunit.InlineData("(first)", "(second)")]
+    [Xunit.InlineData("<First>", "<Second>")]
+    [Xunit.InlineData("A.Run.", "B.Run.")]
+    public void ReviewFindingConvergenceDoesNotCollapseRegionIdentityToEmpty(
+        string previousRegion,
+        string submittedRegion)
     {
         var previous = new[]
         {
             new ReviewFinding(
                 "F-1",
                 ReviewFindingState.Open,
-                new ReviewFindingLocation("src/A.cs", "RunFocusedEvidence"),
+                new ReviewFindingLocation("src/A.cs", previousRegion),
                 "Missing guard.")
         };
         var next = new ReviewFindingRound(
@@ -315,7 +320,7 @@ public sealed class WorkerResultBlockersTests
                 new ReviewFinding(
                     "F-1",
                     ReviewFindingState.Open,
-                    new ReviewFindingLocation("src/a.cs", "RunFocusedEvidence"),
+                    new ReviewFindingLocation("src/A.cs", submittedRegion),
                     "Missing guard.")
             ],
             []);

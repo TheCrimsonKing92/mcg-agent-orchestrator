@@ -249,7 +249,7 @@ public sealed partial class AgentOrchestratorKernel
         ReviewFindings.TryGetEffectiveOpenFindings(
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections,
-            out var effectiveOpenFindings,
+            out _,
             out var suppressedFindings);
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer)
@@ -264,12 +264,12 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
-        var openBlockingFindings = effectiveOpenFindings
-            .Where(finding => finding.Severity == FindingSeverity.Blocking)
-            .ToArray();
+        var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+            mergedFindings,
+            goal.EffectiveAcceptanceCriteriaCorrections);
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            openBlockingFindings.Length > 0)
+            openBlockingFindings.Count > 0)
         {
             var openIds = string.Join(
                 ", ",

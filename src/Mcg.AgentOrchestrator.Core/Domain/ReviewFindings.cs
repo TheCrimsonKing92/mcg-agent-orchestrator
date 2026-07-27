@@ -350,7 +350,7 @@ public static class ReviewFindingConvergence
     // Raw submitted location text remains on the merged finding; normalization is comparison-only.
     private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right)
     {
-        if (!string.Equals(left.File, right.File, StringComparison.Ordinal))
+        if (!string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
@@ -369,13 +369,26 @@ public static class ReviewFindingConvergence
     private static string NormalizeRegion(string region)
     {
         var normalized = Regex.Replace(region.Trim(), @"\s+", " ").ToLowerInvariant();
-        normalized = Regex.Replace(normalized, @"\s*\(.*\)\s*$", string.Empty, RegexOptions.Singleline).TrimEnd();
-        normalized = Regex.Replace(normalized, @"<[^<>]*>\s*$", string.Empty).TrimEnd();
+        var withoutArguments = Regex.Replace(
+            normalized,
+            @"\s*\(.*\)\s*$",
+            string.Empty,
+            RegexOptions.Singleline).TrimEnd();
+        if (withoutArguments.Length > 0)
+        {
+            normalized = withoutArguments;
+        }
+
+        var withoutTypeParameters = Regex.Replace(normalized, @"<[^<>]*>\s*$", string.Empty).TrimEnd();
+        if (withoutTypeParameters.Length > 0)
+        {
+            normalized = withoutTypeParameters;
+        }
 
         if (!normalized.Contains(' '))
         {
             var finalSeparator = normalized.LastIndexOf('.');
-            if (finalSeparator >= 0)
+            if (finalSeparator >= 0 && finalSeparator < normalized.Length - 1)
             {
                 normalized = normalized[(finalSeparator + 1)..];
             }
@@ -387,7 +400,7 @@ public static class ReviewFindingConvergence
     // Exact anchor equality (including hunk) — used only by the recycle guard so that a second,
     // distinct defect in the same region but a different hunk stays reportable under a new id.
     private static bool ExactAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
-        string.Equals(left.File, right.File, StringComparison.Ordinal) &&
+        string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.Region, right.Region, StringComparison.Ordinal) &&
         string.Equals(left.Hunk, right.Hunk, StringComparison.Ordinal);
 
