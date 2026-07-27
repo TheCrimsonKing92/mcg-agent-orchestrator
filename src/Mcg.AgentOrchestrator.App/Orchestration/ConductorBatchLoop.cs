@@ -15,7 +15,17 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxBusyWriteAttempts = 6;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
-    internal const int DefaultParallelAcceptanceCapacity = 4;
+    // Parallel-acceptance WIDTH: how many landing-acceptance gates may run concurrently.
+    // Bounded by build concurrency because every running gate holds a build slot; the
+    // slot-exhaustion / second-attempt-yields tests encode this capacity-2 semantics.
+    internal const int DefaultParallelAcceptanceCapacity =
+        DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
+    // Paid-worker ADMISSION pool that the gate-slot reservation (ConductorDriver worker-cap)
+    // draws from. Deliberately INDEPENDENT of build concurrency / acceptance width: coding
+    // workers do not hold build slots, so reserving one of these for a ready gate still
+    // admits ~3 paid workers (WorkerAdmissionCapacity - 1), preserving pre-de-slotting
+    // throughput. Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
+    internal const int WorkerAdmissionCapacity = 4;
     internal const int DefaultUnscopedStallTickThreshold = 3;
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;

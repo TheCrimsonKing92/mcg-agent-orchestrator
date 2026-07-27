@@ -61,6 +61,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
     private readonly Func<Goal, int> _getAcceptanceSlotCount;
+    private readonly Func<int> _getWorkerAdmissionCapacity;
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly string? _executionDirectory;
@@ -83,6 +84,7 @@ internal sealed class ConductorDriver
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
+        _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
@@ -591,7 +593,8 @@ internal sealed class ConductorDriver
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
         Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
-        Func<Goal, int>? getAcceptanceSlotCount = null)
+        Func<Goal, int>? getAcceptanceSlotCount = null,
+        Func<int>? getWorkerAdmissionCapacity = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -641,6 +644,7 @@ internal sealed class ConductorDriver
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
         _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
+        _getWorkerAdmissionCapacity = getWorkerAdmissionCapacity ?? (() => ConductorBatchLoop.WorkerAdmissionCapacity);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
         _tryBuildAwaitingClarificationEscalationReason =
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
@@ -1458,7 +1462,11 @@ internal sealed class ConductorDriver
         var workerCap = policy.MaxConcurrentPaidWorkers;
         if (_hasGateReadyGoal())
         {
-            workerCap = Math.Min(workerCap, Math.Max(0, _getAcceptanceSlotCount(goal) - 1));
+            // Reserve one paid-worker admission slot for the ready gate. The pool this draws
+            // from is the worker-admission capacity, deliberately decoupled from the
+            // parallel-acceptance width / build-concurrency slot count so a running gate does
+            // not starve paid-worker admission down to 1.
+            workerCap = Math.Min(workerCap, Math.Max(0, _getWorkerAdmissionCapacity() - 1));
         }
 
         if (running >= workerCap)
