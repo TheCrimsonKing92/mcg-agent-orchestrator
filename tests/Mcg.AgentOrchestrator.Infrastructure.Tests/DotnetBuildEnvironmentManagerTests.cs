@@ -1309,12 +1309,29 @@ public sealed class DotnetBuildEnvironmentManagerTests
         try
         {
             var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "test");
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
+            {
+            }
+
+            var sentinel = Path.Combine(first.ArtifactsPath, "incremental-cache-sentinel.txt");
+            File.WriteAllText(sentinel, "preserve after goal lease liveness reclaim");
             File.WriteAllText(Path.Combine(first.RootPath, "lease", "lease.lock"), "999999");
 
-            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "retry");
+            DotnetBuildEnvironment? second = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "retry");
+                using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(second);
+            });
 
+            Assert.NotNull(second);
             Assert.True(second.StaleLockCleared);
             Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
+            Assert.Equal(
+                "preserve after goal lease liveness reclaim",
+                File.ReadAllText(sentinel));
+            Assert.Contains("decision=preserved", output);
+            Assert.Contains("reason=goal-lease-dead-holder", output);
             Assert.True(DotnetBuildEnvironmentManager.TryRotateGoalLease(goalId, "corrupt-cache"));
             var third = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "after-rotate");
             Assert.False(third.ReusedGoalLease);
@@ -1484,7 +1501,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
         var cachedDll = Path.Combine(slot0.ArtifactsPath, "bin", "Sample", "debug_net10.0", "Sample.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(cachedDll)!);
-        File.WriteAllText(cachedDll, "intact incremental output");
+        WriteValidPeFile(cachedDll);
+        var cachedBytes = File.ReadAllBytes(cachedDll);
         File.SetLastWriteTimeUtc(cachedDll, DateTime.UtcNow.AddMinutes(-5));
         var cachedWriteTime = File.GetLastWriteTimeUtc(cachedDll);
         File.WriteAllText(slot0.ExecutionLockPath, "999999");
@@ -1495,7 +1513,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         });
 
         Assert.True(File.Exists(cachedDll));
-        Assert.Equal("intact incremental output", File.ReadAllText(cachedDll));
+        Assert.Equal(cachedBytes, File.ReadAllBytes(cachedDll));
         Assert.Equal(cachedWriteTime, File.GetLastWriteTimeUtc(cachedDll));
         Assert.Contains("decision=preserved", output);
         Assert.Contains("reason=integrity-ok", output);
@@ -1507,6 +1525,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Theory(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_reclaim_wipes_torn_artifacts")]
     [Xunit.InlineData("missing-owner-marker")]
     [Xunit.InlineData("zero-length-dll")]
+    [Xunit.InlineData("invalid-pe-dll")]
     public void DotnetBuildEnvironmentManagerStaleLeaseReclaimWipesTornArtifacts(string tornWrite)
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
@@ -1525,7 +1544,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             var tornDll = Path.Combine(slot0.ArtifactsPath, "bin", "Sample", "debug_net10.0", "Sample.dll");
             Directory.CreateDirectory(Path.GetDirectoryName(tornDll)!);
-            File.WriteAllBytes(tornDll, []);
+            File.WriteAllBytes(tornDll, tornWrite == "zero-length-dll" ? [] : "MZ truncated"u8.ToArray());
         }
 
         File.WriteAllText(slot0.ExecutionLockPath, "999999");
@@ -1544,6 +1563,159 @@ public sealed class DotnetBuildEnvironmentManagerTests
             tornWrite == "missing-owner-marker" ? ".mcg-artifacts-owner.json" : "Sample.dll",
             journal.RootElement.GetProperty("triggerPath").GetString(),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_wipe_decision_survives_artifact_prep_retry")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseWipeDecisionSurvivesArtifactPrepRetry()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment))
+        {
+        }
+
+        var sentinel = Path.Combine(environment.ArtifactsPath, "must-be-cleared.txt");
+        var tornDll = Path.Combine(environment.ArtifactsPath, "bin", "Sample.dll");
+        File.WriteAllText(sentinel, "torn cache");
+        Directory.CreateDirectory(Path.GetDirectoryName(tornDll)!);
+        File.WriteAllBytes(tornDll, []);
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        var lockedPath = Path.Combine(environment.ArtifactsPath, "locked.dll");
+        var prepareAttempts = 0;
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
+        {
+            if (current.ExecutionLockPath == environment.ExecutionLockPath &&
+                Interlocked.Increment(ref prepareAttempts) == 1)
+            {
+                throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
+            }
+        };
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(987654321, "testhost", "dotnet test --artifacts-path slot-0", true)],
+            "test");
+        WorkerProcessJobs.TryKillPidTree = _ => true;
+
+        try
+        {
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                environment,
+                TimeSpan.FromSeconds(1));
+
+            Assert.Equal(2, prepareAttempts);
+            Assert.False(File.Exists(sentinel));
+            Assert.False(File.Exists(tornDll));
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+            DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
+            LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_integrity_probe_retries_transient_io")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseIntegrityProbeRetriesTransientIo()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment))
+        {
+        }
+
+        var cachedDll = Path.Combine(environment.ArtifactsPath, "bin", "Sample.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(cachedDll)!);
+        WriteValidPeFile(cachedDll);
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        var probeAttempts = 0;
+        DotnetBuildEnvironmentManager.BeforeStaleLeaseIntegrityProbeForTests = attempt =>
+        {
+            probeAttempts = attempt;
+            if (attempt < 3)
+            {
+                throw new IOException("transient probe contention");
+            }
+        };
+
+        try
+        {
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                environment,
+                TimeSpan.FromSeconds(1));
+
+            Assert.Equal(3, probeAttempts);
+            Assert.True(File.Exists(cachedDll));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.BeforeStaleLeaseIntegrityProbeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_journal_contention_is_best_effort_and_drains")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseJournalContentionIsBestEffortAndDrains()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment))
+        {
+        }
+
+        var journalPath = LeaseJournalPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        string output;
+        using (var heldJournal = new FileStream(
+            journalPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.Read))
+        {
+            output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                    environment,
+                    TimeSpan.FromSeconds(1));
+            });
+        }
+
+        Assert.Contains("journalStatus=pending", output);
+        Assert.NotEmpty(Directory.GetFiles(
+            Path.GetDirectoryName(journalPath)!,
+            $"{Path.GetFileName(journalPath)}.pending-*.jsonl"));
+
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)))
+        {
+        }
+
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(journalPath)!,
+            $"{Path.GetFileName(journalPath)}.pending-*.jsonl"));
+        Assert.True(File.ReadAllLines(journalPath).Length >= 2);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_journal_rotates_at_bounded_size")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseJournalRotatesAtBoundedSize()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment))
+        {
+        }
+
+        var journalPath = LeaseJournalPath(environment);
+        File.WriteAllBytes(journalPath, new byte[1_048_576]);
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)))
+        {
+        }
+
+        Assert.NotEmpty(Directory.GetFiles(
+            Path.GetDirectoryName(journalPath)!,
+            "lease.journal-*.jsonl"));
+        Assert.Single(File.ReadAllLines(journalPath));
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_force_clean_escape_hatch_wipes_intact_artifacts")]
@@ -1889,9 +2061,9 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var stale = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "stale-owner");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(stale))
             {
-                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
-                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "obj", "stale-cache.txt")));
-                Assert.False(File.Exists(Path.Combine(stale.ArtifactsPath, "bin", "stale.dll")));
+                Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
+                Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "obj", "stale-cache.txt")));
+                Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "bin", "stale.dll")));
             }
         }
         finally
@@ -2528,6 +2700,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
     private static string LeaseJournalPath(DotnetBuildEnvironment environment) =>
         Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, "lease.journal.jsonl");
+
+    private static void WriteValidPeFile(string path)
+    {
+        File.Copy(typeof(DotnetBuildEnvironmentManagerTests).Assembly.Location, path, overwrite: true);
+    }
 
     private static JsonDocument ReadLastLeaseJournalEntry(DotnetBuildEnvironment environment)
     {
