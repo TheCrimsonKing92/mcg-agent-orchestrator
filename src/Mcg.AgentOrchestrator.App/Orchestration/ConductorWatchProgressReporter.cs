@@ -34,7 +34,8 @@ internal sealed class ConductorWatchProgressReporter
         bool quiet,
         ConductorAutonomyPolicy policy,
         TimeSpan? watchInterval = null,
-        TimeSpan? stallThreshold = null)
+        TimeSpan? stallThreshold = null,
+        DispatchLiveChangeSnapshot? liveChanges = null)
     {
         if (quiet)
         {
@@ -68,13 +69,29 @@ internal sealed class ConductorWatchProgressReporter
             previous = null;
         }
 
-        var snapshot = BuildSnapshot(goal, active, now);
+        var snapshot = BuildSnapshot(goal, active, now, previous);
         var stdoutDelta = previous is null
             ? snapshot.StandardOutputBytes
             : Math.Max(0, snapshot.StandardOutputBytes - previous.StandardOutputBytes);
         var outputDelta = previous is null
             ? snapshot.OutputBytes
             : Math.Max(0, snapshot.OutputBytes - previous.OutputBytes);
+        var probeChanges =
+            previous is null ||
+            outputDelta > 0 ||
+            now - previous.EmittedAt >= TimeSpan.FromSeconds(DefaultThrottleSeconds);
+        if (probeChanges)
+        {
+            var changes = liveChanges ??
+                _readChanges(active.LastDispatch.WorkingDirectory, active.LastDispatch.BaseCommit);
+            snapshot = snapshot with
+            {
+                ChangedFileCount = changes.Files.Count,
+                DisplayFiles = changes.DisplayFiles,
+                RemainingFileCount = changes.RemainingFileCount
+            };
+        }
+
         var shouldEmit =
             previous is null ||
             outputDelta > 0 ||
@@ -99,7 +116,11 @@ internal sealed class ConductorWatchProgressReporter
         return lines;
     }
 
-    private ConductorWatchProgressSnapshot BuildSnapshot(Goal goal, TaskSpec task, DateTimeOffset now)
+    private ConductorWatchProgressSnapshot BuildSnapshot(
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset now,
+        EmittedSnapshot? previous)
     {
         var taskNumber = ConsoleViews.GetTaskDisplayNumber(goal, task.Id);
         var totalTasks = goal.Tasks.Count;
@@ -108,7 +129,6 @@ internal sealed class ConductorWatchProgressReporter
         var heartbeat = process is null
             ? null
             : _readHeartbeat(process, now);
-        var changes = _readChanges(dispatch.WorkingDirectory, dispatch.BaseCommit);
         var liveness = ResolveLiveness(process, heartbeat);
         var workerPid = ResolveWorkerPid(process, heartbeat);
         var outputBytes = (heartbeat?.StandardOutputBytes ?? 0) + (heartbeat?.StandardErrorBytes ?? 0);
@@ -127,9 +147,9 @@ internal sealed class ConductorWatchProgressReporter
             outputBytes,
             stdoutBytes,
             lastProgressAge,
-            changes.Files.Count,
-            changes.DisplayFiles,
-            changes.RemainingFileCount,
+            previous?.ChangedFileCount ?? 0,
+            [],
+            0,
             dispatch.ResultCommit,
             now);
     }

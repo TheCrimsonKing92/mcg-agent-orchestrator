@@ -6,6 +6,17 @@ using System.Text.Json;
 
 public sealed class RunEventStoreTests
 {
+    [Xunit.Fact(DisplayName = "GoalOperationJournal_reuses_run_event_store_per_path")]
+    public void GoalOperationJournalReusesRunEventStorePerPath()
+    {
+        var db = TempDb();
+
+        var first = GoalOperationJournal.GetRunEventStore(db);
+        var second = GoalOperationJournal.GetRunEventStore(Path.GetFullPath(db));
+
+        Assert.Same(first, second);
+    }
+
     [Xunit.Fact(DisplayName = "DogfoodLogStore_upserts_goal_entries_and_lists_recent")]
     public async Task DogfoodLogStoreUpsertsGoalEntriesAndListsRecent()
     {
@@ -305,6 +316,34 @@ public sealed class RunEventStoreTests
         Assert.False(result.Attempted);
         var remaining = await store.ReadSinceAsync(maxCount: 10);
         Assert.Contains(remaining, evt => evt.Sequence == oversized.Sequence);
+    }
+
+    [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_memory_skip_does_not_touch_conduct_log")]
+    public async Task RunEventMaintenanceCadenceMemorySkipDoesNotTouchConductLog()
+    {
+        var root = CreateTempDirectory();
+        var db = Path.Combine(root, "run-events.db");
+        var logPath = Path.Combine(root, "logs", ConductEventLogWriter.CurrentFileName);
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        var store = new SqliteRunEventStore(db);
+        await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.RunEventMaintenance,
+            null,
+            RunEventMaintenanceCadence.Operation,
+            "Completed",
+            "fresh marker",
+            "{}",
+            OccurredAt: now.AddHours(-1)));
+
+        Assert.True(RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now).Skipped);
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        File.WriteAllText(logPath, "sentinel");
+        using var exclusive = new FileStream(logPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var second = RunEventMaintenanceCadence.TryRunIfDue(db, logPath, () => now.AddMinutes(1));
+
+        Assert.True(second.Skipped);
+        Assert.Equal("sentinel".Length, exclusive.Length);
     }
 
     [Xunit.Fact(DisplayName = "RunEventMaintenanceCadence_self_defers_when_database_writer_is_busy")]

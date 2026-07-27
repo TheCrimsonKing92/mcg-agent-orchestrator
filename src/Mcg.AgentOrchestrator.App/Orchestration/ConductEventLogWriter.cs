@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductEventLogWriter
 {
     public const string CurrentFileName = "conduct-events.log";
+    internal const string PendingEventsDirectoryName = "pending-events";
     internal const long DefaultMaxBytes = 1_048_576;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -55,8 +56,10 @@ internal sealed class ConductEventLogWriter
         {
             var directory = Path.GetDirectoryName(_path) ?? ".";
             Directory.CreateDirectory(directory);
+            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+            Directory.CreateDirectory(pendingDirectory);
             var pendingPath = Path.Combine(
-                directory,
+                pendingDirectory,
                 $"{Path.GetFileName(_path)}.pending-{Guid.NewGuid():N}.jsonl");
             File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp));
 
@@ -92,8 +95,14 @@ internal sealed class ConductEventLogWriter
         lock (RequiredEventDrainGate)
         {
             var directory = Path.GetDirectoryName(_path) ?? ".";
+            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+            if (!Directory.Exists(pendingDirectory))
+            {
+                return;
+            }
+
             var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
-            foreach (var pendingPath in Directory.GetFiles(directory, pattern).Order(StringComparer.Ordinal))
+            foreach (var pendingPath in Directory.GetFiles(pendingDirectory, pattern).Order(StringComparer.Ordinal))
             {
                 RotateIfNeeded();
                 File.AppendAllText(_path, File.ReadAllText(pendingPath));

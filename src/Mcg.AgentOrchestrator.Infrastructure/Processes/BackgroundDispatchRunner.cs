@@ -85,6 +85,11 @@ public sealed class BackgroundDispatchRunner
     private readonly IDispatchDiagnosticWriter _diagnosticWriter;
     private readonly DispatchRecoveryPolicy _recoveryPolicy;
     private readonly WorkerProviderCatalog _workerProviders;
+    private readonly Func<string, Stream> _openLogReadStream;
+    private readonly Action? _beforeGoalWorktreeInspection;
+    private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
+    private readonly object _processLogCacheGate = new();
+    private readonly Dictionary<WorktreeInspectionCacheKey, WorktreeInspectionCacheEntry> _worktreeInspectionCache = [];
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -98,7 +103,9 @@ public sealed class BackgroundDispatchRunner
         IDispatchDiagnosticWriter? diagnosticWriter = null,
         TimeSpan? startupHangTimeout = null,
         DispatchRecoveryPolicy? recoveryPolicy = null,
-        WorkerProviderCatalog? workerProviders = null)
+        WorkerProviderCatalog? workerProviders = null,
+        Func<string, Stream>? openLogReadStream = null,
+        Action? beforeGoalWorktreeInspection = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -112,6 +119,9 @@ public sealed class BackgroundDispatchRunner
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
         _recoveryPolicy = recoveryPolicy ?? new DispatchRecoveryPolicy(_clock);
         _workerProviders = workerProviders ?? WorkerProviderCatalog.Default();
+        _openLogReadStream = openLogReadStream ??
+            (path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        _beforeGoalWorktreeInspection = beforeGoalWorktreeInspection;
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -125,6 +135,8 @@ public sealed class BackgroundDispatchRunner
         var value = Environment.GetEnvironmentVariable(TestRewriteRealWorkerCommandsVariable);
         return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
+
+    public void BeginRefreshCycle() => _worktreeInspectionCache.Clear();
 
     internal static string RewriteRealWorkerCommandForTests(string command, bool rewriteEnabled)
     {
@@ -850,8 +862,8 @@ public sealed class BackgroundDispatchRunner
         var heartbeat = ProcessLogReader.ReadHeartbeat(processRecord, _clock.UtcNow);
         var stdoutFileBytes = SafeFileLength(processRecord.StandardOutputPath);
         var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
-        var stdout = ReadDecisionBestEffort(processRecord.StandardOutputPath);
-        var stderr = ReadDecisionBestEffort(processRecord.StandardErrorPath);
+        var stdout = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
+        var stderr = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout, stderr);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
@@ -935,8 +947,10 @@ public sealed class BackgroundDispatchRunner
         TaskProcessResourceAccounting? capturedResourceAccounting = null)
     {
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
-        var decisionStandardOutput = ReadDecisionBestEffort(processRecord.StandardOutputPath);
-        var decisionStandardError = ReadDecisionBestEffort(processRecord.StandardErrorPath);
+        var outputSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
+        var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
+        var decisionStandardOutput = outputSnapshot.DecisionText;
+        var decisionStandardError = errorSnapshot.DecisionText;
         var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
         if (resourceAccounting is not null &&
             !resourceAccounting.Reaped &&
@@ -1002,7 +1016,12 @@ public sealed class BackgroundDispatchRunner
                     worktreeEvidence.DirtyPaths);
                 commitAttempted = true;
                 if (commitAttempt.Succeeded &&
-                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out worktreeEvidence) &&
+                    TryInspectGoalWorktree(
+                        processRecord.WorkingDirectory,
+                        goalId,
+                        task.LastDispatch!.DispatchedAt,
+                        out worktreeEvidence,
+                        forceRefresh: true) &&
                     worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
                 {
                     orchestratorCommitted = true;
@@ -1104,9 +1123,9 @@ public sealed class BackgroundDispatchRunner
 
         var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
             ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
-        var standardOutput = ReadBoundedBestEffort(processRecord.StandardOutputPath);
+        var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
-            ReadBoundedBestEffort(processRecord.StandardErrorPath),
+            errorSnapshot.BoundedText,
             standardErrorDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {
@@ -1145,7 +1164,7 @@ public sealed class BackgroundDispatchRunner
             ProviderFailureKind: providerFailureKind,
             HumanInputQuestion: humanInputQuestion);
 
-        return new DispatchRefreshOutcome(
+        var outcome = new DispatchRefreshOutcome(
             completed,
             verification,
             resultCommit,
@@ -1153,6 +1172,8 @@ public sealed class BackgroundDispatchRunner
             recoveryDecision,
             providerFailureKind,
             new DispatchDiagnosticPayload(exitCode, standardOutput, standardError));
+        EvictProcessLogCache(processRecord);
+        return outcome;
     }
 
     private static string? TryGetWorktreeHead(string workingDirectory)
@@ -1662,7 +1683,27 @@ public sealed class BackgroundDispatchRunner
             $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.";
     }
 
-    private static bool TryInspectGoalWorktree(
+    private bool TryInspectGoalWorktree(
+        string workingDirectory,
+        GoalId goalId,
+        DateTimeOffset dispatchedAt,
+        out GoalWorktreeDispatchEvidence evidence,
+        bool forceRefresh = false)
+    {
+        var key = new WorktreeInspectionCacheKey(workingDirectory, goalId, dispatchedAt);
+        if (!forceRefresh && _worktreeInspectionCache.TryGetValue(key, out var cached))
+        {
+            evidence = cached.Evidence;
+            return cached.Available;
+        }
+
+        _beforeGoalWorktreeInspection?.Invoke();
+        var available = TryInspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt, out evidence);
+        _worktreeInspectionCache[key] = new WorktreeInspectionCacheEntry(available, evidence);
+        return available;
+    }
+
+    private static bool TryInspectGoalWorktreeCore(
         string workingDirectory,
         GoalId goalId,
         DateTimeOffset dispatchedAt,
@@ -1713,6 +1754,15 @@ public sealed class BackgroundDispatchRunner
             GitCli.ParseCommitWorthyStatusPaths(filteredStatusOutput));
         return true;
     }
+
+    private sealed record WorktreeInspectionCacheKey(
+        string WorkingDirectory,
+        GoalId GoalId,
+        DateTimeOffset DispatchedAt);
+
+    private sealed record WorktreeInspectionCacheEntry(
+        bool Available,
+        GoalWorktreeDispatchEvidence Evidence);
 
     private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
     {
@@ -1774,6 +1824,7 @@ public sealed class BackgroundDispatchRunner
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
+        EvictProcessLogCache(processRecord);
         return cancelled;
     }
 
@@ -2013,6 +2064,61 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
+    private ProcessLogSnapshot ReadProcessLogBestEffort(TaskProcessRecord processRecord, string path)
+    {
+        var key = new ProcessLogCacheKey(processRecord.ExitCodePath, path);
+        var length = SafeFileLength(path);
+        lock (_processLogCacheGate)
+        {
+            if (_processLogCache.TryGetValue(key, out var cached) && cached.Length == length)
+            {
+                return cached;
+            }
+        }
+
+        var snapshot = ReadProcessLogFileBestEffort(path, length);
+        lock (_processLogCacheGate)
+        {
+            _processLogCache[key] = snapshot;
+        }
+
+        return snapshot;
+    }
+
+    private ProcessLogSnapshot ReadProcessLogFileBestEffort(string path, long length)
+    {
+        if (!File.Exists(path))
+        {
+            return new ProcessLogSnapshot(length, false, string.Empty, string.Empty);
+        }
+
+        try
+        {
+            using var stream = _openLogReadStream(path);
+            using var reader = new StreamReader(stream);
+            return ReadProcessLogSnapshot(reader, path, length);
+        }
+        catch (IOException)
+        {
+            var message = $"[log locked at refresh — see {path}]";
+            return new ProcessLogSnapshot(length, false, message, message);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            var message = $"[log unreadable at refresh — see {path}]";
+            return new ProcessLogSnapshot(length, false, message, message);
+        }
+    }
+
+    private void EvictProcessLogCache(TaskProcessRecord processRecord)
+    {
+        lock (_processLogCacheGate)
+        {
+            _processLogCache.Remove(new ProcessLogCacheKey(processRecord.ExitCodePath, processRecord.StandardOutputPath));
+            _processLogCache.Remove(new ProcessLogCacheKey(processRecord.ExitCodePath, processRecord.StandardErrorPath));
+        }
+    }
+
     private static string ReadDecisionBestEffort(string path)
     {
         if (!File.Exists(path))
@@ -2081,6 +2187,121 @@ public sealed class BackgroundDispatchRunner
 
         return retained.ToString().TrimEnd();
     }
+
+    private static ProcessLogSnapshot ReadProcessLogSnapshot(TextReader reader, string path, long length)
+    {
+        const int MaxDecisionChars = VerificationTextBounds.MaxRetainedChars;
+        var decision = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
+        var prefixRemaining = VerificationTextBounds.PreviewHeadChars;
+        var inWorkerResult = false;
+        var finalOutputSeen = false;
+        var lineBuffer = new StringBuilder();
+        var retainedPrefix = new StringBuilder(VerificationTextBounds.BoundThreshold);
+        var tail = new char[VerificationTextBounds.PreviewTailChars];
+        var tailStart = 0;
+        var tailCount = 0;
+        var totalChars = 0L;
+        var buffer = new char[4096];
+
+        void ProcessDecisionLine()
+        {
+            var line = lineBuffer.ToString().TrimEnd('\r');
+            lineBuffer.Clear();
+            if (prefixRemaining > 0)
+            {
+                var take = Math.Min(prefixRemaining, line.Length);
+                AppendDecisionLine(decision, line[..take], MaxDecisionChars);
+                prefixRemaining -= take;
+            }
+
+            var normalized = NormalizeWorkerResultMarker(line);
+            if (IsWorkerResultOpener(normalized))
+            {
+                inWorkerResult = true;
+                AppendDecisionLine(decision, line, MaxDecisionChars);
+            }
+            else if (IsWorkerResultEndMarker(normalized))
+            {
+                AppendDecisionLine(decision, line, MaxDecisionChars);
+                inWorkerResult = false;
+            }
+            else if (inWorkerResult || IsDecisionSignificantLine(line))
+            {
+                AppendDecisionLine(decision, line, MaxDecisionChars);
+            }
+
+            finalOutputSeen |= ContainsCodexFinalOutput(line);
+        }
+
+        while (true)
+        {
+            var read = reader.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+            {
+                break;
+            }
+
+            if (retainedPrefix.Length < VerificationTextBounds.BoundThreshold)
+            {
+                retainedPrefix.Append(buffer, 0, Math.Min(read, VerificationTextBounds.BoundThreshold - retainedPrefix.Length));
+            }
+
+            for (var index = 0; index < read; index++)
+            {
+                var ch = buffer[index];
+                if (tailCount < tail.Length)
+                {
+                    tail[(tailStart + tailCount) % tail.Length] = ch;
+                    tailCount++;
+                }
+                else
+                {
+                    tail[tailStart] = ch;
+                    tailStart = (tailStart + 1) % tail.Length;
+                }
+
+                if (ch == '\n')
+                {
+                    ProcessDecisionLine();
+                }
+                else
+                {
+                    lineBuffer.Append(ch);
+                }
+            }
+
+            totalChars += read;
+        }
+
+        if (lineBuffer.Length > 0)
+        {
+            ProcessDecisionLine();
+        }
+
+        var bounded = BuildBoundedText(retainedPrefix, tail, tailStart, tailCount, totalChars, path);
+        return new ProcessLogSnapshot(length, finalOutputSeen, decision.ToString().TrimEnd(), bounded);
+    }
+
+    private static string BuildBoundedText(
+        StringBuilder retainedPrefix,
+        char[] tail,
+        int tailStart,
+        int tailCount,
+        long totalChars,
+        string path)
+    {
+        if (totalChars <= VerificationTextBounds.BoundThreshold)
+        {
+            return retainedPrefix.ToString();
+        }
+
+        var head = retainedPrefix.ToString(0, VerificationTextBounds.PreviewHeadChars);
+        var boundedTail = BuildTailText(tail, tailStart, tailCount);
+        return VerificationTextBounds.BuildBoundedText(head, boundedTail, totalChars, path);
+    }
+
+    private sealed record ProcessLogCacheKey(string ProcessRecordKey, string Path);
+    private sealed record ProcessLogSnapshot(long Length, bool FinalOutputSeen, string DecisionText, string BoundedText);
 
     private static void AppendDecisionLine(StringBuilder target, string line, int maxChars)
     {
@@ -2301,13 +2522,6 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var standardOutput = ReadDecisionBestEffort(processRecord.StandardOutputPath);
-        var standardError = ReadDecisionBestEffort(processRecord.StandardErrorPath);
-        if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
-        {
-            return false;
-        }
-
         var lastOutputAt = GetLastOutputWriteTime(processRecord);
         var idleFor = _clock.UtcNow - lastOutputAt;
         if (idleFor < _postOutputIdleTimeout)
@@ -2315,6 +2529,12 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
+        var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
+        var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
+        if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
+        {
+            return false;
+        }
         diagnostic = $"Background dispatch wrapper appears hung after codex final output; no exit file was written after {FormatDuration(idleFor)} of idle logs. Marking dispatch failed with captured stdout/stderr evidence.";
         return true;
     }
@@ -2413,16 +2633,16 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        if (RequiresFileChangeEvidence(task) &&
-            task.LastDispatch is { } dispatch &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var wt) &&
-            (wt.HasCommitAfterDispatch || !wt.IsClean))
+        var idleFor = _clock.UtcNow - heartbeat.LastProgressAt;
+        if (idleFor < _progressStallTimeout)
         {
             return false;
         }
 
-        var idleFor = _clock.UtcNow - heartbeat.LastProgressAt;
-        if (idleFor < _progressStallTimeout)
+        if (RequiresFileChangeEvidence(task) &&
+            task.LastDispatch is { } dispatch &&
+            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt, out var wt) &&
+            (wt.HasCommitAfterDispatch || !wt.IsClean))
         {
             return false;
         }

@@ -43,6 +43,7 @@ public static class DispatchProcessHost
     private static readonly TimeSpan DefaultMaxIdle = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan WatchdogProbeInterval = TimeSpan.FromSeconds(15);
     private const long CpuProgressEpsilonMs = 50L;
+    internal const int ProviderSessionCaptureByteLimit = 64 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -953,6 +954,8 @@ public static void DropToLow() {
         long lastCpuMs = 0L;
         var exitCode = 1;
         var providerSessionId = NormalizeProviderSessionId(parameters.ProviderSessionId);
+        var stdoutSessionCapture = new ProviderSessionCaptureState();
+        var stderrSessionCapture = new ProviderSessionCaptureState();
         var prepStarted = false;
         var prepExitWritten = false;
         Process? worker = null;
@@ -970,7 +973,12 @@ public static void DropToLow() {
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
-            providerSessionId ??= TryCaptureProviderSessionId(parameters.Provider, parameters.StdoutPath, parameters.StderrPath);
+            providerSessionId ??= TryCaptureProviderSessionId(
+                parameters.Provider,
+                parameters.StdoutPath,
+                parameters.StderrPath,
+                stdoutSessionCapture,
+                stderrSessionCapture);
 
             if (HasProgressed(lastStdoutBytes + lastStderrBytes, stdoutBytes + stderrBytes, lastCpuMs, ownedCpuMs, CpuProgressEpsilonMs))
             {
@@ -999,6 +1007,9 @@ public static void DropToLow() {
                 stderrBytes,
                 ownedCpuMs,
                 providerSessionId,
+                sessionCaptureStdoutOffset = stdoutSessionCapture.Offset,
+                sessionCaptureStderrOffset = stderrSessionCapture.Offset,
+                sessionCaptureGaveUp = stderrSessionCapture.GaveUp,
                 worktreeHeadSha = parameters.WorktreeHeadSha,
                 dirtyStateHash = parameters.DirtyStateHash,
                 exitFileExists = File.Exists(parameters.ExitCodePath)
@@ -1230,43 +1241,119 @@ public static void DropToLow() {
         }
     }
 
-    private static string? TryCaptureProviderSessionId(WorkerSandboxProvider provider, string stdoutPath, string stderrPath)
+    private static string? TryCaptureProviderSessionId(
+        WorkerSandboxProvider provider,
+        string stdoutPath,
+        string stderrPath,
+        ProviderSessionCaptureState stdoutState,
+        ProviderSessionCaptureState stderrState)
     {
         if (provider != WorkerSandboxProvider.Codex)
         {
             return null;
         }
 
-        return TryCaptureProviderSessionIdFromLog(stdoutPath) ??
-            TryCaptureProviderSessionIdFromLog(stderrPath);
+        if (stderrState.GaveUp)
+        {
+            return null;
+        }
+
+        return TryCaptureProviderSessionIdFromLog(stdoutPath, stdoutState) ??
+            TryCaptureProviderSessionIdFromLog(stderrPath, stderrState);
     }
 
-    private static string? TryCaptureProviderSessionIdFromLog(string path)
+    internal static string? TryCaptureProviderSessionIdFromLog(
+        string path,
+        ProviderSessionCaptureState state)
     {
-        try
+        lock (state)
         {
-            if (!File.Exists(path))
+            if (state.GaveUp)
             {
                 return null;
             }
 
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            try
             {
-                if (TryCaptureProviderSessionIdFromLine(line, out var sessionId))
+                if (!File.Exists(path))
                 {
-                    return sessionId;
+                    return null;
+                }
+
+                var currentLength = new FileInfo(path).Length;
+                if (currentLength == state.Offset)
+                {
+                    return null;
+                }
+
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (stream.Length < state.Offset)
+                {
+                    state.Reset();
+                }
+
+                var remaining = ProviderSessionCaptureByteLimit - state.InspectedBytes;
+                if (remaining <= 0)
+                {
+                    state.GaveUp = true;
+                    return null;
+                }
+
+                stream.Seek(state.Offset, SeekOrigin.Begin);
+                var requested = (int)Math.Min(remaining, Math.Max(0, stream.Length - state.Offset));
+                if (requested == 0)
+                {
+                    return null;
+                }
+
+                var buffer = new byte[requested];
+                var read = stream.Read(buffer, 0, buffer.Length);
+                state.Offset += read;
+                state.InspectedBytes += read;
+                var text = state.PendingText + Encoding.UTF8.GetString(buffer, 0, read);
+                foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (TryCaptureProviderSessionIdFromLine(line, out var sessionId))
+                    {
+                        return sessionId;
+                    }
+                }
+
+                var lastLineBreak = text.LastIndexOfAny(['\r', '\n']);
+                state.PendingText = lastLineBreak >= 0 ? text[(lastLineBreak + 1)..] : text;
+                if (state.PendingText.Length > 2048)
+                {
+                    state.PendingText = state.PendingText[^2048..];
+                }
+
+                if (state.InspectedBytes >= ProviderSessionCaptureByteLimit)
+                {
+                    state.GaveUp = true;
                 }
             }
-        }
-        catch
-        {
-            // Session capture is best-effort; a missing id simply forces future resume attempts fresh.
-        }
+            catch
+            {
+                // Session capture is best-effort; a missing id simply forces future resume attempts fresh.
+            }
 
-        return null;
+            return null;
+        }
+    }
+
+    internal sealed class ProviderSessionCaptureState
+    {
+        public long Offset { get; set; }
+        public int InspectedBytes { get; set; }
+        public bool GaveUp { get; set; }
+        public string PendingText { get; set; } = string.Empty;
+
+        public void Reset()
+        {
+            Offset = 0;
+            InspectedBytes = 0;
+            GaveUp = false;
+            PendingText = string.Empty;
+        }
     }
 
     internal static bool TryCaptureProviderSessionIdFromLine(string line, out string sessionId)

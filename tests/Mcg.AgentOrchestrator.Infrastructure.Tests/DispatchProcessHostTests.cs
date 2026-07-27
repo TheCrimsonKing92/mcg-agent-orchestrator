@@ -65,6 +65,25 @@ public sealed class DispatchProcessHostTests
         Assert.False(DispatchProcessHost.TryCaptureProviderSessionIdFromLine("tokens used: 1", out _));
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_session_capture_advances_offset_and_gives_up_after_64KiB")]
+    public void DispatchProcessHostSessionCaptureAdvancesOffsetAndGivesUpAfterLimit()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "codex.stderr.log");
+        File.WriteAllText(path, new string('x', DispatchProcessHost.ProviderSessionCaptureByteLimit + 4096));
+        var state = new DispatchProcessHost.ProviderSessionCaptureState();
+
+        var sessionId = DispatchProcessHost.TryCaptureProviderSessionIdFromLog(path, state);
+        var offsetAfterFirstRead = state.Offset;
+        var second = DispatchProcessHost.TryCaptureProviderSessionIdFromLog(path, state);
+
+        Assert.Null(sessionId);
+        Assert.Null(second);
+        Assert.Equal(DispatchProcessHost.ProviderSessionCaptureByteLimit, offsetAfterFirstRead);
+        Assert.Equal(offsetAfterFirstRead, state.Offset);
+        Assert.True(state.GaveUp);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_large_non_ascii_prompt_to_stdin_as_utf8_without_bom")]
     public void DispatchProcessHostWritesPromptToStdinAsUtf8()
     {

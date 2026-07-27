@@ -143,11 +143,12 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     public ProgressiveReviewGlanceObservationResult Observe(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<Goal> goals,
-        IReadOnlyList<TaskDurationStatsRecord>? durationStats = null)
+        IReadOnlyList<TaskDurationStatsRecord>? durationStats = null,
+        Func<TaskSpec, DispatchLiveChangeSnapshot>? liveChanges = null)
     {
         try
         {
-            return ObserveCore(kernel, goals, durationStats);
+            return ObserveCore(kernel, goals, durationStats, liveChanges);
         }
         catch (Exception ex)
         {
@@ -160,7 +161,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private ProgressiveReviewGlanceObservationResult ObserveCore(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<Goal> goals,
-        IReadOnlyList<TaskDurationStatsRecord>? durationStats)
+        IReadOnlyList<TaskDurationStatsRecord>? durationStats,
+        Func<TaskSpec, DispatchLiveChangeSnapshot>? liveChanges)
     {
         var lines = new List<string>();
         var mutated = HarvestCompleted(lines);
@@ -180,7 +182,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
                     return new ProgressiveReviewGlanceObservationResult(mutated, lines);
                 }
 
-                TryStartGlance(goal, task, durationStats ?? [], lines);
+                TryStartGlance(goal, task, durationStats ?? [], lines, liveChanges);
             }
         }
 
@@ -275,7 +277,8 @@ Transcript tail:
         Goal goal,
         TaskSpec task,
         IReadOnlyList<TaskDurationStatsRecord> durationStats,
-        List<string> lines)
+        List<string> lines,
+        Func<TaskSpec, DispatchLiveChangeSnapshot>? liveChanges)
     {
         var roundKey = RoundKey(goal, task);
         var state = GetRoundState(roundKey);
@@ -284,7 +287,19 @@ Transcript tail:
             return;
         }
 
-        var snapshot = _liveChanges(task.LastDispatch!.WorkingDirectory, task.LastDispatch.BaseCommit);
+        var now = _utcNow();
+        var elapsed = now - task.LastDispatch!.DispatchedAt;
+        var elapsedTriggerDue = elapsed >= state.NextElapsedThreshold;
+        if (!elapsedTriggerDue &&
+            state.LastChangeProbeAt is { } lastProbe &&
+            now - lastProbe < TimeSpan.FromSeconds(ConductorWatchProgressReporter.DefaultThrottleSeconds))
+        {
+            return;
+        }
+
+        var snapshot = liveChanges?.Invoke(task) ??
+            _liveChanges(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit);
+        state.LastChangeProbeAt = now;
         ProgressiveReviewGlanceTriggerKind? trigger = null;
         string triggerDetail = string.Empty;
         if (!state.FileCountTriggered && snapshot.Files.Count >= _options.ChangedFileThreshold)
@@ -295,7 +310,6 @@ Transcript tail:
         }
         else
         {
-            var elapsed = _utcNow() - task.LastDispatch.DispatchedAt;
             if (elapsed >= state.NextElapsedThreshold)
             {
                 trigger = ProgressiveReviewGlanceTriggerKind.Elapsed;
@@ -1161,6 +1175,7 @@ Corrective direction:
         public int FiredCount { get; set; }
         public bool FileCountTriggered { get; set; }
         public TimeSpan NextElapsedThreshold { get; set; }
+        public DateTimeOffset? LastChangeProbeAt { get; set; }
         public bool ConcernsSurfaced { get; set; }
         public List<string> QueuedConcerns { get; } = [];
     }

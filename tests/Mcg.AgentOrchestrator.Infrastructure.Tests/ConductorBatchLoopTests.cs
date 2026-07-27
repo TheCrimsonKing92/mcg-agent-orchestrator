@@ -3696,11 +3696,13 @@ public sealed class ConductorBatchLoopTests
 
             var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
             var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var cacheJson = File.ReadAllText(Path.Combine(root, ".orchestrator", "terminal-goal-sweep-cache.json"));
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, first.CacheHitCount);
             Assert.Equal(0, second.CacheMissCount);
             Assert.Equal(1, second.CacheHitCount);
+            Assert.DoesNotContain(Environment.NewLine + "  ", cacheJson, StringComparison.Ordinal);
         }
         finally
         {
@@ -6604,7 +6606,7 @@ public sealed class ConductorBatchLoopTests
 
         Assert.False(appendedImmediately);
         Assert.Single(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
 
         writer.Append("loop-stop", null, "LOOP_STOP tick=2 reason=test");
@@ -6620,7 +6622,7 @@ public sealed class ConductorBatchLoopTests
             record.Detail.Contains("continuing=true", StringComparison.Ordinal));
         Assert.Contains(records, record => record.EventKind == "loop-stop");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
@@ -6675,7 +6677,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0001");
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
@@ -6747,7 +6749,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record => record.EventKind == "gate-total" && record.GoalId == "goal0001");
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 

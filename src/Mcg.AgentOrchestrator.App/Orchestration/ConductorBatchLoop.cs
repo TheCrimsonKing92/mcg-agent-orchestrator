@@ -540,6 +540,23 @@ internal sealed class ConductorBatchLoop
 
             var changedGoalLines = new List<string>();
             var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds);
+            var liveChangeSnapshots = new Dictionary<(string Worktree, string? BaseCommit), DispatchLiveChangeSnapshot>();
+
+            DispatchLiveChangeSnapshot LiveChangesFor(TaskSpec task)
+            {
+                var dispatch = task.LastDispatch!;
+                var key = (dispatch.WorkingDirectory, dispatch.BaseCommit);
+                if (!liveChangeSnapshots.TryGetValue(key, out var snapshot))
+                {
+                    snapshot = GoalChangesReader.BuildLiveDispatchSnapshot(
+                        dispatch.WorkingDirectory,
+                        dispatch.BaseCommit,
+                        displayLimit: 3);
+                    liveChangeSnapshots[key] = snapshot;
+                }
+
+                return snapshot;
+            }
 
             var tickAdvanced = 0;
             var tickHeld = 0;
@@ -646,7 +663,11 @@ internal sealed class ConductorBatchLoop
                         _refreshGoalDispatchesBeforeAdvance(kernel, goal);
                         if (_progressiveReviewGlances is not null && watchInterval is not null)
                         {
-                            var glanceResult = _progressiveReviewGlances.Observe(kernel, [goal], glanceDurationStats);
+                            var glanceResult = _progressiveReviewGlances.Observe(
+                                kernel,
+                                [goal],
+                                glanceDurationStats,
+                                LiveChangesFor);
                             foreach (var line in glanceResult.ProgressLines)
                             {
                                 EmitProgress(line, tickLines);
@@ -781,7 +802,20 @@ internal sealed class ConductorBatchLoop
             {
                 foreach (var goal in eligible)
                 {
-                    foreach (var line in _watchProgressReporter.BuildLines(goal, quiet, policy, watchInterval, stallWarningThreshold))
+                    var activeTask = goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true }) ??
+                        goal.Tasks.FirstOrDefault(task => task.Status == WorkTaskStatus.Running && task.LastDispatch is not null) ??
+                        goal.Tasks.FirstOrDefault(task => task.LastDispatch is not null && task.Status is WorkTaskStatus.Assigned);
+                    var cachedLiveChanges = activeTask?.LastDispatch is { } dispatch &&
+                        liveChangeSnapshots.TryGetValue((dispatch.WorkingDirectory, dispatch.BaseCommit), out var snapshot)
+                            ? snapshot
+                            : null;
+                    foreach (var line in _watchProgressReporter.BuildLines(
+                        goal,
+                        quiet,
+                        policy,
+                        watchInterval,
+                        stallWarningThreshold,
+                        cachedLiveChanges))
                     {
                         EmitProgress(line, tickLines);
                     }

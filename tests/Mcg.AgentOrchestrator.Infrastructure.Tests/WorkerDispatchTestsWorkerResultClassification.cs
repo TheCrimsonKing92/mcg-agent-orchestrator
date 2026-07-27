@@ -694,6 +694,113 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("wrapper appears hung after codex final output", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_idle_guard_skips_log_reads_before_timeout")]
+    public void BackgroundDispatchRunnerCodexIdleGuardSkipsLogReadsBeforeTimeout()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-11T16:10:00Z");
+    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(stderr, "Tokens used: input=123 output=45");
+    File.SetLastWriteTimeUtc(stdout, now.AddSeconds(-10).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddSeconds(-10).UtcDateTime);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Guard log read before codex idle timeout");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-1)));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+        999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-1), null, null));
+    var opens = 0;
+    var runner = new BackgroundDispatchRunner(
+        new TestClock(now),
+        TimeSpan.FromMinutes(2),
+        _ => true,
+        openLogReadStream: path =>
+        {
+            opens++;
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        });
+
+    var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Null(outcome.Verification);
+    Assert.Equal(0, opens);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_memoizes_unchanged_active_process_logs")]
+    public void BackgroundDispatchRunnerMemoizesUnchangedActiveProcessLogs()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-11T16:10:00Z");
+    File.WriteAllText(stdout, "still working");
+    File.WriteAllText(stderr, "no final marker");
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Memoize unchanged active logs");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+        999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+    var opens = 0;
+    var runner = new BackgroundDispatchRunner(
+        new TestClock(now),
+        TimeSpan.FromMinutes(2),
+        _ => true,
+        openLogReadStream: path =>
+        {
+            opens++;
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        });
+
+    Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+    Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+
+    Assert.Equal(2, opens);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_completion_reads_each_log_once_and_shares_payload_strings")]
+    public void BackgroundDispatchRunnerCompletionReadsEachLogOnceAndSharesPayloadStrings()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdout, "completed output");
+    File.WriteAllText(stderr, "completed error");
+    File.WriteAllText(exit, "0");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Read completion logs once");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(
+        999999, "fake-cmd", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+    var opens = 0;
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: _ => false,
+        openLogReadStream: path =>
+        {
+            opens++;
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        });
+
+    var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(2, opens);
+    Assert.NotNull(outcome.Verification);
+    Assert.NotNull(outcome.DiagnosticPayload);
+    Assert.Same(outcome.Verification!.StandardOutput, outcome.DiagnosticPayload!.StandardOutput);
+    Assert.Same(outcome.Verification.StandardError, outcome.DiagnosticPayload.StandardError);
+}
+
     [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_refresh_uses_provider_identity_for_codex_exit_file_behavior")]
     [Xunit.InlineData("codex-cli", "subscription worker prompt", true)]
     [Xunit.InlineData("claude-cli", "claude prompt", false)]
@@ -770,6 +877,86 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(File.Exists(exit));
     Assert.Contains("no observable progress", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("heartbeat state=running", task.LastVerification.StandardError, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_progress_stall_idle_guard_skips_worktree_inspection")]
+    public void BackgroundDispatchRunnerProgressStallIdleGuardSkipsWorktreeInspection()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+    File.WriteAllText(stdout, "worker output");
+    File.WriteAllText(stderr, string.Empty);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Skip worktree inspection before stall bound");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-5)));
+    var process = new TaskProcessRecord(
+        999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(process, now.AddMinutes(-1), now.AddMinutes(-1), "running", 12, 0, childPid: 4242);
+    var inspections = 0;
+    var runner = new BackgroundDispatchRunner(
+        new TestClock(now),
+        isStillRunning: _ => true,
+        progressStallTimeout: TimeSpan.FromMinutes(10),
+        beforeGoalWorktreeInspection: () => inspections++);
+
+    var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Null(outcome.Verification);
+    Assert.Equal(0, inspections);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_cycle_reuses_worktree_inspection")]
+    public void BackgroundDispatchRunnerRefreshCycleReusesWorktreeInspection()
+{
+    var root = CreateSeededDispatchRepository();
+    try
+    {
+        var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Reuse worktree facts within one refresh cycle");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.AppendAllText(Path.Combine(worktree, "README.md"), Environment.NewLine + "dirty");
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, "worker output");
+        File.WriteAllText(stderr, string.Empty);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "claude-cli",
+            "claude prompt",
+            worktree,
+            now.AddMinutes(-40)));
+        var process = new TaskProcessRecord(
+            999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-40), null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 12, 0, childPid: 4242);
+        var inspections = 0;
+        var runner = new BackgroundDispatchRunner(
+            new TestClock(now),
+            isStillRunning: _ => true,
+            progressStallTimeout: TimeSpan.FromMinutes(10),
+            beforeGoalWorktreeInspection: () => inspections++);
+
+        Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+        Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+        Assert.Equal(1, inspections);
+
+        runner.BeginRefreshCycle();
+        Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+        Assert.Equal(2, inspections);
+    }
+    finally
+    {
+        _ = GoalWorktrees.DeleteDirectory(root);
+    }
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_refresh_records_WORKER_RESULT_blocker_as_task_failure_without_subscription_retry")]
