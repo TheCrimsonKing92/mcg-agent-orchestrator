@@ -480,6 +480,17 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.DoesNotContain(@"slots\operator-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain(@"operators\worker-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"Join-Path $leaseRoot ""lease.lock""", source, StringComparison.Ordinal);
+        Assert.Contains("Assert-CustodyAllowsTakeover -ArtifactsPath $Path", source, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "InvokeTestSummary_preserves_absolute_solution_project_paths_for_MTP_detection")]
+    public void InvokeTestSummaryPreservesAbsoluteSolutionProjectPathsForMtpDetection()
+    {
+        var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-TestSummary.ps1"));
+
+        Assert.Contains("[System.IO.Path]::IsPathRooted($_)", source, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Path]::GetFullPath($_)", source, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]

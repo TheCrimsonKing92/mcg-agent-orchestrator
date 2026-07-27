@@ -1155,6 +1155,7 @@ internal static partial class CliCommandHandlers
         }
 
         lease.ReleaseExecutionLock();
+        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
     }
 
     private static bool RunStableSlotMtpTest(

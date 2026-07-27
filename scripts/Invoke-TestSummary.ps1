@@ -69,7 +69,12 @@ else {
     @($Target)
 }
 $usesMtp = @($mtpTargets | Where-Object {
-    $candidate = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $_))
+    $candidate = if ([System.IO.Path]::IsPathRooted($_)) {
+        [System.IO.Path]::GetFullPath($_)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $repoRoot $_))
+    }
     (Test-Path -LiteralPath $candidate -PathType Leaf) -and
         (Select-String -LiteralPath $candidate -SimpleMatch '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>' -Quiet)
 }).Count -eq $mtpTargets.Count

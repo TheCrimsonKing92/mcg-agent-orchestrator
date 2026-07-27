@@ -166,6 +166,114 @@ function Test-OwnerMarkerMatches {
     }
 }
 
+function Test-CustodyMarkerIsLive {
+    param([object]$Marker)
+
+    if ($null -eq $Marker -or [string]::IsNullOrWhiteSpace([string]$Marker.attemptId)) {
+        return $false
+    }
+
+    $hintPath = [string]$Marker.livenessCheckHint
+    if (-not [string]::IsNullOrWhiteSpace($hintPath) -and
+        (Test-Path -LiteralPath $hintPath -PathType Leaf)) {
+        try {
+            $attempt = Get-Content -LiteralPath $hintPath -Raw | ConvertFrom-Json
+            if (-not [string]::Equals(
+                    [string]$attempt.attemptId,
+                    [string]$Marker.attemptId,
+                    [System.StringComparison]::Ordinal)) {
+                return $false
+            }
+
+            $numericOutcome = 0
+            $outcomeText = [string]$attempt.outcome
+            $isRunning = [string]::Equals(
+                $outcomeText,
+                "Running",
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([int]::TryParse($outcomeText, [ref]$numericOutcome) -and $numericOutcome -eq 0)
+            if (-not $isRunning) {
+                return $false
+            }
+
+            $ownerProcessId = [int]$attempt.ownerProcessId
+            if (-not [string]::Equals(
+                    [string]$Marker.machineName,
+                    [Environment]::MachineName,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                $lastHeartbeatAt = [DateTimeOffset]::MinValue
+                return [DateTimeOffset]::TryParse([string]$attempt.lastHeartbeatAt, [ref]$lastHeartbeatAt) -and
+                    ([DateTimeOffset]::UtcNow - $lastHeartbeatAt) -le [TimeSpan]::FromMinutes(2)
+            }
+
+            $owner = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+            if ($null -eq $owner) {
+                return $false
+            }
+
+            $acquiredAt = [DateTimeOffset]::MinValue
+            return -not [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt) -or
+                $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
+        }
+        catch {
+            # Protect a live owner while its atomic lifecycle record is briefly unavailable.
+        }
+    }
+
+    try {
+        $acquiredAt = [DateTimeOffset]::MinValue
+        $hasAcquiredAt = [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt)
+        if (-not [string]::Equals(
+                [string]$Marker.machineName,
+                [Environment]::MachineName,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $hasAcquiredAt -and
+                ([DateTimeOffset]::UtcNow - $acquiredAt) -le [TimeSpan]::FromHours(6)
+        }
+
+        $owner = Get-Process -Id ([int]$Marker.ownerProcessId) -ErrorAction SilentlyContinue
+        if ($null -eq $owner) {
+            return $false
+        }
+
+        return -not $hasAcquiredAt -or
+            $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Assert-CustodyAllowsTakeover {
+    param([string]$ArtifactsPath)
+
+    $custodyPath = Join-Path $ArtifactsPath ".mcg-artifacts-custody.json"
+    if (-not (Test-Path -LiteralPath $custodyPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $custodyPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:MCG_ACCEPTANCE_GATE_ATTEMPT_ID) -and
+        [string]::Equals(
+            [string]$marker.attemptId,
+            $env:MCG_ACCEPTANCE_GATE_ATTEMPT_ID,
+            [System.StringComparison]::Ordinal)) {
+        return
+    }
+
+    if (Test-CustodyMarkerIsLive -Marker $marker) {
+        throw (
+            "Artifact slot takeover refused because acceptance attempt '$([string]$marker.attemptId)' " +
+            "has live custody of '$ArtifactsPath'. Wait for the acceptance attempt to reach a terminal state before retrying.")
+    }
+}
+
 function Initialize-ArtifactsDirectory {
     param(
         [string]$Path,
@@ -176,6 +284,7 @@ function Initialize-ArtifactsDirectory {
     $ownerPath = Join-Path $Path ".mcg-artifacts-owner.json"
     $hasEntries = (Test-Path -LiteralPath $Path) -and $null -ne (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))) {
+        Assert-CustodyAllowsTakeover -ArtifactsPath $Path
         Clear-ArtifactsDirectory -Path $Path
     }
     else {
@@ -229,21 +338,6 @@ $artifactsPath = Join-Path $runRoot "artifacts"
 $executionLockPath = Join-Path $isolatedRoot "build-slots\$buildSlotName.lock"
 New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
 
-$lockPath = Join-Path $leaseRoot "lease.lock"
-$staleLockCleared = $false
-if (Test-Path -LiteralPath $lockPath) {
-    $lockText = (Get-Content -LiteralPath $lockPath -Raw).Trim()
-    $lockPid = 0
-    if ([int]::TryParse($lockText, [ref]$lockPid)) {
-        $lockProcess = Get-Process -Id $lockPid -ErrorAction SilentlyContinue
-        if ($null -eq $lockProcess) {
-            Remove-Item -LiteralPath $lockPath -Force
-            $staleLockCleared = $true
-        }
-    }
-}
-
-Set-Content -LiteralPath $lockPath -Value ([string]$PID)
 $metadata = [ordered]@{
     version = 1
     goalPrefix = $safeGoalPrefix
@@ -254,7 +348,7 @@ $metadata = [ordered]@{
     machineName = $env:COMPUTERNAME
     lastUsedAt = (Get-Date).ToUniversalTime().ToString("o")
     lastAttemptName = "worker-build-check"
-    staleLockCleared = $staleLockCleared
+    staleLockCleared = $false
 }
 ($metadata | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath (Join-Path $leaseRoot "lease.json")
 
@@ -283,7 +377,7 @@ try {
         try {
             $lockStream.Lock(0, 1)
             $lockHeld = $true
-            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $staleLockCleared
+            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $false
         }
         catch [System.IO.IOException] {
             $lockStream.Dispose()
