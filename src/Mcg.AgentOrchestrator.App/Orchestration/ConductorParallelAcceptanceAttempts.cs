@@ -427,8 +427,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             run = _tryRunPreSlot?.Invoke(candidate, policy);
             if (run is null)
             {
-                stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
-                run = RunWithAttemptTelemetryContext(attempt, candidate, policy, stableSlotLease, runAcceptance);
+                run = RunWithAttemptTelemetryContext(
+                    attempt,
+                    candidate,
+                    policy,
+                    runAcceptance,
+                    lease =>
+                    {
+                        stableSlotLease = lease;
+                        AcceptanceAttemptArtifactCustody.Write(
+                            lease.Environment.ArtifactsPath,
+                            attempt.AttemptId,
+                            attempt.MetadataPath,
+                            Environment.ProcessId);
+                    });
             }
         }
         catch (OperationCanceledException ex)
@@ -459,10 +471,17 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
             finally
             {
-                if (stableSlotLease is not null)
+                try
                 {
-                    stableSlotLease.Dispose();
-                    EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+                    AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attempt.AttemptId);
+                }
+                finally
+                {
+                    if (stableSlotLease is not null)
+                    {
+                        stableSlotLease.Dispose();
+                        EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+                    }
                 }
             }
         }
@@ -543,23 +562,41 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         throw new InvalidOperationException("Unknown dotnet build lease acquisition result.");
     }
 
-    private static ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
+    private ConductorParallelAcceptanceRunResult RunWithAttemptTelemetryContext(
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        DotnetBuildEnvironmentLease stableSlotLease,
-        ConductorParallelAcceptanceRunAcceptance runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance,
+        Action<DotnetBuildEnvironmentLease> leaseAcquired)
     {
         var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var previousAttemptId = Environment.GetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.AttemptIdVariable);
+        var previousLivenessHint = Environment.GetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
         Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
+        Environment.SetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.AttemptIdVariable,
+            attempt.AttemptId);
+        Environment.SetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
+            attempt.MetadataPath);
         try
         {
+            var stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
+            leaseAcquired(stableSlotLease);
             return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
         }
         finally
         {
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
+            Environment.SetEnvironmentVariable(
+                AcceptanceAttemptArtifactCustody.AttemptIdVariable,
+                previousAttemptId);
+            Environment.SetEnvironmentVariable(
+                AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
+                previousLivenessHint);
         }
     }
 
@@ -1336,6 +1373,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             foreach (var path in Directory.EnumerateFiles(directory, Path.GetFileName(prefix) + ".*"))
             {
                 TryDeleteFile(path);
+            }
+
+            var receiptDirectory = prefix + ".receipts";
+            if (Directory.Exists(receiptDirectory))
+            {
+                try
+                {
+                    Directory.Delete(receiptDirectory, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Console.Error.WriteLine(
+                        $"ATTEMPT_RECEIPT_PRUNE_FAILED path=\"{receiptDirectory}\" error=\"{ex.Message}\"");
+                }
             }
         }
     }

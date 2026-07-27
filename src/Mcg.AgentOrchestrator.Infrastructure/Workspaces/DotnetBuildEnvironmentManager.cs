@@ -200,6 +200,9 @@ public static class DotnetBuildEnvironmentManager
         return StableSlotArtifactsPath($"slot-{slotIndex}");
     }
 
+    internal static string ManualSlotArtifactsPath() =>
+        StableSlotArtifactsPath("manual");
+
     public static IReadOnlyList<string> StableSlotBuildArguments(int slotIndex)
     {
         return BuildArguments(StableSlotArtifactsPath(slotIndex));
@@ -575,7 +578,10 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed, currentProcessOwnsExecutionLease: true);
+                    PrepareArtifactsDirectory(
+                        environment,
+                        staleExecutionLeaseReclaimed: reclaimed,
+                        currentProcessOwnsExecutionLease: true);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -994,7 +1000,7 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed);
+                    PrepareArtifactsDirectory(environment, staleExecutionLeaseReclaimed: reclaimed);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -1038,6 +1044,18 @@ public static class DotnetBuildEnvironmentManager
         ref bool attemptedOwnedProcessRemediation,
         out BuildLockAttribution attribution)
     {
+        if (exception is AcceptanceAttemptArtifactCustodyException custody)
+        {
+            attribution = new BuildLockAttribution(
+                custody.ArtifactsPath,
+                [],
+                "acceptance-attempt-custody",
+                "artifact-prep",
+                "prepare-artifacts");
+            LockAttribution.EmitReceipt(attribution);
+            return ArtifactPrepLockRemediation.SlotBusy;
+        }
+
         var lockedPath = LockAttribution.TryExtractLockedPath(exception.ToString()) ?? environment.ArtifactsPath;
         if (LockAttribution.IsLeaseLockPath(lockedPath))
         {
@@ -1216,15 +1234,22 @@ public static class DotnetBuildEnvironmentManager
 
     private static void PrepareArtifactsDirectory(
         DotnetBuildEnvironment environment,
-        bool forceClean = false,
+        bool staleExecutionLeaseReclaimed = false,
         bool currentProcessOwnsExecutionLease = false)
     {
         PrepareArtifactsDirectoryForTests?.Invoke(environment);
-        var clean = forceClean || environment.StaleLockCleared;
+        var clean = staleExecutionLeaseReclaimed || environment.StaleLockCleared;
         var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
         if (Directory.Exists(environment.ArtifactsPath) && Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())
         {
             clean |= !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
+        }
+
+        if (clean)
+        {
+            AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
+                environment.ArtifactsPath,
+                Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
         }
 
         if (clean && Directory.Exists(environment.ArtifactsPath))
@@ -1253,6 +1278,17 @@ public static class DotnetBuildEnvironmentManager
 
         Directory.CreateDirectory(environment.ArtifactsPath);
         WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
+        var attemptId = Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
+        var livenessCheckHint = Environment.GetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
+        if (!string.IsNullOrWhiteSpace(attemptId) && !string.IsNullOrWhiteSpace(livenessCheckHint))
+        {
+            AcceptanceAttemptArtifactCustody.Write(
+                environment.ArtifactsPath,
+                attemptId,
+                livenessCheckHint,
+                Environment.ProcessId);
+        }
     }
 
     private static bool OwnerMarkerMatches(string ownerPath, string expectedToken)
@@ -1574,6 +1610,7 @@ public static class DotnetBuildEnvironmentManager
         try
         {
             File.Delete(environment.ExecutionLockPath);
+            AcceptanceAttemptArtifactCustody.ClearIfStale(environment.ArtifactsPath);
             EmitLeaseReceipt("LEASE_RECLAIM", environment, processId);
             return true;
         }
