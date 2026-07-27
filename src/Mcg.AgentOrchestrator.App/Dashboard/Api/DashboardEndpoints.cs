@@ -78,6 +78,7 @@ internal static partial class DashboardEndpoints
         goals.MapGet("/transcript", (string goalId) => Safe(() => GetGoalTranscriptAsync(goalId, services)));
         goals.MapGet("/subscription-plan", (string goalId) => Safe(() => GetSubscriptionPlanAsync(goalId, services)));
         goals.MapGet("/work-summary", (string goalId) => Safe(() => GetGoalWorkSummaryAsync(goalId, services)));
+        goals.MapGet("/operator-intents", (string goalId) => Safe(() => GetGoalOperatorIntentsAsync(goalId, services)));
         goals.MapGet("/failure-triage", (HttpContext context, string goalId) => Safe(() => GetFailureTriageAsync(context, goalId, services)));
         goals.MapGet("/action-recommendations", (HttpContext context, string goalId) => Safe(() => GetActionRecommendationsAsync(context, goalId, services)));
         if (args.EnableOperatorControls)
@@ -121,6 +122,7 @@ internal static partial class DashboardEndpoints
         api.MapGet("/human-input-worklist", async Task<IResult> (HttpContext context) => await Safe(() => GetHumanInputWorklistAsync(context, services)));
         api.MapGet("/next", async Task<IResult> (HttpContext context) => await Safe(() => GetNextActionsAsync(context, services)));
         api.MapGet("/operator-inbox", async Task<IResult> (HttpContext context) => await Safe(() => GetOperatorInboxAsync(context, services)));
+        api.MapGet("/operator-intents/{intentId}", (string intentId) => Safe(() => GetOperatorIntentAsync(intentId, services)));
         api.MapGet("/source-survey", async Task<IResult> (HttpContext context) => await Safe(() => GetSourceSurvey(context, services)));
         api.MapGet("/pending-input", async Task<IResult> (HttpContext context) => await Safe(() => GetPendingInputAsync(context, services)));
         if (args.EnableOperatorControls)

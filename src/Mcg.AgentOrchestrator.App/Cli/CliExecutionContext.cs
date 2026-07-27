@@ -164,6 +164,11 @@ internal interface ICliGoalWorktreeService
         AgentOrchestratorKernel? kernel = null,
         int? gitTimeoutMilliseconds = null);
 
+    GoalWorktreeRemoveResult RemoveTerminalNow(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel kernel);
+
     bool IsGitWorkTree(string executionDirectory);
 
     GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId);
@@ -209,6 +214,12 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         gitTimeoutMilliseconds is { } timeout
             ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
             : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+
+    public GoalWorktreeRemoveResult RemoveTerminalNow(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel kernel) =>
+        GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel);
 
     public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 

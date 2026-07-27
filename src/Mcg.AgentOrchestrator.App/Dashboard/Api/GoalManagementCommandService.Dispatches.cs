@@ -684,9 +684,12 @@ private static ProcessBatchExecutionResult StartDispatches(
     return new ProcessBatchExecutionResult(plan, started, recoveryActions);
 }
 
-public static ProcessBatchExecutionResult RefreshDispatches(AgentOrchestratorKernel kernel, Goal goal)
+public static ProcessBatchExecutionResult RefreshDispatches(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    BackgroundDispatchRunner? runner = null)
 {
-    var runner = new BackgroundDispatchRunner();
+    runner ??= new BackgroundDispatchRunner();
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.RefreshDispatches);
     var refreshed = new List<TaskSpec>();
 

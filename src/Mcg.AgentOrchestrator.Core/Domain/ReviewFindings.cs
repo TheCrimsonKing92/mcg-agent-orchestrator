@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -8,6 +9,56 @@ public enum ReviewFindingState
 {
     Open,
     Resolved
+}
+
+[JsonConverter(typeof(FindingSeverityJsonConverter))]
+public enum FindingSeverity
+{
+    Blocking = 0,
+    Advisory = 1
+}
+
+public sealed class FindingSeverityJsonConverter : JsonConverter<FindingSeverity>
+{
+    public override bool HandleNull => true;
+
+    public override FindingSeverity Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var value = reader.GetString();
+            return Enum.TryParse<FindingSeverity>(value, ignoreCase: true, out var severity) &&
+                   Enum.IsDefined(severity)
+                ? severity
+                : FindingSeverity.Blocking;
+        }
+
+        if (reader.TokenType == JsonTokenType.Number &&
+            reader.TryGetInt32(out var numericSeverity) &&
+            Enum.IsDefined(typeof(FindingSeverity), numericSeverity))
+        {
+            return (FindingSeverity)numericSeverity;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject)
+        {
+            using var ignored = JsonDocument.ParseValue(ref reader);
+        }
+
+        return FindingSeverity.Blocking;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        FindingSeverity value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(
+            value == FindingSeverity.Advisory
+                ? nameof(FindingSeverity.Advisory)
+                : nameof(FindingSeverity.Blocking));
 }
 
 public sealed record ReviewFindingLocation(
@@ -25,7 +76,10 @@ public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
     [property: JsonPropertyName("state")] ReviewFindingState State,
     [property: JsonPropertyName("location")] ReviewFindingLocation Location,
-    [property: JsonPropertyName("description")] string Description);
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("severity")]
+    [property: JsonConverter(typeof(FindingSeverityJsonConverter))]
+    FindingSeverity Severity = FindingSeverity.Blocking);
 
 public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
@@ -50,6 +104,112 @@ public sealed class ReviewFindingConvergenceException : InvalidOperationExceptio
     public int PreviousOpenCount { get; }
 
     public int NextOpenCount { get; }
+}
+
+public static class ReviewFindings
+{
+    public static IReadOnlyList<ReviewFinding> GetEffectiveOpenFindings(
+        IEnumerable<ReviewFinding> findings,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections)
+    {
+        TryGetEffectiveOpenFindings(
+            findings,
+            criteriaCorrections,
+            out var effectiveFindings,
+            out _);
+        return effectiveFindings;
+    }
+
+    public static bool TryGetEffectiveOpenFindings(
+        IEnumerable<ReviewFinding> findings,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
+        out IReadOnlyList<ReviewFinding> effectiveFindings,
+        out IReadOnlyList<(ReviewFinding Finding, EffectiveAcceptanceCriteriaCorrection Correction)> suppressedFindings)
+    {
+        ArgumentNullException.ThrowIfNull(findings);
+        ArgumentNullException.ThrowIfNull(criteriaCorrections);
+
+        var result = FilterWaived(
+            findings.Where(finding => finding.State == ReviewFindingState.Open),
+            finding => finding.Description,
+            criteriaCorrections);
+        effectiveFindings = result.Kept;
+        suppressedFindings = result.Suppressed
+            .Select(item => (item.Item, item.Correction))
+            .ToArray();
+        return suppressedFindings.Count > 0;
+    }
+
+    public static IReadOnlyList<ReviewFinding> GetOpenBlockingFindings(
+        IEnumerable<ReviewFinding> findings,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
+        GetEffectiveOpenFindings(findings, criteriaCorrections)
+            .Where(finding => finding.Severity == FindingSeverity.Blocking)
+            .ToArray();
+
+    public static IReadOnlyList<ReviewFinding> GetOpenAdvisoryFindings(
+        IEnumerable<ReviewFinding> findings,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
+        GetEffectiveOpenFindings(findings, criteriaCorrections)
+            .Where(finding => finding.Severity == FindingSeverity.Advisory)
+            .ToArray();
+
+    public static bool TryFilterWaivedDescriptions(
+        IEnumerable<string> findings,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
+        out IReadOnlyList<string> effectiveFindings,
+        out IReadOnlyList<(string Finding, EffectiveAcceptanceCriteriaCorrection Correction)> suppressedFindings)
+    {
+        ArgumentNullException.ThrowIfNull(findings);
+        ArgumentNullException.ThrowIfNull(criteriaCorrections);
+
+        var result = FilterWaived(findings, finding => finding, criteriaCorrections);
+        effectiveFindings = result.Kept;
+        suppressedFindings = result.Suppressed
+            .Select(item => (item.Item, item.Correction))
+            .ToArray();
+        return suppressedFindings.Count > 0;
+    }
+
+    public static bool IsWaived(
+        string finding,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections)
+    {
+        TryFilterWaivedDescriptions(
+            [finding],
+            criteriaCorrections,
+            out _,
+            out var suppressedFindings);
+        return suppressedFindings.Count > 0;
+    }
+
+    private static FilteredFindings<T> FilterWaived<T>(
+        IEnumerable<T> findings,
+        Func<T, string> description,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections)
+    {
+        var kept = new List<T>();
+        var suppressed = new List<(T Item, EffectiveAcceptanceCriteriaCorrection Correction)>();
+        foreach (var finding in findings)
+        {
+            if (EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
+                description(finding),
+                criteriaCorrections,
+                out var correction))
+            {
+                suppressed.Add((finding, correction));
+                continue;
+            }
+
+            kept.Add(finding);
+        }
+
+        return new FilteredFindings<T>(kept, suppressed);
+    }
+
+    private sealed record FilteredFindings<T>(
+        IReadOnlyList<T> Kept,
+        IReadOnlyList<(T Item, EffectiveAcceptanceCriteriaCorrection Correction)> Suppressed);
 }
 
 public static class ReviewFindingConvergence
@@ -109,14 +269,16 @@ public static class ReviewFindingConvergence
 
         foreach (var newFinding in nextById.Values)
         {
-            var priorAtAnchor = previous.FirstOrDefault(prior => SameAnchor(prior.Location, newFinding.Location));
+            var priorAtAnchor = previous.FirstOrDefault(prior =>
+                prior.State == ReviewFindingState.Open &&
+                ExactAnchor(prior.Location, newFinding.Location));
             if (priorAtAnchor is not null)
             {
                 throw new ReviewFindingConvergenceException(
                     RecycledAnchorIdentityViolationCode,
                     CountOpen(previous),
                     CountOpen(nextRound.Findings),
-                    $"Structural anchor '{newFinding.Location}' already belongs to stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.");
+                    $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.");
             }
 
             merged.Add(newFinding);
@@ -126,9 +288,13 @@ public static class ReviewFindingConvergence
         // defect late is doing its job, and rejecting the growth traps it — the structured report would
         // fail an open-set-increase check, a prose-only needs-work fails the no-open-findings rule, and
         // pass would be dishonest. (That trap cost four review rounds on 2026-07-25 before the increase
-        // check was removed.) Re-litigation abuse stays blocked by the remaining guards: a still-open id
-        // cannot move anchors, a resolved id cannot reopen without its anchor being touched, and a retired
-        // anchor cannot be recycled under a new id.
+        // check was removed.) Anchor identity is file+region: hunk line-ranges drift whenever upstream
+        // code is edited, and requiring hunk equality rejected honest re-reports of carried findings six
+        // rounds in a row on 2026-07-27. Recycling is likewise scoped to OPEN priors — a resolved
+        // finding's anchor must be able to host a genuinely new defect under a new id, or that defect
+        // becomes unreportable under any id (the R8/R9 circular trap). Re-litigation abuse stays blocked
+        // by the remaining guards: a still-open id cannot move file/region, a resolved id cannot reopen
+        // without its anchor being touched, and an OPEN finding's exact anchor cannot be re-keyed.
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();
@@ -179,10 +345,64 @@ public static class ReviewFindingConvergence
         IReadOnlyList<ReviewFindingLocation> touchedAnchors) =>
         touchedAnchors.Any(touched => SameAnchor(anchor, touched));
 
-    private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
+    // Identity-level anchor equality: file + canonical region only. Region text is reviewer-authored,
+    // so harmless signature, qualification, whitespace, and casing paraphrases share an identity.
+    // Raw submitted location text remains on the merged finding; normalization is comparison-only.
+    private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right)
+    {
+        if (!string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(left.Region, right.Region, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return string.Equals(
+            NormalizeRegion(left.Region),
+            NormalizeRegion(right.Region),
+            StringComparison.Ordinal);
+    }
+
+    private static string NormalizeRegion(string region)
+    {
+        var normalized = Regex.Replace(region.Trim(), @"\s+", " ").ToLowerInvariant();
+        var withoutArguments = Regex.Replace(
+            normalized,
+            @"\s*\(.*\)\s*$",
+            string.Empty,
+            RegexOptions.Singleline).TrimEnd();
+        if (withoutArguments.Length > 0)
+        {
+            normalized = withoutArguments;
+        }
+
+        var withoutTypeParameters = Regex.Replace(normalized, @"<[^<>]*>\s*$", string.Empty).TrimEnd();
+        if (withoutTypeParameters.Length > 0)
+        {
+            normalized = withoutTypeParameters;
+        }
+
+        if (!normalized.Contains(' '))
+        {
+            var finalSeparator = normalized.LastIndexOf('.');
+            if (finalSeparator >= 0 && finalSeparator < normalized.Length - 1)
+            {
+                normalized = normalized[(finalSeparator + 1)..];
+            }
+        }
+
+        return normalized;
+    }
+
+    // Exact anchor equality (including hunk) — used only by the recycle guard so that a second,
+    // distinct defect in the same region but a different hunk stays reportable under a new id.
+    private static bool ExactAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
         string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.Region, right.Region, StringComparison.Ordinal) &&
-        string.Equals(left.Hunk ?? string.Empty, right.Hunk ?? string.Empty, StringComparison.Ordinal);
+        string.Equals(left.Hunk, right.Hunk, StringComparison.Ordinal);
 
     private static void ValidateFindings(IEnumerable<ReviewFinding> findings)
     {

@@ -14,6 +14,39 @@ using System.Text.Json;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "Worker_preflight_terminal_sweep_cleans_cancelled_worktree_without_starting_paid_process")]
+    public void WorkerPreflightTerminalSweepCleansCancelledWorktreeWithoutStartingPaidProcess()
+    {
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do not dispatch after cancellation.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Cancelled preflight cleanup", [task]);
+            var agent = TestSubscriptionAgent("developer", "Developer", AgentRole.Developer);
+            kernel.ActivateGoal(goal.Id, [agent]);
+            _ = GoalWorktrees.Ensure(root, goal.Id);
+            kernel.CancelGoal(goal.Id, "Cancelled before paid dispatch.");
+
+            var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var readiness = GoalReadinessPreflight.Build(
+                kernel.GetGoal(goal.Id),
+                [agent],
+                root,
+                WorkerProfileCatalog.Default(),
+                GoalWorktrees.TryResolve);
+
+            Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-worktree-cleanup");
+            Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
+            Assert.True(readiness.HasHardBlockers);
+            Assert.All(kernel.GetGoal(goal.Id).Tasks, currentTask => Assert.Null(currentTask.LastProcess));
+        }
+        finally
+        {
+            _ = GoalWorktrees.DeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Reviewer_round_diff_resolves_only_touched_structural_anchor")]
     public void ReviewerRoundDiffResolvesOnlyTouchedStructuralAnchor()
     {

@@ -28,6 +28,11 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
     {
         throw new ArgumentException("Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]");
     }
+    var forceTerminalCleanup = HasCliConfirmation(parts, "--force-terminal-cleanup");
+    if (forceTerminalCleanup && normalizedAction != "remove")
+    {
+        throw new ArgumentException("--force-terminal-cleanup is valid only with workspace remove.");
+    }
 
     var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
     context.CurrentGoal = goal;
@@ -64,7 +69,9 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             GoalWorktreeRemoveResult removeResult;
             try
             {
-                removeResult = context.Worktrees.Remove(executionDirectory, goal.Id, context.Kernel);
+                removeResult = forceTerminalCleanup
+                    ? context.Worktrees.RemoveTerminalNow(executionDirectory, goal.Id, context.Kernel)
+                    : context.Worktrees.Remove(executionDirectory, goal.Id, context.Kernel);
             }
             catch (InvalidOperationException ex)
             {

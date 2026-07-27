@@ -454,6 +454,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             ConsoleViews.PrintGoals(context.Kernel);
+            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(context.Workspace.ExecutionDirectory));
             return false;
 
         case "agents":
@@ -991,9 +992,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
+                var loopReaper = new BackgroundDispatchRunner();
                 var parkedGoalSafetyNetTick = 0;
                 TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
                 {
+                    loopReaper.BeginRefreshCycle();
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
                     // submitted goals. This keeps role handoff decisions tied to durable task status
                     // instead of stale loop-local objects.
@@ -1045,7 +1048,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
                     {
-                        try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); }
+                        try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper); }
                         catch { /* per-goal isolation */ }
                     }
 
@@ -1059,7 +1062,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }
-                var loopReaper = new BackgroundDispatchRunner();
                 using var loopWakeSignal = watchInterval is not null
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
@@ -1068,9 +1070,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
-                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) => { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal); },
+                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                    {
+                        GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
+                    },
                     handoffOnMaxDuration: handoff,
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     selfRelaunch: selfRelaunch,
@@ -1118,6 +1124,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchReaper = new BackgroundDispatchRunner();
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
+                    watchReaper.BeginRefreshCycle();
                     foreach (var resolved in wk.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
                     {
                         Console.WriteLine($"[conduct --watch] Resolved stale human wait {resolved.RequestId.Value[..8]} ({resolved.Kind}) via {resolved.Resolution}.");
@@ -1126,7 +1133,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
                     RemoteGitMirror.TryStartBackgroundProcessing(wk, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
-                    if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g); } catch { } }
+                    if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g, watchReaper); } catch { } }
                 };
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
@@ -1136,8 +1143,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
                     wk => watchReaper.RequeueInterruptedDispatches(wk),
-                    (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal); },
+                    (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal, watchReaper); },
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,

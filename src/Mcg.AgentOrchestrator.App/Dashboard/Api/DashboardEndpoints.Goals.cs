@@ -112,6 +112,9 @@ internal static partial class DashboardEndpoints
         var agents = services.LoadAgentCatalog().Agents;
         var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(services.Workspace.RunEventStorePath, goal);
+        var operatorIntents = OperatorIntentDatabaseExists(services)
+            ? await OperatorIntentStore(services).ListForGoalAsync(goal.Id.Value, limit: 20)
+            : [];
         return Json(DashboardResponseMapper.ToGoalWorkSummaryDto(
             current,
             goal,
@@ -119,8 +122,48 @@ internal static partial class DashboardEndpoints
             agents,
             BuildHostInfo(services),
             services.Workspace.ExecutionDirectory,
-            conductorDisposition: conductorDisposition));
+            conductorDisposition: conductorDisposition,
+            operatorIntents: operatorIntents));
     }
+
+    private static async Task<IResult> GetGoalOperatorIntentsAsync(
+        string goalId,
+        DashboardEndpointServices services)
+    {
+        var current = await LoadAsync(services);
+        var goal = ResolveGoal(current, goalId);
+        if (!OperatorIntentDatabaseExists(services))
+        {
+            return Json(Array.Empty<OperatorIntentDto>());
+        }
+
+        var intents = await OperatorIntentStore(services).ListForGoalAsync(goal.Id.Value, limit: 50);
+        return Json(intents.Select(DashboardResponseMapper.ToOperatorIntentDto).ToList());
+    }
+
+    private static async Task<IResult> GetOperatorIntentAsync(
+        string intentId,
+        DashboardEndpointServices services)
+    {
+        if (!OperatorIntentDatabaseExists(services))
+        {
+            throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
+        }
+
+        var intent = await OperatorIntentStore(services).GetAsync(intentId)
+            ?? throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
+        return Json(DashboardResponseMapper.ToOperatorIntentDto(intent));
+    }
+
+    private static bool OperatorIntentDatabaseExists(DashboardEndpointServices services) =>
+        File.Exists(Path.Combine(
+            services.Workspace.OrchestratorDirectory,
+            SqliteOperatorIntentStore.DatabaseFileName));
+
+    private static SqliteOperatorIntentStore OperatorIntentStore(DashboardEndpointServices services) =>
+        SqliteOperatorIntentStore.OpenExisting(
+            services.Workspace.OrchestratorDirectory,
+            services.Workspace.LogDirectory);
 
     private static async Task<IResult> GetFailureTriageAsync(
         HttpContext context,
@@ -279,6 +322,23 @@ internal static partial class DashboardEndpoints
         if (operation.Equals("refresh", StringComparison.OrdinalIgnoreCase))
         {
             return await RefreshTaskOutsideTransactionAsync(context, goalId, taskId, services, agents, policy);
+        }
+
+        if (GoalManagementCommandService.IsInboxBackedTaskAction(operation))
+        {
+            var current = await LoadAsync(services, context.RequestAborted);
+            var goal = ResolveGoal(current, goalId);
+            var task = OrchestratorEntityResolver.GetTaskByDisplayNumber(goal, taskId);
+            var actionResult = await GoalManagementCommandService.ApplyTaskActionAsync(
+                current,
+                agents,
+                services.Providers,
+                services.Workspace,
+                goal,
+                task,
+                operation,
+                body);
+            return Json(actionResult);
         }
 
         return await MutateAsync(

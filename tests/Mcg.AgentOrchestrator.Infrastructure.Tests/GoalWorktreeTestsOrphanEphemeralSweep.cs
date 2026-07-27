@@ -322,14 +322,15 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_escalates_cleanup_debt_once_with_lock_holders")]
-    public void GoalWorktreesSweepEscalatesCleanupDebtOnceWithLockHolders()
+    [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_escalates_consecutive_failures_and_auto_resolves_after_slow_retry")]
+    public void GoalWorktreesSweepEscalatesConsecutiveFailuresAndAutoResolvesAfterSlowRetry()
     {
         var repo = CreateSeededRepository();
         var originalDelete = GoalWorktrees.DeleteDirectoryForCleanup;
         var originalWarnings = GoalWorktrees.CleanupWarningSink;
         var originalNow = GoalWorktrees.CleanupUtcNow;
         var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        var originalOptions = GoalWorktrees.CleanupOptions;
         var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
         try
         {
@@ -344,26 +345,45 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             GoalWorktrees.CleanupWarningSink = warnings.Add;
             GoalWorktrees.CleanupUtcNow = () => now;
             GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(10);
+            GoalWorktrees.ConfigureCleanup(
+                new GoalWorktreeCleanupOptions(TimeSpan.FromMinutes(5), 3, TimeSpan.FromDays(1)),
+                Path.Combine(repo, ".orchestrator"));
             GoalWorktrees.FindLockHoldersForCleanup = _ =>
             [
                 new WorktreeLockHolder(1234, "dotnet", "dotnet test")
             ];
 
             _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
-            warnings.Clear();
+            now = now.AddMinutes(11);
             _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
-            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
-            _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
+            now = now.AddMinutes(11);
             _ = GoalWorktrees.SweepOrphanedWorktrees(repo);
 
             var escalations = warnings
-                .Where(warning => warning.Operation == "orphan-sweep:cleanup-debt-escalated")
+                .Where(warning => warning.Operation == "cleanup-debt-escalated")
                 .ToList();
             var escalation = Assert.Single(escalations);
             Assert.Contains("dotnet[pid=1234]", escalation.Exception.Message, StringComparison.Ordinal);
             Assert.Contains("dotnet test", escalation.Exception.Message, StringComparison.Ordinal);
-            Assert.Equal(4, CleanupJournalSkipCount(repo, orphanPath));
-            Assert.DoesNotContain(warnings, warning => warning.Operation == "orphan-sweep:skip-backoff");
+            Assert.Equal(3, CleanupJournalSkipCount(repo, orphanPath));
+            var debt = Assert.Single(GoalWorktrees.ListCleanupDebt(repo));
+            Assert.NotNull(debt.EscalatedAtUtc);
+            Assert.Equal(TimeSpan.FromDays(1), debt.RemainingWait);
+            var store = CollaborationItemStore.ForDirectory(Path.Combine(repo, ".orchestrator"));
+            var attention = Assert.Single(store.GetAttentionQueueAsync().GetAwaiter().GetResult());
+            Assert.Contains("Worktree cleanup escalated", attention.Subject, StringComparison.Ordinal);
+
+            GoalWorktrees.DeleteDirectoryForCleanup = _ =>
+            {
+                Directory.Delete(orphanPath, recursive: true);
+                return GoalWorktreeDeleteResult.Success;
+            };
+            now = now.AddDays(1).AddMinutes(1);
+            var recovered = GoalWorktrees.SweepOrphanedWorktrees(repo);
+
+            Assert.Equal(1, recovered.RemovedCount);
+            Assert.Empty(GoalWorktrees.ListCleanupDebt(repo));
+            Assert.Empty(store.GetAttentionQueueAsync().GetAwaiter().GetResult());
         }
         finally
         {
@@ -371,6 +391,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             GoalWorktrees.CleanupWarningSink = originalWarnings;
             GoalWorktrees.CleanupUtcNow = originalNow;
             GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+            GoalWorktrees.ConfigureCleanup(originalOptions);
             GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
             DeleteDirectory(repo);
         }

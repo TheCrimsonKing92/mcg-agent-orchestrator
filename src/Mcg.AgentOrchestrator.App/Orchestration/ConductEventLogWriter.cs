@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -6,10 +7,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductEventLogWriter
 {
     public const string CurrentFileName = "conduct-events.log";
+    internal const string PendingEventsDirectoryName = "pending-events";
     internal const long DefaultMaxBytes = 1_048_576;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly object RequiredEventDrainGate = new();
+    private static readonly ConcurrentDictionary<string, byte> MigratedLegacyPendingPaths =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly string _path;
     private readonly long _maxBytes;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -29,6 +33,7 @@ internal sealed class ConductEventLogWriter
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _beforeRequiredEventDrain = beforeRequiredEventDrain;
         _beforeAppendCommit = beforeAppendCommit;
+        MigrateLegacyPendingEvents();
     }
 
     public string CurrentPath => _path;
@@ -55,8 +60,10 @@ internal sealed class ConductEventLogWriter
         {
             var directory = Path.GetDirectoryName(_path) ?? ".";
             Directory.CreateDirectory(directory);
+            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+            Directory.CreateDirectory(pendingDirectory);
             var pendingPath = Path.Combine(
-                directory,
+                pendingDirectory,
                 $"{Path.GetFileName(_path)}.pending-{Guid.NewGuid():N}.jsonl");
             File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp));
 
@@ -92,13 +99,62 @@ internal sealed class ConductEventLogWriter
         lock (RequiredEventDrainGate)
         {
             var directory = Path.GetDirectoryName(_path) ?? ".";
+            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+            if (!Directory.Exists(pendingDirectory))
+            {
+                return;
+            }
+
             var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
-            foreach (var pendingPath in Directory.GetFiles(directory, pattern).Order(StringComparer.Ordinal))
+            foreach (var pendingPath in Directory.GetFiles(pendingDirectory, pattern).Order(StringComparer.Ordinal))
             {
                 RotateIfNeeded();
                 File.AppendAllText(_path, File.ReadAllText(pendingPath));
                 File.Delete(pendingPath);
             }
+        }
+    }
+
+    private void MigrateLegacyPendingEvents()
+    {
+        var directory = Path.GetDirectoryName(_path) ?? ".";
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        var normalizedPath = Path.GetFullPath(_path);
+        if (!MigratedLegacyPendingPaths.TryAdd(normalizedPath, 0))
+        {
+            return;
+        }
+
+        try
+        {
+            lock (RequiredEventDrainGate)
+            {
+                var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
+                var legacyPaths = Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly);
+                if (legacyPaths.Length == 0)
+                {
+                    return;
+                }
+
+                var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+                Directory.CreateDirectory(pendingDirectory);
+                foreach (var legacyPath in legacyPaths)
+                {
+                    File.Move(legacyPath, Path.Combine(pendingDirectory, Path.GetFileName(legacyPath)));
+                }
+            }
+        }
+        catch (IOException)
+        {
+            MigratedLegacyPendingPaths.TryRemove(normalizedPath, out _);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            MigratedLegacyPendingPaths.TryRemove(normalizedPath, out _);
         }
     }
 

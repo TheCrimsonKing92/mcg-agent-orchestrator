@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
@@ -63,6 +65,7 @@ public static class DotnetBuildEnvironmentManager
 
     // Supported escape hatch for tests that need lease-root isolation.
     public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
+    public const string ForceCleanStaleLeaseArtifactsVariable = "MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS";
     public const int BuildConcurrencySlotCount = 2;
     // Compatibility name for callers migrating from the former artifact-slot grid.
     public const int StableSlotCount = BuildConcurrencySlotCount;
@@ -70,7 +73,11 @@ public static class DotnetBuildEnvironmentManager
     private const string LeaseDirectoryName = "lease";
     private const string LeaseMetadataFileName = "lease.json";
     private const string LeaseLockFileName = "lease.lock";
+    private const string GoalLeaseReclaimPendingFileName = "goal-lease-reclaim.pending.json";
     private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
+    private const string LeaseJournalFileName = "lease.journal.jsonl";
+    private const long LeaseJournalMaxBytes = 1_048_576;
+    private const int StaleLeaseIntegrityProbeAttempts = 3;
     private const string LandingTestsRootDirectoryName = "mcg-landing-tests";
     private const string LandingTestFixtureMarkerFileName = ".mcg-landing-fixture.json";
     private static readonly TimeSpan LandingFixtureMarkerStaleAge = TimeSpan.FromHours(2);
@@ -81,9 +88,11 @@ public static class DotnetBuildEnvironmentManager
     private static readonly TimeProvider DefaultLeaseTimeProvider = TimeProvider.System;
     private static readonly Action<TimeSpan> DefaultLeaseSleep = Thread.Sleep;
     private static readonly object CurrentLandingFixtureRootsGate = new();
+    private static readonly object LeaseJournalDrainGate = new();
     private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
     private static int s_nextStableSlotScanStart = -1;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
+    internal static Action<int>? BeforeStaleLeaseIntegrityProbeForTests { get; set; }
     internal static Action? ShutdownBuildServersForTests { get; set; }
     internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
     internal static TimeProvider DefaultLeaseTimeProviderForTests => DefaultLeaseTimeProvider;
@@ -92,6 +101,10 @@ public static class DotnetBuildEnvironmentManager
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true
+    };
+    private static readonly JsonSerializerOptions LeaseJournalJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
     public static DotnetBuildEnvironment CreateAttempt(
@@ -193,6 +206,17 @@ public static class DotnetBuildEnvironmentManager
         ArgumentOutOfRangeException.ThrowIfNegative(slotIndex);
         return Path.Combine(IsolatedRootBase(), "build-slots", $"activity-{slotIndex}.heartbeat.json");
     }
+
+    // Retained for AcceptanceAttemptArtifactCustody after de-slotting; adapted to the per-process
+    // artifacts model used by CreateStableSlotEnvironment ("runs/p{pid}-build-{slotIndex}/artifacts").
+    public static string StableSlotArtifactsPath(int slotIndex)
+    {
+        ValidateStableSlotIndex(slotIndex);
+        return Path.Combine(IsolatedRootBase(), "runs", $"p{Environment.ProcessId}-build-{slotIndex}", "artifacts");
+    }
+
+    internal static string ManualSlotArtifactsPath() =>
+        Path.Combine(IsolatedRootBase(), "runs", $"p{Environment.ProcessId}-manual", "artifacts");
 
     public static DotnetBuildEnvironment CreateStableSlotAttempt(
         int slotIndex,
@@ -522,11 +546,19 @@ public static class DotnetBuildEnvironmentManager
         var attemptedOwnedProcessRemediation = false;
         var artifactPrepBusyAttempts = 0;
         BuildLockAttribution? selfHeldLandingFixtureAttribution = null;
+        var forceCleanArtifacts = false;
+        var pendingStaleExecutionLeaseReclaim = StaleExecutionLeaseReclaim.None;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var reclaim = TryReclaimStaleExecutionLease(environment);
+            if (reclaim.Reclaimed)
+            {
+                pendingStaleExecutionLeaseReclaim = reclaim;
+            }
+
+            forceCleanArtifacts |= reclaim.ForceCleanArtifacts;
             LeaseFileStream stream;
-            var reclaimed = TryReclaimStaleExecutionLease(environment);
             try
             {
                 if (selfHeldLandingFixtureAttribution is null &&
@@ -584,7 +616,12 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed, currentProcessOwnsExecutionLease: true);
+                    PrepareArtifactsDirectory(
+                        environment,
+                        forceClean: forceCleanArtifacts,
+                        currentProcessOwnsExecutionLease: true,
+                        ownerMarkerValidated: reclaim.Reclaimed,
+                        staleExecutionLeaseReclaim: pendingStaleExecutionLeaseReclaim);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -676,7 +713,16 @@ public static class DotnetBuildEnvironmentManager
         Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
-        var staleLockCleared = TryClearStaleLock(lockPath);
+        var staleLockCleared = TryClearStaleLock(lockPath, out var reclaimedProcessId);
+        if (staleLockCleared)
+        {
+            File.WriteAllText(
+                Path.Combine(leaseDirectory, GoalLeaseReclaimPendingFileName),
+                JsonSerializer.Serialize(
+                    new GoalLeaseReclaim(reclaimedProcessId, lockPath),
+                    JsonOptions));
+        }
+
         File.WriteAllText(lockPath, Environment.ProcessId.ToString());
         File.WriteAllText(metadataPath, JsonSerializer.Serialize(
             new GoalBuildEnvironmentLeaseMetadata(
@@ -690,10 +736,11 @@ public static class DotnetBuildEnvironmentManager
                 Environment.MachineName,
                 DateTimeOffset.UtcNow,
                 attemptName,
-                staleLockCleared),
+                staleLockCleared,
+                staleLockCleared ? reclaimedProcessId : null),
             JsonOptions));
 
-        return new DotnetBuildEnvironment(
+        var environment = new DotnetBuildEnvironment(
             leaseId,
             root,
             artifactsPath,
@@ -704,6 +751,7 @@ public static class DotnetBuildEnvironmentManager
             ReusedGoalLease: reused,
             StaleLockCleared: staleLockCleared,
             BuildPermitIndex: buildPermitIndex);
+        return environment;
     }
 
     private static IReadOnlyList<string> BuildArguments(string artifactsPath) =>
@@ -861,11 +909,19 @@ public static class DotnetBuildEnvironmentManager
         var attemptedCompilerLockRemediation = false;
         var attemptedOwnedProcessRemediation = false;
         blockedAttribution = null;
+        var forceCleanArtifacts = false;
+        var pendingStaleExecutionLeaseReclaim = StaleExecutionLeaseReclaim.None;
         while (true)
         {
+            var reclaim = TryReclaimStaleExecutionLease(environment);
+            if (reclaim.Reclaimed)
+            {
+                pendingStaleExecutionLeaseReclaim = reclaim;
+            }
+
+            forceCleanArtifacts |= reclaim.ForceCleanArtifacts;
             try
             {
-                var reclaimed = TryReclaimStaleExecutionLease(environment);
                 try
                 {
                     stream = OpenExecutionLeaseStream(environment);
@@ -880,7 +936,11 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed);
+                    PrepareArtifactsDirectory(
+                        environment,
+                        forceClean: forceCleanArtifacts,
+                        ownerMarkerValidated: reclaim.Reclaimed,
+                        staleExecutionLeaseReclaim: pendingStaleExecutionLeaseReclaim);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -924,6 +984,18 @@ public static class DotnetBuildEnvironmentManager
         ref bool attemptedOwnedProcessRemediation,
         out BuildLockAttribution attribution)
     {
+        if (exception is AcceptanceAttemptArtifactCustodyException custody)
+        {
+            attribution = new BuildLockAttribution(
+                custody.ArtifactsPath,
+                [],
+                "acceptance-attempt-custody",
+                "artifact-prep",
+                "prepare-artifacts");
+            LockAttribution.EmitReceipt(attribution);
+            return ArtifactPrepLockRemediation.SlotBusy;
+        }
+
         var lockedPath = LockAttribution.TryExtractLockedPath(exception.ToString()) ?? environment.ArtifactsPath;
         if (LockAttribution.IsLeaseLockPath(lockedPath))
         {
@@ -1095,21 +1167,38 @@ public static class DotnetBuildEnvironmentManager
     private static void PrepareArtifactsDirectory(
         DotnetBuildEnvironment environment,
         bool forceClean = false,
-        bool currentProcessOwnsExecutionLease = false)
+        bool currentProcessOwnsExecutionLease = false,
+        bool ownerMarkerValidated = false,
+        StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim = null)
     {
         PrepareArtifactsDirectoryForTests?.Invoke(environment);
-        var clean = forceClean || environment.StaleLockCleared;
+        var clean = forceClean;
         var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
-        if (Directory.Exists(environment.ArtifactsPath) && Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())
+        var ownerMarkerMismatch = false;
+        var goalLeaseReclaim = TryReadPendingGoalLeaseReclaim(environment);
+        if (!ownerMarkerValidated &&
+            Directory.Exists(environment.ArtifactsPath) &&
+            Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())
         {
-            clean |= !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
+            ownerMarkerMismatch = !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
+            clean |= ownerMarkerMismatch;
         }
 
+        if (clean)
+        {
+            AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
+                environment.ArtifactsPath,
+                Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
+        }
+
+        var decision = "preserved";
+        StaleLeaseArtifactIntegrity? outcomeOverride = null;
         if (clean && Directory.Exists(environment.ArtifactsPath))
         {
             try
             {
                 Directory.Delete(environment.ArtifactsPath, recursive: true);
+                decision = "wiped";
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -1124,13 +1213,140 @@ public static class DotnetBuildEnvironmentManager
                     attribution,
                     currentProcessOwnsExecutionLease))
                 {
+                    var failedIntegrity = new StaleLeaseArtifactIntegrity(
+                        true,
+                        "wipe-failed",
+                        lockedPath);
+                    EmitArtifactPreparationReceipts(
+                        environment,
+                        staleExecutionLeaseReclaim,
+                        goalLeaseReclaim,
+                        ownerMarkerMismatch,
+                        failedIntegrity,
+                        "wipe-failed");
                     throw;
                 }
+
+                outcomeOverride = new StaleLeaseArtifactIntegrity(
+                    false,
+                    "wipe-skipped-self-held-lock",
+                    lockedPath);
             }
         }
 
         Directory.CreateDirectory(environment.ArtifactsPath);
-        WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
+        if (outcomeOverride is null)
+        {
+            WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
+        }
+
+        var attemptId = Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
+        var livenessCheckHint = Environment.GetEnvironmentVariable(
+            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
+        if (!string.IsNullOrWhiteSpace(attemptId) && !string.IsNullOrWhiteSpace(livenessCheckHint))
+        {
+            AcceptanceAttemptArtifactCustody.Write(
+                environment.ArtifactsPath,
+                attemptId,
+                livenessCheckHint,
+                Environment.ProcessId);
+        }
+
+        var outcomeIntegrity = outcomeOverride ??
+            (ownerMarkerMismatch
+                ? new StaleLeaseArtifactIntegrity(true, "owner-marker-mismatch", ownerPath)
+                : null);
+        EmitArtifactPreparationReceipts(
+            environment,
+            staleExecutionLeaseReclaim,
+            goalLeaseReclaim,
+            ownerMarkerMismatch,
+            outcomeIntegrity,
+            decision);
+        if (goalLeaseReclaim is not null)
+        {
+            MarkGoalLeaseReclaimReceiptEmitted(environment);
+        }
+    }
+
+    private static void EmitArtifactPreparationReceipts(
+        DotnetBuildEnvironment environment,
+        StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim,
+        GoalLeaseReclaim? goalLeaseReclaim,
+        bool ownerMarkerMismatch,
+        StaleLeaseArtifactIntegrity? outcomeOverride,
+        string decision)
+    {
+        if (staleExecutionLeaseReclaim is { Reclaimed: true, Integrity: { } integrity })
+        {
+            EmitLeaseReclaimReceipt(
+                environment,
+                staleExecutionLeaseReclaim.ReclaimedProcessId,
+                outcomeOverride ?? integrity,
+                decision: decision);
+        }
+
+        if (ownerMarkerMismatch)
+        {
+            EmitLeaseReclaimReceipt(
+                environment,
+                reclaimedProcessId: null,
+                integrity: outcomeOverride ??
+                    new StaleLeaseArtifactIntegrity(true, "owner-marker-mismatch", Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName)),
+                receipt: "ARTIFACT_PREP",
+                decision: decision);
+        }
+
+        if (goalLeaseReclaim is not null)
+        {
+            EmitLeaseReclaimReceipt(
+                environment,
+                goalLeaseReclaim.ReclaimedProcessId,
+                integrity: outcomeOverride ??
+                    new StaleLeaseArtifactIntegrity(false, "goal-lease-dead-holder", goalLeaseReclaim.TriggerPath),
+                receipt: "GOAL_LEASE_RECLAIM",
+                decision: decision);
+        }
+    }
+
+    private static GoalLeaseReclaim? TryReadPendingGoalLeaseReclaim(DotnetBuildEnvironment environment)
+    {
+        var pendingPath = Path.Combine(
+            environment.RootPath,
+            LeaseDirectoryName,
+            GoalLeaseReclaimPendingFileName);
+        if (!File.Exists(pendingPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<GoalLeaseReclaim>(
+                File.ReadAllText(pendingPath),
+                JsonOptions);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static void MarkGoalLeaseReclaimReceiptEmitted(DotnetBuildEnvironment environment)
+    {
+        var pendingPath = Path.Combine(
+            environment.RootPath,
+            LeaseDirectoryName,
+            GoalLeaseReclaimPendingFileName);
+        try
+        {
+            File.Delete(pendingPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine(
+                $"GOAL_LEASE_RECLAIM_STATE_PENDING pid={Environment.ProcessId} pending=\"{pendingPath}\" error={ex.GetType().Name}");
+        }
     }
 
     private static bool OwnerMarkerMatches(string ownerPath, string expectedToken)
@@ -1423,25 +1639,256 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static bool TryReclaimStaleExecutionLease(DotnetBuildEnvironment environment)
+    private static StaleExecutionLeaseReclaim TryReclaimStaleExecutionLease(DotnetBuildEnvironment environment)
     {
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         if (metadata?.OwnerProcessId is not { } processId || IsProcessRunning(processId))
         {
-            return false;
+            return StaleExecutionLeaseReclaim.None;
+        }
+
+        var integrity = ProbeStaleLeaseArtifacts(environment, metadata.AcquiredAt);
+        try
+        {
+            File.Delete(environment.ExecutionLockPath);
+            AcceptanceAttemptArtifactCustody.ClearIfStale(environment.ArtifactsPath);
+            EmitLeaseReceipt("LEASE_RECLAIM", environment, processId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return StaleExecutionLeaseReclaim.None;
+        }
+
+        return new StaleExecutionLeaseReclaim(true, processId, integrity);
+    }
+
+    private static StaleLeaseArtifactIntegrity ProbeStaleLeaseArtifacts(
+        DotnetBuildEnvironment environment,
+        DateTimeOffset leaseAcquiredAt)
+    {
+        if (IsEnabled(Environment.GetEnvironmentVariable(ForceCleanStaleLeaseArtifactsVariable)))
+        {
+            return new StaleLeaseArtifactIntegrity(
+                true,
+                "operator-forced",
+                $"env:{ForceCleanStaleLeaseArtifactsVariable}");
+        }
+
+        for (var attempt = 1; attempt <= StaleLeaseIntegrityProbeAttempts; attempt++)
+        {
+            try
+            {
+                BeforeStaleLeaseIntegrityProbeForTests?.Invoke(attempt);
+                return ProbeStaleLeaseArtifactsOnce(environment, leaseAcquiredAt);
+            }
+            catch (Exception ex) when (
+                (ex is IOException or UnauthorizedAccessException) &&
+                attempt < StaleLeaseIntegrityProbeAttempts)
+            {
+                Thread.Sleep(TimeSpan.FromMilliseconds(10));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return new StaleLeaseArtifactIntegrity(true, "integrity-probe-failed", environment.ArtifactsPath);
+            }
+        }
+
+        throw new InvalidOperationException("Stale lease integrity probe exhausted without a verdict.");
+    }
+
+    private static StaleLeaseArtifactIntegrity ProbeStaleLeaseArtifactsOnce(
+        DotnetBuildEnvironment environment,
+        DateTimeOffset leaseAcquiredAt)
+    {
+        var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
+        if (!Directory.Exists(environment.ArtifactsPath) ||
+            !Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())
+        {
+            return new StaleLeaseArtifactIntegrity(false, "artifacts-empty", environment.ArtifactsPath);
+        }
+
+        if (!File.Exists(ownerPath))
+        {
+            return new StaleLeaseArtifactIntegrity(true, "missing-owner-marker", ownerPath);
         }
 
         try
         {
-            File.Delete(environment.ExecutionLockPath);
-            TryDeleteExecutionLeaseMetadata(environment.ExecutionLockPath);
-            EmitLeaseReceipt("LEASE_RECLAIM", environment, processId);
-            return true;
+            var marker = JsonSerializer.Deserialize<ArtifactsOwnerMarker>(File.ReadAllText(ownerPath), JsonOptions);
+            if (marker is null ||
+                string.IsNullOrWhiteSpace(marker.OwnerToken) ||
+                !string.Equals(marker.OwnerToken, environment.SlotOwnerToken, StringComparison.Ordinal))
+            {
+                return new StaleLeaseArtifactIntegrity(true, "invalid-owner-marker", ownerPath);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (JsonException)
+        {
+            return new StaleLeaseArtifactIntegrity(true, "invalid-owner-marker", ownerPath);
+        }
+
+        var probeAfterUtc = leaseAcquiredAt == DateTimeOffset.MinValue
+            ? DateTime.MinValue
+            : leaseAcquiredAt.UtcDateTime.AddSeconds(-2);
+        foreach (var dll in new DirectoryInfo(environment.ArtifactsPath)
+            .EnumerateFiles("*.dll", SearchOption.AllDirectories)
+            .Where(file => file.LastWriteTimeUtc >= probeAfterUtc))
+        {
+            if (dll.Length == 0)
+            {
+                return new StaleLeaseArtifactIntegrity(true, "zero-length-dll", dll.FullName);
+            }
+
+            if (!HasValidPortableExecutableHeader(dll))
+            {
+                return new StaleLeaseArtifactIntegrity(true, "invalid-pe-dll", dll.FullName);
+            }
+        }
+
+        return new StaleLeaseArtifactIntegrity(false, "integrity-ok", ownerPath);
+    }
+
+    private static bool HasValidPortableExecutableHeader(FileInfo file)
+    {
+        using var stream = new FileStream(
+            file.FullName,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        try
+        {
+            using var peReader = new PEReader(stream, PEStreamOptions.LeaveOpen);
+            var headers = peReader.PEHeaders;
+            if (headers.PEHeader is null ||
+                headers.PEHeader.SizeOfHeaders > stream.Length)
+            {
+                return false;
+            }
+
+            return headers.SectionHeaders.All(section =>
+                section.PointerToRawData >= 0 &&
+                section.SizeOfRawData >= 0 &&
+                (long)section.PointerToRawData + section.SizeOfRawData <= stream.Length);
+        }
+        catch (BadImageFormatException)
         {
             return false;
         }
+    }
+
+    private static bool IsEnabled(string? value) =>
+        value is not null &&
+        (value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("yes", StringComparison.OrdinalIgnoreCase));
+
+    private static void EmitLeaseReclaimReceipt(
+        DotnetBuildEnvironment environment,
+        int? reclaimedProcessId,
+        StaleLeaseArtifactIntegrity integrity,
+        string receipt = "LEASE_RECLAIM",
+        string? decision = null)
+    {
+        var reclaimDecision = decision ?? (integrity.ForceCleanArtifacts ? "wiped" : "preserved");
+        var journalPath = Path.Combine(
+            Path.GetDirectoryName(environment.ExecutionLockPath)!,
+            LeaseJournalFileName);
+        var entry = new LeaseJournalEntry(
+            1,
+            DateTimeOffset.UtcNow,
+            receipt,
+            Environment.ProcessId,
+            ReceiptSlotName(environment),
+            environment.LeaseId,
+            reclaimedProcessId,
+            reclaimDecision,
+            integrity.Reason,
+            integrity.TriggerPath);
+        var journalWritten = TryAppendLeaseJournal(
+            journalPath,
+            JsonSerializer.Serialize(entry, LeaseJournalJsonOptions) + Environment.NewLine);
+
+        Console.WriteLine(
+            $"{receipt} pid={Environment.ProcessId} slot={ReceiptSlotName(environment)} lease={environment.LeaseId} reclaimedPid={reclaimedProcessId?.ToString(CultureInfo.InvariantCulture) ?? "unknown"} decision={reclaimDecision} reason={integrity.Reason} triggerPath=\"{integrity.TriggerPath}\" journal=\"{journalPath}\" journalStatus={(journalWritten ? "written" : "pending")} path={environment.ExecutionLockPath}");
+    }
+
+    private static bool TryAppendLeaseJournal(string journalPath, string serializedEntry)
+    {
+        string? pendingPath = null;
+        try
+        {
+            var directory = Path.GetDirectoryName(journalPath)!;
+            Directory.CreateDirectory(directory);
+            pendingPath = Path.Combine(
+                directory,
+                $"{Path.GetFileName(journalPath)}.pending-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllText(pendingPath, serializedEntry);
+            DrainPendingLeaseJournalEntries(journalPath);
+            return !File.Exists(pendingPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine(
+                $"LEASE_RECLAIM_JOURNAL_PENDING pid={Environment.ProcessId} journal=\"{journalPath}\" pending=\"{pendingPath ?? "unavailable"}\" error={ex.GetType().Name}");
+            return false;
+        }
+    }
+
+    private static void DrainPendingLeaseJournalEntries(string journalPath)
+    {
+        lock (LeaseJournalDrainGate)
+        {
+            using var drainLock = new FileStream(
+                journalPath + ".drain.lock",
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+            var directory = Path.GetDirectoryName(journalPath)!;
+            var pattern = $"{Path.GetFileName(journalPath)}.pending-*.jsonl";
+            foreach (var pendingPath in Directory.GetFiles(directory, pattern)
+                .OrderBy(ReadPendingLeaseJournalRecordedAt)
+                .ThenBy(path => path, StringComparer.Ordinal))
+            {
+                RotateLeaseJournalIfNeeded(journalPath);
+                File.AppendAllText(journalPath, File.ReadAllText(pendingPath));
+                File.Delete(pendingPath);
+            }
+        }
+    }
+
+    private static DateTimeOffset ReadPendingLeaseJournalRecordedAt(string pendingPath)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<LeaseJournalEntry>(
+                    File.ReadAllText(pendingPath),
+                    LeaseJournalJsonOptions)
+                ?.RecordedAt ?? DateTimeOffset.MaxValue;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return DateTimeOffset.MaxValue;
+        }
+    }
+
+    private static void RotateLeaseJournalIfNeeded(string journalPath)
+    {
+        if (!File.Exists(journalPath) || new FileInfo(journalPath).Length < LeaseJournalMaxBytes)
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(journalPath)!;
+        var fileName = Path.GetFileNameWithoutExtension(journalPath);
+        var extension = Path.GetExtension(journalPath);
+        var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        var rotatedPath = Path.Combine(directory, $"{fileName}-{stamp}{extension}");
+        for (var index = 1; File.Exists(rotatedPath); index++)
+        {
+            rotatedPath = Path.Combine(directory, $"{fileName}-{stamp}-{index}{extension}");
+        }
+
+        File.Move(journalPath, rotatedPath);
     }
 
     private static ExecutionLeaseMetadata? TryReadExecutionLeaseMetadata(string path)
@@ -1532,17 +1979,31 @@ public static class DotnetBuildEnvironmentManager
         return string.IsNullOrWhiteSpace(slotName) ? environment.SlotOwnerToken : slotName;
     }
 
-    private static bool TryClearStaleLock(string lockPath)
+    private static bool TryClearStaleLock(string lockPath, out int? reclaimedProcessId)
     {
+        reclaimedProcessId = null;
         if (!File.Exists(lockPath))
         {
             return false;
         }
 
-        var text = File.ReadAllText(lockPath).Trim();
-        if (int.TryParse(text, out var processId) && IsProcessRunning(processId))
+        string text;
+        try
+        {
+            text = File.ReadAllText(lockPath).Trim();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return false;
+        }
+
+        if (int.TryParse(text, out var processId))
+        {
+            reclaimedProcessId = processId;
+            if (IsProcessRunning(processId))
+            {
+                return false;
+            }
         }
 
         try
@@ -1645,7 +2106,8 @@ public static class DotnetBuildEnvironmentManager
         string MachineName,
         DateTimeOffset LastUsedAt,
         string LastAttemptName,
-        bool StaleLockCleared);
+        bool StaleLockCleared,
+        int? ReclaimedProcessId = null);
 
     private sealed record ArtifactsOwnerMarker(
         int Version,
@@ -1653,6 +2115,35 @@ public static class DotnetBuildEnvironmentManager
         int OwnerProcessId,
         string MachineName,
         DateTimeOffset LastAcquiredAt);
+
+    private sealed record StaleExecutionLeaseReclaim(
+        bool Reclaimed,
+        int? ReclaimedProcessId,
+        StaleLeaseArtifactIntegrity? Integrity)
+    {
+        public bool ForceCleanArtifacts => Integrity?.ForceCleanArtifacts == true;
+
+        public static StaleExecutionLeaseReclaim None { get; } = new(false, null, null);
+    }
+
+    private sealed record GoalLeaseReclaim(int? ReclaimedProcessId, string TriggerPath);
+
+    private sealed record StaleLeaseArtifactIntegrity(
+        bool ForceCleanArtifacts,
+        string Reason,
+        string TriggerPath);
+
+    private sealed record LeaseJournalEntry(
+        int Version,
+        DateTimeOffset RecordedAt,
+        string Event,
+        int ProcessId,
+        string Slot,
+        string LeaseId,
+        int? ReclaimedProcessId,
+        string Decision,
+        string Reason,
+        string TriggerPath);
 
     private sealed record ExecutionLeaseMetadata(
         int Version,

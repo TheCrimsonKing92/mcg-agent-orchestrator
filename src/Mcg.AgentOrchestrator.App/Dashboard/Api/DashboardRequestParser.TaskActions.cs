@@ -100,7 +100,11 @@ public static ManualVerifySubmissionDto ParseManualVerifySubmission(string body)
         throw new ArgumentException("Manual verification JSON must include 'passed' or 'status'.");
     }
 
-    return new ManualVerifySubmissionDto(passed.Value, noteElement.GetString()!.Trim());
+    var idempotencyKey = TryGetProperty(root, "idempotencyKey", out var idempotencyElement) &&
+        idempotencyElement.ValueKind == JsonValueKind.String
+        ? idempotencyElement.GetString()?.Trim()
+        : null;
+    return new ManualVerifySubmissionDto(passed.Value, noteElement.GetString()!.Trim(), idempotencyKey);
 }
 
 public static ProgressSubmissionDto ParseProgressSubmission(string body)
@@ -143,7 +147,10 @@ public static RetrySubmissionDto ParseRetrySubmission(string body)
         throw new ArgumentException("Retry JSON must include a non-empty 'message' value.");
     }
 
-    return new RetrySubmissionDto(submission.Message.Trim(), submission.Mechanical);
+    return new RetrySubmissionDto(
+        submission.Message.Trim(),
+        submission.Mechanical,
+        submission.IdempotencyKey?.Trim());
 }
 
 public static LimitReviewSubmissionDto? ParseLimitReviewSubmission(string body)

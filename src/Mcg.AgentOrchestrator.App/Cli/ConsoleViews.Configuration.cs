@@ -26,6 +26,16 @@ internal static partial class ConsoleViews
         }
     }
 
+    public static void PrintCleanupDebtWarning(IReadOnlyList<GoalWorktreeCleanupDebt> debts)
+    {
+        var escalatedCount = debts.Count(debt => debt.EscalatedAtUtc is not null);
+        if (escalatedCount > 0)
+        {
+            Console.WriteLine(
+                $"WARNING: stale worktree cleanup escalated={escalatedCount} pending={debts.Count}; run cleanup-status.");
+        }
+    }
+
     public static void PrintModelFunctions(ModelFunctionCatalog catalog)
     {
         if (catalog.Bindings.Count == 0)

@@ -32,6 +32,9 @@ internal sealed class ConductLockPidProbe : IConductLockPidProbe
 
 internal sealed class ConductorLoopLease : IDisposable
 {
+    internal const string InactiveWarning =
+        "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.";
+
     private readonly FileStream _stream;
     private readonly string _path;
     private bool _disposed;
@@ -84,6 +87,31 @@ internal sealed class ConductorLoopLease : IDisposable
             throw new InvalidOperationException(
                 $"conduct loop is already running or the conduct-loop lock is held: {path}",
                 ex);
+        }
+    }
+
+    internal static bool IsActive(
+        string orchestratorDirectory,
+        IConductLockPidProbe? pidProbe = null)
+    {
+        var path = Path.Combine(orchestratorDirectory, "conduct-loop.lock");
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var (ownerPid, _) = ReadOwner(path);
+            return (pidProbe ?? new ConductLockPidProbe()).IsRunning(ownerPid);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

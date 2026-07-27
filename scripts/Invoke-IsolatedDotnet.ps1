@@ -10,6 +10,10 @@ the built test executable with -ReuseArtifacts. The second measurement repeats o
     before running xUnit directly without invoking MSBuild or the unsupported VSTest target.
     Builds share a two-lock machine-wide pool; test results never use the lock path.
 
+Set MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS=1 to force stale-lease recovery to wipe
+the selected slot's artifacts instead of preserving a cache that passes the integrity probe.
+This is an operator recovery escape hatch; unset it after the forced-clean run.
+
 .EXAMPLE
 Measure-Command {
     .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 build tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal
@@ -186,6 +190,106 @@ function Get-OwnerMarkerToken {
     }
     catch {
         return "<invalid>"
+    }
+}
+
+function Test-CustodyMarkerIsLive {
+    param([object]$Marker)
+
+    if ($null -eq $Marker -or [string]::IsNullOrWhiteSpace([string]$Marker.attemptId)) {
+        return $false
+    }
+
+    $hintPath = [string]$Marker.livenessCheckHint
+    if (-not [string]::IsNullOrWhiteSpace($hintPath) -and
+        (Test-Path -LiteralPath $hintPath -PathType Leaf)) {
+        try {
+            $attempt = Get-Content -LiteralPath $hintPath -Raw | ConvertFrom-Json
+            if (-not [string]::Equals(
+                    [string]$attempt.attemptId,
+                    [string]$Marker.attemptId,
+                    [System.StringComparison]::Ordinal)) {
+                return $false
+            }
+
+            $numericOutcome = 0
+            $outcomeText = [string]$attempt.outcome
+            $isRunning = [string]::Equals(
+                $outcomeText,
+                "Running",
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([int]::TryParse($outcomeText, [ref]$numericOutcome) -and $numericOutcome -eq 0)
+            if (-not $isRunning) {
+                return $false
+            }
+
+            $ownerProcessId = [int]$attempt.ownerProcessId
+            if (-not [string]::Equals(
+                    [string]$Marker.machineName,
+                    [Environment]::MachineName,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                $lastHeartbeatAt = [DateTimeOffset]::MinValue
+                return [DateTimeOffset]::TryParse([string]$attempt.lastHeartbeatAt, [ref]$lastHeartbeatAt) -and
+                    ([DateTimeOffset]::UtcNow - $lastHeartbeatAt) -le [TimeSpan]::FromMinutes(2)
+            }
+
+            $owner = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+            if ($null -eq $owner) {
+                return $false
+            }
+
+            $acquiredAt = [DateTimeOffset]::MinValue
+            return -not [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt) -or
+                $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
+        }
+        catch {
+            # Protect a live owner while its atomic lifecycle record is briefly unavailable.
+        }
+    }
+
+    try {
+        $acquiredAt = [DateTimeOffset]::MinValue
+        $hasAcquiredAt = [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt)
+        if (-not [string]::Equals(
+                [string]$Marker.machineName,
+                [Environment]::MachineName,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $hasAcquiredAt -and
+                ([DateTimeOffset]::UtcNow - $acquiredAt) -le [TimeSpan]::FromHours(6)
+        }
+
+        $owner = Get-Process -Id ([int]$Marker.ownerProcessId) -ErrorAction SilentlyContinue
+        if ($null -eq $owner) {
+            return $false
+        }
+
+        return -not $hasAcquiredAt -or
+            $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Assert-CustodyAllowsTakeover {
+    param([string]$ArtifactsPath)
+
+    $custodyPath = Join-Path $ArtifactsPath ".mcg-artifacts-custody.json"
+    if (-not (Test-Path -LiteralPath $custodyPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $custodyPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return
+    }
+
+    if (Test-CustodyMarkerIsLive -Marker $marker) {
+        throw (
+            "Artifact slot takeover refused because acceptance attempt '$([string]$marker.attemptId)' " +
+            "has live custody of '$ArtifactsPath'. Wait for the acceptance attempt to reach a terminal state before retrying.")
     }
 }
 
@@ -496,7 +600,9 @@ function Initialize-ArtifactsDirectory {
 
     $ownerPath = Join-Path $Path ".mcg-artifacts-owner.json"
     $hasEntries = (Test-Path -LiteralPath $Path) -and $null -ne (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
-    if ($ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))) {
+    $takeoverRequired = $ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))
+    if ($takeoverRequired) {
+        Assert-CustodyAllowsTakeover -ArtifactsPath $Path
         Clear-ArtifactsDirectory -Path $Path
     }
     else {

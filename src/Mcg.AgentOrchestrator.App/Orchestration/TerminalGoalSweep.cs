@@ -41,17 +41,23 @@ internal sealed class TerminalGoalSweepCache
 {
     private const int StoreVersion = 1;
     private const string StoreFileName = "terminal-goal-sweep-cache.json";
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new();
     private readonly Dictionary<GoalId, TerminalGoalSweepCacheEntry> _terminalFingerprints = [];
     private string? _loadedStorePath;
     private bool _loaded;
+    private bool _dirty;
 
     internal int Count => _terminalFingerprints.Count;
 
-    internal bool TryMarkHit(AgentOrchestratorKernel kernel, string executionDirectory, Goal goal, string evidenceKey)
+    internal bool TryMarkHit(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        string evidenceKey,
+        TerminalGoalSweepCacheSweepFacts sweepFacts)
     {
         EnsureLoaded(executionDirectory);
-        if (!CanCache(executionDirectory, goal))
+        if (!CanCache(executionDirectory, goal, sweepFacts))
         {
             Remove(goal.Id);
             return false;
@@ -68,24 +74,29 @@ internal sealed class TerminalGoalSweepCache
         string executionDirectory,
         Goal goal,
         string evidenceKey,
-        IReadOnlyList<TerminalGoalSweepBlocker> blockers)
+        IReadOnlyList<TerminalGoalSweepBlocker> blockers,
+        TerminalGoalSweepCacheSweepFacts sweepFacts)
     {
         EnsureLoaded(executionDirectory);
-        if (!CanCache(executionDirectory, goal) || blockers.Any(IsCleanupBlocker))
+        if (!CanCache(executionDirectory, goal, sweepFacts) || blockers.Any(IsCleanupBlocker))
         {
             Remove(goal.Id);
             return;
         }
 
-        _terminalFingerprints[goal.Id] = new TerminalGoalSweepCacheEntry(evidenceKey, BuildFingerprint(kernel, goal));
-        Save();
+        var entry = new TerminalGoalSweepCacheEntry(evidenceKey, BuildFingerprint(kernel, goal));
+        if (!_terminalFingerprints.TryGetValue(goal.Id, out var existing) || existing != entry)
+        {
+            _terminalFingerprints[goal.Id] = entry;
+            _dirty = true;
+        }
     }
 
     private void Remove(GoalId goalId)
     {
         if (_terminalFingerprints.Remove(goalId))
         {
-            Save();
+            _dirty = true;
         }
     }
 
@@ -98,6 +109,7 @@ internal sealed class TerminalGoalSweepCache
         }
 
         _terminalFingerprints.Clear();
+        _dirty = false;
         _loaded = true;
         _loadedStorePath = storePath;
 
@@ -133,9 +145,9 @@ internal sealed class TerminalGoalSweepCache
         }
     }
 
-    private void Save()
+    internal void Flush()
     {
-        if (string.IsNullOrWhiteSpace(_loadedStorePath))
+        if (!_dirty || string.IsNullOrWhiteSpace(_loadedStorePath))
         {
             return;
         }
@@ -153,38 +165,50 @@ internal sealed class TerminalGoalSweepCache
                         item.Value.Fingerprint))
                     .ToArray());
             File.WriteAllText(_loadedStorePath, JsonSerializer.Serialize(file, JsonOptions));
+            _dirty = false;
         }
         catch
         {
-            // Sweep cache persistence is only a memoization layer; git and kernel state remain authoritative.
+            // This cache is derivative of git and kernel state. A failed or crash-lost flush only causes
+            // the next sweep to re-probe; it cannot make a stale cache entry authoritative.
         }
     }
 
     private static string StorePath(string executionDirectory) =>
         Path.Combine(OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory, StoreFileName);
 
-    private static bool CanCache(string executionDirectory, Goal goal) =>
+    private static bool CanCache(
+        string executionDirectory,
+        Goal goal,
+        TerminalGoalSweepCacheSweepFacts sweepFacts) =>
         TerminalGoalSweep.IsTerminalSweepStatus(goal.Status) &&
         goal.Tasks.All(task => !TerminalGoalSweep.IsStaleTerminalAssignedTaskStatus(task.Status)) &&
         goal.Tasks.All(task => task.LastProcess is not { IsRunning: true }) &&
-        !HasPendingGoalArtifactCleanup(executionDirectory, goal.Id) &&
-        !HasPendingCleanupBackoff(executionDirectory, goal.Id);
+        !HasPendingGoalArtifactCleanup(executionDirectory, goal.Id, sweepFacts.GitFacts) &&
+        !HasPendingCleanupBackoff(executionDirectory, goal.Id, sweepFacts.EphemeralDirectories);
 
     private static bool IsCleanupBlocker(TerminalGoalSweepBlocker blocker) =>
         blocker.Kind is "completed-worktree-cleanup-needed" or
             "owned-ephemeral-cleanup-needed";
 
-    private static bool HasPendingCleanupBackoff(string executionDirectory, GoalId goalId) =>
-        EnumerateGoalCleanupPaths(executionDirectory, goalId)
+    private static bool HasPendingCleanupBackoff(
+        string executionDirectory,
+        GoalId goalId,
+        IReadOnlyList<string> ephemeralDirectories) =>
+        EnumerateGoalCleanupPaths(executionDirectory, goalId, ephemeralDirectories)
             .Any(path => GoalWorktrees.TryGetCleanupBackoff(path) is not null);
 
-    private static bool HasPendingGoalArtifactCleanup(string executionDirectory, GoalId goalId) =>
+    private static bool HasPendingGoalArtifactCleanup(
+        string executionDirectory,
+        GoalId goalId,
+        GoalGitFactIndex gitFacts) =>
         GoalWorktrees.TryResolve(executionDirectory, goalId) is not null ||
-        GoalGitFactIndex.GitRunner(
-            executionDirectory,
-            ["rev-parse", "--verify", "--quiet", $"refs/heads/{GoalWorktrees.BranchName(goalId)}"]).ExitCode == 0;
+        gitFacts.HasGoalBranch(goalId);
 
-    private static IEnumerable<string> EnumerateGoalCleanupPaths(string executionDirectory, GoalId goalId)
+    private static IEnumerable<string> EnumerateGoalCleanupPaths(
+        string executionDirectory,
+        GoalId goalId,
+        IReadOnlyList<string> ephemeralDirectories)
     {
         var root = Path.GetFullPath(executionDirectory);
         var fullGoalId = goalId.Value;
@@ -192,24 +216,15 @@ internal sealed class TerminalGoalSweepCache
         yield return GoalWorktrees.WorktreePath(root, goalId);
         yield return Path.Combine(root, ".orchestrator-context", fullGoalId);
 
-        foreach (var rootName in new[] { ".t", ".scratch" })
+        foreach (var directory in ephemeralDirectories)
         {
-            var ephemeralRoot = Path.Combine(root, rootName);
-            if (!Directory.Exists(ephemeralRoot))
+            var name = Path.GetFileName(directory);
+            if (name.Equals(fullGoalId, StringComparison.OrdinalIgnoreCase) ||
+                name.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase))
             {
-                continue;
-            }
-
-            foreach (var directory in Directory.EnumerateDirectories(ephemeralRoot))
-            {
-                var name = Path.GetFileName(directory);
-                if (name.Equals(fullGoalId, StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
-                    name.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase) ||
-                    name.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase))
-                {
-                    yield return directory;
-                }
+                yield return directory;
             }
         }
     }
@@ -272,6 +287,10 @@ internal sealed class TerminalGoalSweepCache
     private sealed record TerminalGoalSweepCacheFileEntry(string GoalId, string EvidenceKey, string Fingerprint);
 }
 
+internal sealed record TerminalGoalSweepCacheSweepFacts(
+    GoalGitFactIndex GitFacts,
+    IReadOnlyList<string> EphemeralDirectories);
+
 internal static class TerminalGoalSweep
 {
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner
@@ -287,7 +306,10 @@ internal static class TerminalGoalSweep
         TerminalGoalSweepCache? cache = null)
     {
         var dispatchRunner = new BackgroundDispatchRunner();
-        GoalGitFactIndex? branchFactIndex = null;
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory);
+        var cacheSweepFacts = new TerminalGoalSweepCacheSweepFacts(
+            branchFactIndex,
+            EnumerateEphemeralDirectories(executionDirectory));
         var results = new List<TerminalGoalSweepGoalResult>();
         var sweptGoalIds = new List<GoalId>();
         var cacheHits = 0;
@@ -298,13 +320,12 @@ internal static class TerminalGoalSweep
             var cacheEvidenceKey = string.Empty;
             if (cache is not null && IsTerminalSweepStatus(originalGoal.Status))
             {
-                branchFactIndex ??= GoalGitFactIndex.Build(executionDirectory);
                 cacheEvidenceKey = branchFactIndex.BuildGoalEvidenceKey(originalGoal);
             }
 
             if (cache is not null &&
                 cacheEvidenceKey.Length > 0 &&
-                cache.TryMarkHit(kernel, executionDirectory, originalGoal, cacheEvidenceKey))
+                cache.TryMarkHit(kernel, executionDirectory, originalGoal, cacheEvidenceKey, cacheSweepFacts))
             {
                 cacheHits++;
                 continue;
@@ -330,7 +351,6 @@ internal static class TerminalGoalSweep
             }
 
             var goal = kernel.GetGoal(originalGoal.Id);
-            branchFactIndex ??= GoalGitFactIndex.Build(executionDirectory);
             var branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
             var hasTerminalTaskDesync = TryBuildTerminalTaskDesyncEvidence(goal, out var desyncEvidence);
             var blockedByDirtyWorktree = false;
@@ -424,6 +444,9 @@ internal static class TerminalGoalSweep
             else if (!blockedByDirtyWorktree &&
                      !branchFacts.BranchAlreadyLanded &&
                      onlyGoalId is null &&
+                     !branchFacts.HasRegisteredWorktree &&
+                     !branchFacts.HasGoalBranch &&
+                     !Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)) &&
                      TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var staleTerminalExclusionEvidence))
             {
                 blockers.Add(new TerminalGoalSweepBlocker(
@@ -431,10 +454,40 @@ internal static class TerminalGoalSweep
                     staleTerminalExclusionEvidence,
                     "excluded"));
             }
-            else if (!blockedByDirtyWorktree &&
-                     !branchFacts.BranchAlreadyLanded &&
-                     hasTerminalTaskDesync &&
-                     kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                originalGoal.Status is GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded &&
+                (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
+                 branchFactIndex.HasGoalBranch(GoalWorktrees.BranchName(goal.Id)) ||
+                 Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id))))
+            {
+                var removeResult = GoalWorktrees.RemoveTerminal(
+                    executionDirectory,
+                    goal.Id,
+                    kernel);
+                if (!removeResult.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "terminal-worktree-cleanup-needed",
+                        removeResult.Message,
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                }
+                else
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "terminal-worktree-cleanup",
+                        removeResult.Message,
+                        $"workspace remove {prefix}"));
+                }
+
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
+            }
+
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                !branchFacts.BranchAlreadyLanded &&
+                hasTerminalTaskDesync &&
+                kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",
@@ -475,12 +528,19 @@ internal static class TerminalGoalSweep
                 !skipMergedCleanupThisPass &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
-                var removeResult = GoalWorktrees.Remove(
-                    executionDirectory,
-                    goal.Id,
-                    kernel,
-                    branchFacts.HasRegisteredWorktree,
-                    branchFacts.HasGoalBranch);
+                var removeResult = goal.Status == GoalStatus.Verified
+                    ? GoalWorktrees.Remove(
+                        executionDirectory,
+                        goal.Id,
+                        kernel,
+                        branchFacts.HasRegisteredWorktree,
+                        branchFacts.HasGoalBranch)
+                    : GoalWorktrees.RemoveTerminal(
+                        executionDirectory,
+                        goal.Id,
+                        kernel,
+                        branchFacts.HasRegisteredWorktree,
+                        branchFacts.HasGoalBranch);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -541,18 +601,35 @@ internal static class TerminalGoalSweep
             {
                 var currentGoal = kernel.GetGoal(originalGoal.Id);
                 var currentEvidenceKey = IsTerminalSweepStatus(currentGoal.Status)
-                    ? branchFactIndex!.BuildGoalEvidenceKey(currentGoal)
+                    ? branchFactIndex.BuildGoalEvidenceKey(currentGoal)
                     : cacheEvidenceKey;
-                cache.Record(kernel, executionDirectory, currentGoal, currentEvidenceKey, blockers);
+                cache.Record(kernel, executionDirectory, currentGoal, currentEvidenceKey, blockers, cacheSweepFacts);
             }
         }
 
+        cache?.Flush();
         return new TerminalGoalSweepResult(
             results,
             CountGlobalStaleTerminalExclusions(results),
             cacheHits,
             cacheMisses,
             sweptGoalIds);
+    }
+
+    private static IReadOnlyList<string> EnumerateEphemeralDirectories(string executionDirectory)
+    {
+        var root = Path.GetFullPath(executionDirectory);
+        var directories = new List<string>();
+        foreach (var rootName in new[] { ".t", ".scratch" })
+        {
+            var ephemeralRoot = Path.Combine(root, rootName);
+            if (Directory.Exists(ephemeralRoot))
+            {
+                directories.AddRange(Directory.EnumerateDirectories(ephemeralRoot));
+            }
+        }
+
+        return directories;
     }
 
     private static bool TryReconcileVerifiedMissingBranchOrWorktree(

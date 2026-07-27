@@ -99,7 +99,8 @@ public sealed class TaskSpec
                     LastVerification.StandardErrorPath,
                     LastVerification.ProviderFailureKind,
                     LastVerification.ReviewFindingTouchedAnchors,
-                    LastVerification.ReviewedCommit),
+                    LastVerification.ReviewedCommit,
+                    LastVerification.MergedReviewFindings),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -113,7 +114,8 @@ public sealed class TaskSpec
                     verification.StandardErrorPath,
                     verification.ProviderFailureKind,
                     verification.ReviewFindingTouchedAnchors,
-                    verification.ReviewedCommit))
+                    verification.ReviewedCommit,
+                    verification.MergedReviewFindings))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -218,7 +220,8 @@ public sealed class TaskSpec
                     verification.StandardErrorPath,
                     ProviderFailureKind: verification.ProviderFailureKind,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
-                    ReviewedCommit: verification.ReviewedCommit));
+                    ReviewedCommit: verification.ReviewedCommit,
+                    MergedReviewFindings: verification.MergedReviewFindings));
             }
         }
 
@@ -236,7 +239,8 @@ public sealed class TaskSpec
                 snapshot.LastVerification.StandardErrorPath,
                 ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
-                ReviewedCommit: snapshot.LastVerification.ReviewedCommit);
+                ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
+                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);

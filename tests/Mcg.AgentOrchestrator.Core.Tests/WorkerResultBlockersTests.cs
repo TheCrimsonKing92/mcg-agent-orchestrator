@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
 
 public sealed class WorkerResultBlockersTests
 {
@@ -132,22 +133,80 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-NEW").State);
     }
 
-    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_recycled_stable_id_at_existing_anchor")]
-    public void ReviewFindingConvergenceRejectsRecycledStableIdAtExistingAnchor()
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_recycled_stable_id_at_open_anchor")]
+    public void ReviewFindingConvergenceRejectsRecycledStableIdAtOpenAnchor()
     {
         var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         var previous = new[]
         {
-            new ReviewFinding("F-1", ReviewFindingState.Resolved, anchor, "Original issue.")
+            new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Original issue.")
         };
         var next = new ReviewFindingRound(
-            [new ReviewFinding("F-RECYCLED", ReviewFindingState.Open, anchor, "Same anchor, new identity.")],
+            [
+                new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Original issue."),
+                new ReviewFinding("F-RECYCLED", ReviewFindingState.Open, anchor, "Same anchor, new identity.")
+            ],
             [anchor]);
 
         var error = Assert.Throws<ReviewFindingConvergenceException>(
             () => ReviewFindingConvergence.ApplyRound(previous, next));
 
         Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_new_stable_id_at_resolved_anchor")]
+    public void ReviewFindingConvergenceAllowsNewStableIdAtResolvedAnchor()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Resolved, anchor, "Original issue, fixed.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-NEW", ReviewFindingState.Open, anchor, "Genuinely new defect at the fixed site.")],
+            [anchor]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
+        Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-NEW").State);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_tolerates_hunk_drift_on_open_finding_and_refreshes_location")]
+    public void ReviewFindingConvergenceToleratesHunkDriftOnOpenFindingAndRefreshesLocation()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "1392-1412"), "Missing guard.")
+        };
+        var drifted = new ReviewFindingLocation("src/A.cs", "A.Run", "1403-1412");
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, drifted, "Missing guard.")],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
+        Assert.Equal(drifted, state.Single(finding => finding.StableId == "F-1").Location);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_new_stable_id_in_same_region_at_different_hunk")]
+    public void ReviewFindingConvergenceAllowsNewStableIdInSameRegionAtDifferentHunk()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "guard"), "First defect.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "guard"), "First defect."),
+                new ReviewFinding("F-2", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "dispose"), "Second, distinct defect in the same region.")
+            ],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(2, ReviewFindingConvergence.CountOpen(state));
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_resolved_finding_reported_at_moved_anchor")]
@@ -184,6 +243,156 @@ public sealed class WorkerResultBlockersTests
             () => ReviewFindingConvergence.ApplyRound(previous, next));
 
         Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+    }
+
+    [Xunit.Theory(DisplayName = "ReviewFindingConvergence_keeps_identity_across_region_paraphrases_and_refreshes_raw_region")]
+    [Xunit.InlineData("A.Run", "A.Run")]
+    [Xunit.InlineData("GoalAcceptanceVerifier.RunFocusedEvidence", "RunFocusedEvidence()")]
+    [Xunit.InlineData("Goal Acceptance Verifier Run Focused Evidence", "  gOaL   aCCeptance verifier run focused evidence  ")]
+    [Xunit.InlineData("Namespace.Type.RunFocusedEvidence<T>", "RunFocusedEvidence(string value, int count)")]
+    public void ReviewFindingConvergenceKeepsIdentityAcrossRegionParaphrasesAndRefreshesRawRegion(
+        string previousRegion,
+        string submittedRegion)
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", previousRegion, "old hunk"),
+                "Missing guard.")
+        };
+        var submittedLocation = new ReviewFindingLocation("src/A.cs", submittedRegion, "new hunk");
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, submittedLocation, "Missing guard.")],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(submittedLocation, Assert.Single(state).Location);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_does_not_normalize_file_identity")]
+    public void ReviewFindingConvergenceDoesNotNormalizeFileIdentity()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "RunFocusedEvidence"),
+                "Missing guard.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-1",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/B.cs", "RunFocusedEvidence"),
+                    "Missing guard.")
+            ],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+    }
+
+    [Xunit.Theory(DisplayName = "ReviewFindingConvergence_does_not_collapse_region_identity_to_empty")]
+    [Xunit.InlineData("(first)", "(second)")]
+    [Xunit.InlineData("<First>", "<Second>")]
+    [Xunit.InlineData("A.Run.", "B.Run.")]
+    public void ReviewFindingConvergenceDoesNotCollapseRegionIdentityToEmpty(
+        string previousRegion,
+        string submittedRegion)
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", previousRegion),
+                "Missing guard.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-1",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", submittedRegion),
+                    "Missing guard.")
+            ],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_recycle_guard_uses_raw_region_identity")]
+    public void ReviewFindingConvergenceRecycleGuardUsesRawRegionIdentity()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "FirstType.Run"),
+                "First defect.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                previous[0],
+                new ReviewFinding(
+                    "F-2",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "SecondType.Run"),
+                    "Second defect.")
+            ],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(2, state.Count);
+        Assert.Contains(state, finding => finding.StableId == "F-2");
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFinding_missing_severity_deserializes_and_round_trips_as_blocking")]
+    public void ReviewFindingMissingSeverityDeserializesAndRoundTripsAsBlocking()
+    {
+        const string legacyJson =
+            """{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."}""";
+
+        var finding = JsonSerializer.Deserialize<ReviewFinding>(legacyJson);
+
+        Assert.NotNull(finding);
+        Assert.Equal(FindingSeverity.Blocking, finding.Severity);
+
+        var serialized = JsonSerializer.Serialize(finding);
+        var roundTripped = JsonSerializer.Deserialize<ReviewFinding>(serialized);
+        Assert.NotNull(roundTripped);
+        Assert.Equal(FindingSeverity.Blocking, roundTripped.Severity);
+        Assert.Contains("\"severity\":\"Blocking\"", serialized, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "ReviewFinding_null_or_unrecognized_severity_defaults_to_blocking")]
+    [Xunit.InlineData("null")]
+    [Xunit.InlineData("\"informational\"")]
+    public void ReviewFindingNullOrUnrecognizedSeverityDefaultsToBlocking(string severityJson)
+    {
+        var findingsJson =
+            $$"""[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":{{severityJson}}}]""";
+
+        var parsed = ReviewFindingConvergence.TryParseJson(
+            findingsJson,
+            "[]",
+            out var round,
+            out var diagnostic);
+
+        Assert.True(parsed, diagnostic);
+        Assert.Equal(FindingSeverity.Blocking, Assert.Single(round.Findings).Severity);
     }
 
     [Xunit.Fact(DisplayName = "TryFindNeedsWorkVerdict_uses_open_structured_findings_when_blockers_is_none")]

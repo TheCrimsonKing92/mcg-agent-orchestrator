@@ -113,7 +113,8 @@ public sealed record TaskVerificationSnapshot(
     string? StandardErrorPath = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
-    string? ReviewedCommit = null)
+    string? ReviewedCommit = null,
+    IReadOnlyList<ReviewFinding>? MergedReviewFindings = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

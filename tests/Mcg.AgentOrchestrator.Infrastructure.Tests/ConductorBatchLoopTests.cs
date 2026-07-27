@@ -1491,6 +1491,8 @@ public sealed class ConductorBatchLoopTests
                 Assert.NotNull(persisted.TestResultPaths);
                 Assert.Single(persisted.TestResultPaths!);
                 Assert.True(File.Exists(persisted.TestResultPaths![0]));
+                Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(
+                    DotnetBuildEnvironmentManager.StableSlotArtifactsPath(candidate.SlotIndex))));
                 using var resultJson = JsonDocument.Parse(File.ReadAllText(completed.Attempt.ResultPath));
                 Assert.Equal(
                     persisted.TestResultPaths![0],
@@ -3764,11 +3766,13 @@ public sealed class ConductorBatchLoopTests
 
             var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
             var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var cacheJson = File.ReadAllText(Path.Combine(root, ".orchestrator", "terminal-goal-sweep-cache.json"));
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, first.CacheHitCount);
             Assert.Equal(0, second.CacheMissCount);
             Assert.Equal(1, second.CacheHitCount);
+            Assert.DoesNotContain(Environment.NewLine + "  ", cacheJson, StringComparison.Ordinal);
         }
         finally
         {
@@ -4797,6 +4801,453 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_applies_retry_intent_and_publishes_outcome_after_tick_persist")]
+    public async Task BatchLoopAppliesRetryIntentAndPublishesOutcomeAfterTickPersist()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-loop-operator-intent-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Apply operator retry");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "loop-retry-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Operator repaired through inbox.", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var persistedGoalIds = new List<GoalId>();
+
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                persistGoalTick: (_, goalIds) => persistedGoalIds.AddRange(goalIds));
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+            Assert.Contains(goal.Id, persistedGoalIds);
+            Assert.Contains(goal.Timeline, item =>
+                item.Kind == ProgressKind.GoalPolicyDecision &&
+                item.Message.Contains($"operator-intent:{intent.Id}", StringComparison.Ordinal));
+            Assert.NotNull(outcome);
+            Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Assert.Contains("Applied retry", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_does_not_publish_applied_intent_when_tick_persist_fails")]
+    public async Task BatchLoopDoesNotPublishAppliedIntentWhenTickPersistFails()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-persist-failure");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Keep claimed intent after failed persist");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "persist-failure-intent",
+                "persist-failure-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("retry after persistence recovers", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var sleepCalls = 0;
+
+            _ = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
+                 ConductorAutonomyPolicy.Conservative,
+                 NoStopPath(),
+                 maxIterations: 2,
+                 watchInterval: TimeSpan.FromSeconds(1),
+                 sleepFunc: _ =>
+                 {
+                     sleepCalls++;
+                     return true;
+                 },
+                 persistTick: _ => throw SqliteBusy(),
+                 keepAliveWhenIdle: true,
+                 busyWriteDelay: _ => { });
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Claimed, outcome!.Status);
+            Assert.Null(outcome.CompletedAt);
+            Assert.Equal(1, sleepCalls);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_rejects_operator_intent_outside_configured_goal_scope")]
+    public async Task BatchLoopRejectsOperatorIntentOutsideConfiguredGoalScope()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-scope");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var agents = AgentCatalog.Default().Agents;
+            var scopedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                agents,
+                "Scoped conductor goal");
+            var outsideGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                agents,
+                "Outside conductor goal");
+            var outsideTask = outsideGoal.Tasks.Single();
+            kernel.ReportTaskProgress(outsideGoal.Id, outsideTask.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "outside-scope-intent",
+                "outside-scope-key",
+                OperatorIntentVerbs.Retry,
+                outsideGoal.Id.Value,
+                outsideTask.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("retry outside scope", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+
+            _ = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onlyGoalId: scopedGoal.Id.Value);
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+            Assert.Contains("outside conductor scope", outcome.Outcome, StringComparison.Ordinal);
+            Assert.Equal(WorkTaskStatus.Failed, outsideTask.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_surfaces_rejected_intent_when_no_goal_is_eligible")]
+    public async Task BatchLoopSurfacesRejectedIntentWhenNoGoalIsEligible()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-rejected");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Surface rejected parked-goal intent");
+            kernel.ParkGoal(goal.Id, "operator parked");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "rejected-loop-intent",
+                "rejected-loop-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                TaskId.New().Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("invalid task", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var ticks = new List<BatchTickSummary>();
+
+            _ = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: ticks.Add,
+                persistGoalTick: (_, _) => { });
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+            Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
+                line.Contains("result=rejected", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_after_operator_intent_detaches_and_checkpoints")]
+    public async Task BatchLoopStopAfterOperatorIntentDetachesAndCheckpoints()
+    {
+        var root = CreateTempDirectory("mcg-loop-stop-after-operator-intent");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Stop after rejected operator intent");
+            kernel.ParkGoal(goal.Id, "parked for operator");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "stop-after-intent",
+                "stop-after-intent-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                TaskId.New().Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("invalid task", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var stopFile = Path.Combine(root, ConductorBatchLoop.StopFileName);
+            var detachCalls = 0;
+            var checkpointCalls = 0;
+
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store),
+                detachGoalRunningDispatches: (_, detachedGoal) =>
+                {
+                    Assert.Equal(goal.Id, detachedGoal.Id);
+                    detachCalls++;
+                }).Run(
+                    kernel,
+                    MakeDriver(),
+                    ConductorAutonomyPolicy.Conservative,
+                    stopFile,
+                    maxIterations: 2,
+                    onTick: _ => File.WriteAllText(stopFile, "stop"),
+                    persistTick: _ => checkpointCalls++);
+
+            var outcome = await store.GetAsync(intent.Id);
+            Assert.True(summary.StopRequested);
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal(1, detachCalls);
+            Assert.Equal(1, checkpointCalls);
+            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_fault_isolates_unavailable_operator_intent_store")]
+    public void BatchLoopFaultIsolatesUnavailableOperatorIntentStore()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-unavailable");
+        try
+        {
+            var databasePath = Path.Combine(root, "operator-intents.db");
+            File.WriteAllText(databasePath, "not a sqlite database");
+            var (kernel, _) = SimpleGoal("Advance despite unavailable intent inbox");
+            var workspaceCreates = 0;
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(
+                    new SqliteOperatorIntentStore(
+                        databasePath,
+                        Path.Combine(root, "logs"),
+                        readOnly: true))).Run(
+                kernel,
+                MakeDriver(createWorkspace: _ =>
+                {
+                    workspaceCreates++;
+                    return root;
+                }),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, summary.Advanced);
+            Assert.Equal(1, workspaceCreates);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_running_recovery_sequence_applies_retry_progress_and_manual_verification")]
+    public async Task BatchLoopRunningRecoverySequenceAppliesRetryProgressAndManualVerification()
+    {
+        var root = CreateTempDirectory("mcg-loop-operator-intent-recovery-sequence");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Apply running-loop recovery sequence");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var coordinator = new OperatorIntentCoordinator(store);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+            async Task SubmitAndTick(string id, string verb, object payload)
+            {
+                await store.EnqueueAsync(new OperatorIntentRecord(
+                    id,
+                    $"{id}-key",
+                    verb,
+                    goal.Id.Value,
+                    task.Id.Value,
+                    JsonSerializer.Serialize(
+                        payload,
+                        payload.GetType(),
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                    [],
+                    "operator",
+                    "cli",
+                    "local-process",
+                    DateTimeOffset.UtcNow));
+                _ = new ConductorBatchLoop(operatorIntents: coordinator).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    persistGoalTick: (_, _) => { });
+                Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(id))!.Status);
+            }
+
+            await SubmitAndTick(
+                "sequence-retry",
+                OperatorIntentVerbs.Retry,
+                new RetryOperatorIntentPayload("mechanical recovery", RetryRoundKind.Mechanical));
+            await SubmitAndTick(
+                "sequence-progress",
+                OperatorIntentVerbs.Progress,
+                new ProgressOperatorIntentPayload(WorkTaskStatus.Completed, "existing work still stands"));
+            var verification = new TaskVerificationRecord(
+                "manual-verification passed",
+                root,
+                0,
+                "operator checked existing result",
+                string.Empty,
+                DateTimeOffset.UtcNow);
+            await SubmitAndTick(
+                "sequence-verify",
+                OperatorIntentVerbs.VerifyManual,
+                new ManualVerificationOperatorIntentPayload(verification));
+
+            Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, task.Id).Status);
+            Assert.Equal(verification, kernel.GetTask(goal.Id, task.Id).LastVerification);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_recovers_claimed_intent_without_duplicate_state_mutation")]
+    public async Task OperatorIntentCoordinatorRecoversClaimedIntentWithoutDuplicateStateMutation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-loop-operator-intent-recovery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Recover claimed operator retry");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "loop-recovery-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Apply once.", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+
+            var first = new OperatorIntentCoordinator(store).ExecutePending(kernel, goal);
+            Assert.True(first.MutatedGoalState);
+            var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            var restoredGoal = restored.GetGoal(goal.Id);
+
+            var replay = new OperatorIntentCoordinator(store).ExecutePending(restored, restoredGoal);
+            var outcome = await store.GetAsync(intent.Id);
+
+            Assert.False(replay.MutatedGoalState);
+            Assert.Single(restoredGoal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+            Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Assert.Contains("recovered durable goal marker", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_keeps_unchanged_escalated_goal_set_aside_without_reescalating")]
@@ -6225,7 +6676,7 @@ public sealed class ConductorBatchLoopTests
 
         Assert.False(appendedImmediately);
         Assert.Single(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
 
         writer.Append("loop-stop", null, "LOOP_STOP tick=2 reason=test");
@@ -6241,8 +6692,84 @@ public sealed class ConductorBatchLoopTests
             record.Detail.Contains("continuing=true", StringComparison.Ordinal));
         Assert.Contains(records, record => record.EventKind == "loop-stop");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_migrates_and_drains_legacy_parent_pending_events")]
+    public void ConductEventsMigratesAndDrainsLegacyParentPendingEvents()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-legacy-pending");
+        var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+        var logPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
+        Directory.CreateDirectory(logDirectory);
+        var legacyPendingPath = Path.Combine(
+            logDirectory,
+            $"{Path.GetFileName(logPath)}.pending-{Guid.NewGuid():N}.jsonl");
+        File.WriteAllText(
+            legacyPendingPath,
+            JsonSerializer.Serialize(
+                new ConductEventRecord(
+                    DateTimeOffset.Parse("2026-07-27T12:00:00Z"),
+                    "legacy-required",
+                    "goal1234",
+                    "LEGACY_REQUIRED goal=goal1234"),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+
+        var writer = new ConductEventLogWriter(logPath);
+        writer.Append("loop-stop", null, "LOOP_STOP tick=1 reason=test");
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Contains(records, record => record.EventKind == "legacy-required" && record.GoalId == "goal1234");
+        Assert.Contains(records, record => record.EventKind == "loop-stop");
+        Assert.False(File.Exists(legacyPendingPath));
+        Assert.Empty(Directory.GetFiles(
+            Path.Combine(logDirectory, ConductEventLogWriter.PendingEventsDirectoryName),
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_migrates_legacy_pending_events_for_each_log_name")]
+    public void ConductEventsMigratesLegacyPendingEventsForEachLogName()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-legacy-pending-names");
+        var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+        Directory.CreateDirectory(logDirectory);
+        var firstLogPath = Path.Combine(logDirectory, "first-events.log");
+        var secondLogPath = Path.Combine(logDirectory, "second-events.log");
+
+        static string WriteLegacyPending(string logDirectory, string logPath, string eventKind)
+        {
+            var pendingPath = Path.Combine(
+                logDirectory,
+                $"{Path.GetFileName(logPath)}.pending-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllText(
+                pendingPath,
+                JsonSerializer.Serialize(
+                    new ConductEventRecord(
+                        DateTimeOffset.Parse("2026-07-27T12:00:00Z"),
+                        eventKind,
+                        null,
+                        eventKind),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+            return pendingPath;
+        }
+
+        var firstPendingPath = WriteLegacyPending(logDirectory, firstLogPath, "first-legacy");
+        var secondPendingPath = WriteLegacyPending(logDirectory, secondLogPath, "second-legacy");
+
+        var firstWriter = new ConductEventLogWriter(firstLogPath);
+        var secondWriter = new ConductEventLogWriter(secondLogPath);
+        firstWriter.Append("first-current", null, "first-current");
+        secondWriter.Append("second-current", null, "second-current");
+
+        Assert.Contains("\"eventKind\":\"first-legacy\"", File.ReadAllText(firstLogPath), StringComparison.Ordinal);
+        Assert.Contains("\"eventKind\":\"second-legacy\"", File.ReadAllText(secondLogPath), StringComparison.Ordinal);
+        Assert.False(File.Exists(firstPendingPath));
+        Assert.False(File.Exists(secondPendingPath));
     }
 
     [Xunit.Fact(DisplayName = "ConductEvents_parallel_required_writers_drain_each_event_exactly_once")]
@@ -6296,7 +6823,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0001");
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
@@ -6368,7 +6895,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record => record.EventKind == "gate-total" && record.GoalId == "goal0001");
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 

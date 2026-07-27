@@ -52,6 +52,8 @@ function summarizeResponse(text){
     const errorLogPath = value.errorLogPath || value.ErrorLogPath;
     const listeningPorts = value.listeningPorts || value.ListeningPorts || [];
     const siblings = value.siblingProcesses || value.SiblingProcesses || [];
+    const warning = value.warning || value.Warning;
+    if(warning) return warning;
     if(stopReason) return `Stopped: ${stopReason}. Steps: ${stepCount}. Goal: ${goalId.slice(0, 8) || 'n/a'}.${continuation?.IsRunning || continuation?.isRunning ? ' Server continuation is watching.' : ''}`;
     if(action) return `Ran ${action}. Changed: ${count}. Goal: ${goalId.slice(0, 8) || 'n/a'}.`;
     if(processId && command && outputLogPath) return `Started build/test cycle PID ${processId}: ${command}. Logs: ${outputLogPath}${errorLogPath ? `, ${errorLogPath}` : ''}`;

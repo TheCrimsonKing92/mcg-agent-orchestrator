@@ -2558,17 +2558,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         elapsed.Stop();
         var passed = !result.TimedOut && result.ExitCode == 0;
         EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+        var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry.Paths);
         return (new AcceptanceCheckResult(
             result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,
             passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry),
-            Path.GetDirectoryName(telemetry.Paths[0]),
+            environment.ArtifactsPath,
             "goal-acceptance-verifier",
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
             ResultSummary: BuildGenericCommandResultSummary(result),
-            TestResultPaths: telemetry.Paths), false);
+            TestResultPaths: durableTestResultPaths), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -2948,6 +2949,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -2961,7 +2963,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 lockRemediationApplied,
                 BuildManagedDotnetResultSummary(result, lockRemediationApplied),
-                TestResultPaths: telemetry?.Paths), lockRemediationApplied);
+                TestResultPaths: durableTestResultPaths), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -3006,6 +3008,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
                 passed,
@@ -3019,7 +3022,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 true,
                 BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true),
-                TestResultPaths: telemetry?.Paths), true);
+                TestResultPaths: durableTestResultPaths), true);
         }
         finally
         {
@@ -5126,8 +5129,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var directory = !string.IsNullOrWhiteSpace(resultsDirectoryOverride)
             ? resultsDirectoryOverride
             : string.IsNullOrWhiteSpace(attemptPrefix)
-            ? Path.Combine(environment.ArtifactsPath, "TestResults")
-            : Path.GetDirectoryName(attemptPrefix);
+                ? Path.Combine(environment.ArtifactsPath, "TestResults")
+                : Path.GetDirectoryName(attemptPrefix);
         if (string.IsNullOrWhiteSpace(directory))
         {
             directory = Path.Combine(environment.ArtifactsPath, "TestResults");
@@ -5164,6 +5167,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 throw new IOException($"Unable to clear stale TRX before the test run: {path}");
             }
         }
+    }
+
+    internal static IReadOnlyList<string>? CopyCompletedTestReceiptsToAttemptFolder(
+        IReadOnlyList<string>? sourcePaths)
+    {
+        if (sourcePaths is null)
+        {
+            return null;
+        }
+
+        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        if (string.IsNullOrWhiteSpace(attemptPrefix))
+        {
+            return sourcePaths;
+        }
+
+        var receiptDirectory = Path.GetDirectoryName(attemptPrefix);
+        if (string.IsNullOrWhiteSpace(receiptDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Acceptance attempt TRX prefix '{attemptPrefix}' does not identify an attempt receipt folder.");
+        }
+
+        var durablePaths = new string[sourcePaths.Count];
+        for (var index = 0; index < sourcePaths.Count; index++)
+        {
+            var sourcePath = sourcePaths[index];
+            if (!File.Exists(sourcePath))
+            {
+                durablePaths[index] = sourcePath;
+                continue;
+            }
+
+            var destinationPath = Path.Combine(receiptDirectory, Path.GetFileName(sourcePath));
+            try
+            {
+                Directory.CreateDirectory(receiptDirectory);
+                if (!sourcePath.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+                    File.Copy(sourcePath, temporaryPath, overwrite: true);
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
+                }
+
+                durablePaths[index] = destinationPath;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException(
+                    $"Failed to preserve completed test receipt from '{sourcePath}' to attempt folder '{destinationPath}'.",
+                    ex);
+            }
+        }
+
+        return durablePaths;
     }
 
     private static string[] AddVstestTelemetryArguments(

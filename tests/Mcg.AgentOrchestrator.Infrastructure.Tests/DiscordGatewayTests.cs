@@ -190,6 +190,83 @@ public sealed class DiscordGatewayTests
         Assert.Equal("key-001", audit.InteractionId);
     }
 
+    [Xunit.Fact(DisplayName = "DiscordDecisionApplier_recovery_round_trips_through_operator_intent_with_full_audit")]
+    public async Task DiscordDecisionApplierRecoveryRoundTripsThroughOperatorIntentWithFullAudit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Discord operator-intent recovery");
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+        await repository.SaveAsync(kernel);
+        using var loopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        var collaborationStore = new CollaborationItemStore(Path.Combine(root, "collaboration-items.db"));
+        await collaborationStore.RaiseWithActionsAsync(
+            CollaborationItemType.Decision,
+            goal.Id.Value,
+            "Retry",
+            "Retry failed task",
+            "discord-intent-item",
+            [new CollaborationActionBinding("Retry", $"retry {goal.Id.Value[..8]} 1 discord-retry")]);
+        var providers = new InMemoryModelProviderRegistry([]);
+
+        var applier = new DiscordDecisionApplier(
+            root,
+            dispatch: (command, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var agents = (IReadOnlyList<AgentDefinition>)AgentCatalog.Default().Agents;
+                var profiles = WorkerProfileCatalog.Default();
+                Goal? currentGoal = null;
+                CliPersistentStateRunner.ExecuteCommand(
+                    CliArgumentParser.SplitCommand(command),
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal,
+                    DiscordTestOperatorChannel.Instance);
+                return Task.CompletedTask;
+            },
+            collaborationStore,
+            allowedUserIds: ["user1"]);
+        var decision = new OperatorDecision(
+            "discord-intent-item",
+            0,
+            null,
+            "discord:user1",
+            "discord-interaction-key");
+
+        Assert.True(await applier.ApplyAsync(decision));
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory,
+            workspace.LogDirectory);
+        var intent = Assert.Single(await intentStore.ListForGoalAsync(goal.Id.Value));
+        Assert.Equal("discord-interaction-key", intent.IdempotencyKey);
+        Assert.Equal("discord:user1", intent.Actor);
+        Assert.Equal("discord", intent.Channel);
+        Assert.Equal("discord-operator-allowlist", intent.AuthenticationAssurance);
+
+        var liveKernel = await repository.LoadAsync();
+        var liveGoal = liveKernel.GetGoal(goal.Id);
+        var coordinator = new OperatorIntentCoordinator(intentStore);
+        Assert.True(coordinator.ExecutePending(liveKernel, liveGoal).MutatedGoalState);
+        await repository.SaveAsync(liveKernel);
+        coordinator.CompletePersisted([goal.Id]);
+
+        var outcome = await intentStore.GetAsync(intent.Id);
+        Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+        var audit = Assert.Single(await collaborationStore.ListDecisionAuditAsync());
+        Assert.Equal("discord:user1", audit.ActorId);
+        Assert.Equal("discord-interaction-key", audit.InteractionId);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordDecisionApplier_duplicate_decision_not_re_executed")]
     public async Task DiscordDecisionApplierDuplicateDecisionNotReExecuted()
     {
@@ -1105,6 +1182,18 @@ public sealed class DiscordGatewayTests
         Assert.Contains("line(s)", content);
         Assert.Contains("goal-00", content);
         Assert.DoesNotContain("goal-29", content);
+    }
+
+    private sealed class DiscordTestOperatorChannel : IOperatorChannel
+    {
+        public static readonly DiscordTestOperatorChannel Instance = new();
+
+        public string ChannelType => "discord";
+
+        public Task SendEscalationAsync(
+            OperatorEscalation escalation,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeDiscordForumApi : IDiscordForumApi

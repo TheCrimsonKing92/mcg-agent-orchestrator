@@ -15,12 +15,14 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 2);
+        var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
+        return [.. SplitTaskTargetCommandWithTextFileFlag(command, commandRemainder, 2), .. metadataFlags];
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitRetryCommand(command, remainder);
+        var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
+        return [.. SplitRetryCommand(command, commandRemainder), .. metadataFlags];
     }
 
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase))
@@ -109,7 +111,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 2);
+        var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
+        return [.. SplitTaskTargetCommandWithTextFileFlag(command, commandRemainder, 2), .. metadataFlags];
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||
@@ -335,6 +338,82 @@ private static IReadOnlyList<string> SplitRetryCommand(string command, string re
         : string.Join(' ', [beforeFlag, afterFlag]).Trim();
     normalized.Add("--mechanical");
     return normalized.Where(part => !string.IsNullOrWhiteSpace(part)).ToArray();
+}
+
+private static (string CommandRemainder, IReadOnlyList<string> MetadataFlags) ExtractOperatorIntentMetadataFlags(
+    string remainder)
+{
+    const string idempotencyFlag = "--idempotency-key";
+    var flagIndex = remainder.LastIndexOf($" {idempotencyFlag} ", StringComparison.OrdinalIgnoreCase);
+    if (flagIndex < 0 && remainder.StartsWith($"{idempotencyFlag} ", StringComparison.OrdinalIgnoreCase))
+    {
+        flagIndex = 0;
+    }
+
+    if (flagIndex < 0)
+    {
+        return (remainder, []);
+    }
+
+    var commandRemainder = remainder[..flagIndex].Trim();
+    var metadata = TokenizeQuotedArguments(remainder[flagIndex..].Trim());
+    if (metadata.Count != 4 ||
+        !metadata[0].Equals(idempotencyFlag, StringComparison.OrdinalIgnoreCase) ||
+        !metadata[2].Equals("--operator-actor", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new ArgumentException(
+            "Operator intent metadata must be '--idempotency-key <key> --operator-actor <actor>'.");
+    }
+
+    return (commandRemainder, metadata);
+}
+
+private static IReadOnlyList<string> TokenizeQuotedArguments(string value)
+{
+    var parts = new List<string>();
+    var current = new System.Text.StringBuilder();
+    var quoted = false;
+    for (var index = 0; index < value.Length; index++)
+    {
+        var character = value[index];
+        if (character == '\\' && index + 1 < value.Length && value[index + 1] == '"')
+        {
+            current.Append('"');
+            index++;
+            continue;
+        }
+
+        if (character == '"')
+        {
+            quoted = !quoted;
+            continue;
+        }
+
+        if (char.IsWhiteSpace(character) && !quoted)
+        {
+            if (current.Length > 0)
+            {
+                parts.Add(current.ToString());
+                current.Clear();
+            }
+
+            continue;
+        }
+
+        current.Append(character);
+    }
+
+    if (quoted)
+    {
+        throw new ArgumentException("Operator intent metadata contains an unterminated quoted value.");
+    }
+
+    if (current.Length > 0)
+    {
+        parts.Add(current.ToString());
+    }
+
+    return parts;
 }
 
 private static int? ResolveRetryMessageIndex(IReadOnlyList<string> parts)

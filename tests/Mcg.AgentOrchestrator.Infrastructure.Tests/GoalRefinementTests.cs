@@ -166,7 +166,7 @@ public sealed class GoalRefinementTests
         var task = goal.Tasks.Single();
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "needs retry");
 
-        await GoalManagementCommandService.ApplyTaskActionAsync(
+        var queued = await GoalManagementCommandService.ApplyTaskActionAsync(
             kernel,
             AgentCatalog.Default().Agents,
             new InMemoryModelProviderRegistry([]),
@@ -176,6 +176,17 @@ public sealed class GoalRefinementTests
             "retry",
             """{"message":"Retry after running gh pr checkout and git push."}""");
 
+        var queuedIntent = Xunit.Assert.IsType<OperatorIntentDto>(queued);
+        Xunit.Assert.Equal(OperatorIntentStatus.Pending, queuedIntent.Status);
+        Xunit.Assert.DoesNotContain(
+            goal.Timeline,
+            evt => evt.Message.Contains("Brief capability warning", StringComparison.Ordinal));
+
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
+        var execution = coordinator.ExecutePending(kernel, goal);
+        coordinator.CompletePersisted([goal.Id]);
+
+        Xunit.Assert.True(execution.MutatedGoalState);
         var warnings = goal.Timeline
             .Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
                 evt.Message.Contains("Brief capability warning", StringComparison.Ordinal))

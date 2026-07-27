@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Concurrent;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -115,6 +116,8 @@ internal static class GoalOperationJournal
     public const string LandingIntentOperation = "conductor:landing-intent";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
     internal static Action? BeforeAcceptanceRetryAppend { get; set; }
+    private static readonly ConcurrentDictionary<string, Lazy<SqliteRunEventStore>> RunEventStores =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -830,7 +833,7 @@ internal static class GoalOperationJournal
                 System.IO.Path.GetFullPath(executionDirectory),
                 ".orchestrator",
                 "run-events.db");
-            var store = new SqliteRunEventStore(storePath);
+            var store = GetRunEventStore(storePath);
             store.AppendAsync(new RunEventAppend(
                 RunEventTypes.GoalOperation,
                 entry.GoalId.Value,
@@ -846,6 +849,30 @@ internal static class GoalOperationJournal
         {
             // The journal is still the command's primary lifecycle side effect; observability must not
             // make dispatch or acceptance fail.
+        }
+    }
+
+    internal static SqliteRunEventStore GetRunEventStore(string storePath)
+    {
+        var normalizedPath = Path.GetFullPath(storePath);
+        var lazy = RunEventStores.GetOrAdd(
+            normalizedPath,
+            static path => new Lazy<SqliteRunEventStore>(
+                () => new SqliteRunEventStore(path),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            if (RunEventStores.TryGetValue(normalizedPath, out var current) &&
+                ReferenceEquals(current, lazy))
+            {
+                RunEventStores.TryRemove(normalizedPath, out _);
+            }
+
+            throw;
         }
     }
 

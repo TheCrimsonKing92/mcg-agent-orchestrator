@@ -25,7 +25,7 @@ internal static class CliCommandHelp
     public const string InquiryUsage = "Usage: inquiry <goal-prefix> <task-number> --text-file <question>";
     public const string AgentUsage = "Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
     public const string AgentAddUsage = "Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
-    public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix]";
+    public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
@@ -182,7 +182,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Workspace = new(
         WorkspaceUsage,
         "Manage goal worktrees for create, merge, rebase, and remove operations.",
-        ["--autonomy", "--help", "-h"]);
+        ["--autonomy", "--force-terminal-cleanup", "--help", "-h"]);
 
     private static readonly CommandHelpEntry WorkspaceCreate = new(
         WorkspaceCreateUsage,

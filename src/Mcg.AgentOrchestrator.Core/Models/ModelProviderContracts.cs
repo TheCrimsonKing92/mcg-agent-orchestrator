@@ -58,13 +58,18 @@ public sealed record TaskVerificationRecord(
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
     string? HumanInputQuestion = null,
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
-    string? ReviewedCommit = null)
+    string? ReviewedCommit = null,
+    IReadOnlyList<ReviewFinding>? MergedReviewFindings = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
     public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
 
     public bool Succeeded => ExitCode == 0;
+
+    public IReadOnlyList<ReviewFinding> GetOpenAdvisoryFindings(
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
+        ReviewFindings.GetOpenAdvisoryFindings(MergedReviewFindings ?? [], criteriaCorrections);
 }
 
 public sealed record TaskDispatchRecord(

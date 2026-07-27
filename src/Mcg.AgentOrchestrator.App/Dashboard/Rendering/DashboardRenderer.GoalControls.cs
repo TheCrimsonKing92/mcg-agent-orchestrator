@@ -323,6 +323,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<section class=\"task-action-group task-action-group-wide\">");
         html.AppendLine("<h4>Retry</h4>");
         html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/retry\">");
+        html.AppendLine($"<input type=\"hidden\" name=\"idempotencyKey\" value=\"dashboard-retry-{Guid.NewGuid():N}\">");
         html.AppendLine("<div class=\"field\"><label>Retry note</label><input class=\"wide\" name=\"message\" placeholder=\"What changed or what should be tried next?\" required></div>");
         html.AppendLine("<button type=\"submit\">Retry task</button>");
         html.AppendLine("</form>");
@@ -374,6 +375,7 @@ public static partial class DashboardRenderer
         html.AppendLine("<p class=\"section-note\">PowerShell: quote filters that contain | so they stay command arguments.</p>");
         var manualModelFitPlaceholder = BuildModelFitNotePlaceholder(task);
         html.AppendLine($"<form class=\"controls compact\" data-action=\"{prefix}/verify-manual\">");
+        html.AppendLine($"<input type=\"hidden\" name=\"idempotencyKey\" value=\"dashboard-verify-manual-{Guid.NewGuid():N}\">");
         html.AppendLine("<div class=\"field\"><label>Manual result</label><select name=\"passed\"><option value=\"true\">Passed</option><option value=\"false\">Failed</option></select></div>");
         html.AppendLine($"<div class=\"field\"><label>Verification note</label><input name=\"note\"{manualModelFitPlaceholder} required></div>");
         html.AppendLine("<button type=\"submit\">Record manual result</button>");

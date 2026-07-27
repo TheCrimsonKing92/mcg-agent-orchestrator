@@ -23,7 +23,7 @@ public static partial class GoalWorktrees
         var debts = new List<GoalWorktreeCleanupDebt>();
         try
         {
-            using var conn = OpenCleanupStateConnection(statePath);
+            using var conn = OpenCleanupStateReadConnection(statePath);
             using var command = conn.CreateCommand();
             command.CommandText = """
                 SELECT b.path, b.reason, b.skip_until_utc,
@@ -46,7 +46,7 @@ public static partial class GoalWorktrees
                     skipUntilUtc - CleanupBackoffDurationFor(reason);
                 var lastSeenUtc = ReadOptionalDateTimeOffset(reader, 4) ?? firstSeenUtc;
                 var lastOperation = reader.IsDBNull(5) ? "(recorded)" : reader.GetString(5);
-                var skipCount = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);
+                var failureCount = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);
                 var escalatedAtUtc = ReadOptionalDateTimeOffset(reader, 7);
                 var now = CleanupUtcNow();
                 var age = now - firstSeenUtc;
@@ -70,7 +70,7 @@ public static partial class GoalWorktrees
                     skipUntilUtc,
                     age,
                     remaining,
-                    skipCount,
+                    failureCount,
                     escalatedAtUtc));
             }
         }
@@ -88,7 +88,7 @@ public static partial class GoalWorktrees
         string reason)
     {
         var path = WorktreePath(executionDirectory, goalId);
-        RecordCleanupNeeded(path, reason);
+        RecordCleanupNeeded(path, reason, goalId: goalId);
         return TryGetCleanupBackoff(path);
     }
 
@@ -101,7 +101,7 @@ public static partial class GoalWorktrees
     {
         return "cleanup-debt escalation: " +
             $"path='{path}' reason={reason} age={FormatRemainingWait(debt.Age)} " +
-            $"skip_count={debt.SkipCount} holders={FormatLockHolders(lockHolders)}";
+            $"consecutive_failures={debt.ConsecutiveFailureCount} holders={FormatLockHolders(lockHolders)}";
     }
 
     private static string FormatLockHolders(IReadOnlyList<WorktreeLockHolder> lockHolders) =>
@@ -192,12 +192,16 @@ public static partial class GoalWorktrees
             return true;
         }
 
-        ClearOrphanCleanupBackoff(path, cleanupStateRoot);
+        ClearOrphanCleanupDelay(path, cleanupStateRoot);
         return false;
     }
 
-    private static void RecordCleanupNeeded(string path, string reason, string? cleanupStateRoot = null) =>
-        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed", cleanupStateRoot);
+    private static void RecordCleanupNeeded(
+        string path,
+        string reason,
+        string? cleanupStateRoot = null,
+        GoalId? goalId = null) =>
+        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed", cleanupStateRoot, goalId);
 
     private static void ClearCleanupNeeded(string path, string? cleanupStateRoot = null) =>
         ClearOrphanCleanupBackoff(path, cleanupStateRoot);
@@ -212,11 +216,16 @@ public static partial class GoalWorktrees
         string path,
         string reason,
         string warningOperation = "orphan-sweep:backoff",
-        string? cleanupStateRoot = null)
+        string? cleanupStateRoot = null,
+        GoalId? goalId = null)
     {
         try
         {
             using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
+            var observation = RecordCleanupDebtObserved(conn, path, warningOperation, reason);
+            var retryDuration = observation.Debt.EscalatedAtUtc is null
+                ? CleanupBackoffDurationFor(reason)
+                : CleanupOptions.EscalatedRetryInterval;
             using var command = conn.CreateCommand();
             command.CommandText = """
                 INSERT INTO worktree_cleanup_backoff(path, skip_until_utc, reason)
@@ -224,12 +233,16 @@ public static partial class GoalWorktrees
                 ON CONFLICT(path) DO UPDATE SET
                     skip_until_utc = excluded.skip_until_utc,
                     reason = excluded.reason;
-                """;
+            """;
             command.Parameters.AddWithValue("$path", NormalizePath(path));
-            command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(CleanupBackoffDurationFor(reason)).ToString("O"));
+            command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(retryDuration).ToString("O"));
             command.Parameters.AddWithValue("$reason", reason);
             command.ExecuteNonQuery();
-            _ = RecordCleanupDebtObserved(conn, path, warningOperation, reason, incrementSkipCount: false);
+            if (observation.EscalatedNow)
+            {
+                RaiseCleanupDebtAttention(path, reason, observation.Debt, goalId);
+            }
+
             WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason, TryGetCleanupBackoff(path, cleanupStateRoot))));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
@@ -279,6 +292,7 @@ public static partial class GoalWorktrees
 
     private static void ClearOrphanCleanupBackoff(string path, string? cleanupStateRoot = null)
     {
+        var wasEscalated = false;
         try
         {
             var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
@@ -286,6 +300,7 @@ public static partial class GoalWorktrees
                 return;
 
             using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
+            wasEscalated = HasCleanupDebtEscalation(conn, NormalizePath(path));
             using var command = conn.CreateCommand();
             command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
             command.Parameters.AddWithValue("$path", NormalizePath(path));
@@ -298,6 +313,33 @@ public static partial class GoalWorktrees
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
             WarnCleanupFailure(path, "orphan-sweep:backoff-clear", ex);
+        }
+
+        if (wasEscalated)
+        {
+            ResolveCleanupDebtAttention(path);
+        }
+    }
+
+    private static void ClearOrphanCleanupDelay(string path, string? cleanupStateRoot = null)
+    {
+        try
+        {
+            var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
+            if (!File.Exists(statePath))
+            {
+                return;
+            }
+
+            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
+            using var command = conn.CreateCommand();
+            command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
+            command.Parameters.AddWithValue("$path", NormalizePath(path));
+            command.ExecuteNonQuery();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            WarnCleanupFailure(path, "orphan-sweep:backoff-delay-clear", ex);
         }
     }
 
@@ -331,6 +373,22 @@ public static partial class GoalWorktrees
         return conn;
     }
 
+    private static SqliteConnection OpenCleanupStateReadConnection(string statePath)
+    {
+        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = statePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+            DefaultTimeout = 1
+        }.ToString());
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 1000;";
+        command.ExecuteNonQuery();
+        return conn;
+    }
+
     private static void JournalCleanupBackoffSkip(
         string path,
         string operation,
@@ -340,15 +398,7 @@ public static partial class GoalWorktrees
         try
         {
             using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
-            var observation = RecordCleanupDebtObserved(conn, path, operation, backoff.Reason, incrementSkipCount: true);
-            if (observation.EscalatedNow)
-            {
-                var lockHolders = FindLockHoldersForCleanup(path);
-                WarnCleanupFailure(
-                    path,
-                    operation.Replace(":skip-backoff", ":cleanup-debt-escalated", StringComparison.OrdinalIgnoreCase),
-                    new IOException(BuildCleanupDebtEscalationMessage(path, backoff.Reason, observation.Debt, lockHolders)));
-            }
+            _ = RecordCleanupDebtObserved(conn, path, operation, backoff.Reason, incrementFailureCount: false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -361,7 +411,7 @@ public static partial class GoalWorktrees
         string path,
         string operation,
         string reason,
-        bool incrementSkipCount)
+        bool incrementFailureCount = true)
     {
         var normalizedPath = NormalizePath(path);
         var now = CleanupUtcNow();
@@ -382,16 +432,16 @@ public static partial class GoalWorktrees
                 $now,
                 $operation,
                 $reason,
-                $skipIncrement,
-                NULL)
+                $failureIncrement,
+                CASE WHEN $failureIncrement >= $escalationThreshold THEN $now ELSE NULL END)
             ON CONFLICT(path) DO UPDATE SET
                 last_seen_utc = excluded.last_seen_utc,
                 last_operation = excluded.last_operation,
                 last_reason = excluded.last_reason,
-                skip_count = worktree_cleanup_journal.skip_count + $skipIncrement,
+                skip_count = worktree_cleanup_journal.skip_count + $failureIncrement,
                 escalated_at_utc = CASE
                     WHEN worktree_cleanup_journal.escalated_at_utc IS NULL
-                         AND worktree_cleanup_journal.skip_count + $skipIncrement >= $escalationThreshold
+                         AND worktree_cleanup_journal.skip_count + $failureIncrement >= $escalationThreshold
                     THEN $now
                     ELSE worktree_cleanup_journal.escalated_at_utc
                 END;
@@ -400,8 +450,8 @@ public static partial class GoalWorktrees
         command.Parameters.AddWithValue("$now", now.ToString("O"));
         command.Parameters.AddWithValue("$operation", operation);
         command.Parameters.AddWithValue("$reason", reason);
-        command.Parameters.AddWithValue("$skipIncrement", incrementSkipCount ? 1 : 0);
-        command.Parameters.AddWithValue("$escalationThreshold", CleanupDebtEscalationSkipThreshold);
+        command.Parameters.AddWithValue("$failureIncrement", incrementFailureCount ? 1 : 0);
+        command.Parameters.AddWithValue("$escalationThreshold", CleanupOptions.EscalationThreshold);
         command.ExecuteNonQuery();
 
         using var read = conn.CreateCommand();
@@ -419,7 +469,7 @@ public static partial class GoalWorktrees
 
         var firstSeen = DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture);
         var lastSeen = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture);
-        var skipCount = reader.GetInt32(3);
+        var failureCount = reader.GetInt32(3);
         var escalatedAt = ReadOptionalDateTimeOffset(reader, 4);
         var age = now - firstSeen;
         if (age < TimeSpan.Zero)
@@ -433,15 +483,15 @@ public static partial class GoalWorktrees
             reader.GetString(2),
             firstSeen,
             lastSeen,
-            now.Add(CleanupBackoffDurationFor(reason)),
+            now.Add(escalatedAt is null ? CleanupBackoffDurationFor(reason) : CleanupOptions.EscalatedRetryInterval),
             age,
-            CleanupBackoffDurationFor(reason),
-            skipCount,
+            escalatedAt is null ? CleanupBackoffDurationFor(reason) : CleanupOptions.EscalatedRetryInterval,
+            failureCount,
             escalatedAt);
-        var escalatedNow = incrementSkipCount &&
+        var escalatedNow = incrementFailureCount &&
             !wasEscalated &&
             escalatedAt is not null &&
-            skipCount >= CleanupDebtEscalationSkipThreshold;
+            failureCount >= CleanupOptions.EscalationThreshold;
         return new CleanupDebtObservation(debt, escalatedNow);
     }
 
@@ -457,6 +507,60 @@ public static partial class GoalWorktrees
     private sealed record OrphanCleanupBackoffEntry(DateTimeOffset SkipUntilUtc, string Reason);
 
     private sealed record CleanupDebtObservation(GoalWorktreeCleanupDebt Debt, bool EscalatedNow);
+
+    private static void RaiseCleanupDebtAttention(
+        string path,
+        string reason,
+        GoalWorktreeCleanupDebt debt,
+        GoalId? goalId)
+    {
+        var lockHolders = FindLockHoldersForCleanup(path);
+        var message = BuildCleanupDebtEscalationMessage(path, reason, debt, lockHolders);
+        WarnCleanupFailure(path, "cleanup-debt-escalated", new IOException(message));
+        try
+        {
+            CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path))
+                .RaiseAsync(
+                    CollaborationItemType.Decision,
+                    goalId?.Value,
+                    $"Worktree cleanup escalated: {Path.GetFileName(path)}",
+                    string.Join(Environment.NewLine, [
+                        message,
+                        $"Retry: {(goalId is null ? "cleanup-status" : $"workspace remove {Prefix(goalId.Value)} --force-terminal-cleanup")}"
+                    ]),
+                    CleanupAttentionCorrelationKey(path))
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            WarnCleanupFailure(path, "cleanup-debt-attention-raise", ex);
+        }
+    }
+
+    private static void ResolveCleanupDebtAttention(string path)
+    {
+        try
+        {
+            _ = CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path))
+                .TryResolveAsync(CleanupAttentionCorrelationKey(path), "worktree cleanup succeeded")
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            WarnCleanupFailure(path, "cleanup-debt-attention-resolve", ex);
+        }
+    }
+
+    private static string CleanupAttentionDirectory(string path) =>
+        CleanupAttentionStoreDirectory ?? Path.Combine(LocateCleanupStateRoot(path), ".orchestrator");
+
+    private static string CleanupAttentionCorrelationKey(string path) =>
+        $"worktree-cleanup-debt:{NormalizePath(path)}";
+
+    private static string Prefix(string goalId) =>
+        goalId[..Math.Min(8, goalId.Length)].ToLowerInvariant();
 
     private static TimeSpan CleanupBackoffDurationFor(string reason) =>
         IsBudgetExhaustedCleanupNeededReason(reason) ? CleanupBudgetExhaustedBackoffDuration : CleanupBackoffDuration;

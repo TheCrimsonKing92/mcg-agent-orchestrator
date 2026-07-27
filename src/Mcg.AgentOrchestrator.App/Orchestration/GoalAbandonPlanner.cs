@@ -174,10 +174,7 @@ internal static class GoalAbandonPlanner
                 GoalTerminalDispositionKind.Retired,
                 $"Goal {goal.Id.Value[..8]} was abandoned by operator and is terminal: {before.Reason}"));
 
-        if (GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) is not null)
-        {
-            _ = GoalWorktrees.Remove(workspace.ExecutionDirectory, goal.Id, kernel);
-        }
+        _ = GoalWorktrees.RemoveTerminal(workspace.ExecutionDirectory, goal.Id, kernel);
 
         if (DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id).CanCleanup)
         {
