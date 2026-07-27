@@ -5437,7 +5437,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var attemptPrefix = AcceptanceAttemptResultsPrefix;
         if (!string.IsNullOrWhiteSpace(attemptPrefix))
         {
-            return $"{attemptPrefix}.{Slug(check.Name)}.{GateHeartbeatArtifacts.FileName}";
+            return $"{attemptPrefix}.{Slug(check.Name)}-{ShortHash(check.Name)}.{GateHeartbeatArtifacts.FileName}";
         }
 
         if (environment is not null)

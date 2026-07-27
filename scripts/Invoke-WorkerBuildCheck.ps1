@@ -307,11 +307,11 @@ try {
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
+        & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }
 
-    & dotnet build-server shutdown *> $null
     Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
 }
 

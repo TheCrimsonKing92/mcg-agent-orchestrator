@@ -1705,22 +1705,15 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
     internal void ReleaseExecutionLock()
     {
-        if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
-        {
-            return;
-        }
-
-        try
-        {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersBestEffort();
-        }
-        finally
-        {
-            _stream.Dispose();
-        }
+        ReleaseExecutionLockCore();
     }
 
     public void Dispose()
+    {
+        ReleaseExecutionLockCore();
+    }
+
+    private void ReleaseExecutionLockCore()
     {
         if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
         {
@@ -1729,11 +1722,11 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
         try
         {
-            _stream.Dispose();
+            DotnetBuildEnvironmentManager.ShutdownBuildServersBestEffort();
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersBestEffort();
+            _stream.Dispose();
         }
     }
 }

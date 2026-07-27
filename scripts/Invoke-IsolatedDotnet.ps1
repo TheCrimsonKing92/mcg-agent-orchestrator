@@ -95,12 +95,12 @@ function Get-BuildSlotName {
         return "build-0"
     }
 
-    [int64]$hash = 0
+    [int]$hash = 0
     foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
-        $hash = (($hash * 31) + [int][char]$ch) % 2147483647
+        $hash = ($hash + [int][char]$ch) % 2
     }
 
-    return "build-$([Math]::Abs($hash % 2))"
+    return "build-$hash"
 }
 
 function Clear-ArtifactsDirectory {
@@ -687,6 +687,7 @@ try {
         $appDllBeforeDotnet = Get-AppDllSnapshot
         if ($ReuseArtifacts) {
             $mtpArguments = Get-MtpTestArguments -Values $DotnetArguments
+            & dotnet build-server shutdown *> $null
             $lockStream.Unlock(0, 1)
             $lockStream.Dispose()
             $lockStream = $null
@@ -704,11 +705,11 @@ try {
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
+        & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }
 
-    & dotnet build-server shutdown *> $null
     Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($GoalPrefix) -and $exitCode -eq 0) {
         Remove-Item -LiteralPath $runRoot -Force -Recurse -ErrorAction SilentlyContinue

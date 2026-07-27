@@ -1238,6 +1238,31 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dispose_shuts_down_build_servers_before_releasing_permit")]
+    public void DotnetBuildEnvironmentManagerDisposeShutsDownBuildServersBeforeReleasingPermit()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        bool? permitAvailableDuringShutdown = null;
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () =>
+            permitAvailableDuringShutdown =
+                DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0);
+        try
+        {
+            var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
+
+            lease.Dispose();
+
+            Assert.False(permitAvailableDuringShutdown ?? true);
+            Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_success_cleanup_removes_only_invocation_run_roots")]
     public void DotnetBuildEnvironmentManagerSuccessCleanupRemovesOnlyInvocationRunRoots()
     {
@@ -1791,6 +1816,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.DoesNotContain("sandbox=1", log);
             Assert.DoesNotContain("account=sandbox-user", log);
             Assert.DoesNotContain("target=sandbox-target", log);
+            Assert.True(File.Exists(Path.Combine(root, "isolated-dotnet", "build-slots", "build-0.lock")));
+            Assert.False(File.Exists(Path.Combine(root, "isolated-dotnet", "build-slots", "build-1.lock")));
             Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
             Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
         }

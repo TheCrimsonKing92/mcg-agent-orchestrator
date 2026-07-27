@@ -2325,8 +2325,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "infrastructure lane beta",
             environment,
             stableSlotIndex: 0);
+        var punctuationFirst = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane alpha+beta",
+            environment,
+            stableSlotIndex: 0);
+        var punctuationSecond = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane alpha beta",
+            environment,
+            stableSlotIndex: 0);
 
         Assert.NotEqual(first, second);
+        Assert.NotEqual(punctuationFirst, punctuationSecond);
         Assert.StartsWith(root + Path.DirectorySeparatorChar, first, StringComparison.OrdinalIgnoreCase);
         Assert.StartsWith(root + Path.DirectorySeparatorChar, second, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(environment.ArtifactsPath, first, StringComparison.OrdinalIgnoreCase);

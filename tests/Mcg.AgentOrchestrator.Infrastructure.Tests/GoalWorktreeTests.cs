@@ -1687,7 +1687,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         var isolatedRoot = Path.Combine(root, "isolated");
         var shimDirectory = Path.Combine(root, "shim");
         var workDirectory = Path.Combine(root, "repo");
-        var artifactsPath = Path.Combine(isolatedRoot, "slots", StableSlotName("reuse-goal"), "artifacts");
+        var artifactsPath = Path.Combine(isolatedRoot, "goals", "reuse-goal", "artifacts");
         const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
         var dependencyDirectory = Path.Combine(artifactsPath, "bin", projectName, "debug");
         var assemblyPath = Path.Combine(dependencyDirectory, $"{projectName}.dll");
@@ -1816,17 +1816,6 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(file, target);
         }
-    }
-
-    private static string StableSlotName(string value)
-    {
-        long hash = 0;
-        foreach (var character in value.ToLowerInvariant())
-        {
-            hash = ((hash * 31) + character) % 2147483647;
-        }
-
-        return $"slot-{Math.Abs(hash % 4)}";
     }
 
     private sealed record ReuseFixture(
