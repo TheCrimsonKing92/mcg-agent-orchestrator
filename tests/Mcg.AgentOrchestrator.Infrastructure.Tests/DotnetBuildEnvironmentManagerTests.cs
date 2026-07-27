@@ -64,6 +64,39 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_goal_resolution_is_read_only")]
+    public async Task DotnetBuildEnvironmentManagerConcurrentGoalResolutionIsReadOnly()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var goalId = new GoalId("1234567890abcdef1234567890abcdef");
+        var initial = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance");
+        var metadataPath = initial.LeaseMetadataPath
+            ?? throw new InvalidOperationException("Expected goal lease metadata.");
+        try
+        {
+            var metadataBefore = await File.ReadAllBytesAsync(metadataPath);
+
+            var resolved = await Task.WhenAll(
+                Enumerable.Range(0, 32)
+                    .Select(_ => Task.Run(() =>
+                        DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId))));
+
+            var metadataAfter = await File.ReadAllBytesAsync(metadataPath);
+            Assert.Equal(metadataBefore, metadataAfter);
+            Assert.All(resolved, environment =>
+            {
+                Assert.Equal(initial.RootPath, environment.RootPath);
+                Assert.Equal(initial.ArtifactsPath, environment.ArtifactsPath);
+                Assert.Equal(initial.ExecutionLockPath, environment.ExecutionLockPath);
+                Assert.Equal(initial.LeaseMetadataPath, environment.LeaseMetadataPath);
+            });
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_manual_attempts_use_invocation_local_artifacts")]
     public void DotnetBuildEnvironmentManagerManualAttemptsUseInvocationLocalArtifacts()
     {

@@ -236,13 +236,36 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         const string displayName = "structural coverage discovers Core through direct MTP";
         var calls = new List<string[]>();
+        var buildPermitChecks = 0;
+        DotnetBuildEnvironmentLease? buildLease = null;
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
+            buildLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var buildPermitIndex = buildLease.Environment.BuildPermitIndex
+                ?? throw new InvalidOperationException("Expected a scheduler-managed build permit.");
             var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
             {
                 calls.Add(arguments);
+                if (arguments.Length >= 2 &&
+                    arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    arguments[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+                {
+                    Xunit.Assert.False(
+                        DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermitIndex),
+                        "Every build, including the structural-coverage baseline build, must hold a build permit.");
+                    buildPermitChecks++;
+                }
+                else if (arguments.Contains("--list-tests") ||
+                    arguments.Contains("--report-trx-filename"))
+                {
+                    Xunit.Assert.True(
+                        DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermitIndex),
+                        "MTP test execution and discovery must not retain a build permit.");
+                }
+
                 if (arguments.Contains("--list-tests"))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, displayName));
@@ -257,9 +280,13 @@ public sealed class AcceptanceGateEngineSettingsTests
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             });
 
-            var result = await verifier.RunAsync(root);
+            var result = await verifier.RunAsync(
+                root,
+                stableSlotIndex: buildPermitIndex,
+                stableSlotLease: buildLease);
 
             Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Equal(2, buildPermitChecks);
             Xunit.Assert.Contains(result.Checks!, check =>
                 check.Name == "structural test coverage" &&
                 check.ResultSummary!.Contains("discovered=1", StringComparison.Ordinal));
@@ -270,6 +297,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
+            buildLease?.Dispose();
             GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
             GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
