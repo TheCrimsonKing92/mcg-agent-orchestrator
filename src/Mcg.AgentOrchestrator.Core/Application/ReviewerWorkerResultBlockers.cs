@@ -104,39 +104,25 @@ public static class WorkerResultBlockers
             return true;
         }
 
-        var kept = new List<string>();
-        var suppressed = new List<string>();
-        foreach (var finding in SplitBlockerFindings(blocker))
-        {
-            if (EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
-                finding,
-                criteriaCorrections,
-                out _))
-            {
-                suppressed.Add(finding);
-                continue;
-            }
-
-            kept.Add(finding);
-        }
-
+        ReviewFindings.TryFilterWaivedDescriptions(
+            SplitBlockerFindings(blocker),
+            criteriaCorrections,
+            out var kept,
+            out var suppressed);
         if (suppressed.Count == 0)
         {
             return true;
         }
 
         blocker = string.Join("; ", kept);
-        suppressedFindings = suppressed;
+        suppressedFindings = suppressed.Select(item => item.Finding).ToArray();
         return !string.IsNullOrWhiteSpace(blocker);
     }
 
     public static bool IsSuppressedByCriteriaCorrection(
         string finding,
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
-        EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
-            finding,
-            criteriaCorrections,
-            out _);
+        ReviewFindings.IsWaived(finding, criteriaCorrections);
 
     public static bool TryFindEvidenceRequest(TaskVerificationRecord? verification, out string request)
     {

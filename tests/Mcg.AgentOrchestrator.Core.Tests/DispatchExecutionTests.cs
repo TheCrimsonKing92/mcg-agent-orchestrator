@@ -1077,6 +1077,94 @@ public sealed class DispatchExecutionTests
             evt.Message.Contains("F-1", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_open_advisory_findings")]
+    public void RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsOpenAdvisoryFindings()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Retain advisory reviewer findings", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskNote(
+            goal.Id,
+            reviewer.Id,
+            "CRITERIA CORRECTION: supersedes=\"obsolete readability suggestion\"; correction=\"current style is accepted\"");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var result = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Consider simplifying this branch.","severity":"advisory"},{"stable_id":"A-2","state":"resolved","location":{"file":"src/B.cs","region":"B.Run"},"description":"Resolved advisory.","severity":"advisory"},{"stable_id":"A-3","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Obsolete readability suggestion.","severity":"advisory"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Equal(3, reviewer.LastVerification!.MergedReviewFindings!.Count);
+        var advisory = Assert.Single(kernel.GetOpenAdvisoryReviewFindings(goal.Id));
+        Assert.Equal("A-1", advisory.StableId);
+        Assert.Equal(FindingSeverity.Advisory, advisory.Severity);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+        Assert.Equal("A-1", Assert.Single(restored.GetOpenAdvisoryReviewFindings(goal.Id)).StableId);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_still_rejects_open_blocking_among_advisories")]
+    public void RecordDispatchExecutionResultReviewerPassStillRejectsOpenBlockingAmongAdvisories()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Reject blocking reviewer finding", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var result = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"B-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Correctness defect.","severity":"blocking"},{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("open blocking stable_id(s): B-1", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_waived_finding_is_suppressed_at_recording")]
+    public void RecordDispatchExecutionResultWaivedFindingIsSuppressedAtRecording()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Suppress waived structured finding", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskNote(
+            goal.Id,
+            reviewer.Id,
+            "CRITERIA CORRECTION: supersedes=\"full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient\"");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var result = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"W-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing full Infrastructure suite before review.","severity":"blocking"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Equal("W-1", Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).StableId);
+        Assert.Empty(kernel.GetOpenAdvisoryReviewFindings(goal.Id));
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("verdict rejected", StringComparison.Ordinal));
+    }
+
     [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_reviewer_nonpass_open_findings_cannot_complete_without_text_blocker")]
     [Xunit.InlineData("needs-work")]
     [Xunit.InlineData("fail")]
@@ -1130,7 +1218,7 @@ public sealed class DispatchExecutionTests
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskFailed &&
-            evt.Message.Contains("zero open structured findings requires verdict: pass", StringComparison.Ordinal));
+            evt.Message.Contains("zero open blocking structured findings requires verdict: pass", StringComparison.Ordinal));
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskCompleted);
     }

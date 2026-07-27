@@ -71,23 +71,11 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var findings = SplitReviewerBlockerFindings(blocker);
-        var kept = new List<string>();
-        var suppressedItems = new List<(string Finding, EffectiveAcceptanceCriteriaCorrection Correction)>();
-        foreach (var finding in findings)
-        {
-            if (EffectiveAcceptanceCriteriaCorrectionParser.TryFindMatchingCorrection(
-                finding,
-                goal.EffectiveAcceptanceCriteriaCorrections,
-                out var correction))
-            {
-                suppressedItems.Add((finding, correction));
-                continue;
-            }
-
-            kept.Add(finding);
-        }
-
-        if (suppressedItems.Count == 0)
+        if (!ReviewFindings.TryFilterWaivedDescriptions(
+            findings,
+            goal.EffectiveAcceptanceCriteriaCorrections,
+            out var kept,
+            out var suppressedItems))
         {
             return false;
         }
