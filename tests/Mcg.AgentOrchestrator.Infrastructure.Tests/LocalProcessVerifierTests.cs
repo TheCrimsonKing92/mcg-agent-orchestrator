@@ -17,7 +17,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
             Assert.False(prepared.Command.Contains('\'', StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("--artifacts-path", StringComparison.Ordinal));
             Assert.False(prepared.Command.Contains("--disable-build-servers", StringComparison.Ordinal));
-            Assert.False(prepared.Command.Contains("-maxcpucount:1", StringComparison.Ordinal));
+            Assert.DoesNotContain("-maxcpucount:1", prepared.Command.Split(' '));
             Assert.False(prepared.Command.Contains("-p:UseSharedCompilation=false", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("-maxcpucount:", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains(Path.Combine("goals", goalId.Value[..8], "artifacts"), StringComparison.OrdinalIgnoreCase));

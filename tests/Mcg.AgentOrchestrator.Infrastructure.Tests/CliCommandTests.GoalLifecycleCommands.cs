@@ -2662,8 +2662,15 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
                 task.Id,
                 ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
             CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
-            var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
-            using var slot0Lock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0);
+            // De-slotting: acceptance acquires the goal's own deterministic build permit rather
+            // than overflowing to the first free slot. Hold the complement permit so the foreign
+            // lease never collides with the goal's permit (which would deterministically block
+            // acceptance under the no-overflow acquisition), while still proving acceptance
+            // acquires and pins its own permit regardless of an unrelated held slot.
+            var goalBuildPermit =
+                DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "permit-probe").BuildPermitIndex ?? 0;
+            var foreignSlot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(goalBuildPermit == 0 ? 1 : 0);
+            using var foreignSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(foreignSlot);
             var leaseHeldObserved = false;
             var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
             {
@@ -2688,12 +2695,12 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
                 phaseTimings: new CliPhaseTimingRecorder("acceptance"),
                 stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
 
-            Xunit.Assert.NotEqual(0, verifier.LastStableSlotIndex);
+            Xunit.Assert.Equal(goalBuildPermit, verifier.LastStableSlotIndex);
             var selectedSlot = verifier.LastStableSlotLease?.Environment.SlotOwnerToken;
             Xunit.Assert.False(string.IsNullOrWhiteSpace(selectedSlot));
             Xunit.Assert.True(leaseHeldObserved);
             Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=verification-suite", output);
-            Xunit.Assert.Contains($"slot={selectedSlot}", output);
+            Xunit.Assert.Contains($"slot=slot-{verifier.LastStableSlotIndex}", output);
 
             var conductEvent = File.ReadAllLines(workspace.ConductEventsLogPath)
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
