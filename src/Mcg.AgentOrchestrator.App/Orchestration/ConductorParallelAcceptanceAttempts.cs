@@ -473,7 +473,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 try
                 {
-                    AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attempt.AttemptId);
+                    if (stableSlotLease is not null)
+                    {
+                        AcceptanceAttemptArtifactCustody.Release(
+                            stableSlotLease.Environment.ArtifactsPath,
+                            attempt.AttemptId);
+                    }
                 }
                 finally
                 {

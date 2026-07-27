@@ -762,12 +762,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_mirrors_to_stable_slot_so_gate_status_sees_live_run")]
-    public void GoalAcceptanceVerifierGateHeartbeatMirrorsToStableSlotSoGateStatusSeesLiveRun()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_mirrors_are_run_scoped_and_terminal_cleanup_preserves_sibling")]
+    public void GoalAcceptanceVerifierGateHeartbeatMirrorsAreRunScopedAndTerminalCleanupPreservesSibling()
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-gate-status-mirror-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        var goalId = new GoalId("abcdef01abcdef01abcdef01abcdef01");
+        var firstGoalId = new GoalId("abcdef01abcdef01abcdef01abcdef01");
+        var secondGoalId = new GoalId("12345678123456781234567812345678");
         const int buildSlot = 0;
         var environment = new DotnetBuildEnvironment(
             "goal-mirror",
@@ -788,16 +789,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             // The attempt-results prefix is exactly what made gate-status structurally blind: it forces the
             // PRIMARY heartbeat onto an attempt-scoped path that GateHeartbeatArtifacts.ReadStableSlots never
             // reads.
-            using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                Path.Combine(root, "attempt-owner"));
-
-            var (primaryPath, stableSlotPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                "infrastructure lane",
-                goalId,
-                environment,
-                childPid,
-                stdoutPath,
-                stderrPath);
+            string firstPrimaryPath;
+            string? firstMirrorPath;
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-a")))
+            {
+                (firstPrimaryPath, firstMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    firstGoalId,
+                    environment,
+                    childPid,
+                    stdoutPath,
+                    stderrPath);
+            }
 
             var expectedStableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(buildSlot);
 
@@ -805,45 +809,62 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             // and is NOT the stable slot path gate-status reads.
             Assert.StartsWith(
                 Path.Combine(root, "attempt-owner"),
-                primaryPath,
+                firstPrimaryPath,
                 StringComparison.OrdinalIgnoreCase);
-            Assert.NotEqual(expectedStableSlotPath, primaryPath);
+            Assert.NotEqual(expectedStableSlotPath, firstPrimaryPath);
 
-            // The fix mirrors each beat onto the stable per-build-slot heartbeat keyed to the environment's
-            // build-concurrency slot (BuildPermitIndex) — the exact file gate-status reads.
-            Assert.Equal(expectedStableSlotPath, stableSlotPath);
+            Assert.Equal(
+                GateHeartbeatArtifacts.GetRunScopedStableSlotPath(buildSlot, firstPrimaryPath),
+                firstMirrorPath);
             Assert.True(
-                File.Exists(expectedStableSlotPath),
-                $"Stable-slot heartbeat mirror missing: {expectedStableSlotPath}");
+                File.Exists(firstMirrorPath),
+                $"Run-scoped heartbeat mirror missing: {firstMirrorPath}");
 
-            // gate-status's read path now observes the LIVE gate on the build slot.
-            var runningSlot = GateHeartbeatArtifacts.ReadStableSlots()
+            string secondPrimaryPath;
+            string? secondMirrorPath;
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-b")))
+            {
+                (secondPrimaryPath, secondMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    secondGoalId,
+                    environment,
+                    childPid + 1,
+                    stdoutPath,
+                    stderrPath);
+            }
+            Assert.NotEqual(firstMirrorPath, secondMirrorPath);
+
+            var runningSlots = GateHeartbeatArtifacts.ReadStableSlots()
+                .Where(status => status.SlotIndex == buildSlot)
+                .ToArray();
+            Assert.Equal(2, runningSlots.Length);
+            Assert.Contains(runningSlots, status =>
+                status.Snapshot?.GoalId == firstGoalId.Value &&
+                status.Snapshot.State == "running");
+            Assert.Contains(runningSlots, status =>
+                status.Snapshot?.GoalId == secondGoalId.Value &&
+                status.Snapshot.State == "running");
+
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-a")))
+            {
+                GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    firstGoalId,
+                    environment,
+                    childPid,
+                    stdoutPath,
+                    stderrPath,
+                    finalState: "completed");
+            }
+
+            Assert.False(File.Exists(firstMirrorPath));
+            var remainingSlot = GateHeartbeatArtifacts.ReadStableSlots()
                 .Single(status => status.SlotIndex == buildSlot);
-            Assert.True(
-                runningSlot.IsAvailable,
-                $"gate-status could not read slot {buildSlot}: {runningSlot.UnavailableReason}");
-            Assert.NotNull(runningSlot.Snapshot);
-            Assert.Equal("running", runningSlot.Snapshot!.State);
-            Assert.Equal(goalId.Value, runningSlot.Snapshot.GoalId);
-            Assert.Equal("infrastructure lane", runningSlot.Snapshot.CurrentTarget);
-            Assert.Equal(childPid, runningSlot.Snapshot.ChildPid);
-
-            // When the gate ends, the terminal beat overwrites the mirror on the same cadence, so gate-status
-            // stops showing "running" (no stale live state leaks onto the slot after the run).
-            GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                "infrastructure lane",
-                goalId,
-                environment,
-                childPid,
-                stdoutPath,
-                stderrPath,
-                finalState: "completed");
-
-            var finalSlot = GateHeartbeatArtifacts.ReadStableSlots()
-                .Single(status => status.SlotIndex == buildSlot);
-            Assert.True(finalSlot.IsAvailable);
-            Assert.NotNull(finalSlot.Snapshot);
-            Assert.Equal("completed", finalSlot.Snapshot!.State);
+            Assert.Equal(secondMirrorPath, remainingSlot.Path);
+            Assert.Equal("running", remainingSlot.Snapshot?.State);
+            Assert.Equal(secondGoalId.Value, remainingSlot.Snapshot?.GoalId);
         }
         finally
         {
@@ -5092,7 +5113,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static void TryDeleteStableSlotHeartbeat(int slotIndex)
     {
-        try { File.Delete(GateHeartbeatArtifacts.GetStableSlotPath(slotIndex)); } catch { }
+        var stablePath = GateHeartbeatArtifacts.GetStableSlotPath(slotIndex);
+        try { File.Delete(stablePath); } catch { }
+        try
+        {
+            var directory = Path.GetDirectoryName(stablePath) ?? ".";
+            var pattern =
+                $"{Path.GetFileNameWithoutExtension(stablePath)}-*{Path.GetExtension(stablePath)}";
+            foreach (var path in Directory.EnumerateFiles(directory, pattern))
+            {
+                try { File.Delete(path); } catch { }
+            }
+        }
+        catch { }
     }
 
     private static System.Diagnostics.Process StartSleepProcess()

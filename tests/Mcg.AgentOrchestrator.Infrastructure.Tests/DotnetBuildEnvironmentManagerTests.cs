@@ -481,8 +481,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(evidencePath));
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_terminal_cleanup_releases_manual_slot_custody")]
-    public void DotnetBuildEnvironmentManagerTerminalCleanupReleasesManualSlotCustody()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_terminal_cleanup_releases_exact_run_custody")]
+    public void DotnetBuildEnvironmentManagerTerminalCleanupReleasesExactRunCustody()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(null, "coverage-discovery");
@@ -495,20 +495,20 @@ public sealed class DotnetBuildEnvironmentManagerTests
             metadataPath,
             Environment.ProcessId);
 
-        AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId);
+        AcceptanceAttemptArtifactCustody.Release(environment.ArtifactsPath, attemptId);
 
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
-    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_uses_operator_build_namespace_outside_firewall_test_slots")]
-    public void InvokeWorkerBuildCheckUsesOperatorBuildNamespaceOutsideFirewallTestSlots()
+    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_preserves_per_goal_root_outside_firewall_test_slots")]
+    public void InvokeWorkerBuildCheckPreservesPerGoalRootOutsideFirewallTestSlots()
     {
         var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-WorkerBuildCheck.ps1"));
 
-        Assert.Contains(@"slots\operator-build""", source, StringComparison.Ordinal);
-        Assert.Contains(@"operators\worker-build""", source, StringComparison.Ordinal);
-        Assert.DoesNotContain(@"slots\operator-build\$safeGoalPrefix", source, StringComparison.Ordinal);
-        Assert.DoesNotContain(@"operators\worker-build\$safeGoalPrefix", source, StringComparison.Ordinal);
+        Assert.Contains(@"goals\$safeGoalPrefix""", source, StringComparison.Ordinal);
+        Assert.Contains(@"build-slots\$buildSlotName.lock""", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"slots\operator-build", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"operators\worker-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
     }
 
@@ -2593,8 +2593,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_numeric_running_attempt_custody_refuses_slot_takeover")]
-    public void InvokeIsolatedDotnetNumericRunningAttemptCustodyRefusesSlotTakeover()
+    [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_goal_run_does_not_take_over_obsolete_slot_custody")]
+    public void InvokeIsolatedDotnetGoalRunDoesNotTakeOverObsoleteSlotCustody()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -2675,10 +2675,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
             var output = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult();
 
-            Assert.NotEqual(0, process.ExitCode);
-            Assert.Contains(attemptId, output, StringComparison.Ordinal);
-            Assert.Contains(artifactsPath, output, StringComparison.OrdinalIgnoreCase);
+            Assert.True(
+                process.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}{output}");
             Assert.True(File.Exists(evidencePath));
+            Assert.True(Directory.Exists(Path.Combine(isolatedRoot, "goals", goalPrefix, "artifacts")));
         }
         finally
         {

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -59,6 +61,18 @@ public static class GateHeartbeatArtifacts
     public static string GetStableSlotPath(int slotIndex) =>
         DotnetBuildEnvironmentManager.BuildSlotHeartbeatPath(slotIndex);
 
+    public static string GetRunScopedStableSlotPath(int slotIndex, string runIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runIdentity);
+        var stablePath = GetStableSlotPath(slotIndex);
+        var directory = Path.GetDirectoryName(stablePath) ?? ".";
+        var fileName = Path.GetFileNameWithoutExtension(stablePath);
+        var extension = Path.GetExtension(stablePath);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(runIdentity)))[..12]
+            .ToLowerInvariant();
+        return Path.Combine(directory, $"{fileName}-{hash}{extension}");
+    }
+
     public static string GetManualPath(string worktreePath) =>
         Path.Combine(worktreePath, ".orchestrator", FileName);
 
@@ -68,7 +82,14 @@ public static class GateHeartbeatArtifacts
         var statuses = new List<GateHeartbeatStatus>(DotnetBuildEnvironmentManager.StableSlotCount);
         for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
         {
-            statuses.Add(ReadStableSlot(slot, now));
+            var runPaths = EnumerateRunScopedStableSlotPaths(slot);
+            if (runPaths.Count == 0)
+            {
+                statuses.Add(ReadStableSlot(slot, now));
+                continue;
+            }
+
+            statuses.AddRange(runPaths.Select(path => Read(slot, path, now)));
         }
 
         return statuses;
@@ -78,6 +99,23 @@ public static class GateHeartbeatArtifacts
     {
         var path = GetStableSlotPath(slotIndex);
         var now = observedAt ?? DateTimeOffset.UtcNow;
+        return Read(slotIndex, path, now);
+    }
+
+    public static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch
+        {
+            // Heartbeats are observability artifacts; they must never decide acceptance.
+        }
+    }
+
+    private static GateHeartbeatStatus Read(int slotIndex, string path, DateTimeOffset now)
+    {
         if (!File.Exists(path))
         {
             return new GateHeartbeatStatus(slotIndex, path, false, "missing", null, null, null);
@@ -103,6 +141,33 @@ public static class GateHeartbeatArtifacts
         catch
         {
             return new GateHeartbeatStatus(slotIndex, path, false, "invalid", null, null, null);
+        }
+    }
+
+    private static IReadOnlyList<string> EnumerateRunScopedStableSlotPaths(int slotIndex)
+    {
+        var stablePath = GetStableSlotPath(slotIndex);
+        var directory = Path.GetDirectoryName(stablePath) ?? ".";
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        var pattern =
+            $"{Path.GetFileNameWithoutExtension(stablePath)}-*{Path.GetExtension(stablePath)}";
+        try
+        {
+            return Directory.EnumerateFiles(directory, pattern)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [];
         }
     }
 

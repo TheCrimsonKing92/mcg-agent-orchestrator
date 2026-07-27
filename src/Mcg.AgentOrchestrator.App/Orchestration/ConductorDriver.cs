@@ -1458,7 +1458,7 @@ internal sealed class ConductorDriver
         var workerCap = policy.MaxConcurrentPaidWorkers;
         if (_hasGateReadyGoal())
         {
-            workerCap = Math.Min(workerCap, Math.Max(0, DotnetBuildEnvironmentManager.StableSlotCount - 1));
+            workerCap = Math.Min(workerCap, Math.Max(0, _getAcceptanceSlotCount(goal) - 1));
         }
 
         if (running >= workerCap)

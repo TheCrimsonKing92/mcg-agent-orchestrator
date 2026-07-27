@@ -5538,12 +5538,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             string.Join(' ', arguments.Select(QuoteForDisplay)));
     }
 
-    // gate-status reads ONLY the stable per-build-slot heartbeat (build-slots/activity-{n}). During a
-    // gate/evidence run the attempt-results prefix is always set, so ResolveGateHeartbeatPath returns an
-    // attempt-scoped primary path that gate-status never reads — leaving it structurally blind. When the
-    // run carries a build environment, mirror each beat onto that environment's build-concurrency slot so
-    // gate-status observes the live gate. Returns null when there is no build slot to mirror to, or when
-    // the primary path already IS the stable slot path (nothing gained by double-writing the same file).
+    // An attempt can run several checks after releasing its build permit, and unrelated goals can hash to
+    // the same permit index. Mirror each live run to a path keyed by its attempt-scoped primary heartbeat
+    // so terminal updates can never overwrite a sibling. Gate-status enumerates these run-scoped mirrors.
     private static string? ResolveStableSlotHeartbeatMirrorPath(
         DotnetBuildEnvironment? environment,
         string primaryHeartbeatPath)
@@ -5558,7 +5555,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var stableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(slotIndex);
         return primaryHeartbeatPath.Equals(stableSlotPath, StringComparison.OrdinalIgnoreCase)
             ? null
-            : stableSlotPath;
+            : GateHeartbeatArtifacts.GetRunScopedStableSlotPath(slotIndex, primaryHeartbeatPath);
     }
 
     private static string ResolveGateHeartbeatPath(
@@ -6219,13 +6216,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var snapshot = BuildSnapshot(state, childPid, exitCode);
             GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
-            MirrorToStableSlot(snapshot);
+            if (_context.StableSlotHeartbeatPath is { } stableSlotPath)
+            {
+                GateHeartbeatArtifacts.TryDelete(stableSlotPath);
+            }
         }
 
-        // Mirror the beat onto the stable per-build-slot heartbeat that gate-status reads. WriteFinal
-        // flows through here too, so the terminal state (completed/timed-out) overwrites the mirrored
-        // "running" snapshot on the same cadence and gate-status never keeps showing "running" once the
-        // gate has ended.
+        // Mirror only the live beat. WriteFinal removes this run's uniquely keyed mirror, leaving any
+        // concurrent sibling visible and preventing completed state from accumulating indefinitely.
         private void MirrorToStableSlot(GateHeartbeatSnapshot snapshot)
         {
             if (_context.StableSlotHeartbeatPath is { } stableSlotPath)

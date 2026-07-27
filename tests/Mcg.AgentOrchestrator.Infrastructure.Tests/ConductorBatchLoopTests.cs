@@ -1492,7 +1492,7 @@ public sealed class ConductorBatchLoopTests
                 Assert.Single(persisted.TestResultPaths!);
                 Assert.True(File.Exists(persisted.TestResultPaths![0]));
                 Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(
-                    DotnetBuildEnvironmentManager.StableSlotArtifactsPath(candidate.SlotIndex))));
+                    DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id))));
                 using var resultJson = JsonDocument.Parse(File.ReadAllText(completed.Attempt.ResultPath));
                 Assert.Equal(
                     persisted.TestResultPaths![0],
@@ -1514,6 +1514,7 @@ public sealed class ConductorBatchLoopTests
         finally
         {
             TryDeleteDirectory(attemptRoot);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
         }
     }
 

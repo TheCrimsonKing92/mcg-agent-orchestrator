@@ -217,7 +217,8 @@ public sealed class ConductorDriverTests
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
-        Func<bool>? hasGateReadyGoal = null)
+        Func<bool>? hasGateReadyGoal = null,
+        Func<Goal, int>? getAcceptanceSlotCount = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -249,6 +250,7 @@ public sealed class ConductorDriverTests
             normalizeLifecycleState: normalizeLifecycleState,
             recoverSandboxPrep: recoverSandboxPrep,
             hasGateReadyGoal: hasGateReadyGoal,
+            getAcceptanceSlotCount: getAcceptanceSlotCount,
             runFocusedEvidence: runFocusedEvidence,
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
@@ -663,8 +665,8 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_reserves_gate_slot_when_gate_ready")]
-    public void ConductorDriverWorkspaceReadyReservesGateSlotWhenGateReady()
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_reserves_acceptance_capacity_not_build_permit_count")]
+    public void ConductorDriverWorkspaceReadyReservesAcceptanceCapacityNotBuildPermitCount()
     {
         var (_, goal) = SimpleGoal();
         var policy = ConductorAutonomyPolicy.Conservative;
@@ -672,9 +674,10 @@ public sealed class ConductorDriverTests
 
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getRunningCount: () => DotnetBuildEnvironmentManager.StableSlotCount - 1,
+            getRunningCount: () => 3,
             dispatchAndStart: _ => { dispatchCalled = true; return DispatchStartOutcome.Started(); },
-            hasGateReadyGoal: () => true);
+            hasGateReadyGoal: () => true,
+            getAcceptanceSlotCount: _ => 4);
 
         ConductorAdvanceResult? result = null;
         var output = AsyncLocalConsoleRouter.Capture(() => result = driver.AdvanceOnce(goal, policy));
