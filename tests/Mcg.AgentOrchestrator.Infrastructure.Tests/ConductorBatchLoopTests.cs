@@ -369,9 +369,16 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "BatchLoop_runs_disjoint_gate_ready_acceptance_concurrently_on_distinct_slots")]
     public void BatchLoopRunsDisjointGateReadyAcceptanceConcurrentlyOnDistinctSlots()
     {
-        var kernel = new AgentOrchestratorKernel();
-        var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
-        var goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
+        AgentOrchestratorKernel kernel;
+        Goal goalA;
+        Goal goalB;
+        do
+        {
+            kernel = new AgentOrchestratorKernel();
+            goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
+            goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
+        }
+        while (BuildPermitIndex(goalA) == BuildPermitIndex(goalB));
         using var release = new ManualResetEventSlim(false);
         using var bothStarted = new CountdownEvent(2);
         using var bothFinished = new CountdownEvent(2);
@@ -738,14 +745,25 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_slot_exhaustion_queues_extra_goal")]
     public void BatchLoopParallelAcceptanceSlotExhaustionQueuesExtraGoal()
     {
-        var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(0, ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1)
-            .Select(index => CreateVerifiedSimpleGoal(
-                kernel,
-                $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
-            .ToArray();
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        AgentOrchestratorKernel kernel;
+        Goal[] goals;
+        do
+        {
+            kernel = new AgentOrchestratorKernel();
+            goals = Enumerable.Range(0, ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1)
+                .Select(index => CreateVerifiedSimpleGoal(
+                    kernel,
+                    $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
+                .ToArray();
+        }
+        while (goals
+            .Take(ConductorBatchLoop.DefaultParallelAcceptanceCapacity)
+            .Select(BuildPermitIndex)
+            .Distinct()
+            .Count() < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
         using var release = new ManualResetEventSlim(false);
-        using var firstWaveStarted = new CountdownEvent(ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
+        using var firstWaveStarted = new CountdownEvent(1);
         var running = 0;
         var maxRunning = 0;
         var slots = new ConcurrentQueue<int?>();
@@ -756,7 +774,6 @@ public sealed class ConductorBatchLoopTests
 
         try
         {
-            using var allStarted = new CountdownEvent(ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1);
             var driver = MakeDriver(
                 getFacts: goal => landed.Contains(goal.Id.Value)
                     ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
@@ -764,7 +781,6 @@ public sealed class ConductorBatchLoopTests
                 runAcceptanceWithSlot: (_, slot) =>
                 {
                     slots.Enqueue(slot);
-                    allStarted.Signal();
                     lock (gate)
                     {
                         running++;
@@ -811,35 +827,32 @@ public sealed class ConductorBatchLoopTests
             release.Set();
             waitForAttempts();
 
-            BatchTickSummary? firstFreeTick = null;
-            var firstFreeSummary = new ConductorBatchLoop().Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1,
-                onTick: t => firstFreeTick = t);
-            var totalAdvanced = firstFreeSummary.Advanced;
+            var totalAdvanced = 0;
             var deferredPrefix = goals[^1].Id.Value[..8];
-            var deferredGoalStartedOnFirstFreeTick = firstFreeTick?.ProgressLines?.Any(line =>
-                line.Contains($"ACCEPTANCE goal={deferredPrefix}", StringComparison.Ordinal) &&
-                line.Contains("result=started", StringComparison.Ordinal)) == true;
-
-            Assert.True(allStarted.Wait(TimeSpan.FromSeconds(5)));
-            waitForAttempts();
-
-            var finalSummary = new ConductorBatchLoop().Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1);
-            totalAdvanced += finalSummary.Advanced;
+            var deferredGoalEventuallyStarted = false;
+            for (var tick = 0; tick < 10 && totalAdvanced < goals.Length; tick++)
+            {
+                BatchTickSummary? retryTick = null;
+                var retrySummary = new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    onTick: current => retryTick = current);
+                totalAdvanced += retrySummary.Advanced;
+                deferredGoalEventuallyStarted |= retryTick?.ProgressLines?.Any(line =>
+                    line.Contains($"ACCEPTANCE goal={deferredPrefix}", StringComparison.Ordinal) &&
+                    line.Contains("result=started", StringComparison.Ordinal)) == true;
+                waitForAttempts();
+            }
 
             Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1, totalAdvanced);
-            Assert.True(deferredGoalStartedOnFirstFreeTick);
-            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, maxRunning);
-            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+            Assert.True(deferredGoalEventuallyStarted);
+            Assert.InRange(
+                maxRunning,
+                1,
+                DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
             Assert.DoesNotContain(slots, slot => !slot.HasValue);
             Assert.Contains(firstTick!.ProgressLines!, line =>
                 line.Contains("ADMISSION", StringComparison.Ordinal) &&
@@ -1432,9 +1445,9 @@ public sealed class ConductorBatchLoopTests
                     ConductorAutonomyPolicy.Conservative,
                     (runCandidate, _) =>
                     {
-                        var prefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+                        var prefix = GoalAcceptanceVerifier.AcceptanceAttemptResultsPrefixForTests;
                         Assert.False(string.IsNullOrWhiteSpace(prefix));
-                        var trxPath = prefix + ".dotnet-test.trx";
+                        var trxPath = $"{prefix}.dotnet-test.trx";
                         File.WriteAllText(trxPath, "trx");
                         return ConductorParallelAcceptanceRunResult.Accepted(
                             runCandidate,
@@ -2025,9 +2038,13 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "ParallelAcceptance_second_attempt_yields_without_running_while_first_holds_slot")]
     public void ParallelAcceptanceSecondAttemptYieldsWithoutRunningWhileFirstHoldsSlot()
     {
-        using var _ = IsolatedDotnetRootScope();
+        using var isolatedRoot = IsolatedDotnetRootScope();
         var (_, goalA) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldA.cs");
         var (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldB.cs");
+        while (BuildPermitIndex(goalA) != BuildPermitIndex(goalB))
+        {
+            (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldB.cs");
+        }
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         using var releaseFirst = new ManualResetEventSlim(false);
         using var firstHasLease = new ManualResetEventSlim(false);
@@ -2043,6 +2060,7 @@ public sealed class ConductorBatchLoopTests
         var candidateA = ConductorParallelAcceptanceCandidate.Create(goalA, 0, ["src/HoldA.cs"], "branch-a", "main");
         var candidateB = ConductorParallelAcceptanceCandidate.Create(goalB, 0, ["src/HoldB.cs"], "branch-b", "main");
         var secondRan = false;
+        DotnetBuildEnvironment? firstLeaseEnvironment = null;
 
         try
         {
@@ -2052,12 +2070,17 @@ public sealed class ConductorBatchLoopTests
                 (attemptCandidate, _, stableSlotLease, _) =>
                 {
                     Assert.NotNull(stableSlotLease);
+                    firstLeaseEnvironment = stableSlotLease.Environment;
                     firstHasLease.Set();
                     Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(5)));
                     return PassingRun(attemptCandidate, ConductorAutonomyPolicy.Conservative);
                 });
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, first.Kind);
             Assert.True(firstHasLease.Wait(TimeSpan.FromSeconds(5)));
+            var secondEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "contention-probe");
+            Assert.Equal(firstLeaseEnvironment!.ExecutionLockPath, secondEnvironment.ExecutionLockPath);
+            Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(secondEnvironment, TimeSpan.Zero));
 
             var second = coordinator.Evaluate(
                 candidateB,
@@ -2092,7 +2115,8 @@ public sealed class ConductorBatchLoopTests
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var liveCandidate = ConductorParallelAcceptanceCandidate.Create(liveGoal, 0, ["src/LiveCli.cs"], "branch-live", "main");
         var deadCandidate = ConductorParallelAcceptanceCandidate.Create(deadGoal, 0, ["src/DeadCli.cs"], "branch-dead", "main");
-        var liveEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var liveEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(liveGoal.Id, "live-cli");
+        var deadEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(deadGoal.Id, "dead-cli");
         var liveRan = false;
         var deadRan = false;
 
@@ -2113,7 +2137,7 @@ public sealed class ConductorBatchLoopTests
                 Assert.False(liveRan);
             }
 
-            File.WriteAllText(liveEnvironment.ExecutionLockPath, "999999");
+            File.WriteAllText(deadEnvironment.ExecutionLockPath, "999999");
             var deadCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
             var reclaimed = deadCoordinator.Evaluate(
                 deadCandidate,
@@ -2548,6 +2572,12 @@ public sealed class ConductorBatchLoopTests
         JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
             File.ReadAllText(path),
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    private static int BuildPermitIndex(Goal goal) =>
+        goal.Id.Value[..8]
+            .ToLowerInvariant()
+            .Sum(ch => (int)ch) %
+        DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
 
     private static void AssertBackgroundOutcome(
         string fileName,

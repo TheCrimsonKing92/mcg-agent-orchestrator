@@ -2303,6 +2303,48 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_use_distinct_attempt_heartbeat_files")]
+    public void GoalAcceptanceVerifierConcurrentShardsUseDistinctAttemptHeartbeatFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-shard-heartbeats-{Guid.NewGuid():N}");
+        var environment = new DotnetBuildEnvironment(
+            "goal-heartbeat",
+            root,
+            Path.Combine(root, "build-artifacts"),
+            Path.Combine(root, "build-slots", "build-0.lock"),
+            [],
+            "goal-heartbeat");
+        using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+            Path.Combine(root, "attempt-owner"));
+
+        var first = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane alpha",
+            environment,
+            stableSlotIndex: 0);
+        var second = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane beta",
+            environment,
+            stableSlotIndex: 0);
+
+        Assert.NotEqual(first, second);
+        Assert.StartsWith(root + Path.DirectorySeparatorChar, first, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(root + Path.DirectorySeparatorChar, second, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(environment.ArtifactsPath, first, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(environment.ArtifactsPath, second, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_owner_results_fallback_never_roots_in_goal_worktree")]
+    public void GoalAcceptanceVerifierOwnerResultsFallbackNeverRootsInGoalWorktree()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"mcg-owner-root-{Guid.NewGuid():N}");
+        var worktreePath = Path.Combine(repositoryRoot, ".orchestrator-worktrees", "abc12345");
+
+        var resolved = GoalAcceptanceVerifier.ResolveOwnerResultsRepositoryRoot(worktreePath);
+
+        Assert.Equal(repositoryRoot, resolved, ignoreCase: true);
+        Assert.False(resolved.StartsWith(worktreePath, StringComparison.OrdinalIgnoreCase));
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_gate_evidence_and_operator_owners_do_not_cross_contaminate")]
     public async Task GoalAcceptanceVerifierConcurrentGateEvidenceAndOperatorOwnersDoNotCrossContaminate()
     {
@@ -2310,6 +2352,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var attemptA = Path.Combine(root, "attempt-a");
         var attemptB = Path.Combine(root, "attempt-b");
         var operatorDirectory = Path.Combine(root, "operator");
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        var gateBuild = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "gate-chaos");
+        var operatorBuild = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "operator-chaos");
         var environment = new DotnetBuildEnvironment(
             "goal-chaos",
             root,
@@ -2319,45 +2364,144 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "goal-chaos");
         using var ready = new CountdownEvent(2);
         using var release = new ManualResetEventSlim(false);
+        var faults = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var custodyRefusals = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var activeBuildOwners = 0;
+        var maximumConcurrentBuildOwners = 0;
         try
         {
-            Task<string> RunOwnerAsync(string directory, string content) => Task.Run(() =>
+            static string Trx(string id, string testName) =>
+                $"<TestRun><TestDefinitions><UnitTest id=\"{id}\" name=\"{testName}\"><TestMethod className=\"ChaosTests\" name=\"{testName[(testName.LastIndexOf('.') + 1)..]}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"{id}\" testName=\"{testName}\" outcome=\"Passed\" /></Results></TestRun>";
+
+            static void RecordMaximum(ref int location, int value)
             {
-                using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                    Path.Combine(directory, "owner"));
-                ready.Signal();
-                release.Wait();
-                var resolved = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
-                Directory.CreateDirectory(resolved);
-                var receipt = Path.Combine(resolved, "lane.trx");
-                File.WriteAllText(receipt, content);
-                return receipt;
+                var observed = Volatile.Read(ref location);
+                while (value > observed)
+                {
+                    var prior = Interlocked.CompareExchange(ref location, value, observed);
+                    if (prior == observed)
+                    {
+                        return;
+                    }
+
+                    observed = prior;
+                }
+            }
+
+            Task<(string Path, long Length, string Hash, TestCoverageInvariantResult Coverage)> RunOwnerAsync(
+                string directory,
+                string testName,
+                bool ownsBuildPermit) => Task.Run(() =>
+            {
+                DotnetBuildEnvironmentLease? lease = null;
+                try
+                {
+                    if (ownsBuildPermit)
+                    {
+                        lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                                gateBuild,
+                                TimeSpan.Zero)).Lease;
+                        var concurrent = Interlocked.Increment(ref activeBuildOwners);
+                        RecordMaximum(ref maximumConcurrentBuildOwners, concurrent);
+                    }
+
+                    using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                        Path.Combine(directory, "owner"));
+                    var resolved = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
+                    Directory.CreateDirectory(resolved);
+                    var receipt = Path.Combine(resolved, "lane.trx");
+                    File.WriteAllText(receipt, Trx(Guid.NewGuid().ToString("N"), testName));
+                    var length = new FileInfo(receipt).Length;
+                    var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(receipt)));
+                    ready.Signal();
+                    release.Wait();
+
+                    if (!receipt.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    {
+                        custodyRefusals.Enqueue($"receipt escaped owner directory: {receipt}");
+                    }
+
+                    var coverage = TestCoverageInvariant.Evaluate(
+                        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { testName },
+                        [new TestPartitionCoverage(
+                            testName,
+                            Completed: true,
+                            TestResultPaths: [receipt],
+                            AttemptId: Path.GetFileName(directory))],
+                        currentAttemptId: Path.GetFileName(directory));
+                    return (receipt, length, hash, coverage);
+                }
+                catch (Exception ex)
+                {
+                    faults.Enqueue(ex.ToString());
+                    throw;
+                }
+                finally
+                {
+                    if (ownsBuildPermit)
+                    {
+                        Interlocked.Decrement(ref activeBuildOwners);
+                    }
+
+                    lease?.Dispose();
+                }
             });
 
-            var ownerA = RunOwnerAsync(attemptA, "attempt-a-receipt");
-            var ownerB = RunOwnerAsync(attemptB, "attempt-b-receipt");
+            var ownerA = RunOwnerAsync(attemptA, "ChaosTests.AttemptA", ownsBuildPermit: true);
+            var ownerB = RunOwnerAsync(attemptB, "ChaosTests.AttemptB", ownsBuildPermit: false);
             Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "Concurrent owners did not reach the event gate.");
+            var operatorBlocked = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(operatorBuild, TimeSpan.Zero));
+            Assert.Contains(
+                operatorBlocked.BusySlots,
+                slot => slot.SlotIndex == gateBuild.BuildPermitIndex);
             Directory.CreateDirectory(operatorDirectory);
             var operatorReceipt = Path.Combine(operatorDirectory, "operator.trx");
-            File.WriteAllText(operatorReceipt, "operator-receipt");
+            File.WriteAllText(operatorReceipt, Trx("operator", "ChaosTests.Operator"));
             release.Set();
 
             var receipts = await Task.WhenAll(ownerA, ownerB);
-            var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            using (var operatorLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    operatorBuild,
+                    TimeSpan.FromSeconds(2))).Lease)
             {
-                [receipts[0]] = "attempt-a-receipt",
-                [receipts[1]] = "attempt-b-receipt",
-                [operatorReceipt] = "operator-receipt"
-            };
-            Assert.StartsWith(attemptA + Path.DirectorySeparatorChar, receipts[0], StringComparison.OrdinalIgnoreCase);
-            Assert.StartsWith(attemptB + Path.DirectorySeparatorChar, receipts[1], StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(receipts, path => path.StartsWith(operatorDirectory, StringComparison.OrdinalIgnoreCase));
-            Assert.All(expected, pair => Assert.Equal(pair.Value, File.ReadAllText(pair.Key)));
-            Assert.Equal(3, expected.Keys.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+                var concurrent = Interlocked.Increment(ref activeBuildOwners);
+                RecordMaximum(ref maximumConcurrentBuildOwners, concurrent);
+                Interlocked.Decrement(ref activeBuildOwners);
+            }
+
+            Assert.StartsWith(attemptA + Path.DirectorySeparatorChar, receipts[0].Path, StringComparison.OrdinalIgnoreCase);
+            Assert.StartsWith(attemptB + Path.DirectorySeparatorChar, receipts[1].Path, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(receipts, receipt => receipt.Path.StartsWith(operatorDirectory, StringComparison.OrdinalIgnoreCase));
+            Assert.All(receipts, receipt =>
+            {
+                Assert.True(File.Exists(receipt.Path));
+                Assert.Equal(receipt.Length, new FileInfo(receipt.Path).Length);
+                Assert.Equal(
+                    receipt.Hash,
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(receipt.Path))));
+                Assert.True(receipt.Coverage.Passed, receipt.Coverage.Summary);
+                Assert.Single(receipt.Coverage.ExecutedTests);
+            });
+            Assert.DoesNotContain(
+                "ChaosTests.AttemptB",
+                TestCoverageInvariant.ReadRecordedTests([receipts[0].Path]));
+            Assert.DoesNotContain(
+                "ChaosTests.AttemptA",
+                TestCoverageInvariant.ReadRecordedTests([receipts[1].Path]));
+            Assert.True(File.Exists(operatorReceipt));
+            Assert.False(operatorReceipt.StartsWith(attemptA, StringComparison.OrdinalIgnoreCase));
+            Assert.False(operatorReceipt.StartsWith(attemptB, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(1, maximumConcurrentBuildOwners);
+            Assert.Empty(faults);
+            Assert.Empty(custodyRefusals);
         }
         finally
         {
             release.Set();
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
         }
     }

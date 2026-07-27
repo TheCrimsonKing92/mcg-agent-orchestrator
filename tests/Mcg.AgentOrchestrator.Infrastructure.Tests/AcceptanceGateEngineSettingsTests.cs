@@ -53,8 +53,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_slot_count_limits_stable_slot_execution")]
-    public async Task GoalAcceptanceVerifierCandidateSlotCountLimitsStableSlotExecution()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_count_does_not_constrain_build_permit_index")]
+    public async Task GoalAcceptanceVerifierShardCountDoesNotConstrainBuildPermitIndex()
     {
         var root = CreateWorkspace("""
             {
@@ -75,10 +75,9 @@ public sealed class AcceptanceGateEngineSettingsTests
             var verifier = new GoalAcceptanceVerifier((_, _, _) =>
                 Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1")));
 
-            var error = await Xunit.Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-                () => verifier.RunAsync(root, stableSlotIndex: 1));
+            var result = await verifier.RunAsync(root, stableSlotIndex: 1);
 
-            Xunit.Assert.Contains("requested slot count", error.Message, StringComparison.Ordinal);
+            Xunit.Assert.True(result.Passed);
         }
         finally
         {

@@ -363,9 +363,7 @@ internal static partial class CliCommandHandlers
 
             case "firewall-setup":
             {
-                var exitCode = new FirewallSetupCommand(
-                    new WindowsFirewallRuleWriter(),
-                    manifestRoot: context.Workspace.RootDirectory).Execute(Console.Out);
+                var exitCode = new FirewallSetupCommand().Execute(Console.Out);
                 if (exitCode != FirewallSetupCommand.SuccessExitCode)
                 {
                     throw new CliExitException(exitCode);
@@ -1126,6 +1124,7 @@ internal static partial class CliCommandHandlers
         if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
             RunStableSlotMtpTest(parts, context, lease);
+            DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
             return;
         }
 
@@ -1138,6 +1137,9 @@ internal static partial class CliCommandHandlers
         {
             throw new CliExitException(exitCode);
         }
+
+        lease.ReleaseExecutionLock();
+        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
     }
 
     private static void RunStableSlotMtpTest(

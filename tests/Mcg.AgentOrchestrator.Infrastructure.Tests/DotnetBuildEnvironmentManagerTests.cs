@@ -1183,6 +1183,83 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_goal_build_permit_is_deterministic_and_guards_goal_artifacts")]
+    public void DotnetBuildEnvironmentManagerGoalBuildPermitIsDeterministicAndGuardsGoalArtifacts()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var goalId = new GoalId("89abcdef89abcdef89abcdef89abcdef");
+        try
+        {
+            var gate = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "gate");
+            var worker = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "worker-build-check");
+            var expectedPermit = goalId.Value[..8]
+                .ToLowerInvariant()
+                .Sum(ch => (int)ch) %
+                DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
+
+            Assert.Equal(expectedPermit, gate.BuildPermitIndex);
+            Assert.Equal(gate.BuildPermitIndex, worker.BuildPermitIndex);
+            Assert.Equal(gate.ExecutionLockPath, worker.ExecutionLockPath);
+            Assert.Equal(gate.ArtifactsPath, worker.ArtifactsPath);
+
+            using var gateLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(gate, TimeSpan.Zero)).Lease;
+            var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(worker, TimeSpan.Zero));
+            Assert.Contains(blocked.BusySlots, slot => slot.SlotIndex == expectedPermit);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_early_release_shuts_down_build_servers_before_releasing_permit")]
+    public void DotnetBuildEnvironmentManagerEarlyReleaseShutsDownBuildServersBeforeReleasingPermit()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var shutdowns = 0;
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => Interlocked.Increment(ref shutdowns);
+        try
+        {
+            using var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
+
+            lease.ReleaseExecutionLock();
+            lease.ReleaseExecutionLock();
+
+            Assert.Equal(1, shutdowns);
+            Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_success_cleanup_removes_only_invocation_run_roots")]
+    public void DotnetBuildEnvironmentManagerSuccessCleanupRemovesOnlyInvocationRunRoots()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var run = DotnetBuildEnvironmentManager.CreateAttempt(null, "operator-success");
+        var goalId = new GoalId("76543210765432107654321076543210");
+        var goal = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "gate");
+        try
+        {
+            File.WriteAllText(Path.Combine(run.ArtifactsPath, "receipt.txt"), "success");
+
+            Assert.True(DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(run));
+            Assert.False(Directory.Exists(run.RootPath));
+            Assert.False(DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(goal));
+            Assert.True(Directory.Exists(goal.RootPath));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_stable_slot_skips_leased_slot_zero")]
     public void DotnetBuildEnvironmentManagerFirstAvailableStableSlotSkipsLeasedSlotZero()
     {

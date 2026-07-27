@@ -82,14 +82,7 @@ internal sealed class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
-        _getAcceptanceSlotCount = goal =>
-        {
-            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id)
-                ?? throw new DirectoryNotFoundException(
-                    $"Acceptance worktree was not found for goal {goal.Id.Value[..8]}.");
-            _ = AcceptanceGateEngineSettings.Load(worktreePath);
-            return ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
-        };
+        _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
         _parallelAcceptanceEnabled = true;
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),

@@ -13,7 +13,8 @@ public sealed record DotnetBuildEnvironment(
     string SlotOwnerToken,
     string? LeaseMetadataPath = null,
     bool ReusedGoalLease = false,
-    bool StaleLockCleared = false);
+    bool StaleLockCleared = false,
+    int? BuildPermitIndex = null);
 
 public sealed record DotnetBuildLeaseStatus(
     string LeaseId,
@@ -134,6 +135,31 @@ public static class DotnetBuildEnvironmentManager
     public static string BaseBuildCacheRoot()
     {
         return DotnetBaseBuildCache.DefaultRootPath(IsolatedRootBase());
+    }
+
+    public static bool TryCleanupSuccessfulRun(DotnetBuildEnvironment environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        var runsRoot = Path.GetFullPath(Path.Combine(IsolatedRootBase(), "runs"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+            Path.DirectorySeparatorChar;
+        var root = Path.GetFullPath(environment.RootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!root.StartsWith(runsRoot, StringComparison.OrdinalIgnoreCase) ||
+            !Directory.Exists(root))
+        {
+            return false;
+        }
+
+        try
+        {
+            Directory.Delete(root, recursive: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     public static string BuildSlotHeartbeatPath(int slotIndex)
@@ -599,7 +625,8 @@ public static class DotnetBuildEnvironmentManager
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
         var artifactsPath = Path.Combine(root, "artifacts");
-        var executionLockPath = BuildSlotExecutionLockPath(BuildSlotIndex(Prefix(goalId)));
+        var buildPermitIndex = BuildSlotIndex(Prefix(goalId));
+        var executionLockPath = BuildSlotExecutionLockPath(buildPermitIndex);
         Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
@@ -629,7 +656,8 @@ public static class DotnetBuildEnvironmentManager
             leaseId,
             metadataPath,
             ReusedGoalLease: reused,
-            StaleLockCleared: staleLockCleared);
+            StaleLockCleared: staleLockCleared,
+            BuildPermitIndex: buildPermitIndex);
     }
 
     private static IReadOnlyList<string> BuildArguments(string artifactsPath) =>
@@ -689,7 +717,8 @@ public static class DotnetBuildEnvironmentManager
             artifactsPath,
             executionLockPath,
             BuildArguments(artifactsPath),
-            $"build-{slotIndex % BuildConcurrencySlotCount}");
+            $"build-{slotIndex % BuildConcurrencySlotCount}",
+            BuildPermitIndex: slotIndex % BuildConcurrencySlotCount);
     }
 
     private static void ValidateStableSlotIndex(int slotIndex)
@@ -726,13 +755,10 @@ public static class DotnetBuildEnvironmentManager
 
     private static int BuildSlotIndex(string owner)
     {
-        var hash = 0;
-        foreach (var ch in owner)
-        {
-            hash = unchecked((hash * 31) + char.ToLowerInvariant(ch));
-        }
-
-        return (int)((uint)hash % BuildConcurrencySlotCount);
+        return owner
+            .Select(char.ToLowerInvariant)
+            .Sum(ch => (int)ch) %
+            BuildConcurrencySlotCount;
     }
 
     private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(
@@ -1362,6 +1388,7 @@ public static class DotnetBuildEnvironmentManager
         try
         {
             File.Delete(environment.ExecutionLockPath);
+            TryDeleteExecutionLeaseMetadata(environment.ExecutionLockPath);
             EmitLeaseReceipt("LEASE_RECLAIM", environment, processId);
             return true;
         }
@@ -1373,14 +1400,16 @@ public static class DotnetBuildEnvironmentManager
 
     private static ExecutionLeaseMetadata? TryReadExecutionLeaseMetadata(string path)
     {
-        if (!File.Exists(path))
+        var metadataPath = ExecutionLeaseMetadataPath(path);
+        var sourcePath = File.Exists(metadataPath) ? metadataPath : path;
+        if (!File.Exists(sourcePath))
         {
             return null;
         }
 
         try
         {
-            var text = File.ReadAllText(path).Trim();
+            var text = File.ReadAllText(sourcePath).Trim();
             if (string.IsNullOrWhiteSpace(text))
             {
                 return null;
@@ -1416,14 +1445,31 @@ public static class DotnetBuildEnvironmentManager
             Environment.ProcessId,
             Environment.MachineName,
             DateTimeOffset.UtcNow);
+        var serialized = JsonSerializer.Serialize(metadata, JsonOptions);
         stream.SetLength(0);
         stream.Position = 0;
         using var writer = new StreamWriter(stream, leaveOpen: true);
-        writer.Write(JsonSerializer.Serialize(metadata, JsonOptions));
+        writer.Write(serialized);
         writer.WriteLine();
         writer.Flush();
         stream.Flush(flushToDisk: true);
         stream.Position = 0;
+        File.WriteAllText(ExecutionLeaseMetadataPath(environment.ExecutionLockPath), serialized);
+    }
+
+    private static string ExecutionLeaseMetadataPath(string executionLockPath) =>
+        $"{executionLockPath}.owner.json";
+
+    private static void TryDeleteExecutionLeaseMetadata(string executionLockPath)
+    {
+        try
+        {
+            File.Delete(ExecutionLeaseMetadataPath(executionLockPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The byte-range lock remains authoritative; owner metadata is diagnostic only.
+        }
     }
 
     private static void EmitLeaseReceipt(string receipt, DotnetBuildEnvironment environment, int? reclaimedProcessId = null)
@@ -1622,6 +1668,7 @@ public static class DotnetBuildEnvironmentManager
                 {
                     if (_rangeLocked)
                     {
+                        TryDeleteExecutionLeaseMetadata(_environment.ExecutionLockPath);
                         Unlock(0, 1);
                         _rangeLocked = false;
                     }
@@ -1640,7 +1687,7 @@ public static class DotnetBuildEnvironmentManager
 public sealed class DotnetBuildEnvironmentLease : IDisposable
 {
     private readonly FileStream _stream;
-    private bool _detached;
+    private int _state;
 
     internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream)
     {
@@ -1652,24 +1699,30 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
     internal FileStream DetachStreamForLegacyCaller()
     {
-        _detached = true;
+        Interlocked.Exchange(ref _state, 1);
         return _stream;
     }
 
     internal void ReleaseExecutionLock()
     {
-        if (_detached)
+        if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
         {
             return;
         }
 
-        _detached = true;
-        _stream.Dispose();
+        try
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersBestEffort();
+        }
+        finally
+        {
+            _stream.Dispose();
+        }
     }
 
     public void Dispose()
     {
-        if (_detached)
+        if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
         {
             return;
         }

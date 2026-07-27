@@ -65,7 +65,8 @@ if ($requiresExactArguments) {
     }
 
     $testExit = 0
-    foreach ($mtpTarget in $mtpTargets) {
+    $executionTargets = if ($usesMtp) { $mtpTargets } else { @($Target) }
+    foreach ($mtpTarget in $executionTargets) {
         $stableArguments = if ($usesMtp) {
             $arguments = @('mtp-test', $mtpTarget, '--results-directory', $results)
             if ($NoBuild) { $arguments += '--no-build' }

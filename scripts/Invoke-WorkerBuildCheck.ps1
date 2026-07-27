@@ -27,12 +27,12 @@ function Get-BuildSlotName {
         return "build-0"
     }
 
-    [int64]$hash = 0
+    [int]$hash = 0
     foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
-        $hash = (($hash * 31) + [int][char]$ch) % 2147483647
+        $hash = ($hash + [int][char]$ch) % 2
     }
 
-    return "build-$([Math]::Abs($hash % 2))"
+    return "build-$hash"
 }
 
 function Get-IsolatedRootBase {

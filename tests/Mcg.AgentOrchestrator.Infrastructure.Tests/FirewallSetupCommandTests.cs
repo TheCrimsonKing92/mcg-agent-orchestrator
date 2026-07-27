@@ -6,14 +6,12 @@ public sealed class FirewallSetupCommandTests
     [Xunit.Fact(DisplayName = "FirewallSetupCommand_is_retired_and_never_mutates_firewall_policy")]
     public void FirewallSetupCommandIsRetiredAndNeverMutatesFirewallPolicy()
     {
-        var writer = new RecordingFirewallRuleWriter();
-        var command = new FirewallSetupCommand(writer, () => true);
+        var command = new FirewallSetupCommand();
         using var output = new StringWriter();
 
         var exitCode = command.Execute(output);
 
         Xunit.Assert.Equal(FirewallSetupCommand.SuccessExitCode, exitCode);
-        Xunit.Assert.Empty(writer.Rules);
         Xunit.Assert.Contains("Firewall setup is retired", output.ToString());
         Xunit.Assert.Contains("Remove-TestSlotFirewallRules.ps1", output.ToString());
     }
@@ -21,32 +19,32 @@ public sealed class FirewallSetupCommandTests
     [Xunit.Fact(DisplayName = "FirewallSetupCommand_retirement_does_not_require_application_elevation")]
     public void FirewallSetupCommandRetirementDoesNotRequireApplicationElevation()
     {
-        var writer = new RecordingFirewallRuleWriter();
-        var command = new FirewallSetupCommand(writer, () => false);
+        var command = new FirewallSetupCommand();
         using var output = new StringWriter();
 
         var exitCode = command.Execute(output);
 
         Xunit.Assert.Equal(FirewallSetupCommand.SuccessExitCode, exitCode);
-        Xunit.Assert.Empty(writer.Rules);
         Xunit.Assert.Contains("Firewall setup is retired", output.ToString());
     }
 
-    private sealed class RecordingFirewallRuleWriter : IFirewallRuleWriter
+    [Xunit.Fact(DisplayName = "Firewall_rule_removal_persists_restoration_definition_before_each_mutation")]
+    public void FirewallRuleRemovalPersistsRestorationDefinitionBeforeEachMutation()
     {
-        private readonly HashSet<string> _names = new(StringComparer.OrdinalIgnoreCase);
+        var script = File.ReadAllText(Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "scripts",
+            "Remove-TestSlotFirewallRules.ps1"));
+        var firstReceipt = script.IndexOf(
+            "Write-RemovalReceipt -Entries $entries",
+            StringComparison.Ordinal);
+        var removal = script.IndexOf(
+            "Remove-NetFirewallRule -Name $rule.Name",
+            StringComparison.Ordinal);
 
-        public List<FirewallRuleSpec> Rules { get; } = [];
-
-        public bool CreateInboundAllowRule(FirewallRuleSpec rule)
-        {
-            if (!_names.Add(rule.Name))
-            {
-                return false;
-            }
-
-            Rules.Add(rule);
-            return true;
-        }
+        Xunit.Assert.True(firstReceipt >= 0);
+        Xunit.Assert.True(removal > firstReceipt);
+        Xunit.Assert.Contains("$entry.removalState = \"removing\"", script, StringComparison.Ordinal);
+        Xunit.Assert.Contains("[System.IO.File]::Move($temporaryPath, $ReceiptPath, $true)", script, StringComparison.Ordinal);
     }
 }

@@ -163,6 +163,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly AsyncLocal<Func<bool>?> CurrentGateCancellationProbe = new();
     private static readonly AsyncLocal<AcceptanceGateEngineSettings?> CurrentGateEngineSettings = new();
     private static readonly AsyncLocal<string?> CurrentAcceptanceAttemptPrefix = new();
+    private static readonly AsyncLocal<ManagedRunEnvironmentScope?> CurrentManagedRunEnvironmentScope = new();
     private static readonly JsonSerializerOptions PartitionVerdictJournalJsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
@@ -250,9 +251,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new RestoreAction(() => CurrentAcceptanceAttemptPrefix.Value = previous);
     }
 
+    private static ManagedRunEnvironmentScope PushManagedRunEnvironmentScope()
+    {
+        var scope = new ManagedRunEnvironmentScope(CurrentManagedRunEnvironmentScope.Value);
+        CurrentManagedRunEnvironmentScope.Value = scope;
+        return scope;
+    }
+
     private static string? AcceptanceAttemptResultsPrefix =>
         CurrentAcceptanceAttemptPrefix.Value ??
         Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+
+    internal static string? AcceptanceAttemptResultsPrefixForTests =>
+        AcceptanceAttemptResultsPrefix;
 
     private static IDisposable PushEngineSettings(AcceptanceGateEngineSettings settings)
     {
@@ -275,6 +286,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
         using var engineScope = PushEngineSettings(engineSettings);
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "gate");
+        using var runEnvironmentScope = PushManagedRunEnvironmentScope();
         if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure)
         {
             return new AcceptanceVerificationResult(
@@ -504,7 +516,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = CollectTestResultPaths(checks);
 
-        return new AcceptanceVerificationResult(
+        var verification = new AcceptanceVerificationResult(
             Passed: failedCheck is null,
             Skipped: false,
             ExitCode: failedCheck?.ExitCode ?? 0,
@@ -513,6 +525,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ArtifactsPath: artifactsPath,
             Checks: checks,
             TestResultPaths: testResultPaths);
+        if (verification.Passed)
+        {
+            runEnvironmentScope.MarkSuccessful();
+        }
+
+        return verification;
     }
 
     public async Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
@@ -526,6 +544,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
         using var engineScope = PushEngineSettings(engineSettings);
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "evidence");
+        using var runEnvironmentScope = PushManagedRunEnvironmentScope();
 
         if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
         {
@@ -573,12 +592,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var summary = failed is null
             ? $"focused evidence passed: {checks.Count} check(s); receipts: {FormatReceiptPaths(receiptPaths)}"
             : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}; receipts: {FormatReceiptPaths(receiptPaths)}";
-        return new FocusedEvidenceRunResult(
+        var evidence = new FocusedEvidenceRunResult(
             request,
             Accepted: true,
             Passed: failed is null,
             Summary: summary,
             Checks: checks);
+        if (evidence.Passed)
+        {
+            runEnvironmentScope.MarkSuccessful();
+        }
+
+        return evidence;
     }
 
     private static bool ShouldStopAfterFailedCheck(
@@ -2522,7 +2547,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             testResultsDirectoryOverride);
         PrepareTestTelemetryForRun(telemetry);
         var arguments = BuildMtpTestArguments(check, executableEnvironment ?? environment, telemetry);
-        ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
+        ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
         var result = await RunWithGateHeartbeatAsync(
             arguments,
             worktreePath,
@@ -3374,7 +3399,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
         var effectiveArguments = WithBuildEnvironmentArguments(telemetry?.Arguments ?? arguments, environment);
-        ReapRecordedGateChildBeforeManagedDotnetCommand(environment, goalId, stableSlotIndex);
+        ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
         return await RunWithGateHeartbeatAsync(
             effectiveArguments,
             worktreePath,
@@ -3587,11 +3612,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
 
     private static void ReapRecordedGateChildBeforeManagedDotnetCommand(
+        AcceptanceManifestCheck check,
         DotnetBuildEnvironment environment,
         GoalId? goalId,
         int? stableSlotIndex)
     {
-        var heartbeatPath = Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName);
+        var heartbeatPath = ResolveGateHeartbeatPath(check, environment, stableSlotIndex, worktreePath: null);
         if (!File.Exists(heartbeatPath))
         {
             return;
@@ -4691,19 +4717,25 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // The lease limits concurrent builds; it no longer owns build or test artifacts.
         // Goal-scoped artifacts remain reusable across attempts, while ownerless commands use
         // an invocation-local environment.
+        DotnetBuildEnvironment environment;
         if (goalId is not null)
         {
-            return DotnetBuildEnvironmentManager.CreateAttempt(
+            environment = DotnetBuildEnvironmentManager.CreateAttempt(
                 goalId,
                 attemptName);
         }
+        else
+        {
+            environment = buildLease?.Environment ?? (stableSlotIndex.HasValue
+                ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(
+                    stableSlotIndex.Value)
+                : DotnetBuildEnvironmentManager.CreateAttempt(
+                    null,
+                    attemptName));
+        }
 
-        return buildLease?.Environment ?? (stableSlotIndex.HasValue
-            ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(
-                stableSlotIndex.Value)
-            : DotnetBuildEnvironmentManager.CreateAttempt(
-                null,
-                attemptName));
+        CurrentManagedRunEnvironmentScope.Value?.Track(environment);
+        return environment;
     }
 
     private static IDisposable PushOwnerResultsScope(
@@ -4717,12 +4749,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var repositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
-        if (string.IsNullOrWhiteSpace(repositoryRoot))
-        {
-            repositoryRoot = Directory.Exists(worktreePath)
-                ? worktreePath
-                : Path.Combine(Path.GetTempPath(), "mcg-acceptance-owner-results");
-        }
+        repositoryRoot = ResolveOwnerResultsRepositoryRoot(
+            string.IsNullOrWhiteSpace(repositoryRoot) ? worktreePath : repositoryRoot);
 
         var owner = goalId?.Value ?? "operator";
         var directory = Path.Combine(
@@ -4735,6 +4763,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             directory,
             $"{owner[..Math.Min(8, owner.Length)]}-{ownerKind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
         return PushAcceptanceAttemptResultsPrefix(prefix);
+    }
+
+    internal static string ResolveOwnerResultsRepositoryRoot(string worktreePath)
+    {
+        var fullPath = Path.GetFullPath(worktreePath);
+        var worktreeMarker =
+            $"{Path.DirectorySeparatorChar}.orchestrator-worktrees{Path.DirectorySeparatorChar}";
+        var markerIndex = fullPath.IndexOf(worktreeMarker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex > 0)
+        {
+            return fullPath[..markerIndex];
+        }
+
+        var candidate = new DirectoryInfo(fullPath);
+        while (candidate is not null)
+        {
+            if (Directory.Exists(Path.Combine(candidate.FullName, ".git")))
+            {
+                return candidate.FullName;
+            }
+
+            candidate = candidate.Parent;
+        }
+
+        return Path.Combine(Path.GetTempPath(), "mcg-acceptance-owner-results");
     }
 
     private static bool UsesMicrosoftTestingPlatform(AcceptanceManifestCheck check) =>
@@ -5360,11 +5413,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironment? environment)
     {
-        var heartbeatPath = environment is not null
-            ? Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName)
-            : stableSlotIndex.HasValue
-                ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value)
-                : GateHeartbeatArtifacts.GetManualPath(worktreePath);
+        var heartbeatPath = ResolveGateHeartbeatPath(
+            check,
+            environment,
+            stableSlotIndex,
+            worktreePath);
 
         return new GateHeartbeatContext(
             goalId?.Value,
@@ -5374,6 +5427,39 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             heartbeatPath,
             string.Join(' ', arguments.Select(QuoteForDisplay)));
     }
+
+    private static string ResolveGateHeartbeatPath(
+        AcceptanceManifestCheck check,
+        DotnetBuildEnvironment? environment,
+        int? stableSlotIndex,
+        string? worktreePath)
+    {
+        var attemptPrefix = AcceptanceAttemptResultsPrefix;
+        if (!string.IsNullOrWhiteSpace(attemptPrefix))
+        {
+            return $"{attemptPrefix}.{Slug(check.Name)}.{GateHeartbeatArtifacts.FileName}";
+        }
+
+        if (environment is not null)
+        {
+            return Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName);
+        }
+
+        return stableSlotIndex.HasValue
+            ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value)
+            : GateHeartbeatArtifacts.GetManualPath(
+                worktreePath ?? Path.Combine(Path.GetTempPath(), "mcg-acceptance-owner-results"));
+    }
+
+    internal static string ResolveGateHeartbeatPathForTests(
+        string checkName,
+        DotnetBuildEnvironment environment,
+        int? stableSlotIndex = null) =>
+        ResolveGateHeartbeatPath(
+            new AcceptanceManifestCheck { Name = checkName },
+            environment,
+            stableSlotIndex,
+            worktreePath: null);
 
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
@@ -6026,6 +6112,44 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         private static TimeSpan Positive(TimeSpan value) =>
             value < TimeSpan.Zero ? TimeSpan.Zero : value;
+    }
+
+    private sealed class ManagedRunEnvironmentScope(
+        ManagedRunEnvironmentScope? previous) : IDisposable
+    {
+        private readonly ConcurrentDictionary<string, DotnetBuildEnvironment> _environments =
+            new(StringComparer.OrdinalIgnoreCase);
+        private int _successful;
+        private int _disposed;
+
+        public void Track(DotnetBuildEnvironment environment)
+        {
+            if (environment.LeaseMetadataPath is null)
+            {
+                _environments.TryAdd(environment.RootPath, environment);
+            }
+        }
+
+        public void MarkSuccessful() => Interlocked.Exchange(ref _successful, 1);
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            CurrentManagedRunEnvironmentScope.Value = previous;
+            if (Volatile.Read(ref _successful) == 0)
+            {
+                return;
+            }
+
+            foreach (var environment in _environments.Values)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(environment);
+            }
+        }
     }
 
     private sealed class RestoreAction(Action restore) : IDisposable
