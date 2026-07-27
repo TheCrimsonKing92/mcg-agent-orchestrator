@@ -378,6 +378,28 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(evidencePath));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dead_local_custodian_marker_is_cleared_during_lease_reclaim")]
+    public void DotnetBuildEnvironmentManagerDeadLocalCustodianMarkerIsClearedDuringLeaseReclaim()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var evidencePath = Path.Combine(environment.ArtifactsPath, "stale.txt");
+        File.WriteAllText(evidencePath, "stale");
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        WriteForeignOwnerMarker(environment.ArtifactsPath);
+        AcceptanceAttemptArtifactCustody.Write(
+            environment.ArtifactsPath,
+            "dead-local-attempt",
+            Path.Combine(environment.RootPath, "missing.attempt.json"),
+            999999);
+
+        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+
+        Assert.False(File.Exists(evidencePath));
+        Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_custody_cleanup_failure_is_not_silently_accepted")]
     public void DotnetBuildEnvironmentManagerCustodyCleanupFailureIsNotSilentlyAccepted()
     {

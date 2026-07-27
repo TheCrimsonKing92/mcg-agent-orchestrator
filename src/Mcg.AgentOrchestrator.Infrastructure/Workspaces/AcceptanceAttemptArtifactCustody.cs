@@ -89,6 +89,17 @@ public static class AcceptanceAttemptArtifactCustody
         }
     }
 
+    internal static void ClearIfStale(string artifactsPath)
+    {
+        var marker = TryRead(artifactsPath);
+        if (marker is null || IsLive(marker))
+        {
+            return;
+        }
+
+        File.Delete(MarkerPath(artifactsPath));
+    }
+
     public static void ReleaseStableSlots(string attemptId)
     {
         List<Exception>? failures = null;

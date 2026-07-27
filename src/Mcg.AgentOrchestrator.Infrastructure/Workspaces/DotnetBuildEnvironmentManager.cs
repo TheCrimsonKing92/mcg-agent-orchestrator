@@ -1610,6 +1610,7 @@ public static class DotnetBuildEnvironmentManager
         try
         {
             File.Delete(environment.ExecutionLockPath);
+            AcceptanceAttemptArtifactCustody.ClearIfStale(environment.ArtifactsPath);
             EmitLeaseReceipt("LEASE_RECLAIM", environment, processId);
             return true;
         }
