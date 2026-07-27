@@ -436,36 +436,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_custody_cleanup_failure_is_not_silently_accepted")]
-    public void DotnetBuildEnvironmentManagerCustodyCleanupFailureIsNotSilentlyAccepted()
-    {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
-        var attemptId = "locked-marker-attempt";
-        var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
-        WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
-        AcceptanceAttemptArtifactCustody.Write(
-            environment.ArtifactsPath,
-            attemptId,
-            metadataPath,
-            Environment.ProcessId);
-        using var markerLock = new FileStream(
-            AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath),
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read);
-
-        var exception = Assert.Throws<AggregateException>(
-            () => AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId));
-
-        var markerPath = AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath);
-        Assert.True(File.Exists(markerPath));
-        Assert.Contains(attemptId, exception.Message, StringComparison.Ordinal);
-        Assert.Contains(
-            exception.InnerExceptions,
-            failure => failure.Message.Contains(markerPath, StringComparison.Ordinal));
-    }
-
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_missing_custody_marker_preserves_foreign_owner_takeover")]
     public void DotnetBuildEnvironmentManagerMissingCustodyMarkerPreservesForeignOwnerTakeover()
     {
@@ -1493,6 +1463,33 @@ public sealed class DotnetBuildEnvironmentManagerTests
         finally
         {
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_build_permit_scans_past_busy_preferred_permit")]
+    public void DotnetBuildEnvironmentManagerFirstAvailableBuildPermitScansPastBusyPreferredPermit()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var firstGoalId = new GoalId("89abcdef89abcdef89abcdef89abcdef");
+        var secondGoalId = new GoalId("98abcdef98abcdef98abcdef98abcdef");
+        try
+        {
+            var first = DotnetBuildEnvironmentManager.CreateAttempt(firstGoalId, "first");
+            var second = DotnetBuildEnvironmentManager.CreateAttempt(secondGoalId, "second");
+            Assert.Equal(first.BuildPermitIndex, second.BuildPermitIndex);
+
+            using var firstLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(first, TimeSpan.Zero)).Lease;
+            using var secondLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(second, TimeSpan.Zero)).Lease;
+
+            Assert.NotEqual(firstLease.Environment.BuildPermitIndex, secondLease.Environment.BuildPermitIndex);
+            Assert.Equal(second.ArtifactsPath, secondLease.Environment.ArtifactsPath);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(firstGoalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(secondGoalId);
         }
     }
 

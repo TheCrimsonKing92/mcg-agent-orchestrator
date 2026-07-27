@@ -21,15 +21,29 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
+function Get-BuildConcurrencySlotCount {
+    $sourcePath = Join-Path $PSScriptRoot "..\src\Mcg.AgentOrchestrator.Infrastructure\Workspaces\DotnetBuildEnvironmentManager.cs"
+    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $match = [regex]::Match($source, 'public const int BuildConcurrencySlotCount = (?<count>\d+);')
+    if (-not $match.Success) {
+        throw "Could not resolve BuildConcurrencySlotCount from $sourcePath"
+    }
+
+    return [int]$match.Groups["count"].Value
+}
+
 function Get-BuildSlotName {
-    param([string]$Value)
+    param(
+        [string]$Value,
+        [int]$SlotCount
+    )
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return "build-0"
     }
 
     [int]$hash = 0
     foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
-        $hash = ($hash + [int][char]$ch) % 2
+        $hash = ($hash + [int][char]$ch) % $SlotCount
     }
 
     return "build-$hash"
@@ -206,7 +220,8 @@ if ($missingProjects.Count -gt 0) {
 
 $safeGoalPrefix = ConvertTo-SafePathSegment -Value (Get-GoalPrefix)
 $isolatedRoot = Get-IsolatedRootBase
-$buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix
+$buildConcurrencySlotCount = Get-BuildConcurrencySlotCount
+$buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount $buildConcurrencySlotCount
 $leaseId = "goal-$safeGoalPrefix"
 $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
 $leaseRoot = Join-Path $runRoot "lease"

@@ -5741,6 +5741,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
 
                 heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id, exitCode: exitCode);
+                heartbeat = null;
                 heartbeatCts?.Dispose();
                 heartbeatCts = null;
                 heartbeatTask = null;
@@ -5779,6 +5780,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                 heartbeatCts.Dispose();
             }
+
+            heartbeat?.WriteFinal("failed", childPid: startedProcessId, exitCode: null);
 
             if (startedProcessId is { } processId)
             {

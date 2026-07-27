@@ -93,15 +93,29 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
+function Get-BuildConcurrencySlotCount {
+    $sourcePath = Join-Path $PSScriptRoot "..\src\Mcg.AgentOrchestrator.Infrastructure\Workspaces\DotnetBuildEnvironmentManager.cs"
+    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $match = [regex]::Match($source, 'public const int BuildConcurrencySlotCount = (?<count>\d+);')
+    if (-not $match.Success) {
+        throw "Could not resolve BuildConcurrencySlotCount from $sourcePath"
+    }
+
+    return [int]$match.Groups["count"].Value
+}
+
 function Get-BuildSlotName {
-    param([string]$Value)
+    param(
+        [string]$Value,
+        [int]$SlotCount
+    )
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return "build-0"
     }
 
     [int]$hash = 0
     foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
-        $hash = ($hash + [int][char]$ch) % 2
+        $hash = ($hash + [int][char]$ch) % $SlotCount
     }
 
     return "build-$hash"
@@ -672,18 +686,19 @@ function Test-AppDllChangedSinceSnapshot {
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 $hostTempBase = Get-HostTempBase
 $isolatedRoot = Get-IsolatedRootBase
+$buildConcurrencySlotCount = Get-BuildConcurrencySlotCount
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
     $runId = "manual-$PID-$([Guid]::NewGuid().ToString('N'))"
     $runRoot = Join-Path $isolatedRoot "runs\$runId"
     $artifactsPath = Join-Path $runRoot "artifacts"
     $leaseId = "run-$runId"
     $ownerToken = $runId
-    $executionLockPath = Join-Path $isolatedRoot "build-slots\build-$($PID % 2).lock"
+    $executionLockPath = Join-Path $isolatedRoot "build-slots\build-$($PID % $buildConcurrencySlotCount).lock"
     $staleLockCleared = $false
 }
 else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
-    $buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix
+    $buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount $buildConcurrencySlotCount
     $leaseId = "goal-$safeGoalPrefix"
     $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
     $leaseRoot = Join-Path $runRoot "lease"

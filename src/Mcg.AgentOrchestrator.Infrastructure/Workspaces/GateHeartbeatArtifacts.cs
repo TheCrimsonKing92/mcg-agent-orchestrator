@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Security.Cryptography;
@@ -51,6 +52,7 @@ public sealed record GateHeartbeatStatus(
 public static class GateHeartbeatArtifacts
 {
     public const string FileName = "gate-heartbeat.json";
+    private static readonly TimeSpan RunScopedHeartbeatFreshness = TimeSpan.FromMinutes(2);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -82,14 +84,17 @@ public static class GateHeartbeatArtifacts
         var statuses = new List<GateHeartbeatStatus>(DotnetBuildEnvironmentManager.StableSlotCount);
         for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
         {
-            var runPaths = EnumerateRunScopedStableSlotPaths(slot);
-            if (runPaths.Count == 0)
+            var runStatuses = EnumerateRunScopedStableSlotPaths(slot)
+                .Select(path => Read(slot, path, now))
+                .Where(status => IsLiveRunScopedHeartbeat(status, now))
+                .ToArray();
+            if (runStatuses.Length == 0)
             {
                 statuses.Add(ReadStableSlot(slot, now));
                 continue;
             }
 
-            statuses.AddRange(runPaths.Select(path => Read(slot, path, now)));
+            statuses.AddRange(runStatuses);
         }
 
         return statuses;
@@ -141,6 +146,39 @@ public static class GateHeartbeatArtifacts
         catch
         {
             return new GateHeartbeatStatus(slotIndex, path, false, "invalid", null, null, null);
+        }
+    }
+
+    private static bool IsLiveRunScopedHeartbeat(GateHeartbeatStatus status, DateTimeOffset now)
+    {
+        var snapshot = status.Snapshot;
+        if (snapshot is not null &&
+            string.Equals(snapshot.State, "running", StringComparison.OrdinalIgnoreCase) &&
+            now - snapshot.LastObservedAt <= RunScopedHeartbeatFreshness &&
+            IsProcessAlive(snapshot.ProcessId))
+        {
+            return true;
+        }
+
+        TryDelete(status.Path);
+        return false;
+    }
+
+    private static bool IsProcessAlive(int? processId)
+    {
+        if (processId is not > 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId.Value);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
         }
     }
 

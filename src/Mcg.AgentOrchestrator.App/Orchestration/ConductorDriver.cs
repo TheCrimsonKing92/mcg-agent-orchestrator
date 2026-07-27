@@ -640,7 +640,7 @@ internal sealed class ConductorDriver
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
-        _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => DotnetBuildEnvironmentManager.StableSlotCount);
+        _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
         _tryBuildAwaitingClarificationEscalationReason =
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);

@@ -207,17 +207,6 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(IsolatedRootBase(), "build-slots", $"activity-{slotIndex}.heartbeat.json");
     }
 
-    // Retained for AcceptanceAttemptArtifactCustody after de-slotting; adapted to the per-process
-    // artifacts model used by CreateStableSlotEnvironment ("runs/p{pid}-build-{slotIndex}/artifacts").
-    public static string StableSlotArtifactsPath(int slotIndex)
-    {
-        ValidateStableSlotIndex(slotIndex);
-        return Path.Combine(IsolatedRootBase(), "runs", $"p{Environment.ProcessId}-build-{slotIndex}", "artifacts");
-    }
-
-    internal static string ManualSlotArtifactsPath() =>
-        Path.Combine(IsolatedRootBase(), "runs", $"p{Environment.ProcessId}-manual", "artifacts");
-
     public static DotnetBuildEnvironment CreateStableSlotAttempt(
         int slotIndex,
         int slotCount = StableSlotCount)
@@ -671,6 +660,34 @@ public static class DotnetBuildEnvironmentManager
                 delay(SlotBusyPollDelay);
             }
         }
+    }
+
+    public static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermit(
+        DotnetBuildEnvironment environment,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        var preferredPermit = environment.BuildPermitIndex ?? BuildSlotIndex(environment.SlotOwnerToken);
+        for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
+        {
+            var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
+            var candidate = environment with
+            {
+                ExecutionLockPath = BuildSlotExecutionLockPath(permit),
+                BuildPermitIndex = permit
+            };
+            var acquisition = TryAcquireLeaseExecutionLock(
+                candidate,
+                timeout,
+                cancellationToken);
+            if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
+            {
+                return acquisition;
+            }
+        }
+
+        return EmitSlotsBusy(environment.LeaseId, BuildConcurrencySlotCount);
     }
 
     private static (int SlotIndex, int? OwnerProcessId, DateTimeOffset LastAcquiredAt) FindLeastRecentlyLeasedStableSlot(

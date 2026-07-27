@@ -550,7 +550,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
             $"parallel-acceptance-{attempt.AttemptId}");
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
             environment,
             TimeSpan.Zero);
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)

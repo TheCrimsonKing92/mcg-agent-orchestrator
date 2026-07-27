@@ -156,5 +156,5 @@ if ($anyFailed -or $testExit -ne 0) {
     }
     exit 1
 }
-Remove-Item -LiteralPath $results -Recurse -Force
+Remove-Item -LiteralPath $results -Recurse -Force -ErrorAction SilentlyContinue
 "ALL GREEN"; exit 0

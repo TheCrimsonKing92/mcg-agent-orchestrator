@@ -674,10 +674,9 @@ public sealed class ConductorDriverTests
 
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getRunningCount: () => 3,
+            getRunningCount: () => ConductorBatchLoop.DefaultParallelAcceptanceCapacity - 1,
             dispatchAndStart: _ => { dispatchCalled = true; return DispatchStartOutcome.Started(); },
-            hasGateReadyGoal: () => true,
-            getAcceptanceSlotCount: _ => 4);
+            hasGateReadyGoal: () => true);
 
         ConductorAdvanceResult? result = null;
         var output = AsyncLocalConsoleRouter.Capture(() => result = driver.AdvanceOnce(goal, policy));

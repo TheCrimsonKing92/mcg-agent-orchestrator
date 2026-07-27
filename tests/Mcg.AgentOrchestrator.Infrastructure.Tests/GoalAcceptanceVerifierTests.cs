@@ -780,7 +780,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             BuildPermitIndex: buildSlot);
         var stdoutPath = Path.Combine(root, "run.out");
         var stderrPath = Path.Combine(root, "run.err");
-        const int childPid = 4242;
+        var childPid = Environment.ProcessId;
 
         try
         {
@@ -865,6 +865,39 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Equal(secondMirrorPath, remainingSlot.Path);
             Assert.Equal("running", remainingSlot.Snapshot?.State);
             Assert.Equal(secondGoalId.Value, remainingSlot.Snapshot?.GoalId);
+
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-b")))
+            {
+                GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    secondGoalId,
+                    environment,
+                    childPid,
+                    stdoutPath,
+                    stderrPath,
+                    finalState: "completed");
+            }
+
+            string? orphanMirrorPath;
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-orphan")))
+            {
+                (_, orphanMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    secondGoalId,
+                    environment,
+                    int.MaxValue,
+                    stdoutPath,
+                    stderrPath);
+            }
+
+            Assert.NotNull(orphanMirrorPath);
+            Assert.True(File.Exists(orphanMirrorPath));
+            var afterOrphanPrune = GateHeartbeatArtifacts.ReadStableSlots()
+                .Single(status => status.SlotIndex == buildSlot);
+            Assert.Equal("missing", afterOrphanPrune.UnavailableReason);
+            Assert.False(File.Exists(orphanMirrorPath));
         }
         finally
         {

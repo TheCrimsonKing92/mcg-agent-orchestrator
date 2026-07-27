@@ -100,38 +100,6 @@ public static class AcceptanceAttemptArtifactCustody
         File.Delete(MarkerPath(artifactsPath));
     }
 
-    public static void ReleaseStableSlots(string attemptId)
-    {
-        List<Exception>? failures = null;
-        for (var slotIndex = 0; slotIndex < DotnetBuildEnvironmentManager.StableSlotCount; slotIndex++)
-        {
-            try
-            {
-                Release(DotnetBuildEnvironmentManager.StableSlotArtifactsPath(slotIndex), attemptId);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                (failures ??= []).Add(ex);
-            }
-        }
-
-        try
-        {
-            Release(DotnetBuildEnvironmentManager.ManualSlotArtifactsPath(), attemptId);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            (failures ??= []).Add(ex);
-        }
-
-        if (failures is { Count: > 0 })
-        {
-            throw new AggregateException(
-                $"Failed to synchronously release {failures.Count} terminal acceptance-attempt custody marker(s) for attempt '{attemptId}'.",
-                failures);
-        }
-    }
-
     internal static string MarkerPath(string artifactsPath) =>
         Path.Combine(artifactsPath, MarkerFileName);
 
