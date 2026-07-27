@@ -833,7 +833,13 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
             Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
+            Assert.Contains("decision=preserved", output, StringComparison.Ordinal);
+            Assert.Contains("reason=wipe-skipped-self-held-lock", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("decision=wiped", output, StringComparison.Ordinal);
             Assert.True(File.Exists(lockedPath));
+            using var ownerMarker = JsonDocument.Parse(File.ReadAllText(
+                Path.Combine(environment.ArtifactsPath, ".mcg-artifacts-owner.json")));
+            Assert.Equal("foreign-owner", ownerMarker.RootElement.GetProperty("ownerToken").GetString());
         }
         finally
         {
@@ -1333,8 +1339,19 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 "preserve after goal lease liveness reclaim",
                 File.ReadAllText(sentinel));
             Assert.Contains("GOAL_LEASE_RECLAIM", acquisitionOutput, StringComparison.Ordinal);
+            Assert.Contains("reclaimedPid=999999", acquisitionOutput, StringComparison.Ordinal);
             Assert.Contains("decision=preserved", acquisitionOutput, StringComparison.Ordinal);
             Assert.Contains("reason=goal-lease-dead-holder", acquisitionOutput, StringComparison.Ordinal);
+            var repeatAcquisitionOutput = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(second);
+            });
+            Assert.DoesNotContain("GOAL_LEASE_RECLAIM", repeatAcquisitionOutput, StringComparison.Ordinal);
+            using (var journal = ReadLastLeaseJournalEntry(second))
+            {
+                Assert.Equal(999999, journal.RootElement.GetProperty("reclaimedProcessId").GetInt32());
+            }
+
             Assert.True(DotnetBuildEnvironmentManager.TryRotateGoalLease(goalId, "corrupt-cache"));
             var third = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "after-rotate");
             Assert.False(third.ReusedGoalLease);
@@ -1566,6 +1583,50 @@ public sealed class DotnetBuildEnvironmentManagerTests
             tornWrite == "missing-owner-marker" ? ".mcg-artifacts-owner.json" : "Sample.dll",
             journal.RootElement.GetProperty("triggerPath").GetString(),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_failed_wipe_records_observed_failure")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseFailedWipeRecordsObservedFailure()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment))
+        {
+        }
+
+        var tornDll = Path.Combine(environment.ArtifactsPath, "bin", "Sample.dll");
+        var lockedPath = Path.Combine(environment.ArtifactsPath, "locked-cache.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(tornDll)!);
+        File.WriteAllBytes(tornDll, []);
+        File.WriteAllText(lockedPath, "held by foreign process");
+        using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(987654322, "foreign", "foreign cache reader", false)],
+            "test");
+
+        try
+        {
+            DotnetBuildLeaseAcquisition? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    environment,
+                    TimeSpan.Zero));
+
+            Assert.IsType<DotnetBuildLeaseAcquisition.BuildLockBlocked>(result);
+            Assert.True(File.Exists(lockedPath));
+            Assert.Contains("LEASE_RECLAIM", output, StringComparison.Ordinal);
+            Assert.Contains("decision=wipe-failed", output, StringComparison.Ordinal);
+            Assert.Contains("reason=wipe-failed", output, StringComparison.Ordinal);
+            using var journal = ReadLastLeaseJournalEntry(environment);
+            Assert.Equal("wipe-failed", journal.RootElement.GetProperty("decision").GetString());
+            Assert.Equal("wipe-failed", journal.RootElement.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            LockAttribution.AttributeForTests = null;
+        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_wipe_decision_survives_artifact_prep_retry")]
@@ -1810,6 +1871,54 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.True(File.ReadAllLines(journalPath).Length >= 2);
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_journal_drains_pending_entries_by_recorded_time")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseJournalDrainsPendingEntriesByRecordedTime()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment))
+        {
+        }
+
+        var journalPath = LeaseJournalPath(environment);
+        var older = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var newer = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var directory = Path.GetDirectoryName(journalPath)!;
+        var fileName = Path.GetFileName(journalPath);
+        File.WriteAllText(
+            Path.Combine(directory, $"{fileName}.pending-z.jsonl"),
+            CreateLeaseJournalEntry(older, "older") + Environment.NewLine);
+        File.WriteAllText(
+            Path.Combine(directory, $"{fileName}.pending-a.jsonl"),
+            CreateLeaseJournalEntry(newer, "newer") + Environment.NewLine);
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)))
+        {
+        }
+
+        var entries = File.ReadAllLines(journalPath)
+            .Select(line => JsonDocument.Parse(line))
+            .ToArray();
+        try
+        {
+            Assert.True(entries.Length >= 3);
+            var recordedAt = entries
+                .Select(entry => entry.RootElement.GetProperty("recordedAt").GetDateTimeOffset())
+                .ToArray();
+            Assert.Equal(recordedAt.Order().ToArray(), recordedAt);
+            Assert.Equal("older", entries[0].RootElement.GetProperty("reason").GetString());
+            Assert.Equal("newer", entries[1].RootElement.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            foreach (var entry in entries)
+            {
+                entry.Dispose();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_journal_rotates_at_bounded_size")]
     public void DotnetBuildEnvironmentManagerStaleLeaseJournalRotatesAtBoundedSize()
     {
@@ -1858,6 +1967,21 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("decision=wiped", output);
         Assert.Contains("reason=operator-forced", output);
         Assert.Contains($"env:{DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable}", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Invoke-IsolatedDotnet_documents_stale_lease_force_clean_escape_hatch")]
+    public void InvokeIsolatedDotnetDocumentsStaleLeaseForceCleanEscapeHatch()
+    {
+        var script = File.ReadAllText(Path.Combine(
+            ResolveRepositoryRoot(),
+            "scripts",
+            "Invoke-IsolatedDotnet.ps1"));
+
+        Assert.Contains(
+            DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable,
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("operator recovery escape hatch", script, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_stable_slot_acquirers_get_different_slots")]
@@ -2814,6 +2938,21 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
     private static string LeaseJournalPath(DotnetBuildEnvironment environment) =>
         Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, "lease.journal.jsonl");
+
+    private static string CreateLeaseJournalEntry(DateTimeOffset recordedAt, string reason) =>
+        JsonSerializer.Serialize(new
+        {
+            version = 1,
+            recordedAt,
+            @event = "LEASE_RECLAIM",
+            processId = Environment.ProcessId,
+            slot = "slot-0",
+            leaseId = "manual",
+            reclaimedProcessId = 999999,
+            decision = "preserved",
+            reason,
+            triggerPath = "test"
+        });
 
     private static void WriteValidPeFile(string path)
     {
