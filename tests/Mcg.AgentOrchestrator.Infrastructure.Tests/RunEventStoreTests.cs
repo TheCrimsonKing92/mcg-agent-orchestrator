@@ -17,6 +17,25 @@ public sealed class RunEventStoreTests
         Assert.Same(first, second);
     }
 
+    [Xunit.Fact(DisplayName = "GoalOperationJournal_retries_store_initialization_after_transient_schema_failure")]
+    public void GoalOperationJournalRetriesStoreInitializationAfterTransientSchemaFailure()
+    {
+        var root = CreateTempDirectory();
+        var blockedDirectory = Path.Combine(root, "temporarily-blocked");
+        var db = Path.Combine(blockedDirectory, "run-events.db");
+        File.WriteAllText(blockedDirectory, "blocks directory creation");
+
+        Assert.ThrowsAny<IOException>(() => GoalOperationJournal.GetRunEventStore(db));
+
+        File.Delete(blockedDirectory);
+        Directory.CreateDirectory(blockedDirectory);
+        var recovered = GoalOperationJournal.GetRunEventStore(db);
+
+        Assert.NotNull(recovered);
+        Assert.True(File.Exists(db));
+        Assert.Same(recovered, GoalOperationJournal.GetRunEventStore(db));
+    }
+
     [Xunit.Fact(DisplayName = "DogfoodLogStore_upserts_goal_entries_and_lists_recent")]
     public async Task DogfoodLogStoreUpsertsGoalEntriesAndListsRecent()
     {

@@ -314,7 +314,7 @@ internal sealed class ConductorWatchProgressReporter
         return pollBasedThreshold > defaultThreshold ? pollBasedThreshold : defaultThreshold;
     }
 
-    private static TaskSpec? GetActiveTask(Goal goal) =>
+    internal static TaskSpec? GetActiveTask(Goal goal) =>
         goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true }) ??
         goal.Tasks.FirstOrDefault(task => task.Status == WorkTaskStatus.Running && task.LastDispatch is not null) ??
         goal.Tasks.FirstOrDefault(task => task.LastDispatch is not null && task.Status is WorkTaskStatus.Assigned);

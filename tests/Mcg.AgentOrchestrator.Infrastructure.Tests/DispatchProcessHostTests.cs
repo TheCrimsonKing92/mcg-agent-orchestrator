@@ -84,6 +84,32 @@ public sealed class DispatchProcessHostTests
         Assert.True(state.GaveUp);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_stderr_capture_exhaustion_does_not_disable_stdout_capture")]
+    public void DispatchProcessHostStderrCaptureExhaustionDoesNotDisableStdoutCapture()
+    {
+        var root = CreateTempDirectory();
+        var stdout = Path.Combine(root, "codex.stdout.log");
+        var stderr = Path.Combine(root, "codex.stderr.log");
+        File.WriteAllText(stdout, "Session ID: stdout-session-after-stderr-cap");
+        File.WriteAllText(stderr, string.Empty);
+        var stdoutState = new DispatchProcessHost.ProviderSessionCaptureState();
+        var stderrState = new DispatchProcessHost.ProviderSessionCaptureState
+        {
+            GaveUp = true
+        };
+
+        var sessionId = DispatchProcessHost.TryCaptureProviderSessionId(
+            WorkerSandboxProvider.Codex,
+            stdout,
+            stderr,
+            stdoutState,
+            stderrState);
+
+        Assert.Equal("stdout-session-after-stderr-cap", sessionId);
+        Assert.False(stdoutState.GaveUp);
+        Assert.True(stderrState.GaveUp);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_large_non_ascii_prompt_to_stdin_as_utf8_without_bom")]
     public void DispatchProcessHostWritesPromptToStdinAsUtf8()
     {
@@ -350,7 +376,9 @@ public sealed class DispatchProcessHostTests
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { },
+                protectGitMetadata: _ => { });
 
             var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
             Assert.True(Directory.Exists(sandboxBin));
@@ -386,7 +414,9 @@ public sealed class DispatchProcessHostTests
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { },
+                protectGitMetadata: _ => { });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
@@ -421,7 +451,9 @@ public sealed class DispatchProcessHostTests
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { },
+                protectGitMetadata: _ => { });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -11,6 +12,8 @@ internal sealed class ConductEventLogWriter
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly object RequiredEventDrainGate = new();
+    private static readonly ConcurrentDictionary<string, byte> MigratedLegacyPendingDirectories =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly string _path;
     private readonly long _maxBytes;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -30,6 +33,7 @@ internal sealed class ConductEventLogWriter
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _beforeRequiredEventDrain = beforeRequiredEventDrain;
         _beforeAppendCommit = beforeAppendCommit;
+        MigrateLegacyPendingEvents();
     }
 
     public string CurrentPath => _path;
@@ -108,6 +112,49 @@ internal sealed class ConductEventLogWriter
                 File.AppendAllText(_path, File.ReadAllText(pendingPath));
                 File.Delete(pendingPath);
             }
+        }
+    }
+
+    private void MigrateLegacyPendingEvents()
+    {
+        var directory = Path.GetDirectoryName(_path) ?? ".";
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        var normalizedDirectory = Path.GetFullPath(directory);
+        if (!MigratedLegacyPendingDirectories.TryAdd(normalizedDirectory, 0))
+        {
+            return;
+        }
+
+        try
+        {
+            lock (RequiredEventDrainGate)
+            {
+                var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
+                var legacyPaths = Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly);
+                if (legacyPaths.Length == 0)
+                {
+                    return;
+                }
+
+                var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+                Directory.CreateDirectory(pendingDirectory);
+                foreach (var legacyPath in legacyPaths)
+                {
+                    File.Move(legacyPath, Path.Combine(pendingDirectory, Path.GetFileName(legacyPath)));
+                }
+            }
+        }
+        catch (IOException)
+        {
+            MigratedLegacyPendingDirectories.TryRemove(normalizedDirectory, out _);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            MigratedLegacyPendingDirectories.TryRemove(normalizedDirectory, out _);
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -89,7 +90,7 @@ public sealed class BackgroundDispatchRunner
     private readonly Action? _beforeGoalWorktreeInspection;
     private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
     private readonly object _processLogCacheGate = new();
-    private readonly Dictionary<WorktreeInspectionCacheKey, WorktreeInspectionCacheEntry> _worktreeInspectionCache = [];
+    private readonly ConcurrentDictionary<WorktreeInspectionCacheKey, WorktreeInspectionCacheEntry> _worktreeInspectionCache = [];
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -964,7 +965,12 @@ public sealed class BackgroundDispatchRunner
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         if (RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var worktreeEvidence))
+            TryInspectGoalWorktree(
+                processRecord.WorkingDirectory,
+                goalId,
+                task.LastDispatch!.DispatchedAt,
+                out var worktreeEvidence,
+                forceRefresh: true))
         {
             hasCommittedChanges = worktreeEvidence.HasRelevantCommitAfterDispatch;
             // Default path: a Developer/Tester that edited the worktree and showed verification
@@ -1850,7 +1856,19 @@ public sealed class BackgroundDispatchRunner
     public int DetachRunningProcessesForGoal(AgentOrchestratorKernel kernel, GoalId goalId)
     {
         var goal = kernel.GetGoal(goalId);
-        return goal.Tasks.Count(task => task.LastProcess is { IsRunning: true });
+        var detached = 0;
+        foreach (var task in goal.Tasks)
+        {
+            if (task.LastProcess is not { IsRunning: true } process)
+            {
+                continue;
+            }
+
+            EvictProcessLogCache(process);
+            detached++;
+        }
+
+        return detached;
     }
 
     public int RequeueInterruptedDispatches(AgentOrchestratorKernel kernel)
@@ -1862,6 +1880,11 @@ public sealed class BackgroundDispatchRunner
             {
                 if (task.Status == WorkTaskStatus.Cancelled)
                 {
+                    if (task.LastProcess is { } cancelledProcess)
+                    {
+                        EvictProcessLogCache(cancelledProcess);
+                    }
+
                     kernel.RequeueInterruptedDispatch(
                         goal.Id,
                         task.Id,
@@ -1878,6 +1901,7 @@ public sealed class BackgroundDispatchRunner
                     continue;
                 }
 
+                EvictProcessLogCache(process);
                 kernel.RequeueInterruptedDispatch(
                     goal.Id,
                     task.Id,
@@ -2077,9 +2101,12 @@ public sealed class BackgroundDispatchRunner
         }
 
         var snapshot = ReadProcessLogFileBestEffort(path, length);
-        lock (_processLogCacheGate)
+        if (snapshot.ReadSucceeded)
         {
-            _processLogCache[key] = snapshot;
+            lock (_processLogCacheGate)
+            {
+                _processLogCache[key] = snapshot;
+            }
         }
 
         return snapshot;
@@ -2089,7 +2116,7 @@ public sealed class BackgroundDispatchRunner
     {
         if (!File.Exists(path))
         {
-            return new ProcessLogSnapshot(length, false, string.Empty, string.Empty);
+            return new ProcessLogSnapshot(length, false, string.Empty, string.Empty, ReadSucceeded: true);
         }
 
         try
@@ -2101,12 +2128,12 @@ public sealed class BackgroundDispatchRunner
         catch (IOException)
         {
             var message = $"[log locked at refresh — see {path}]";
-            return new ProcessLogSnapshot(length, false, message, message);
+            return new ProcessLogSnapshot(length, false, message, message, ReadSucceeded: false);
         }
         catch (UnauthorizedAccessException)
         {
             var message = $"[log unreadable at refresh — see {path}]";
-            return new ProcessLogSnapshot(length, false, message, message);
+            return new ProcessLogSnapshot(length, false, message, message, ReadSucceeded: false);
         }
     }
 
@@ -2202,11 +2229,13 @@ public sealed class BackgroundDispatchRunner
         var tailCount = 0;
         var totalChars = 0L;
         var buffer = new char[4096];
+        var previousWasCarriageReturn = false;
 
         void ProcessDecisionLine()
         {
-            var line = lineBuffer.ToString().TrimEnd('\r');
+            var line = lineBuffer.ToString();
             lineBuffer.Clear();
+            var containsFinalOutput = ContainsCodexFinalOutput(line);
             if (prefixRemaining > 0)
             {
                 var take = Math.Min(prefixRemaining, line.Length);
@@ -2225,12 +2254,12 @@ public sealed class BackgroundDispatchRunner
                 AppendDecisionLine(decision, line, MaxDecisionChars);
                 inWorkerResult = false;
             }
-            else if (inWorkerResult || IsDecisionSignificantLine(line))
+            else if (inWorkerResult || IsDecisionSignificantLine(line, containsFinalOutput))
             {
                 AppendDecisionLine(decision, line, MaxDecisionChars);
             }
 
-            finalOutputSeen |= ContainsCodexFinalOutput(line);
+            finalOutputSeen |= containsFinalOutput;
         }
 
         while (true)
@@ -2260,13 +2289,24 @@ public sealed class BackgroundDispatchRunner
                     tailStart = (tailStart + 1) % tail.Length;
                 }
 
-                if (ch == '\n')
+                if (ch == '\r')
                 {
                     ProcessDecisionLine();
+                    previousWasCarriageReturn = true;
+                }
+                else if (ch == '\n')
+                {
+                    if (!previousWasCarriageReturn)
+                    {
+                        ProcessDecisionLine();
+                    }
+
+                    previousWasCarriageReturn = false;
                 }
                 else
                 {
                     lineBuffer.Append(ch);
+                    previousWasCarriageReturn = false;
                 }
             }
 
@@ -2301,7 +2341,12 @@ public sealed class BackgroundDispatchRunner
     }
 
     private sealed record ProcessLogCacheKey(string ProcessRecordKey, string Path);
-    private sealed record ProcessLogSnapshot(long Length, bool FinalOutputSeen, string DecisionText, string BoundedText);
+    private sealed record ProcessLogSnapshot(
+        long Length,
+        bool FinalOutputSeen,
+        string DecisionText,
+        string BoundedText,
+        bool ReadSucceeded = true);
 
     private static void AppendDecisionLine(StringBuilder target, string line, int maxChars)
     {
@@ -2324,7 +2369,10 @@ public sealed class BackgroundDispatchRunner
         target.Append(line, 0, Math.Min(line.Length, remaining));
     }
 
-    private static bool IsDecisionSignificantLine(string line)
+    private static bool IsDecisionSignificantLine(string line) =>
+        IsDecisionSignificantLine(line, ContainsCodexFinalOutput(line));
+
+    private static bool IsDecisionSignificantLine(string line, bool containsCodexFinalOutput)
     {
         return DispatchFailureClassifier.HasVerificationEvidenceInOutput(line, string.Empty) ||
             line.Contains("HUMAN_INPUT:", StringComparison.OrdinalIgnoreCase) ||
@@ -2341,7 +2389,7 @@ public sealed class BackgroundDispatchRunner
              line.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) ||
             line.Contains("sandbox-prep", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("[dispatch-host] terminating worker tree:", StringComparison.Ordinal) ||
-            ContainsCodexFinalOutput(line) ||
+            containsCodexFinalOutput ||
             IsProviderDecisionLine(line) ||
             line.Contains("Model fit:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("Changed files:", StringComparison.OrdinalIgnoreCase) ||
@@ -2529,9 +2577,9 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
-        var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
-        if (!ContainsCodexFinalOutput(standardOutput) && !ContainsCodexFinalOutput(standardError))
+        var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
+        var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
+        if (!standardOutput.FinalOutputSeen && !standardError.FinalOutputSeen)
         {
             return false;
         }

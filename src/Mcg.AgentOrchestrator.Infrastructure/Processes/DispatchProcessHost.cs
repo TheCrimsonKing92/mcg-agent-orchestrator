@@ -1241,7 +1241,7 @@ public static void DropToLow() {
         }
     }
 
-    private static string? TryCaptureProviderSessionId(
+    internal static string? TryCaptureProviderSessionId(
         WorkerSandboxProvider provider,
         string stdoutPath,
         string stderrPath,
@@ -1249,11 +1249,6 @@ public static void DropToLow() {
         ProviderSessionCaptureState stderrState)
     {
         if (provider != WorkerSandboxProvider.Codex)
-        {
-            return null;
-        }
-
-        if (stderrState.GaveUp)
         {
             return null;
         }

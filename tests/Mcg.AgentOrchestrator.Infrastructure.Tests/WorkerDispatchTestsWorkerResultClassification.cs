@@ -167,6 +167,32 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Xunit.Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_paid_worker_preflight_failure_has_zero_external_io")]
+    public void BackgroundDispatchRunnerPaidWorkerPreflightFailureHasZeroExternalIo()
+{
+    var root = CreateTempDirectory();
+    var logRoot = Path.Combine(root, "logs");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Refuse paid worker before external IO");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", "codex exec paid-worker-prompt", root, DateTimeOffset.UtcNow));
+    var runner = new BackgroundDispatchRunner(disableProcessStart: true);
+
+    var ex = Assert.ThrowsAny<InvalidOperationException>(
+        () => runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot));
+
+    Assert.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, ex.Message, StringComparison.Ordinal);
+    Assert.False(Directory.Exists(logRoot));
+    Assert.Empty(Directory.GetFiles(root));
+    Assert.Null(task.LastProcess);
+    Assert.Null(task.LastDispatch!.WorktreeHeadSha);
+    Assert.Null(task.LastDispatch.DirtyStateHash);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_cancel_kills_tracked_tree_and_allows_redispatch_without_paid_start")]
     public void BackgroundDispatchRunnerCancelKillsTrackedTreeAndAllowsRedispatchWithoutPaidStart()
 {
@@ -766,6 +792,85 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(2, opens);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_retries_failed_unchanged_process_log_read")]
+    public void BackgroundDispatchRunnerRetriesFailedUnchangedProcessLogRead()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-11T16:10:00Z");
+    File.WriteAllText(stdout, "Tokens used: input=123 output=45");
+    File.WriteAllText(stderr, "no final marker");
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry locked unchanged log");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+    var stdoutAttempts = 0;
+    var runner = new BackgroundDispatchRunner(
+        new TestClock(now),
+        TimeSpan.FromMinutes(2),
+        _ => true,
+        openLogReadStream: path =>
+        {
+            if (path == stdout && ++stdoutAttempts == 1)
+            {
+                throw new IOException("simulated transient lock");
+            }
+
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        });
+
+    Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+    var completed = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(2, stdoutAttempts);
+    Assert.Equal(1, completed.ProcessRecord.ExitCode);
+    Assert.Contains("wrapper appears hung after codex final output", completed.Verification!.StandardError, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_bare_carriage_returns_preserve_worker_result_markers")]
+    public void BackgroundDispatchRunnerBareCarriageReturnsPreserveWorkerResultMarkers()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    File.WriteAllText(
+        stdout,
+        "prefix\r" + WorkerResultBlock("none", "no changes", "pass - no changes")
+            .Replace(Environment.NewLine, "\r", StringComparison.Ordinal) + "\r");
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Read bare carriage return worker result");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(999999, "fake-cmd", root, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
+
+    var outcome = new BackgroundDispatchRunner(isStillRunning: _ => false)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.True(outcome.Verification!.WorkerResultPresent);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_completion_reads_each_log_once_and_shares_payload_strings")]
     public void BackgroundDispatchRunnerCompletionReadsEachLogOnceAndSharesPayloadStrings()
 {
@@ -952,6 +1057,59 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         runner.BeginRefreshCycle();
         Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
         Assert.Equal(2, inspections);
+    }
+    finally
+    {
+        _ = GoalWorktrees.DeleteDirectory(root);
+    }
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_completion_refreshes_cached_worktree_before_commit")]
+    public void BackgroundDispatchRunnerCompletionRefreshesCachedWorktreeBeforeCommit()
+{
+    var root = CreateSeededDispatchRepository();
+    try
+    {
+        var now = DateTimeOffset.Parse("2026-06-12T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Refresh worktree evidence at completion");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.AppendAllText(Path.Combine(worktree, "README.md"), Environment.NewLine + "first dirty change");
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "worker.exit.txt");
+        File.WriteAllText(stdout, WorkerResultBlock("README.md, src/Second.cs", "implemented changes", "pass - focused"));
+        File.WriteAllText(stderr, string.Empty);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("claude-cli", "claude prompt", worktree, now.AddMinutes(-40)));
+        var process = new TaskProcessRecord(
+            999999, "claude prompt", worktree, stdout, stderr, exit, now.AddMinutes(-40), null, null);
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 12, 0, childPid: 4242);
+        var running = true;
+        var runner = new BackgroundDispatchRunner(
+            new TestClock(now),
+            isStillRunning: _ => running,
+            progressStallTimeout: TimeSpan.FromMinutes(10));
+
+        Assert.Null(runner.ReconcileLatestProcess(kernel, goal.Id, task.Id).Verification);
+        Directory.CreateDirectory(Path.Combine(worktree, "src"));
+        File.WriteAllText(Path.Combine(worktree, "src", "Second.cs"), "internal sealed class Second;");
+        File.WriteAllText(exit, "0");
+        running = false;
+
+        var completed = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        var status = GitCli.Run(worktree, "status", "--porcelain");
+
+        Assert.Equal(0, completed.ProcessRecord.ExitCode);
+        Assert.True(completed.Verification!.HasCommittedChanges);
+        Assert.True(status.Succeeded);
+        Assert.True(string.IsNullOrWhiteSpace(status.Output));
+        Assert.True(File.Exists(Path.Combine(worktree, "src", "Second.cs")));
     }
     finally
     {

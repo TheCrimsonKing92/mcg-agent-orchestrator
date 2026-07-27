@@ -802,9 +802,7 @@ internal sealed class ConductorBatchLoop
             {
                 foreach (var goal in eligible)
                 {
-                    var activeTask = goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true }) ??
-                        goal.Tasks.FirstOrDefault(task => task.Status == WorkTaskStatus.Running && task.LastDispatch is not null) ??
-                        goal.Tasks.FirstOrDefault(task => task.LastDispatch is not null && task.Status is WorkTaskStatus.Assigned);
+                    var activeTask = ConductorWatchProgressReporter.GetActiveTask(goal);
                     var cachedLiveChanges = activeTask?.LastDispatch is { } dispatch &&
                         liveChangeSnapshots.TryGetValue((dispatch.WorkingDirectory, dispatch.BaseCommit), out var snapshot)
                             ? snapshot

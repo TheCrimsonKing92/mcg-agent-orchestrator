@@ -852,12 +852,29 @@ internal static class GoalOperationJournal
         }
     }
 
-    internal static SqliteRunEventStore GetRunEventStore(string storePath) =>
-        RunEventStores.GetOrAdd(
-            Path.GetFullPath(storePath),
+    internal static SqliteRunEventStore GetRunEventStore(string storePath)
+    {
+        var normalizedPath = Path.GetFullPath(storePath);
+        var lazy = RunEventStores.GetOrAdd(
+            normalizedPath,
             static path => new Lazy<SqliteRunEventStore>(
                 () => new SqliteRunEventStore(path),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            if (RunEventStores.TryGetValue(normalizedPath, out var current) &&
+                ReferenceEquals(current, lazy))
+            {
+                RunEventStores.TryRemove(normalizedPath, out _);
+            }
+
+            throw;
+        }
+    }
 
     private static GoalOperationJournalEntry? TryDeserialize(string line)
     {
