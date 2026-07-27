@@ -821,13 +821,16 @@ Corrective direction:
         }
     }
 
-    private IReadOnlyList<string> BoundChangedFiles(DispatchLiveChangeSnapshot snapshot) =>
-        BoundList(
-            snapshot.DisplayFiles.Count > 0 ? snapshot.DisplayFiles : snapshot.Files,
+    private IReadOnlyList<string> BoundChangedFiles(DispatchLiveChangeSnapshot snapshot)
+    {
+        var hasCompleteFileSet = snapshot.Files.Count > 0;
+        return BoundList(
+            hasCompleteFileSet ? snapshot.Files : snapshot.DisplayFiles,
             _options.ChangedFilePromptLimit,
             _options.ChangedFileListCharacterLimit,
             ChangedFileLabel,
-            snapshot.RemainingFileCount);
+            hasCompleteFileSet ? 0 : snapshot.RemainingFileCount);
+    }
 
     private static IReadOnlyList<string> FormatCriteriaCorrectionOverlay(
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> corrections)

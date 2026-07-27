@@ -6662,6 +6662,46 @@ public sealed class ConductorBatchLoopTests
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
+    [Xunit.Fact(DisplayName = "ConductEvents_migrates_legacy_pending_events_for_each_log_name")]
+    public void ConductEventsMigratesLegacyPendingEventsForEachLogName()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-legacy-pending-names");
+        var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+        Directory.CreateDirectory(logDirectory);
+        var firstLogPath = Path.Combine(logDirectory, "first-events.log");
+        var secondLogPath = Path.Combine(logDirectory, "second-events.log");
+
+        static string WriteLegacyPending(string logDirectory, string logPath, string eventKind)
+        {
+            var pendingPath = Path.Combine(
+                logDirectory,
+                $"{Path.GetFileName(logPath)}.pending-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllText(
+                pendingPath,
+                JsonSerializer.Serialize(
+                    new ConductEventRecord(
+                        DateTimeOffset.Parse("2026-07-27T12:00:00Z"),
+                        eventKind,
+                        null,
+                        eventKind),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+            return pendingPath;
+        }
+
+        var firstPendingPath = WriteLegacyPending(logDirectory, firstLogPath, "first-legacy");
+        var secondPendingPath = WriteLegacyPending(logDirectory, secondLogPath, "second-legacy");
+
+        var firstWriter = new ConductEventLogWriter(firstLogPath);
+        var secondWriter = new ConductEventLogWriter(secondLogPath);
+        firstWriter.Append("first-current", null, "first-current");
+        secondWriter.Append("second-current", null, "second-current");
+
+        Assert.Contains("\"eventKind\":\"first-legacy\"", File.ReadAllText(firstLogPath), StringComparison.Ordinal);
+        Assert.Contains("\"eventKind\":\"second-legacy\"", File.ReadAllText(secondLogPath), StringComparison.Ordinal);
+        Assert.False(File.Exists(firstPendingPath));
+        Assert.False(File.Exists(secondPendingPath));
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_parallel_required_writers_drain_each_event_exactly_once")]
     public async Task ConductEventsParallelRequiredWritersDrainEachEventExactlyOnce()
     {

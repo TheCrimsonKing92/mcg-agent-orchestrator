@@ -12,7 +12,7 @@ internal sealed class ConductEventLogWriter
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly object RequiredEventDrainGate = new();
-    private static readonly ConcurrentDictionary<string, byte> MigratedLegacyPendingDirectories =
+    private static readonly ConcurrentDictionary<string, byte> MigratedLegacyPendingPaths =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly string _path;
     private readonly long _maxBytes;
@@ -123,8 +123,8 @@ internal sealed class ConductEventLogWriter
             return;
         }
 
-        var normalizedDirectory = Path.GetFullPath(directory);
-        if (!MigratedLegacyPendingDirectories.TryAdd(normalizedDirectory, 0))
+        var normalizedPath = Path.GetFullPath(_path);
+        if (!MigratedLegacyPendingPaths.TryAdd(normalizedPath, 0))
         {
             return;
         }
@@ -150,11 +150,11 @@ internal sealed class ConductEventLogWriter
         }
         catch (IOException)
         {
-            MigratedLegacyPendingDirectories.TryRemove(normalizedDirectory, out _);
+            MigratedLegacyPendingPaths.TryRemove(normalizedPath, out _);
         }
         catch (UnauthorizedAccessException)
         {
-            MigratedLegacyPendingDirectories.TryRemove(normalizedDirectory, out _);
+            MigratedLegacyPendingPaths.TryRemove(normalizedPath, out _);
         }
     }
 

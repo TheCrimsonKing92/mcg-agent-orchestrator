@@ -720,6 +720,43 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("wrapper appears hung after codex final output", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_hung_detection_ignores_final_output_beyond_decision_limit")]
+    public void BackgroundDispatchRunnerCodexHungDetectionIgnoresFinalOutputBeyondDecisionLimit()
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    var now = DateTimeOffset.Parse("2026-06-11T16:10:00Z");
+    var significantPrefix = string.Join(
+        Environment.NewLine,
+        Enumerable.Repeat($"Model fit: {new string('x', 500)}", 50));
+    File.WriteAllText(stdout, significantPrefix + Environment.NewLine + "Tokens used: input=123 output=45");
+    File.WriteAllText(stderr, string.Empty);
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Preserve bounded codex final output detection");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
+
+    var outcome = new BackgroundDispatchRunner(new TestClock(now), TimeSpan.FromMinutes(2), _ => true)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Null(outcome.Verification);
+    Assert.Null(outcome.ProcessRecord.ExitCode);
+    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.False(File.Exists(exit));
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_idle_guard_skips_log_reads_before_timeout")]
     public void BackgroundDispatchRunnerCodexIdleGuardSkipsLogReadsBeforeTimeout()
 {

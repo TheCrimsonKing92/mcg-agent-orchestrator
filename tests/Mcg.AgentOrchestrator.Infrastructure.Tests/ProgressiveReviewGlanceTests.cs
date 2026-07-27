@@ -143,7 +143,7 @@ public sealed class ProgressiveReviewGlanceTests
             task.Id,
             "CRITERIA CORRECTION: supersedes=\"extra 02\"; correction=\"Extra correction 02\"");
         var allFiles = Enumerable.Range(1, 100).Select(index => $"src/File{index:D2}.cs").ToArray();
-        var displayFiles = allFiles.Take(40).ToArray();
+        var displayFiles = allFiles.Take(3).ToArray();
         var runner = new ControlledGlanceRunner();
         runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(ProgressiveReviewGlanceVerdict.OnTrack, "ok", "bounded", 1, 1));
         var coordinator = NewCoordinator(
@@ -173,6 +173,7 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("xxxxxxxxxx", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("more criteria correction", StringComparison.Ordinal));
         Xunit.Assert.Contains("src/File01.cs", inputs.ChangedFiles);
+        Xunit.Assert.Contains("src/File05.cs", inputs.ChangedFiles);
         Xunit.Assert.DoesNotContain("src/File06.cs", inputs.ChangedFiles);
         Xunit.Assert.Contains(inputs.ChangedFiles, item => item.Contains("more changed file", StringComparison.Ordinal));
         Xunit.Assert.True(inputs.DiffExcerpt.Length < 90);

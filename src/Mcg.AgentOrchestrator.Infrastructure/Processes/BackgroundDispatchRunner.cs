@@ -2221,7 +2221,6 @@ public sealed class BackgroundDispatchRunner
         var decision = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
         var prefixRemaining = VerificationTextBounds.PreviewHeadChars;
         var inWorkerResult = false;
-        var finalOutputSeen = false;
         var lineBuffer = new StringBuilder();
         var retainedPrefix = new StringBuilder(VerificationTextBounds.BoundThreshold);
         var tail = new char[VerificationTextBounds.PreviewTailChars];
@@ -2259,7 +2258,6 @@ public sealed class BackgroundDispatchRunner
                 AppendDecisionLine(decision, line, MaxDecisionChars);
             }
 
-            finalOutputSeen |= containsFinalOutput;
         }
 
         while (true)
@@ -2319,7 +2317,12 @@ public sealed class BackgroundDispatchRunner
         }
 
         var bounded = BuildBoundedText(retainedPrefix, tail, tailStart, tailCount, totalChars, path);
-        return new ProcessLogSnapshot(length, finalOutputSeen, decision.ToString().TrimEnd(), bounded);
+        var decisionText = decision.ToString().TrimEnd();
+        return new ProcessLogSnapshot(
+            length,
+            ContainsCodexFinalOutput(decisionText),
+            decisionText,
+            bounded);
     }
 
     private static string BuildBoundedText(
