@@ -324,8 +324,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dead_lease_holder_reclaims_slot_despite_live_marker_process")]
-    public void DotnetBuildEnvironmentManagerDeadLeaseHolderReclaimsSlotDespiteLiveMarkerProcess()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_metadata_does_not_override_live_attempt_custody")]
+    public void DotnetBuildEnvironmentManagerStaleLeaseMetadataDoesNotOverrideLiveAttemptCustody()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
@@ -344,10 +344,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
             metadataPath,
             Environment.ProcessId);
 
-        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+        var blocked = Assert.Throws<DotnetBuildSlotsBusyException>(
+            () => DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero));
 
-        Assert.False(File.Exists(evidencePath));
-        Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+        Assert.Equal(environment.LeaseId, blocked.SlotsBusy.WantedBy);
+        Assert.True(File.Exists(evidencePath));
+        Assert.True(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_remote_custody_marker_allows_foreign_owner_takeover")]
@@ -376,8 +378,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(evidencePath));
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_custody_cleanup_failure_does_not_mask_terminal_outcome")]
-    public void DotnetBuildEnvironmentManagerCustodyCleanupFailureDoesNotMaskTerminalOutcome()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_custody_cleanup_failure_is_not_silently_accepted")]
+    public void DotnetBuildEnvironmentManagerCustodyCleanupFailureIsNotSilentlyAccepted()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
@@ -395,14 +397,15 @@ public sealed class DotnetBuildEnvironmentManagerTests
             FileAccess.Read,
             FileShare.Read);
 
-        var output = CaptureConsoleError(
+        var exception = Assert.Throws<AggregateException>(
             () => AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId));
 
         var markerPath = AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath);
         Assert.True(File.Exists(markerPath));
-        Assert.Contains("CUSTODY_RELEASE_FAILED", output, StringComparison.Ordinal);
-        Assert.Contains(attemptId, output, StringComparison.Ordinal);
-        Assert.Contains(markerPath, output, StringComparison.Ordinal);
+        Assert.Contains(attemptId, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            exception.InnerExceptions,
+            failure => failure.Message.Contains(markerPath, StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_missing_custody_marker_preserves_foreign_owner_takeover")]

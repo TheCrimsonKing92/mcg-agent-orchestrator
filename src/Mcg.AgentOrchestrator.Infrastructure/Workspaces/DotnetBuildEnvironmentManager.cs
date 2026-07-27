@@ -1245,7 +1245,7 @@ public static class DotnetBuildEnvironmentManager
             clean |= !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
         }
 
-        if (clean && !staleExecutionLeaseReclaimed)
+        if (clean)
         {
             AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
                 environment.ArtifactsPath,

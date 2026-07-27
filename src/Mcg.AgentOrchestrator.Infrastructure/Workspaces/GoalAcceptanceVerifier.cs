@@ -786,7 +786,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string ResolveInfrastructureShardResultsDirectory(
         DotnetBuildEnvironment environment)
     {
-        return Path.Combine(environment.ArtifactsPath, "TestResults");
+        var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
+        var attemptDirectory = string.IsNullOrWhiteSpace(attemptPrefix)
+            ? null
+            : Path.GetDirectoryName(attemptPrefix);
+        return string.IsNullOrWhiteSpace(attemptDirectory)
+            ? Path.Combine(environment.ArtifactsPath, "TestResults")
+            : attemptDirectory;
     }
 
     internal static int ResolveAvailableShardWorkerCount(
@@ -5014,7 +5020,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var attemptPrefix = Environment.GetEnvironmentVariable(AcceptanceAttemptTrxPrefixVariable);
         var directory = !string.IsNullOrWhiteSpace(resultsDirectoryOverride)
             ? resultsDirectoryOverride
-            : Path.Combine(environment.ArtifactsPath, "TestResults");
+            : string.IsNullOrWhiteSpace(attemptPrefix)
+                ? Path.Combine(environment.ArtifactsPath, "TestResults")
+                : Path.GetDirectoryName(attemptPrefix);
         if (string.IsNullOrWhiteSpace(directory))
         {
             directory = Path.Combine(environment.ArtifactsPath, "TestResults");
@@ -5067,7 +5075,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return sourcePaths;
         }
 
-        var receiptDirectory = attemptPrefix + ".receipts";
+        var receiptDirectory = Path.GetDirectoryName(attemptPrefix);
+        if (string.IsNullOrWhiteSpace(receiptDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Acceptance attempt TRX prefix '{attemptPrefix}' does not identify an attempt receipt folder.");
+        }
+
         var durablePaths = new string[sourcePaths.Count];
         for (var index = 0; index < sourcePaths.Count; index++)
         {
@@ -5093,10 +5107,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Console.WriteLine(
-                    $"ATTEMPT_RECEIPT_COPY_FAILED source=\"{sourcePath}\" destination=\"{destinationPath}\" error=\"{ex.Message}\"");
-                Console.Out.Flush();
-                durablePaths[index] = sourcePath;
+                throw new IOException(
+                    $"Failed to preserve completed test receipt from '{sourcePath}' to attempt folder '{destinationPath}'.",
+                    ex);
             }
         }
 

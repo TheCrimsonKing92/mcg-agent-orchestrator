@@ -39,7 +39,7 @@ public sealed class TestCoverageInvariantTests
             Assert.Single(durablePaths);
             Assert.True(File.Exists(durablePaths[0]));
             Assert.StartsWith(
-                attemptPrefix + ".receipts" + Path.DirectorySeparatorChar,
+                Path.GetDirectoryName(attemptPrefix)! + Path.DirectorySeparatorChar,
                 durablePaths[0],
                 StringComparison.OrdinalIgnoreCase);
         }
@@ -55,13 +55,13 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TestCoverageInvariant_receipt_copy_failure_preserves_slot_receipt_path")]
-    public void TestCoverageInvariantReceiptCopyFailurePreservesSlotReceiptPath()
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_receipt_copy_failure_fails_lane_completion")]
+    public void TestCoverageInvariantReceiptCopyFailureFailsLaneCompletion()
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-attempt-receipt-failure-{Guid.NewGuid():N}");
         var sourcePath = Path.Combine(root, "slot", "lane.trx");
         var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
-        var receiptDirectory = attemptPrefix + ".receipts";
+        var receiptDirectory = Path.GetDirectoryName(attemptPrefix)!;
         var previousPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         try
@@ -74,15 +74,12 @@ public sealed class TestCoverageInvariantTests
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 attemptPrefix);
 
-            IReadOnlyList<string>? durablePaths = null;
-            var output = CaptureConsole(
-                () => durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath]));
+            var exception = Assert.Throws<IOException>(
+                () => GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath]));
 
-            Assert.Equal([sourcePath], durablePaths);
             Assert.True(File.Exists(sourcePath));
-            Assert.Contains("ATTEMPT_RECEIPT_COPY_FAILED", output, StringComparison.Ordinal);
-            Assert.Contains(sourcePath, output, StringComparison.Ordinal);
-            Assert.Contains(receiptDirectory, output, StringComparison.Ordinal);
+            Assert.Contains(sourcePath, exception.Message, StringComparison.Ordinal);
+            Assert.Contains(receiptDirectory, exception.Message, StringComparison.Ordinal);
         }
         finally
         {

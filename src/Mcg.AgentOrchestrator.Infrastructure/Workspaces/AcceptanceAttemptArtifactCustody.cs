@@ -81,25 +81,44 @@ public static class AcceptanceAttemptArtifactCustody
         }
 
         var path = MarkerPath(artifactsPath);
-        try
+        File.Delete(path);
+        if (File.Exists(path))
         {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine(
-                $"CUSTODY_RELEASE_FAILED attempt={attemptId} path=\"{path}\" error=\"{ex.Message}\"");
+            throw new IOException(
+                $"Failed to release terminal acceptance-attempt custody marker for attempt '{attemptId}' at '{path}'.");
         }
     }
 
     public static void ReleaseStableSlots(string attemptId)
     {
+        List<Exception>? failures = null;
         for (var slotIndex = 0; slotIndex < DotnetBuildEnvironmentManager.StableSlotCount; slotIndex++)
         {
-            Release(DotnetBuildEnvironmentManager.StableSlotArtifactsPath(slotIndex), attemptId);
+            try
+            {
+                Release(DotnetBuildEnvironmentManager.StableSlotArtifactsPath(slotIndex), attemptId);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                (failures ??= []).Add(ex);
+            }
         }
 
-        Release(DotnetBuildEnvironmentManager.ManualSlotArtifactsPath(), attemptId);
+        try
+        {
+            Release(DotnetBuildEnvironmentManager.ManualSlotArtifactsPath(), attemptId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            (failures ??= []).Add(ex);
+        }
+
+        if (failures is { Count: > 0 })
+        {
+            throw new AggregateException(
+                $"Failed to synchronously release {failures.Count} terminal acceptance-attempt custody marker(s) for attempt '{attemptId}'.",
+                failures);
+        }
     }
 
     internal static string MarkerPath(string artifactsPath) =>
