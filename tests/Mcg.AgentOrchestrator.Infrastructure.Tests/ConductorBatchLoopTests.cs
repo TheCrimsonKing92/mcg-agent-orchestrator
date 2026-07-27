@@ -369,16 +369,24 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "BatchLoop_runs_disjoint_gate_ready_acceptance_concurrently_on_distinct_slots")]
     public void BatchLoopRunsDisjointGateReadyAcceptanceConcurrentlyOnDistinctSlots()
     {
-        AgentOrchestratorKernel kernel;
-        Goal goalA;
-        Goal goalB;
-        do
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
+        var goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
+        for (var attempt = 1;
+             attempt < 128 && BuildPermitIndex(goalA) == BuildPermitIndex(goalB);
+             attempt++)
         {
             kernel = new AgentOrchestratorKernel();
             goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
             goalB = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/B.cs");
         }
-        while (BuildPermitIndex(goalA) == BuildPermitIndex(goalB));
+        if (BuildPermitIndex(goalA) == BuildPermitIndex(goalB))
+        {
+            throw new InvalidOperationException(
+                $"Could not generate goals on distinct build permits after 128 attempts; " +
+                $"goalA={goalA.Id.Value}, goalB={goalB.Id.Value}, permit={BuildPermitIndex(goalA)}.");
+        }
+
         using var release = new ManualResetEventSlim(false);
         using var bothStarted = new CountdownEvent(2);
         using var bothFinished = new CountdownEvent(2);
@@ -531,7 +539,10 @@ public sealed class ConductorBatchLoopTests
                     ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
                     : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
                 parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts),
-                getAcceptanceSlotCount: goal => goal.Id == goalA.Id ? 4 : 1);
+                getAcceptanceSlotCount: goal =>
+                    goal.Id == goalA.Id
+                        ? ConductorBatchLoop.DefaultParallelAcceptanceCapacity
+                        : 1);
 
             var summary = new ConductorBatchLoop().Run(
                 kernel,
@@ -746,9 +757,20 @@ public sealed class ConductorBatchLoopTests
     public void BatchLoopParallelAcceptanceSlotExhaustionQueuesExtraGoal()
     {
         using var isolatedRoot = IsolatedDotnetRootScope();
-        AgentOrchestratorKernel kernel;
-        Goal[] goals;
-        do
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1)
+            .Select(index => CreateVerifiedSimpleGoal(
+                kernel,
+                $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
+            .ToArray();
+        for (var attempt = 1;
+             attempt < 128 &&
+             goals
+                 .Take(ConductorBatchLoop.DefaultParallelAcceptanceCapacity)
+                 .Select(BuildPermitIndex)
+                 .Distinct()
+                 .Count() < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
+             attempt++)
         {
             kernel = new AgentOrchestratorKernel();
             goals = Enumerable.Range(0, ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1)
@@ -757,13 +779,19 @@ public sealed class ConductorBatchLoopTests
                     $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
                 .ToArray();
         }
-        while (goals
+        if (goals
             .Take(ConductorBatchLoop.DefaultParallelAcceptanceCapacity)
             .Select(BuildPermitIndex)
             .Distinct()
-            .Count() < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
+            .Count() < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount)
+        {
+            throw new InvalidOperationException(
+                $"Could not generate {ConductorBatchLoop.DefaultParallelAcceptanceCapacity} acceptance goals " +
+                $"covering {DotnetBuildEnvironmentManager.BuildConcurrencySlotCount} build permits after 128 attempts.");
+        }
+
         using var release = new ManualResetEventSlim(false);
-        using var firstWaveStarted = new CountdownEvent(1);
+        using var firstWaveStarted = new CountdownEvent(ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         var running = 0;
         var maxRunning = 0;
         var slots = new ConcurrentQueue<int?>();
@@ -849,11 +877,15 @@ public sealed class ConductorBatchLoopTests
 
             Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1, totalAdvanced);
             Assert.True(deferredGoalEventuallyStarted);
-            Assert.InRange(
-                maxRunning,
-                1,
-                DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
+            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, maxRunning);
             Assert.DoesNotContain(slots, slot => !slot.HasValue);
+            Assert.Equal(
+                ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
+                slots
+                    .Where(slot => slot.HasValue)
+                    .Select(slot => slot!.Value)
+                    .Distinct()
+                    .Count());
             Assert.Contains(firstTick!.ProgressLines!, line =>
                 line.Contains("ADMISSION", StringComparison.Ordinal) &&
                 line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal));
@@ -2041,10 +2073,20 @@ public sealed class ConductorBatchLoopTests
         using var isolatedRoot = IsolatedDotnetRootScope();
         var (_, goalA) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldA.cs");
         var (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldB.cs");
-        while (BuildPermitIndex(goalA) != BuildPermitIndex(goalB))
+        for (var attempt = 1;
+             attempt < 128 && BuildPermitIndex(goalA) != BuildPermitIndex(goalB);
+             attempt++)
         {
             (_, goalB) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldB.cs");
         }
+        if (BuildPermitIndex(goalA) != BuildPermitIndex(goalB))
+        {
+            throw new InvalidOperationException(
+                $"Could not generate goals on the same build permit after 128 attempts; " +
+                $"goalA={goalA.Id.Value} permit={BuildPermitIndex(goalA)}, " +
+                $"goalB={goalB.Id.Value} permit={BuildPermitIndex(goalB)}.");
+        }
+
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         using var releaseFirst = new ManualResetEventSlim(false);
         using var firstHasLease = new ManualResetEventSlim(false);

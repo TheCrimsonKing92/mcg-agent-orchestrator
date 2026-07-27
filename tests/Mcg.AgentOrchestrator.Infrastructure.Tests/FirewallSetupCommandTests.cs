@@ -31,10 +31,12 @@ public sealed class FirewallSetupCommandTests
     [Xunit.Fact(DisplayName = "Firewall_rule_removal_persists_restoration_definition_before_each_mutation")]
     public void FirewallRuleRemovalPersistsRestorationDefinitionBeforeEachMutation()
     {
-        var script = File.ReadAllText(Path.Combine(
+        var scriptPath = Path.Combine(
             InfrastructureTestSupport.FindRepositoryRoot(),
             "scripts",
-            "Remove-TestSlotFirewallRules.ps1"));
+            "Remove-TestSlotFirewallRules.ps1");
+        AssertPowerShellParses(scriptPath);
+        var script = File.ReadAllText(scriptPath);
         var firstReceipt = script.IndexOf(
             "Write-RemovalReceipt -Entries $entries",
             StringComparison.Ordinal);
@@ -44,7 +46,43 @@ public sealed class FirewallSetupCommandTests
 
         Xunit.Assert.True(firstReceipt >= 0);
         Xunit.Assert.True(removal > firstReceipt);
+        Xunit.Assert.Contains("#Requires -Version 7.0", script, StringComparison.Ordinal);
         Xunit.Assert.Contains("$entry.removalState = \"removing\"", script, StringComparison.Ordinal);
         Xunit.Assert.Contains("[System.IO.File]::Move($temporaryPath, $ReceiptPath, $true)", script, StringComparison.Ordinal);
+    }
+
+    private static void AssertPowerShellParses(string scriptPath)
+    {
+        using var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "pwsh",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+        };
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-NonInteractive");
+        process.StartInfo.ArgumentList.Add("-CommandWithArgs");
+        process.StartInfo.ArgumentList.Add(
+            "$tokens = $null; $errors = $null; " +
+            "[System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors) > $null; " +
+            "if ($errors.Count -gt 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }");
+        process.StartInfo.ArgumentList.Add(scriptPath);
+        process.Start();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException($"PowerShell parser did not exit for '{scriptPath}'.");
+        }
+
+        Xunit.Assert.True(
+            process.ExitCode == 0,
+            $"PowerShell parser rejected '{scriptPath}': {stderr.GetAwaiter().GetResult()}{stdout.GetAwaiter().GetResult()}");
     }
 }

@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -725,25 +726,32 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
             using var cts = new CancellationTokenSource();
             var run = verifier.RunAsync(root, goalId, stableSlotIndex: 0, cancellationToken: cts.Token);
-            var heartbeatPath = GateHeartbeatArtifacts.GetStableSlotPath(0);
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (!File.Exists(heartbeatPath) && DateTimeOffset.UtcNow < deadline)
+            while (!progress.Any(item => item.CurrentTarget == "hung gate receipt") &&
+                   DateTimeOffset.UtcNow < deadline)
             {
                 await Task.Delay(100);
             }
 
+            var heartbeatPath = Assert.Single(
+                progress
+                    .Where(item => item.CurrentTarget == "hung gate receipt")
+                    .Select(item => item.HeartbeatPath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase));
             cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
 
-            var status = GateHeartbeatArtifacts.ReadStableSlot(0);
-            Assert.True(status.IsAvailable, status.UnavailableReason);
-            Assert.NotNull(status.Snapshot);
-            Assert.Equal("feedfacefeedfacefeedfacefeedface", status.Snapshot!.GoalId);
-            Assert.Equal("verification-check", status.Snapshot.Phase);
-            Assert.Equal("hung gate receipt", status.Snapshot.CurrentTarget);
-            Assert.True(status.Snapshot.ChildPid.HasValue || status.Snapshot.State is "completed" or "timed-out");
-            Assert.True(status.IdleDuration >= TimeSpan.Zero);
+            Assert.True(File.Exists(heartbeatPath), $"Missing attempt heartbeat '{heartbeatPath}'.");
+            var snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(snapshot);
+            Assert.Equal("feedfacefeedfacefeedfacefeedface", snapshot!.GoalId);
+            Assert.Equal("verification-check", snapshot.Phase);
+            Assert.Equal("hung gate receipt", snapshot.CurrentTarget);
+            Assert.True(snapshot.ChildPid.HasValue || snapshot.State is "completed" or "timed-out");
+            Assert.True(DateTimeOffset.UtcNow - snapshot.LastProgressAt >= TimeSpan.Zero);
             Assert.Contains(progress, item => item.GoalId == goalId.Value && item.CurrentTarget == "hung gate receipt");
         }
         finally
@@ -864,7 +872,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
             Assert.Contains("--report-trx", mtpCall);
             Assert.Contains("--filter-class", mtpCall);
-            Assert.Equal("run-slot-0", result.Checks.Single().LeaseId);
+            Assert.Equal("goal-abcdef12", result.Checks.Single().LeaseId);
         }
         finally
         {
@@ -909,7 +917,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 stableSlotIndex: 0);
 
             Assert.True(result.Passed);
-            var artifactsPath = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0).ArtifactsPath;
+            var artifactsPath = DotnetBuildEnvironmentManager.GoalArtifactsPath(
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"));
             Assert.Contains(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build");
             Assert.Contains(calls, call =>
                 call.Length >= 3 &&
@@ -1508,6 +1517,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var calls = new List<string[]>();
         var buildAttempts = 0;
         var sleeper = StartSleepProcess();
+        var goalId = new GoalId("99998888777766665555444433332222");
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -1529,8 +1539,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     if (buildAttempts == 1)
                     {
                         var artifactsPath = GetArtifactsPath(args);
+                        var heartbeatEnvironment =
+                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                        var heartbeatPath =
+                            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                                "core tests",
+                                heartbeatEnvironment,
+                                stableSlotIndex: 0);
                         GateHeartbeatArtifacts.Write(
-                            Path.Combine(artifactsPath, GateHeartbeatArtifacts.FileName),
+                            heartbeatPath,
                             new GateHeartbeatSnapshot(
                                 "99998888777766665555444433332222",
                                 "verification-check",
@@ -1560,7 +1577,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             AcceptanceVerificationResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = verifier.RunAsync(root, new GoalId("99998888777766665555444433332222"), stableSlotIndex: 0)
+                result = verifier.RunAsync(root, goalId, stableSlotIndex: 0)
                     .GetAwaiter()
                     .GetResult());
 
@@ -2166,6 +2183,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             ["MCG_SHARD_SMOKE_BETA_SIGNAL"] = betaSignalPath
         };
         DotnetBuildEnvironmentLease? primaryLease = null;
+        DotnetBuildEnvironment? primaryEnvironment = null;
         var primaryBuildPermit = -1;
         try
         {
@@ -2204,6 +2222,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             primaryLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
+            primaryEnvironment = primaryLease.Environment;
             var primarySlot = StableSlotIndex(primaryLease.Environment.ArtifactsPath);
             primaryBuildPermit = primarySlot;
             var run = verifier.RunAsync(
@@ -2260,6 +2279,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousAttemptPrefix);
             primaryLease?.Dispose();
+            if (primaryEnvironment is not null)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(primaryEnvironment);
+            }
+
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             DeleteDirectoryWithRetry(root);
         }
@@ -2361,9 +2385,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var attemptA = Path.Combine(root, "attempt-a");
         var attemptB = Path.Combine(root, "attempt-b");
         var operatorDirectory = Path.Combine(root, "operator");
-        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
-        var gateBuild = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "gate-chaos");
-        var operatorBuild = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "operator-chaos");
+        var executionLockPath = Path.Combine(root, "build-slots", "build-0.lock");
+        var gateBuild = new DotnetBuildEnvironment(
+            "gate-chaos",
+            Path.Combine(root, "gate-build"),
+            Path.Combine(root, "gate-build", "artifacts"),
+            executionLockPath,
+            [],
+            "gate-chaos",
+            BuildPermitIndex: 0);
+        var operatorBuild = new DotnetBuildEnvironment(
+            "operator-chaos",
+            Path.Combine(root, "operator-build"),
+            Path.Combine(root, "operator-build", "artifacts"),
+            executionLockPath,
+            [],
+            "operator-chaos",
+            BuildPermitIndex: 0);
         var environment = new DotnetBuildEnvironment(
             "goal-chaos",
             root,
@@ -2510,7 +2548,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         finally
         {
             release.Set();
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
         }
     }

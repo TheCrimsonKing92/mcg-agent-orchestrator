@@ -1123,8 +1123,12 @@ internal static partial class CliCommandHandlers
         using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
         if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
-            RunStableSlotMtpTest(parts, context, lease);
-            DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+            var resultsSurviveCleanup = RunStableSlotMtpTest(parts, context, lease);
+            if (resultsSurviveCleanup)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+            }
+
             return;
         }
 
@@ -1139,10 +1143,9 @@ internal static partial class CliCommandHandlers
         }
 
         lease.ReleaseExecutionLock();
-        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
     }
 
-    private static void RunStableSlotMtpTest(
+    private static bool RunStableSlotMtpTest(
         IReadOnlyList<string> parts,
         CliExecutionContext context,
         DotnetBuildEnvironmentLease buildLease)
@@ -1181,8 +1184,9 @@ internal static partial class CliCommandHandlers
         }
 
         buildLease.ReleaseExecutionLock();
-        var resultsDirectory = ReadStableSlotOption(parts, "--results-directory")
-            ?? Path.Combine(environment.ArtifactsPath, "TestResults");
+        var configuredResultsDirectory = ReadStableSlotOption(parts, "--results-directory");
+        var resultsDirectory = configuredResultsDirectory ??
+            Path.Combine(environment.ArtifactsPath, "TestResults");
         Directory.CreateDirectory(resultsDirectory);
         var mtpArguments = new List<string>
         {
@@ -1210,6 +1214,14 @@ internal static partial class CliCommandHandlers
         {
             throw new CliExitException(testExit);
         }
+
+        return configuredResultsDirectory is not null &&
+            !Path.GetFullPath(resultsDirectory)
+                .StartsWith(
+                    Path.GetFullPath(environment.RootPath)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                    Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool executableExists) =>

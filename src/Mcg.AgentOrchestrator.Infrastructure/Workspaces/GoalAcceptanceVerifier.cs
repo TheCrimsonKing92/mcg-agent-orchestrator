@@ -2881,16 +2881,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             attemptName,
             stableSlotIndex,
             stableSlotLease);
-        FileStream? leaseLock = null;
+        DotnetBuildEnvironmentLease? leaseLock = null;
         try
         {
-            leaseLock = stableSlotLease is null
-                ? DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+            leaseLock = stableSlotLease?.IsExecutionLockHeld == true
+                ? null
+                : DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
                     environment,
                     cancellationToken,
                     _timeProvider,
-                    _leaseSleep)
-                : null;
+                    _leaseSleep);
             afterLeasePrepared?.Invoke(environment);
 
             var lockRemediationApplied = false;
@@ -2904,7 +2904,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
                 cancellationToken).ConfigureAwait(false);
 
-            if (IsBuildLockFailure(result, environment, out var attribution))
+            if (IsBuildLockFailure(result, environment, check, out var attribution))
             {
                 (result, lockRemediationApplied) = await RemediateBuildLockAndRetryAsync(
                     arguments,
@@ -2918,7 +2918,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     attribution,
                     nextEnvironment =>
                     {
-                        if (stableSlotLease is not null)
+                        if (stableSlotLease?.IsExecutionLockHeld == true)
                         {
                             return;
                         }
@@ -2926,7 +2926,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         leaseLock?.Dispose();
                         leaseLock = null;
                         environment = nextEnvironment;
-                        leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                        leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
                             environment,
                             cancellationToken,
                             _timeProvider,
@@ -2935,7 +2935,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     cancellationToken).ConfigureAwait(false);
             }
 
-            if (IsBuildLockFailure(result, environment, out var finalAttribution))
+            if (IsBuildLockFailure(result, environment, check, out var finalAttribution))
             {
                 throw new BuildLockBlockedException(finalAttribution);
             }
@@ -2980,7 +2980,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 attribution,
                 nextEnvironment =>
                 {
-                    if (stableSlotLease is not null)
+                    if (stableSlotLease?.IsExecutionLockHeld == true)
                     {
                         return;
                     }
@@ -2988,7 +2988,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     leaseLock?.Dispose();
                     leaseLock = null;
                     environment = nextEnvironment;
-                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
                         environment,
                         cancellationToken,
                         _timeProvider,
@@ -2996,7 +2996,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            if (IsBuildLockFailure(result, environment, out var finalAttribution))
+            if (IsBuildLockFailure(result, environment, check, out var finalAttribution))
             {
                 throw new BuildLockBlockedException(finalAttribution);
             }
@@ -3103,7 +3103,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             retryAttribution = AttributeBuildLock(lockedPath, worktreePath, "acceptance-retry", check.Name);
         }
 
-        if (retry is not null && !IsBuildLockFailure(retry, retryEnvironment, out retryAttribution))
+        if (retry is not null &&
+            !IsBuildLockFailure(retry, retryEnvironment, check, out retryAttribution))
         {
             return (retry, true);
         }
@@ -3159,7 +3160,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             throw new BuildLockBlockedException(AttributeBuildLock(lockedPath, worktreePath, "acceptance-kill-retry", check.Name));
         }
 
-        if (IsBuildLockFailure(killRetry, killRetryEnvironment, out var killRetryAttribution))
+        if (IsBuildLockFailure(
+            killRetry,
+            killRetryEnvironment,
+            check,
+            out var killRetryAttribution))
         {
             throw new BuildLockBlockedException(killRetryAttribution);
         }
@@ -3241,7 +3246,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 throw new BuildLockBlockedException(exceptionAttribution);
             }
 
-            if (!IsBuildLockFailure(retry, retryEnvironment, out var retryAttribution))
+            if (!IsBuildLockFailure(retry, retryEnvironment, check, out var retryAttribution))
             {
                 EmitTransientNoHolderBuildLockRetryReceipt(
                     check,
@@ -3423,7 +3428,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return attribution with { ProbeElapsed = elapsed.Elapsed };
     }
 
-    private static bool IsBuildLockFailure(CommandResult result, DotnetBuildEnvironment environment, out BuildLockAttribution attribution)
+    private static bool IsBuildLockFailure(
+        CommandResult result,
+        DotnetBuildEnvironment environment,
+        AcceptanceManifestCheck check,
+        out BuildLockAttribution attribution)
     {
         attribution = null!;
         if (result.TimedOut || result.ExitCode == 0 || DotnetTestRunReportsCompleted(result.Output))
@@ -3442,14 +3451,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment.ArtifactsPath,
             "acceptance-output",
             "classify-build-lock");
-        attribution = EnrichBuildLockAttributionWithGateContext(attribution, environment);
-        EmitBuildLockClassificationContext(attribution, result, environment);
+        attribution = EnrichBuildLockAttributionWithGateContext(attribution, environment, check);
+        EmitBuildLockClassificationContext(attribution, result, environment, check);
         return true;
     }
 
     private static BuildLockAttribution EnrichBuildLockAttributionWithGateContext(
         BuildLockAttribution attribution,
-        DotnetBuildEnvironment environment)
+        DotnetBuildEnvironment environment,
+        AcceptanceManifestCheck check)
     {
         var holders = attribution.Holders.ToList();
         var consumedGateContext = false;
@@ -3460,7 +3470,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             holders.Add(activeConsumer);
         }
 
-        var heartbeat = ReadGateHeartbeat(environment);
+        var heartbeat = ReadGateHeartbeat(environment, check);
         consumedGateContext |= heartbeat?.Snapshot is not null;
         foreach (var holder in BuildLiveHeartbeatHolders(heartbeat?.Snapshot, environment))
         {
@@ -3519,9 +3529,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static void EmitBuildLockClassificationContext(
         BuildLockAttribution attribution,
         CommandResult result,
-        DotnetBuildEnvironment environment)
+        DotnetBuildEnvironment environment,
+        AcceptanceManifestCheck check)
     {
-        var heartbeat = ReadGateHeartbeat(environment);
+        var heartbeat = ReadGateHeartbeat(environment, check);
         var snapshot = heartbeat?.Snapshot;
         var pidAlive = snapshot?.ProcessId is { } pid && IsProcessRunning(pid);
         var childAlive = snapshot?.ChildPid is { } childPid && IsProcessRunning(childPid);
@@ -3546,17 +3557,27 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Console.Out.Flush();
     }
 
-    private static GateHeartbeatStatus? ReadGateHeartbeat(DotnetBuildEnvironment environment)
+    private static GateHeartbeatStatus? ReadGateHeartbeat(
+        DotnetBuildEnvironment environment,
+        AcceptanceManifestCheck check)
     {
-        var path = Path.Combine(environment.ArtifactsPath, GateHeartbeatArtifacts.FileName);
+        var stableSlotIndex = TryGetStableSlotIndex(environment);
+        var path = ResolveGateHeartbeatPath(
+            check,
+            environment,
+            stableSlotIndex,
+            worktreePath: null);
         if (!File.Exists(path))
         {
             return null;
         }
 
-        if (TryGetStableSlotIndex(environment) is { } stableSlotIndex)
+        if (stableSlotIndex.HasValue &&
+            path.Equals(
+                GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value),
+                StringComparison.OrdinalIgnoreCase))
         {
-            return GateHeartbeatArtifacts.ReadStableSlot(stableSlotIndex);
+            return GateHeartbeatArtifacts.ReadStableSlot(stableSlotIndex.Value);
         }
 
         try
@@ -3565,9 +3586,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 File.ReadAllText(path),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
             return snapshot is null
-                ? new GateHeartbeatStatus(-1, path, false, "invalid", null, null, null)
+                ? new GateHeartbeatStatus(stableSlotIndex ?? -1, path, false, "invalid", null, null, null)
                 : new GateHeartbeatStatus(
-                    -1,
+                    stableSlotIndex ?? -1,
                     path,
                     true,
                     null,
@@ -3577,7 +3598,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         catch
         {
-            return new GateHeartbeatStatus(-1, path, false, "invalid", null, null, null);
+            return new GateHeartbeatStatus(
+                stableSlotIndex ?? -1,
+                path,
+                false,
+                "invalid",
+                null,
+                null,
+                null);
         }
     }
 
@@ -3936,11 +3964,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     "--verbosity",
                     "minimal"
                 };
-                var mainBuild = await _runner(
-                    mainBuildArguments,
-                    mainWorktreePath,
-                    EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
-                    cancellationToken).ConfigureAwait(false);
+                var mainBuildPermit = stableSlotLease?.IsExecutionLockHeld == true
+                    ? null
+                    : DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
+                        environment,
+                        cancellationToken,
+                        _timeProvider,
+                        _leaseSleep);
+                CommandResult mainBuild;
+                try
+                {
+                    mainBuild = await _runner(
+                        mainBuildArguments,
+                        mainWorktreePath,
+                        EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
+                        cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    mainBuildPermit?.Dispose();
+                }
+
                 if (mainBuild.ExitCode != 0)
                 {
                     return new AcceptanceCheckResult(
@@ -4718,23 +4763,29 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Goal-scoped artifacts remain reusable across attempts, while ownerless commands use
         // an invocation-local environment.
         DotnetBuildEnvironment environment;
-        if (goalId is not null)
+        if (buildLease is not null)
         {
-            environment = DotnetBuildEnvironmentManager.CreateAttempt(
-                goalId,
-                attemptName);
+            environment = buildLease.Environment;
+        }
+        else if (goalId is not null)
+        {
+            environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
         }
         else
         {
-            environment = buildLease?.Environment ?? (stableSlotIndex.HasValue
+            environment = stableSlotIndex.HasValue
                 ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(
                     stableSlotIndex.Value)
                 : DotnetBuildEnvironmentManager.CreateAttempt(
                     null,
-                    attemptName));
+                    attemptName);
         }
 
-        CurrentManagedRunEnvironmentScope.Value?.Track(environment);
+        if (buildLease is null)
+        {
+            CurrentManagedRunEnvironmentScope.Value?.Track(environment);
+        }
+
         return environment;
     }
 

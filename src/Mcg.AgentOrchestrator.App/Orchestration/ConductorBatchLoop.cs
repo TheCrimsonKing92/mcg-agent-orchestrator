@@ -15,7 +15,8 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxBusyWriteAttempts = 6;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
-    internal const int DefaultParallelAcceptanceCapacity = 4;
+    internal const int DefaultParallelAcceptanceCapacity =
+        DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
     internal const int DefaultUnscopedStallTickThreshold = 3;
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;

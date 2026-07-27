@@ -44,10 +44,26 @@ if ($Filter)  { $testArgs += @('--filter', $Filter) }
 $hasFilterMetacharacters = $Filter.IndexOfAny([char[]]'&|<>()') -ge 0
 $resolvedTarget = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $Target))
 $mtpTargets = if ([System.IO.Path]::GetExtension($resolvedTarget).Equals(".sln", [System.StringComparison]::OrdinalIgnoreCase)) {
-    @(
-        ".\tests\Mcg.AgentOrchestrator.Core.Tests\Mcg.AgentOrchestrator.Core.Tests.csproj",
-        ".\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
-    )
+    $solutionDirectory = Split-Path -Parent $resolvedTarget
+    $listedProjects = @(& dotnet sln $resolvedTarget list)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to enumerate projects from solution target: $resolvedTarget"
+    }
+
+    $testProjects = @($listedProjects |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -match '\.[A-Za-z]+proj$' } |
+        ForEach-Object { [System.IO.Path]::GetFullPath((Join-Path $solutionDirectory $_)) } |
+        Where-Object {
+            (Select-String -LiteralPath $_ -SimpleMatch '<IsTestProject>true</IsTestProject>' -Quiet) -or
+            (Select-String -LiteralPath $_ -SimpleMatch '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>' -Quiet)
+        })
+    if ($testProjects.Count -eq 0) {
+        throw "Solution target contains no discoverable test projects: $resolvedTarget"
+    }
+
+    Write-Host "Discovered $($testProjects.Count) test project(s) from $resolvedTarget."
+    $testProjects
 }
 else {
     @($Target)

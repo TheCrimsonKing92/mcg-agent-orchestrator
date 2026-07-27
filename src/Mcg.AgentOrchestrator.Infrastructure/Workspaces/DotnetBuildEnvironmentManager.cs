@@ -121,6 +121,32 @@ public static class DotnetBuildEnvironmentManager
             owner);
     }
 
+    internal static DotnetBuildEnvironment ResolveGoalEnvironment(GoalId goalId)
+    {
+        ArgumentNullException.ThrowIfNull(goalId);
+        var root = GoalRoot(goalId);
+        var leaseId = $"goal-{Prefix(goalId)}";
+        var leaseDirectory = LeaseDirectory(goalId);
+        var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
+        var artifactsPath = Path.Combine(root, "artifacts");
+        var buildPermitIndex = BuildSlotIndex(Prefix(goalId));
+        var executionLockPath = BuildSlotExecutionLockPath(buildPermitIndex);
+        Directory.CreateDirectory(leaseDirectory);
+        Directory.CreateDirectory(artifactsPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
+
+        return new DotnetBuildEnvironment(
+            leaseId,
+            root,
+            artifactsPath,
+            executionLockPath,
+            BuildArguments(artifactsPath),
+            leaseId,
+            metadataPath,
+            ReusedGoalLease: File.Exists(metadataPath),
+            BuildPermitIndex: buildPermitIndex);
+    }
+
     public static string GoalRoot(GoalId goalId)
     {
         return Path.Combine(IsolatedRootBase(), "goals", Prefix(goalId));
@@ -455,6 +481,26 @@ public static class DotnetBuildEnvironmentManager
         return TryAcquireLeaseExecutionLock(environment, timeout, cancellationToken, timeProvider, sleep) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease.DetachStreamForLegacyCaller(),
+            DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
+            DotnetBuildLeaseAcquisition.BuildLockBlocked blocked => throw new BuildLockBlockedException(blocked.Attribution),
+            _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
+        };
+    }
+
+    internal static DotnetBuildEnvironmentLease AcquireLeaseExecutionPermit(
+        DotnetBuildEnvironment environment,
+        CancellationToken cancellationToken = default,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null)
+    {
+        return TryAcquireLeaseExecutionLock(
+            environment,
+            timeout: null,
+            cancellationToken,
+            timeProvider,
+            sleep) switch
+        {
+            DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
             DotnetBuildLeaseAcquisition.BuildLockBlocked blocked => throw new BuildLockBlockedException(blocked.Attribution),
             _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
@@ -1696,6 +1742,8 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
     }
 
     public DotnetBuildEnvironment Environment { get; }
+
+    internal bool IsExecutionLockHeld => Volatile.Read(ref _state) == 0;
 
     internal FileStream DetachStreamForLegacyCaller()
     {
