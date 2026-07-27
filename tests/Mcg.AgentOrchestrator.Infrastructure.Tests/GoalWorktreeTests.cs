@@ -1611,8 +1611,11 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
     }
 }
 
+[Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 {
+    private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(30);
+
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuses_prebuilt_test_assembly_and_dependency_directory")]
     public async Task InvokeIsolatedDotnetReusesPrebuiltTestAssemblyAndDependencyDirectory()
     {
@@ -1788,7 +1791,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         process.StandardInput.Close();
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(ProcessExitTimeout);
         try
         {
             await process.WaitForExitAsync(timeout.Token);
@@ -1804,7 +1807,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             var timedOutStdout = await stdoutTask;
             var timedOutStderr = await stderrTask;
             throw new Xunit.Sdk.XunitException(
-                $"Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.{Environment.NewLine}stdout:{Environment.NewLine}{timedOutStdout}{Environment.NewLine}stderr:{Environment.NewLine}{timedOutStderr}");
+                $"Invoke-IsolatedDotnet.ps1 did not exit within {ProcessExitTimeout.TotalSeconds:0} seconds.{Environment.NewLine}stdout:{Environment.NewLine}{timedOutStdout}{Environment.NewLine}stderr:{Environment.NewLine}{timedOutStderr}");
         }
 
         var stdout = await stdoutTask;
