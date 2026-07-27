@@ -3696,11 +3696,13 @@ public sealed class ConductorBatchLoopTests
 
             var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
             var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var cacheJson = File.ReadAllText(Path.Combine(root, ".orchestrator", "terminal-goal-sweep-cache.json"));
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, first.CacheHitCount);
             Assert.Equal(0, second.CacheMissCount);
             Assert.Equal(1, second.CacheHitCount);
+            Assert.DoesNotContain(Environment.NewLine + "  ", cacheJson, StringComparison.Ordinal);
         }
         finally
         {
@@ -6604,7 +6606,7 @@ public sealed class ConductorBatchLoopTests
 
         Assert.False(appendedImmediately);
         Assert.Single(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
 
         writer.Append("loop-stop", null, "LOOP_STOP tick=2 reason=test");
@@ -6620,8 +6622,84 @@ public sealed class ConductorBatchLoopTests
             record.Detail.Contains("continuing=true", StringComparison.Ordinal));
         Assert.Contains(records, record => record.EventKind == "loop-stop");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_migrates_and_drains_legacy_parent_pending_events")]
+    public void ConductEventsMigratesAndDrainsLegacyParentPendingEvents()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-legacy-pending");
+        var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+        var logPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
+        Directory.CreateDirectory(logDirectory);
+        var legacyPendingPath = Path.Combine(
+            logDirectory,
+            $"{Path.GetFileName(logPath)}.pending-{Guid.NewGuid():N}.jsonl");
+        File.WriteAllText(
+            legacyPendingPath,
+            JsonSerializer.Serialize(
+                new ConductEventRecord(
+                    DateTimeOffset.Parse("2026-07-27T12:00:00Z"),
+                    "legacy-required",
+                    "goal1234",
+                    "LEGACY_REQUIRED goal=goal1234"),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+
+        var writer = new ConductEventLogWriter(logPath);
+        writer.Append("loop-stop", null, "LOOP_STOP tick=1 reason=test");
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Contains(records, record => record.EventKind == "legacy-required" && record.GoalId == "goal1234");
+        Assert.Contains(records, record => record.EventKind == "loop-stop");
+        Assert.False(File.Exists(legacyPendingPath));
+        Assert.Empty(Directory.GetFiles(
+            Path.Combine(logDirectory, ConductEventLogWriter.PendingEventsDirectoryName),
+            $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductEvents_migrates_legacy_pending_events_for_each_log_name")]
+    public void ConductEventsMigratesLegacyPendingEventsForEachLogName()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-legacy-pending-names");
+        var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+        Directory.CreateDirectory(logDirectory);
+        var firstLogPath = Path.Combine(logDirectory, "first-events.log");
+        var secondLogPath = Path.Combine(logDirectory, "second-events.log");
+
+        static string WriteLegacyPending(string logDirectory, string logPath, string eventKind)
+        {
+            var pendingPath = Path.Combine(
+                logDirectory,
+                $"{Path.GetFileName(logPath)}.pending-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllText(
+                pendingPath,
+                JsonSerializer.Serialize(
+                    new ConductEventRecord(
+                        DateTimeOffset.Parse("2026-07-27T12:00:00Z"),
+                        eventKind,
+                        null,
+                        eventKind),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+            return pendingPath;
+        }
+
+        var firstPendingPath = WriteLegacyPending(logDirectory, firstLogPath, "first-legacy");
+        var secondPendingPath = WriteLegacyPending(logDirectory, secondLogPath, "second-legacy");
+
+        var firstWriter = new ConductEventLogWriter(firstLogPath);
+        var secondWriter = new ConductEventLogWriter(secondLogPath);
+        firstWriter.Append("first-current", null, "first-current");
+        secondWriter.Append("second-current", null, "second-current");
+
+        Assert.Contains("\"eventKind\":\"first-legacy\"", File.ReadAllText(firstLogPath), StringComparison.Ordinal);
+        Assert.Contains("\"eventKind\":\"second-legacy\"", File.ReadAllText(secondLogPath), StringComparison.Ordinal);
+        Assert.False(File.Exists(firstPendingPath));
+        Assert.False(File.Exists(secondPendingPath));
     }
 
     [Xunit.Fact(DisplayName = "ConductEvents_parallel_required_writers_drain_each_event_exactly_once")]
@@ -6675,7 +6753,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0001");
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
@@ -6747,7 +6825,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record => record.EventKind == "gate-total" && record.GoalId == "goal0001");
         Assert.Single(records, record => record.EventKind == "gate-progress" && record.GoalId == "goal0002");
         Assert.Empty(Directory.GetFiles(
-            Path.GetDirectoryName(logPath)!,
+            Path.Combine(Path.GetDirectoryName(logPath)!, ConductEventLogWriter.PendingEventsDirectoryName),
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 

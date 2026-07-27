@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -8,6 +9,8 @@ internal static class RunEventMaintenanceCadence
 {
     internal const string Operation = "run-events:maintenance";
     internal static readonly TimeSpan Interval = TimeSpan.FromHours(24);
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> NextDueByStorePath =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public static RunEventMaintenanceCadenceResult TryRunIfDue(
         string runEventStorePath,
@@ -15,6 +18,12 @@ internal static class RunEventMaintenanceCadence
         Func<DateTimeOffset>? utcNow = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
+        var cadenceKey = Path.GetFullPath(runEventStorePath);
+        if (NextDueByStorePath.TryGetValue(cadenceKey, out var nextDue) && now < nextDue)
+        {
+            return SkippedResult();
+        }
+
         var journal = new ConductEventLogWriter(conductEventsLogPath);
         try
         {
@@ -24,16 +33,8 @@ internal static class RunEventMaintenanceCadence
             var latest = LatestMaintenanceMarker(store, conductEventsLogPath);
             if (latest is not null && now - latest.Value < Interval)
             {
-                var skipLine = $"RUN_EVENTS_MAINTENANCE_SKIPPED reason=fresh lastRun={latest.Value:O} nextDue={latest.Value.Add(Interval):O}";
-                Console.WriteLine(skipLine);
-                TryAppendJournal(journal, "run-events-maintenance-skip", skipLine, now);
-                return new RunEventMaintenanceCadenceResult(
-                    Attempted: false,
-                    Skipped: true,
-                    Deferred: false,
-                    Failed: false,
-                    Reason: "fresh",
-                    Maintenance: null);
+                NextDueByStorePath[cadenceKey] = latest.Value.Add(Interval);
+                return SkippedResult();
             }
 
             var options = RunEventMaintenanceOptions.Default with { UtcNow = now, Vacuum = false };
@@ -44,6 +45,7 @@ internal static class RunEventMaintenanceCadence
             if (!result.Deferred)
             {
                 TryAppendRunEventReceipt(store, "cadence", options, result, now);
+                NextDueByStorePath[cadenceKey] = now.Add(Interval);
             }
 
             return new RunEventMaintenanceCadenceResult(
@@ -68,6 +70,15 @@ internal static class RunEventMaintenanceCadence
                 Maintenance: null);
         }
     }
+
+    private static RunEventMaintenanceCadenceResult SkippedResult() =>
+        new(
+            Attempted: false,
+            Skipped: true,
+            Deferred: false,
+            Failed: false,
+            Reason: "fresh",
+            Maintenance: null);
 
     public static string FormatReceipt(
         string mode,

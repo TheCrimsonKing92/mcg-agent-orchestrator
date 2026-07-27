@@ -46,6 +46,8 @@ internal sealed class GoalGitFactIndex(
 
     public bool HasGoalBranch(string branchName) => isGitWorkTree && goalBranchTips.ContainsKey(branchName);
 
+    public bool HasGoalBranch(GoalId goalId) => HasGoalBranch(GoalWorktrees.BranchName(goalId));
+
     public GoalBranchFacts BuildGoalBranchFacts(Goal goal)
     {
         var branch = GoalWorktrees.BranchName(goal.Id);
