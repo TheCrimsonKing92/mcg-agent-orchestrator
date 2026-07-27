@@ -77,7 +77,9 @@ public sealed record ReviewFinding(
     [property: JsonPropertyName("state")] ReviewFindingState State,
     [property: JsonPropertyName("location")] ReviewFindingLocation Location,
     [property: JsonPropertyName("description")] string Description,
-    [property: JsonPropertyName("severity")] FindingSeverity Severity = FindingSeverity.Blocking);
+    [property: JsonPropertyName("severity")]
+    [property: JsonConverter(typeof(FindingSeverityJsonConverter))]
+    FindingSeverity Severity = FindingSeverity.Blocking);
 
 public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
@@ -348,7 +350,7 @@ public static class ReviewFindingConvergence
     // Raw submitted location text remains on the merged finding; normalization is comparison-only.
     private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right)
     {
-        if (!string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(left.File, right.File, StringComparison.Ordinal))
         {
             return false;
         }
@@ -385,8 +387,9 @@ public static class ReviewFindingConvergence
     // Exact anchor equality (including hunk) — used only by the recycle guard so that a second,
     // distinct defect in the same region but a different hunk stays reportable under a new id.
     private static bool ExactAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
-        SameAnchor(left, right) &&
-        string.Equals(left.Hunk ?? string.Empty, right.Hunk ?? string.Empty, StringComparison.Ordinal);
+        string.Equals(left.File, right.File, StringComparison.Ordinal) &&
+        string.Equals(left.Region, right.Region, StringComparison.Ordinal) &&
+        string.Equals(left.Hunk, right.Hunk, StringComparison.Ordinal);
 
     private static void ValidateFindings(IEnumerable<ReviewFinding> findings)
     {

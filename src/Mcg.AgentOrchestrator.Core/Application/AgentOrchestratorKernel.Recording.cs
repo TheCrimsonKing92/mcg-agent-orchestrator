@@ -337,9 +337,11 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var finalReviewRecord = goal.Tasks
-            .Where(task => task.RequiredRole == AgentRole.Reviewer)
-            .SelectMany(task => task.VerificationHistory)
-            .Where(verification => verification.MergedReviewFindings is not null)
+            .Where(task =>
+                task.RequiredRole == AgentRole.Reviewer &&
+                task.Status == WorkTaskStatus.Completed)
+            .Select(task => task.LastVerification)
+            .OfType<TaskVerificationRecord>()
             .OrderBy(verification => verification.CompletedAt)
             .LastOrDefault();
 
@@ -388,9 +390,7 @@ public sealed partial class AgentOrchestratorKernel
         var historicalVerifications = goal.Tasks
             .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
             .SelectMany(candidate => candidate.VerificationHistory)
-            .Where(candidate =>
-                !ReferenceEquals(candidate, currentVerification) &&
-                candidate.CompletedAt != currentVerification.CompletedAt);
+            .Where(candidate => !ReferenceEquals(candidate, currentVerification));
         foreach (var verification in historicalVerifications
             .Append(currentVerification)
             .OrderBy(candidate => candidate.CompletedAt))

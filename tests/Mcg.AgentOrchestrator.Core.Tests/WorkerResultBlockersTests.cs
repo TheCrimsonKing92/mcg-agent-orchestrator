@@ -299,6 +299,61 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
     }
 
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_compares_file_identity_with_ordinal_casing")]
+    public void ReviewFindingConvergenceComparesFileIdentityWithOrdinalCasing()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "RunFocusedEvidence"),
+                "Missing guard.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-1",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/a.cs", "RunFocusedEvidence"),
+                    "Missing guard.")
+            ],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_recycle_guard_uses_raw_region_identity")]
+    public void ReviewFindingConvergenceRecycleGuardUsesRawRegionIdentity()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "FirstType.Run"),
+                "First defect.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                previous[0],
+                new ReviewFinding(
+                    "F-2",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "SecondType.Run"),
+                    "Second defect.")
+            ],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(2, state.Count);
+        Assert.Contains(state, finding => finding.StableId == "F-2");
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFinding_missing_severity_deserializes_and_round_trips_as_blocking")]
     public void ReviewFindingMissingSeverityDeserializesAndRoundTripsAsBlocking()
     {
