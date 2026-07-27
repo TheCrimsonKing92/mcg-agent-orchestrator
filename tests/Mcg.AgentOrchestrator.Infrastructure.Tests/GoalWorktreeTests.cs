@@ -372,6 +372,7 @@ public abstract class GoalWorktreeTestBase
         public int? RemoveTimeoutMilliseconds { get; private set; }
 
         public Func<string, GoalId, AgentOrchestratorKernel?, int?, GoalWorktreeRemoveResult>? RemoveOverride { get; init; }
+        public Func<string, GoalId, AgentOrchestratorKernel, GoalWorktreeRemoveResult>? RemoveTerminalNowOverride { get; init; }
 
         public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
 
@@ -395,6 +396,14 @@ public abstract class GoalWorktreeTestBase
                 ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
                 : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
         }
+
+        public GoalWorktreeRemoveResult RemoveTerminalNow(
+            string executionDirectory,
+            GoalId goalId,
+            AgentOrchestratorKernel kernel) =>
+            RemoveTerminalNowOverride is not null
+                ? RemoveTerminalNowOverride(executionDirectory, goalId, kernel)
+                : GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel);
 
         public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 

@@ -6,13 +6,43 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static partial class GoalWorktrees
 {
     public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
-        Remove(executionDirectory, goalId, kernel, GitCli.DefaultTimeoutMilliseconds, forceTerminalCleanup: false);
+        Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            GitCli.DefaultTimeoutMilliseconds,
+            precomputedHasRegisteredWorktree: null,
+            precomputedHasBranch: null,
+            forceTerminalCleanup: false,
+            bypassCleanupBackoff: false);
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel kernel) =>
-        Remove(executionDirectory, goalId, kernel, GitCli.DefaultTimeoutMilliseconds, forceTerminalCleanup: true);
+        Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            GitCli.DefaultTimeoutMilliseconds,
+            precomputedHasRegisteredWorktree: null,
+            precomputedHasBranch: null,
+            forceTerminalCleanup: true,
+            bypassCleanupBackoff: false);
+
+    public static GoalWorktreeRemoveResult RemoveTerminalNow(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel kernel) =>
+        Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            GitCli.DefaultTimeoutMilliseconds,
+            precomputedHasRegisteredWorktree: null,
+            precomputedHasBranch: null,
+            forceTerminalCleanup: true,
+            bypassCleanupBackoff: true);
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -27,7 +57,8 @@ public static partial class GoalWorktrees
             GitCli.DefaultTimeoutMilliseconds,
             hasRegisteredWorktree,
             hasBranch,
-            forceTerminalCleanup: false);
+            forceTerminalCleanup: false,
+            bypassCleanupBackoff: false);
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -42,7 +73,8 @@ public static partial class GoalWorktrees
             GitCli.DefaultTimeoutMilliseconds,
             hasRegisteredWorktree,
             hasBranch,
-            forceTerminalCleanup: true);
+            forceTerminalCleanup: true,
+            bypassCleanupBackoff: false);
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -57,7 +89,8 @@ public static partial class GoalWorktrees
             gitTimeoutMilliseconds,
             precomputedHasRegisteredWorktree: null,
             precomputedHasBranch: null,
-            forceTerminalCleanup);
+            forceTerminalCleanup,
+            bypassCleanupBackoff: false);
 
     private static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -66,15 +99,19 @@ public static partial class GoalWorktrees
         int gitTimeoutMilliseconds,
         bool? precomputedHasRegisteredWorktree,
         bool? precomputedHasBranch,
-        bool forceTerminalCleanup)
+        bool forceTerminalCleanup,
+        bool bypassCleanupBackoff)
     {
         var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, CleanupElapsedMilliseconds);
         var path = WorktreePath(executionDirectory, goalId);
         if (forceTerminalCleanup &&
             !CanDirectDeleteTerminalWorktree(executionDirectory, path, kernel, out var terminalSafetyFailure))
         {
-            throw new InvalidOperationException(
-                $"Terminal worktree cleanup refused unsafe target '{path}': {terminalSafetyFailure}.");
+            return new GoalWorktreeRemoveResult(
+                $"Terminal worktree cleanup refused unsafe target '{path}': {terminalSafetyFailure}.",
+                path,
+                Directory.Exists(path) ? FindLockHoldersForCleanup(path) : [],
+                ConductorRetryCommand(goalId));
         }
 
         if (!IsGitWorkTree(executionDirectory, cleanupBudget.RemainingMilliseconds))
@@ -108,7 +145,9 @@ public static partial class GoalWorktrees
 
         var wasAlreadyUnregistered = !hasRegisteredWorktree;
 
-        if (hasLeftoverDirectory && IsCleanupBackedOff(path, "remove", out var backoff))
+        if (!bypassCleanupBackoff &&
+            hasLeftoverDirectory &&
+            IsCleanupBackedOff(path, "remove", out var backoff))
         {
             var lockHolders = FindLockHoldersForCleanup(path);
             if ((!IsLockHeldCleanupNeededReason(backoff.Reason) &&
@@ -128,7 +167,8 @@ public static partial class GoalWorktrees
                     CleanupBackoff: detail);
             }
         }
-        else if (!hasLeftoverDirectory &&
+        else if (!bypassCleanupBackoff &&
+            !hasLeftoverDirectory &&
             hasBranch &&
             IsCleanupBackedOff(path, "remove", out var branchBackoff))
         {
@@ -148,15 +188,11 @@ public static partial class GoalWorktrees
         if (hasRegisteredWorktree)
         {
             DeleteUntrackedOrchestratorInternalArtifacts(path);
-            var removal = forceTerminalCleanup
-                ? GitCli.Run(
-                    executionDirectory,
-                    cleanupBudget.RemainingMilliseconds,
-                    "worktree",
-                    "remove",
-                    "--force",
-                    ToExtendedLengthPath(path))
-                : GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "remove", path);
+            var removal = RunWorktreeRemove(
+                executionDirectory,
+                cleanupBudget.RemainingMilliseconds,
+                forceTerminalCleanup ? ToExtendedLengthPath(path) : path,
+                forceTerminalCleanup);
             if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
             {
                 var safetyFailure = "terminal cleanup was not authorized";
@@ -196,13 +232,10 @@ public static partial class GoalWorktrees
                         CleanupBackoff: detail);
                 }
 
-                _ = GitCli.Run(
+                _ = RunWorktreePrune(
                     executionDirectory,
                     cleanupBudget.RemainingMilliseconds,
-                    "worktree",
-                    "prune",
-                    "--expire",
-                    "now");
+                    true);
                 if (IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
                 {
                     RecordCleanupNeeded(path, "remove:worktree-prune-failed", goalId: goalId);
@@ -218,20 +251,17 @@ public static partial class GoalWorktrees
             }
             else if (removal.ExitCode != 0)
             {
-                _ = GitCli.Run(
+                _ = RunWorktreePrune(
                     executionDirectory,
                     cleanupBudget.RemainingMilliseconds,
-                    "worktree",
-                    "prune",
-                    "--expire",
-                    "now");
+                    true);
             }
         }
         else
         {
             // Worktree already unregistered; prune any stale tracking entries left by a prior
             // partial removal so git's internal state is consistent before we finish cleanup.
-            GitCli.Run(executionDirectory, cleanupBudget.RemainingMilliseconds, "worktree", "prune");
+            RunWorktreePrune(executionDirectory, cleanupBudget.RemainingMilliseconds, false);
         }
 
         GitCli.GitResult? branchRemoval = null;
@@ -468,6 +498,29 @@ public static partial class GoalWorktrees
     }
 
     private static string ConductorRetryCommand(GoalId goalId) => $"conduct {Prefix(goalId)} --loop";
+
+    private static GitCli.GitResult DefaultRunWorktreeRemove(
+        string executionDirectory,
+        int timeoutMilliseconds,
+        string path,
+        bool forceTerminalCleanup) =>
+        forceTerminalCleanup
+            ? GitCli.Run(
+                executionDirectory,
+                timeoutMilliseconds,
+                "worktree",
+                "remove",
+                "--force",
+                path)
+            : GitCli.Run(executionDirectory, timeoutMilliseconds, "worktree", "remove", path);
+
+    private static GitCli.GitResult DefaultRunWorktreePrune(
+        string executionDirectory,
+        int timeoutMilliseconds,
+        bool expireNow) =>
+        expireNow
+            ? GitCli.Run(executionDirectory, timeoutMilliseconds, "worktree", "prune", "--expire", "now")
+            : GitCli.Run(executionDirectory, timeoutMilliseconds, "worktree", "prune");
 
     private static void DeleteUntrackedOrchestratorInternalArtifacts(string worktreePath)
     {

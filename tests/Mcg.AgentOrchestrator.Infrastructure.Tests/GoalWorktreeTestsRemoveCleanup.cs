@@ -24,6 +24,8 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 
         var scratchRoot = Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-long-wt", Guid.NewGuid().ToString("n"));
         var repo = Path.Combine(scratchRoot, "repo");
+        var originalWorktreeRemove = GoalWorktrees.RunWorktreeRemove;
+        var originalWorktreePrune = GoalWorktrees.RunWorktreePrune;
 
         try
         {
@@ -50,10 +52,26 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             Directory.CreateDirectory(extendedDeepPath);
             Assert.True(Directory.Exists(extendedDeepPath));
             kernel.CancelGoal(goal.Id, "Test terminal cleanup.");
+            string? removalPath = null;
+            var pruneCalls = 0;
+            GoalWorktrees.RunWorktreeRemove = (_, _, path, force) =>
+            {
+                removalPath = path;
+                Assert.True(force);
+                return new GitCli.GitResult(1, string.Empty, "simulated git long-path refusal");
+            };
+            GoalWorktrees.RunWorktreePrune = (executionDirectory, timeout, expireNow) =>
+            {
+                pruneCalls++;
+                Assert.True(expireNow);
+                return GitCli.Run(executionDirectory, timeout, "worktree", "prune", "--expire", "now");
+            };
 
             var result = GoalWorktrees.RemoveTerminal(repo, goal.Id, kernel);
 
             Assert.True(result.IsComplete, result.Message);
+            Assert.True(removalPath?.StartsWith(@"\\?\", StringComparison.Ordinal) is true, removalPath);
+            Assert.Equal(1, pruneCalls);
             Assert.False(Directory.Exists(worktree));
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
             Assert.DoesNotContain(
@@ -63,7 +81,110 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
         finally
         {
+            GoalWorktrees.RunWorktreeRemove = originalWorktreeRemove;
+            GoalWorktrees.RunWorktreePrune = originalWorktreePrune;
             _ = GoalWorktrees.DeleteDirectory(scratchRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktrees_terminal_remove_reports_unsafe_prefix_collision_without_throwing")]
+    public void GoalWorktreesTerminalRemoveReportsUnsafePrefixCollisionWithoutThrowing()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var terminalId = new GoalId("12345678aaaaaaaaaaaaaaaaaaaaaaaa");
+            var activeId = new GoalId("12345678bbbbbbbbbbbbbbbbbbbbbbbb");
+            var terminal = kernel.CreateGoal(
+                terminalId,
+                "Terminal collision",
+                [new TaskSpec(TaskId.New(), "Terminal work", AgentRole.Developer)]);
+            var active = kernel.CreateGoal(
+                activeId,
+                "Active collision",
+                [new TaskSpec(TaskId.New(), "Active work", AgentRole.Developer)]);
+            kernel.ActivateGoal(terminal.Id, AgentCatalog.Default().Agents);
+            kernel.ActivateGoal(active.Id, AgentCatalog.Default().Agents);
+            var path = GoalWorktrees.Ensure(repo, terminal.Id);
+            kernel.CancelGoal(terminal.Id, "Terminal collision test.");
+
+            var result = GoalWorktrees.RemoveTerminal(repo, terminal.Id, kernel);
+
+            Assert.False(result.IsComplete);
+            Assert.Contains("refused unsafe target", result.Message, StringComparison.Ordinal);
+            Assert.Contains($"non-terminal goal {active.Id.Value[..8]} (Active)", result.Message, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(path));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_workspace_remove_force_terminal_cleanup_bypasses_escalated_backoff")]
+    public void CliWorkspaceRemoveForceTerminalCleanupBypassesEscalatedBackoff()
+    {
+        var repo = CreateSeededRepository();
+        var originalDelete = GoalWorktrees.DeleteDirectory;
+        var originalAcl = GoalWorktrees.SandboxAclHelper;
+        var originalShutdown = GoalWorktrees.BuildServerShutdown;
+        var originalLockHolders = GoalWorktrees.FindLockHoldersForCleanup;
+        var originalOptions = GoalWorktrees.CleanupOptions;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Forced terminal cleanup",
+                [new TaskSpec(TaskId.New(), "Leave terminal residue.", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+            File.Delete(Path.Combine(path, ".git"));
+            RunGit(repo, "worktree", "prune");
+            kernel.CancelGoal(goal.Id, "Force cleanup test.");
+            GoalWorktrees.DeleteDirectory = _ => false;
+            GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
+            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            GoalWorktrees.FindLockHoldersForCleanup = _ => [];
+            GoalWorktrees.ConfigureCleanup(
+                new GoalWorktreeCleanupOptions(TimeSpan.FromMinutes(5), 1, TimeSpan.FromDays(1)),
+                Path.Combine(repo, ".orchestrator"));
+
+            var deferred = GoalWorktrees.RemoveTerminal(repo, goal.Id, kernel);
+            Assert.False(deferred.IsComplete);
+            Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id));
+            var attentionStore = CollaborationItemStore.ForDirectory(Path.Combine(repo, ".orchestrator"));
+            var attention = Assert.Single(attentionStore.GetAttentionQueueAsync().GetAwaiter().GetResult());
+            Assert.Contains(
+                $"workspace remove {goal.Id.Value[..8]} --force-terminal-cleanup",
+                attention.Body,
+                StringComparison.Ordinal);
+
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            var context = new CliExecutionContext(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal);
+
+            _ = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["workspace", "remove", goal.Id.Value[..8], "--force-terminal-cleanup"],
+                context));
+
+            Assert.False(Directory.Exists(path));
+            Assert.Null(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id));
+            Assert.Empty(attentionStore.GetAttentionQueueAsync().GetAwaiter().GetResult());
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectory = originalDelete;
+            GoalWorktrees.SandboxAclHelper = originalAcl;
+            GoalWorktrees.BuildServerShutdown = originalShutdown;
+            GoalWorktrees.FindLockHoldersForCleanup = originalLockHolders;
+            GoalWorktrees.ConfigureCleanup(originalOptions);
+            DeleteDirectory(repo);
         }
     }
 

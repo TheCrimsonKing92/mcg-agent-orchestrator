@@ -221,6 +221,10 @@ public static partial class GoalWorktrees
     internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
     internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
     internal static Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; } = DeleteDirectoryWithReason;
+    internal static Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; } =
+        DefaultRunWorktreeRemove;
+    internal static Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; } =
+        DefaultRunWorktreePrune;
     internal static Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; } = FindLockHolders;
     internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
     internal static Func<long>? CleanupElapsedMilliseconds { get; set; }

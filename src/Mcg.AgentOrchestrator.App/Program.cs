@@ -95,9 +95,6 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName);
-GoalWorktreeOrphanSweepScheduler.Configure(
-    WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
-    workspace.OrchestratorDirectory);
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
@@ -110,6 +107,18 @@ try
 catch (ArgumentException ex)
 {
     Console.Error.WriteLine($"Error: {ex.Message}");
+    return 1;
+}
+
+try
+{
+    GoalWorktreeOrphanSweepScheduler.Configure(
+        WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
+        workspace.OrchestratorDirectory);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
     return 1;
 }
 
@@ -290,7 +299,7 @@ Console.WriteLine("  reassign-agent <task-number> <agent-id> (persist exact task
 Console.WriteLine("  goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal]");
 Console.WriteLine("  monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal]");
 Console.WriteLine("  monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
-Console.WriteLine("  acceptance [goal-id] [--autonomy <policy>], workspace [create|merge|remove] [goal-id-prefix] [--autonomy <policy>]");
+Console.WriteLine("  acceptance [goal-id] [--autonomy <policy>], workspace [create|merge|remove] [goal-id-prefix] [--force-terminal-cleanup] [--autonomy <policy>]");
 Console.WriteLine("  advance [goal-id], advance-subscription [goal-id] --confirm-subscription-advance [--autonomy <policy>]");
 Console.WriteLine("  run-goal [goal-id] --confirm-batch-start [--confirm-readiness-risk] [--autonomy <policy>]");
 Console.WriteLine("  lifecycle-goal <objective> --confirm-batch-start [--autonomy <policy>]");

@@ -23,7 +23,7 @@ public static partial class GoalWorktrees
         var debts = new List<GoalWorktreeCleanupDebt>();
         try
         {
-            using var conn = OpenCleanupStateConnection(statePath);
+            using var conn = OpenCleanupStateReadConnection(statePath);
             using var command = conn.CreateCommand();
             command.CommandText = """
                 SELECT b.path, b.reason, b.skip_until_utc,
@@ -373,6 +373,22 @@ public static partial class GoalWorktrees
         return conn;
     }
 
+    private static SqliteConnection OpenCleanupStateReadConnection(string statePath)
+    {
+        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = statePath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+            DefaultTimeout = 1
+        }.ToString());
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 1000;";
+        command.ExecuteNonQuery();
+        return conn;
+    }
+
     private static void JournalCleanupBackoffSkip(
         string path,
         string operation,
@@ -510,7 +526,7 @@ public static partial class GoalWorktrees
                     $"Worktree cleanup escalated: {Path.GetFileName(path)}",
                     string.Join(Environment.NewLine, [
                         message,
-                        $"Retry: {(goalId is null ? "cleanup-status" : $"workspace remove {Prefix(goalId.Value)}")}"
+                        $"Retry: {(goalId is null ? "cleanup-status" : $"workspace remove {Prefix(goalId.Value)} --force-terminal-cleanup")}"
                     ]),
                     CleanupAttentionCorrelationKey(path))
                 .GetAwaiter()

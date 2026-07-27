@@ -53,7 +53,7 @@ internal static class GoalsPrunePlanner
             }
 
             kernel.CancelGoal(item.GoalId, PruneReason);
-            GoalWorktrees.Remove(executionDirectory, item.GoalId, kernel);
+            GoalWorktrees.RemoveTerminal(executionDirectory, item.GoalId, kernel);
             applied.Add(item with { Disposition = GoalPruneDisposition.Pruned });
         }
 
