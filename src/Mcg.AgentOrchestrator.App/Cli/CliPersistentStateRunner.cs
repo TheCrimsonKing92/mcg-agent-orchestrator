@@ -1241,6 +1241,11 @@ internal static class CliPersistentStateRunner
         Console.WriteLine(
             $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goal.Id.Value[..8]} " +
             $"task={task.Id.Value[..8]} status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
+        {
+            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+        }
+
         return false;
     }
 

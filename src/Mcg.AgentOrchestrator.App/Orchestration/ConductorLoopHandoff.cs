@@ -32,6 +32,9 @@ internal sealed class ConductLockPidProbe : IConductLockPidProbe
 
 internal sealed class ConductorLoopLease : IDisposable
 {
+    internal const string InactiveWarning =
+        "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.";
+
     private readonly FileStream _stream;
     private readonly string _path;
     private bool _disposed;

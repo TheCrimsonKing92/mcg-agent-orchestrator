@@ -282,7 +282,8 @@ internal sealed record OperatorIntentDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset? ClaimedAt,
     DateTimeOffset? CompletedAt,
-    string? Outcome);
+    string? Outcome,
+    string? Warning = null);
 
 internal sealed record GoalTestImpactDto(
     bool RequiresBuild,

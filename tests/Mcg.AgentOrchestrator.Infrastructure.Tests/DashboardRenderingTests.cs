@@ -184,23 +184,31 @@ public sealed class DashboardRenderingTests
 
             var retryDto = Assert.IsType<OperatorIntentDto>(queuedRetry);
             Assert.Equal(OperatorIntentStatus.Pending, retryDto.Status);
+            Assert.Equal(
+                "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.",
+                retryDto.Warning);
             Assert.Equal(WorkTaskStatus.Failed, task.Status);
             Assert.True(File.Exists(Path.Combine(
                 workspace.OrchestratorDirectory,
                 SqliteOperatorIntentStore.DatabaseFileName)));
 
-            var queuedProgress = await GoalManagementCommandService.ApplyTaskActionAsync(
-                kernel,
-                agents,
-                providers,
-                workspace,
-                goal,
-                task,
-                "progress",
-                """{"status":"completed","message":"verified while loop runs"}""");
+            object? queuedProgress;
+            using (ConductorLoopLease.Acquire(workspace.OrchestratorDirectory))
+            {
+                queuedProgress = await GoalManagementCommandService.ApplyTaskActionAsync(
+                    kernel,
+                    agents,
+                    providers,
+                    workspace,
+                    goal,
+                    task,
+                    "progress",
+                    """{"status":"completed","message":"verified while loop runs"}""");
+            }
 
             var progressDto = Assert.IsType<OperatorIntentDto>(queuedProgress);
             Assert.Equal(OperatorIntentStatus.Pending, progressDto.Status);
+            Assert.Null(progressDto.Warning);
             Assert.Equal(WorkTaskStatus.Failed, task.Status);
             var intents = await SqliteOperatorIntentStore
                 .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
@@ -1867,6 +1875,7 @@ public sealed class DashboardRenderingTests
     // Script assertions (view-independent)
     Assert.Contains("agentProviderOptions", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("summarizeResponse", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("if(warning) return warning", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("Server continuation is watching", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Auto-resume scheduled", StringComparison.Ordinal));
     Assert.Contains("Stopped:", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);

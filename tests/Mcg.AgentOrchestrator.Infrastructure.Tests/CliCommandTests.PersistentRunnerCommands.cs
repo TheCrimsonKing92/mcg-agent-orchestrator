@@ -215,8 +215,10 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsInboxBackedGoalScopedTaskMutationCommand(args));
     }
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_retry_appends_intent_without_active_conductor_or_state_transaction")]
-    public async Task PersistentRunnerRetryAppendsIntentWithoutStateTransaction()
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_retry_reports_conductor_liveness_without_state_transaction")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task PersistentRunnerRetryReportsConductorLivenessWithoutStateTransaction(bool conductorActive)
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -230,6 +232,9 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
+        using var conductorLease = conductorActive
+            ? ConductorLoopLease.Acquire(workspace.OrchestratorDirectory)
+            : null;
         var output = CaptureConsole(() =>
         {
             var changed = CliPersistentStateRunner.ExecuteCommand(
@@ -259,6 +264,17 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal("retry-test-key", intent.IdempotencyKey);
         Xunit.Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
         Xunit.Assert.Contains("Operator intent queued", output, StringComparison.Ordinal);
+        const string inactiveWarning =
+            "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.";
+        if (conductorActive)
+        {
+            Xunit.Assert.DoesNotContain(inactiveWarning, output, StringComparison.Ordinal);
+        }
+        else
+        {
+            Xunit.Assert.Contains(inactiveWarning, output, StringComparison.Ordinal);
+        }
+
         Xunit.Assert.True(Directory.EnumerateFiles(
             workspace.LogDirectory,
             $"*{SqliteOperatorIntentStore.WakeFileSuffix}").Any());

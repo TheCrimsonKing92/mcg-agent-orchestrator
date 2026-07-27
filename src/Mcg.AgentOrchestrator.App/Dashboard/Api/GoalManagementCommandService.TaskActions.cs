@@ -158,7 +158,10 @@ private static async Task<OperatorIntentDto> EnqueueOperatorIntentAsync(
     var persisted = await SqliteOperatorIntentStore
         .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
         .EnqueueAsync(intent);
-    return DashboardResponseMapper.ToOperatorIntentDto(persisted);
+    var warning = ConductorLoopLease.IsActive(workspace.OrchestratorDirectory)
+        ? null
+        : ConductorLoopLease.InactiveWarning;
+    return DashboardResponseMapper.ToOperatorIntentDto(persisted) with { Warning = warning };
 }
 
 private static void ApplySubscriptionLimitReviewAcknowledgement(
