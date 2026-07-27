@@ -437,6 +437,8 @@ public static partial class DashboardRenderer
         }
         html.AppendLine("</div>");
 
+        RenderOperatorIntentEvidence(html, goal, options);
+
         html.AppendLine("<div class=\"goal-work-grid\">");
         // Human decisions
         html.AppendLine("<div class=\"goal-panel\">");
@@ -649,6 +651,64 @@ public static partial class DashboardRenderer
         {
             html.AppendLine("<div id=\"op-status\" class=\"statusline\" aria-live=\"polite\"></div>");
         }
+    }
+
+    private static void RenderOperatorIntentEvidence(
+        StringBuilder html,
+        Goal goal,
+        DashboardRenderOptions options)
+    {
+        if (options.Workspace is null)
+        {
+            return;
+        }
+
+        var orchestratorDirectory = Path.GetDirectoryName(options.Workspace.SqliteStatePath);
+        if (string.IsNullOrWhiteSpace(orchestratorDirectory))
+        {
+            return;
+        }
+
+        IReadOnlyList<OperatorIntentRecord> intents;
+        try
+        {
+            var databasePath = Path.Combine(
+                orchestratorDirectory,
+                SqliteOperatorIntentStore.DatabaseFileName);
+            intents = !File.Exists(databasePath)
+                ? []
+                : new SqliteOperatorIntentStore(databasePath, options.Workspace.LogDirectory, readOnly: true)
+                    .ListForGoalAsync(goal.Id.Value, limit: 10)
+                    .GetAwaiter()
+                    .GetResult();
+        }
+        catch (Exception ex)
+        {
+            html.AppendLine("<div class=\"goal-panel\"><h3>Operator intent evidence</h3>");
+            html.AppendLine($"<p class=\"bad\">Intent inbox unavailable: {Encode(ex.Message)}</p></div>");
+            return;
+        }
+
+        html.AppendLine("<div class=\"goal-panel\"><h3>Operator intent evidence</h3>");
+        html.AppendLine($"<p class=\"meta\">Typed recovery requests are applied by the conductor tick. API: <code>/api/goals/{goal.Id.Value[..8]}/operator-intents</code></p>");
+        html.AppendLine("<table><thead><tr><th>Intent</th><th>Verb</th><th>Status</th><th>Audit</th><th>Outcome</th></tr></thead><tbody>");
+        if (intents.Count == 0)
+        {
+            html.AppendLine("<tr><td colspan=\"5\">none</td></tr>");
+        }
+        else
+        {
+            foreach (var intent in intents)
+            {
+                html.AppendLine(
+                    $"<tr><td><code>{Encode(intent.Id)}</code></td>" +
+                    $"<td>{Encode(intent.Verb)}</td><td>{Encode(intent.Status.ToString())}</td>" +
+                    $"<td><span class=\"meta\">actor={Encode(intent.Actor)}; channel={Encode(intent.Channel)}; auth={Encode(intent.AuthenticationAssurance)}</span></td>" +
+                    $"<td>{Encode(intent.Outcome ?? "pending")}</td></tr>");
+            }
+        }
+
+        html.AppendLine("</tbody></table></div>");
     }
 
     private static void RenderGoalHeader(

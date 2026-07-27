@@ -37,11 +37,11 @@ internal sealed record DispatchSubmissionDto(string WorkerName, string Command);
 
 internal sealed record VerifySubmissionDto(string Command);
 
-internal sealed record ManualVerifySubmissionDto(bool Passed, string Note);
+internal sealed record ManualVerifySubmissionDto(bool Passed, string Note, string? IdempotencyKey = null);
 
 internal sealed record ProgressSubmissionDto(string Status, string Message);
 
-internal sealed record RetrySubmissionDto(string Message, bool Mechanical = false);
+internal sealed record RetrySubmissionDto(string Message, bool Mechanical = false, string? IdempotencyKey = null);
 
 internal sealed record LimitReviewSubmissionDto(bool ConfirmLimitReview, string Note);
 

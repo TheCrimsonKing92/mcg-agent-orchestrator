@@ -258,7 +258,8 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     DashboardHostInfoDto? host = null,
     string? executionDirectory = null,
     IReadOnlyList<string>? changedFiles = null,
-    GoalOperatorDisposition? conductorDisposition = null)
+    GoalOperatorDisposition? conductorDisposition = null,
+    IReadOnlyList<OperatorIntentRecord>? operatorIntents = null)
 {
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
@@ -281,11 +282,28 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
         ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
-        testImpact)
+        testImpact,
+        operatorIntents?.Select(ToOperatorIntentDto).ToList())
     {
         StatusText = GoalStatusText(goal.Status, lifecycle)
     };
 }
+
+public static OperatorIntentDto ToOperatorIntentDto(OperatorIntentRecord intent) =>
+    new(
+        intent.Id,
+        intent.IdempotencyKey,
+        intent.Verb,
+        intent.GoalId,
+        intent.TaskId,
+        intent.Status,
+        intent.Actor,
+        intent.Channel,
+        intent.AuthenticationAssurance,
+        intent.CreatedAt,
+        intent.ClaimedAt,
+        intent.CompletedAt,
+        intent.Outcome);
 
 private static GoalStatus EffectiveStatus(GoalStatus status, GoalLifecycleState? lifecycleState) =>
     status == GoalStatus.Completed && lifecycleState != GoalLifecycleState.CleanedUp

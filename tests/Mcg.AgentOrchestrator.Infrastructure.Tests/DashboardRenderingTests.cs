@@ -80,6 +80,155 @@ public sealed class DashboardRenderingTests
     Assert.True(sse.Contains("GOAL goal=abc12345 result=done state=Complete", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardRenderer_and_work_summary_surface_operator_intent_audit_outcome")]
+    public async Task DashboardRendererAndWorkSummarySurfaceOperatorIntentAuditOutcome()
+    {
+        var root = CreateTempDirectory();
+        var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+        var logDirectory = Path.Combine(orchestratorDirectory, "logs");
+        Directory.CreateDirectory(logDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Render operator intent evidence");
+        var task = goal.Tasks.Single();
+        var store = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, logDirectory);
+        var intent = new OperatorIntentRecord(
+            "intent-dashboard",
+            "intent-dashboard-key",
+            OperatorIntentVerbs.Retry,
+            goal.Id.Value,
+            task.Id.Value,
+            JsonSerializer.Serialize(
+                new RetryOperatorIntentPayload("dashboard retry", null),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            [],
+            "miles",
+            "dashboard",
+            "dashboard-operator-control",
+            DateTimeOffset.UtcNow);
+        await store.EnqueueAsync(intent);
+        await store.ClaimNextAsync(goal.Id.Value, "test-conductor");
+        await store.CompleteAsync(
+            intent.Id,
+            "test-conductor",
+            OperatorIntentStatus.Applied,
+            "Applied retry in tick 4.",
+            DateTimeOffset.UtcNow);
+        var persisted = await store.ListForGoalAsync(goal.Id.Value);
+        var workspace = new DashboardWorkspaceContext(
+            root,
+            Path.Combine(orchestratorDirectory, "state.db"),
+            root,
+            Path.Combine(orchestratorDirectory, "prompts"),
+            logDirectory,
+            Path.Combine(orchestratorDirectory, "workers.json"),
+            Path.Combine(orchestratorDirectory, "agents.json"),
+            12345);
+
+        var html = DashboardRenderer.Render(
+            kernel,
+            RenderOptions(
+                View: DashboardView.Goal,
+                FocusGoalPrefix: goal.Id.Value[..8],
+                Workspace: workspace));
+        var dto = DashboardResponseMapper.ToGoalWorkSummaryDto(
+            kernel,
+            goal,
+            WorkerProfileCatalog.Default(),
+            operatorIntents: persisted);
+
+        Assert.Contains("Operator intent evidence", html, StringComparison.Ordinal);
+        Assert.Contains("intent-dashboard", html, StringComparison.Ordinal);
+        Assert.Contains("actor=miles; channel=dashboard; auth=dashboard-operator-control", html, StringComparison.Ordinal);
+        Assert.Contains("Applied retry in tick 4.", html, StringComparison.Ordinal);
+        var dtoIntent = Assert.Single(dto.OperatorIntents!);
+        Assert.Equal(OperatorIntentStatus.Applied, dtoIntent.Status);
+        Assert.Equal("Applied retry in tick 4.", dtoIntent.Outcome);
+    }
+
+    [Xunit.Theory(DisplayName = "Dashboard_recovery_actions_route_outside_state_mutation_transaction")]
+    [Xunit.InlineData(OperatorIntentVerbs.Retry, true)]
+    [Xunit.InlineData(OperatorIntentVerbs.Progress, true)]
+    [Xunit.InlineData(OperatorIntentVerbs.VerifyManual, true)]
+    [Xunit.InlineData("complete-verify", false)]
+    public void DashboardRecoveryActionsRouteOutsideStateMutationTransaction(string operation, bool expected)
+    {
+        Assert.Equal(expected, GoalManagementCommandService.IsInboxBackedTaskAction(operation));
+    }
+
+    [Xunit.Fact(DisplayName = "Dashboard_recovery_actions_always_use_inbox")]
+    public async Task DashboardRecoveryActionsAlwaysUseInbox()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var agents = (IReadOnlyList<AgentDefinition>)AgentCatalog.Default().Agents;
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "Dashboard recovery routing");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var providers = new InMemoryModelProviderRegistry([]);
+
+            var queuedRetry = await GoalManagementCommandService.ApplyTaskActionAsync(
+                kernel,
+                agents,
+                providers,
+                workspace,
+                goal,
+                task,
+                "retry",
+                "retry while loop is down");
+
+            var retryDto = Assert.IsType<OperatorIntentDto>(queuedRetry);
+            Assert.Equal(OperatorIntentStatus.Pending, retryDto.Status);
+            Assert.Equal(
+                "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.",
+                retryDto.Warning);
+            Assert.Equal(WorkTaskStatus.Failed, task.Status);
+            Assert.True(File.Exists(Path.Combine(
+                workspace.OrchestratorDirectory,
+                SqliteOperatorIntentStore.DatabaseFileName)));
+
+            object? queuedProgress;
+            using (ConductorLoopLease.Acquire(workspace.OrchestratorDirectory))
+            {
+                queuedProgress = await GoalManagementCommandService.ApplyTaskActionAsync(
+                    kernel,
+                    agents,
+                    providers,
+                    workspace,
+                    goal,
+                    task,
+                    "progress",
+                    """{"status":"completed","message":"verified while loop runs"}""");
+            }
+
+            var progressDto = Assert.IsType<OperatorIntentDto>(queuedProgress);
+            Assert.Equal(OperatorIntentStatus.Pending, progressDto.Status);
+            Assert.Null(progressDto.Warning);
+            Assert.Equal(WorkTaskStatus.Failed, task.Status);
+            var intents = await SqliteOperatorIntentStore
+                .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
+                .ListForGoalAsync(goal.Id.Value);
+            Assert.Equal(2, intents.Count);
+            Assert.Contains(intents, intent => intent.Verb == OperatorIntentVerbs.Retry);
+            Assert.Contains(intents, intent => intent.Verb == OperatorIntentVerbs.Progress);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_renders_goal_tasks_and_attention")]
     public void DashboardRendererRendersGoalTasksAndAttention()
 {
@@ -1198,11 +1347,13 @@ public sealed class DashboardRenderingTests
 {
     var empty = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission(""));
     var json = Assert.ThrowsAny<ArgumentException>(() => DashboardRequestParser.ParseRetrySubmission("{\"message\":\"\"}"));
-    var parsed = DashboardRequestParser.ParseRetrySubmission("{\"message\":\"Fix failed verification\"}");
+    var parsed = DashboardRequestParser.ParseRetrySubmission(
+        "{\"message\":\"Fix failed verification\",\"idempotencyKey\":\"dashboard-submit-1\"}");
 
     Assert.Contains("Retry note cannot be empty", empty.Message, StringComparison.Ordinal);
     Assert.Contains("non-empty 'message'", json.Message, StringComparison.Ordinal);
     Assert.Equal("Fix failed verification", parsed.Message);
+    Assert.Equal("dashboard-submit-1", parsed.IdempotencyKey);
 }
     [Xunit.Fact(DisplayName = "DashboardRequestParser_requires_limit_review_confirmation_note")]
     public void DashboardRequestParserRequiresLimitReviewConfirmationNote()
@@ -1700,6 +1851,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/2/refresh", goalHtml, StringComparison.Ordinal);
     Assert.Contains("Advanced task controls", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/retry", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("name=\"idempotencyKey\" value=\"dashboard-retry-", goalHtml, StringComparison.Ordinal);
     Assert.Contains("Retry note", goalHtml, StringComparison.Ordinal);
     Assert.Contains("What changed or what should be tried next?", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/profile-dispatch", goalHtml, StringComparison.Ordinal);
@@ -1715,6 +1867,7 @@ public sealed class DashboardRenderingTests
     Assert.Contains("AgentCatalog|WorkerProfile", goalHtml, StringComparison.Ordinal);
     Assert.Contains("PowerShell: quote filters that contain |", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/3/verify-manual", goalHtml, StringComparison.Ordinal);
+    Assert.Contains("name=\"idempotencyKey\" value=\"dashboard-verify-manual-", goalHtml, StringComparison.Ordinal);
     Assert.Contains("<option value=\"false\">Failed</option>", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/goals/{goalPrefix}/tasks/2/logs", goalHtml, StringComparison.Ordinal);
     Assert.Contains($"/api/human-input-worklist?goal={goalPrefix}", goalHtml, StringComparison.Ordinal);
@@ -1722,6 +1875,7 @@ public sealed class DashboardRenderingTests
     // Script assertions (view-independent)
     Assert.Contains("agentProviderOptions", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("summarizeResponse", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("if(warning) return warning", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("Server continuation is watching", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Auto-resume scheduled", StringComparison.Ordinal));
     Assert.Contains("Stopped:", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);

@@ -72,6 +72,52 @@ public sealed class ConductorWakeSignalTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ConductorWakeSignal_existing_operator_intent_wake_file_wakes_without_exit_tracking")]
+    public void ConductorWakeSignalExistingOperatorIntentWakeFileWakesWithoutExitTracking()
+    {
+        var root = CreateTempDirectory("mcg-conductor-wake-intent");
+        try
+        {
+            var wakePath = Path.Combine(root, $"queued{Mcg.AgentOrchestrator.Infrastructure.SqliteOperatorIntentStore.WakeFileSuffix}");
+            File.WriteAllText(wakePath, "queued");
+            using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
+            wakeSignal.UpdateTrackedExitArtifacts([]);
+
+            Assert.True(wakeSignal.Wait(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)));
+            Assert.False(File.Exists(wakePath));
+            Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(10)));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorWakeSignal_unavailable_watch_directory_degrades_to_polling")]
+    public void ConductorWakeSignalUnavailableWatchDirectoryDegradesToPolling()
+    {
+        var root = CreateTempDirectory("mcg-conductor-wake-unavailable");
+        try
+        {
+            var fileInsteadOfDirectory = Path.Combine(root, "not-a-directory");
+            File.WriteAllText(fileInsteadOfDirectory, "occupied");
+            var warnings = new List<string>();
+
+            using var wakeSignal = new FileSystemWatcherConductorWakeSignal(
+                fileInsteadOfDirectory,
+                warnings.Add);
+
+            wakeSignal.UpdateTrackedExitArtifacts([]);
+            Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(10)));
+            Assert.Contains(warnings, warning =>
+                warning.Contains("continuing with timed polling", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static string CreateTempDirectory(string prefix)
     {
         var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
