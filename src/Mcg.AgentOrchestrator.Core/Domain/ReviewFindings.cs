@@ -11,11 +11,54 @@ public enum ReviewFindingState
     Resolved
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter<FindingSeverity>))]
+[JsonConverter(typeof(FindingSeverityJsonConverter))]
 public enum FindingSeverity
 {
     Blocking = 0,
     Advisory = 1
+}
+
+public sealed class FindingSeverityJsonConverter : JsonConverter<FindingSeverity>
+{
+    public override bool HandleNull => true;
+
+    public override FindingSeverity Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var value = reader.GetString();
+            return Enum.TryParse<FindingSeverity>(value, ignoreCase: true, out var severity) &&
+                   Enum.IsDefined(severity)
+                ? severity
+                : FindingSeverity.Blocking;
+        }
+
+        if (reader.TokenType == JsonTokenType.Number &&
+            reader.TryGetInt32(out var numericSeverity) &&
+            Enum.IsDefined(typeof(FindingSeverity), numericSeverity))
+        {
+            return (FindingSeverity)numericSeverity;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject)
+        {
+            using var ignored = JsonDocument.ParseValue(ref reader);
+        }
+
+        return FindingSeverity.Blocking;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        FindingSeverity value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(
+            value == FindingSeverity.Advisory
+                ? nameof(FindingSeverity.Advisory)
+                : nameof(FindingSeverity.Blocking));
 }
 
 public sealed record ReviewFindingLocation(
@@ -67,6 +110,20 @@ public static class ReviewFindings
         IEnumerable<ReviewFinding> findings,
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections)
     {
+        TryGetEffectiveOpenFindings(
+            findings,
+            criteriaCorrections,
+            out var effectiveFindings,
+            out _);
+        return effectiveFindings;
+    }
+
+    public static bool TryGetEffectiveOpenFindings(
+        IEnumerable<ReviewFinding> findings,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
+        out IReadOnlyList<ReviewFinding> effectiveFindings,
+        out IReadOnlyList<(ReviewFinding Finding, EffectiveAcceptanceCriteriaCorrection Correction)> suppressedFindings)
+    {
         ArgumentNullException.ThrowIfNull(findings);
         ArgumentNullException.ThrowIfNull(criteriaCorrections);
 
@@ -74,7 +131,11 @@ public static class ReviewFindings
             findings.Where(finding => finding.State == ReviewFindingState.Open),
             finding => finding.Description,
             criteriaCorrections);
-        return result.Kept;
+        effectiveFindings = result.Kept;
+        suppressedFindings = result.Suppressed
+            .Select(item => (item.Item, item.Correction))
+            .ToArray();
+        return suppressedFindings.Count > 0;
     }
 
     public static IReadOnlyList<ReviewFinding> GetOpenBlockingFindings(

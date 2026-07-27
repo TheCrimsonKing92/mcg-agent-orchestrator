@@ -246,12 +246,30 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
-        var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+        ReviewFindings.TryGetEffectiveOpenFindings(
             mergedFindings,
-            goal.EffectiveAcceptanceCriteriaCorrections);
+            goal.EffectiveAcceptanceCriteriaCorrections,
+            out var effectiveOpenFindings,
+            out var suppressedFindings);
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer)
+        {
+            foreach (var item in suppressedFindings)
+            {
+                Append(
+                    goal,
+                    task.Id,
+                    ProgressKind.TaskNote,
+                    $"Suppressed Reviewer structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.");
+            }
+        }
+
+        var openBlockingFindings = effectiveOpenFindings
+            .Where(finding => finding.Severity == FindingSeverity.Blocking)
+            .ToArray();
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            openBlockingFindings.Count > 0)
+            openBlockingFindings.Length > 0)
         {
             var openIds = string.Join(
                 ", ",

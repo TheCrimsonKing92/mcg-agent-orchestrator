@@ -1159,6 +1159,24 @@ public sealed class DispatchExecutionTests
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal("W-1", Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).StableId);
         Assert.Empty(kernel.GetOpenAdvisoryReviewFindings(goal.Id));
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains(
+                "Suppressed Reviewer structured finding matching operator criteria correction: stable_id=W-1",
+                StringComparison.Ordinal) &&
+            evt.Message.Contains(
+                "finding: Missing full Infrastructure suite before review.",
+                StringComparison.Ordinal) &&
+            evt.Message.Contains(
+                "superseded criterion: full Infrastructure suite before review",
+                StringComparison.Ordinal) &&
+            evt.Message.Contains(
+                "correction recorded",
+                StringComparison.Ordinal) &&
+            evt.Message.Contains(
+                "by operator",
+                StringComparison.Ordinal));
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskFailed &&

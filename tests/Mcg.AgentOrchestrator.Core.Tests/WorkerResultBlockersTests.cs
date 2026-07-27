@@ -317,6 +317,24 @@ public sealed class WorkerResultBlockersTests
         Assert.Contains("\"severity\":\"Blocking\"", serialized, StringComparison.Ordinal);
     }
 
+    [Xunit.Theory(DisplayName = "ReviewFinding_null_or_unrecognized_severity_defaults_to_blocking")]
+    [Xunit.InlineData("null")]
+    [Xunit.InlineData("\"informational\"")]
+    public void ReviewFindingNullOrUnrecognizedSeverityDefaultsToBlocking(string severityJson)
+    {
+        var findingsJson =
+            $$"""[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":{{severityJson}}}]""";
+
+        var parsed = ReviewFindingConvergence.TryParseJson(
+            findingsJson,
+            "[]",
+            out var round,
+            out var diagnostic);
+
+        Assert.True(parsed, diagnostic);
+        Assert.Equal(FindingSeverity.Blocking, Assert.Single(round.Findings).Severity);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindNeedsWorkVerdict_uses_open_structured_findings_when_blockers_is_none")]
     public void TryFindNeedsWorkVerdictUsesOpenStructuredFindingsWhenBlockersIsNone()
     {
