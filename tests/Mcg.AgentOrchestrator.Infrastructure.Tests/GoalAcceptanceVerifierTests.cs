@@ -1708,6 +1708,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             }
             """);
         var buildAttempts = 0;
+        var goalId = new GoalId("aaaabbbbccccddddeeeeffff00001111");
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.err");
         File.WriteAllText(stdoutPath, "fast child stdout");
@@ -1733,8 +1734,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     {
                         var artifactsPath = GetArtifactsPath(args);
                         var lockedPath = Path.Combine(artifactsPath, "bin", "Core.dll");
+                        var heartbeatEnvironment =
+                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                        var heartbeatPath =
+                            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                                "core tests",
+                                heartbeatEnvironment,
+                                stableSlotIndex: 0);
                         GateHeartbeatArtifacts.Write(
-                            Path.Combine(artifactsPath, GateHeartbeatArtifacts.FileName),
+                            heartbeatPath,
                             new GateHeartbeatSnapshot(
                                 "aaaabbbbccccddddeeeeffff00001111",
                                 "verification-check",
@@ -1771,7 +1779,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             AcceptanceVerificationResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = verifier.RunAsync(root, new GoalId("aaaabbbbccccddddeeeeffff00001111"), stableSlotIndex: 0)
+                result = verifier.RunAsync(root, goalId, stableSlotIndex: 0)
                     .GetAwaiter()
                     .GetResult());
 
