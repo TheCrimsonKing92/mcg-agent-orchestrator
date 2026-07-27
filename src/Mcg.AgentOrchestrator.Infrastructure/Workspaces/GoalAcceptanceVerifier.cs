@@ -5534,7 +5534,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check.Name,
             stableSlotIndex,
             heartbeatPath,
+            ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath),
             string.Join(' ', arguments.Select(QuoteForDisplay)));
+    }
+
+    // gate-status reads ONLY the stable per-build-slot heartbeat (build-slots/activity-{n}). During a
+    // gate/evidence run the attempt-results prefix is always set, so ResolveGateHeartbeatPath returns an
+    // attempt-scoped primary path that gate-status never reads — leaving it structurally blind. When the
+    // run carries a build environment, mirror each beat onto that environment's build-concurrency slot so
+    // gate-status observes the live gate. Returns null when there is no build slot to mirror to, or when
+    // the primary path already IS the stable slot path (nothing gained by double-writing the same file).
+    private static string? ResolveStableSlotHeartbeatMirrorPath(
+        DotnetBuildEnvironment? environment,
+        string primaryHeartbeatPath)
+    {
+        if (environment?.BuildPermitIndex is not { } slotIndex ||
+            slotIndex < 0 ||
+            slotIndex >= DotnetBuildEnvironmentManager.StableSlotCount)
+        {
+            return null;
+        }
+
+        var stableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(slotIndex);
+        return primaryHeartbeatPath.Equals(stableSlotPath, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : stableSlotPath;
     }
 
     private static string ResolveGateHeartbeatPath(
@@ -5569,6 +5593,41 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment,
             stableSlotIndex,
             worktreePath: null);
+
+    // Test seam: drive one real gate-heartbeat "running" beat (and optionally a terminal beat) through
+    // the production context creation + runtime writer, so a test can prove that gate-status's
+    // stable-slot read path (GateHeartbeatArtifacts.ReadStableSlots) observes a live gate. Returns the
+    // primary (attempt-scoped) heartbeat path and the stable-slot mirror path the context resolved.
+    internal static (string PrimaryPath, string? StableSlotPath) WriteGateHeartbeatBeatForTests(
+        string checkName,
+        GoalId? goalId,
+        DotnetBuildEnvironment environment,
+        int processId,
+        string stdoutPath,
+        string stderrPath,
+        string? finalState = null)
+    {
+        var context = CreateGateHeartbeatContext(
+            new AcceptanceManifestCheck { Name = checkName },
+            ["dotnet", "test"],
+            Path.GetTempPath(),
+            goalId,
+            stableSlotIndex: null,
+            environment);
+        var runtime = new GateHeartbeatRuntime(
+            context,
+            processId,
+            stdoutPath,
+            stderrPath,
+            TimeSpan.FromMinutes(1));
+        runtime.WriteRunning(emitProgress: false);
+        if (finalState is not null)
+        {
+            runtime.WriteFinal(finalState, childPid: processId, exitCode: 0);
+        }
+
+        return (context.HeartbeatPath, context.StableSlotHeartbeatPath);
+    }
 
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
@@ -6114,6 +6173,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string CurrentTarget,
         int? SlotIndex,
         string HeartbeatPath,
+        string? StableSlotHeartbeatPath,
         string CommandLine);
 
     private sealed class GateHeartbeatRuntime
@@ -6147,6 +6207,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var snapshot = BuildSnapshot("running", childPid: _processId);
             GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
+            MirrorToStableSlot(snapshot);
             if (emitProgress || snapshot.LastObservedAt - _lastProgressEmittedAt >= ProgressInterval)
             {
                 _lastProgressEmittedAt = snapshot.LastObservedAt;
@@ -6158,6 +6219,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var snapshot = BuildSnapshot(state, childPid, exitCode);
             GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
+            MirrorToStableSlot(snapshot);
+        }
+
+        // Mirror the beat onto the stable per-build-slot heartbeat that gate-status reads. WriteFinal
+        // flows through here too, so the terminal state (completed/timed-out) overwrites the mirrored
+        // "running" snapshot on the same cadence and gate-status never keeps showing "running" once the
+        // gate has ended.
+        private void MirrorToStableSlot(GateHeartbeatSnapshot snapshot)
+        {
+            if (_context.StableSlotHeartbeatPath is { } stableSlotPath)
+            {
+                GateHeartbeatArtifacts.TryWrite(stableSlotPath, snapshot);
+            }
         }
 
         private GateHeartbeatSnapshot BuildSnapshot(string state, int? childPid, int? exitCode = null)

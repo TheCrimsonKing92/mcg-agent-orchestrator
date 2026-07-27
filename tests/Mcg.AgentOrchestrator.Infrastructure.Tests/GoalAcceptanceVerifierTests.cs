@@ -762,6 +762,96 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_mirrors_to_stable_slot_so_gate_status_sees_live_run")]
+    public void GoalAcceptanceVerifierGateHeartbeatMirrorsToStableSlotSoGateStatusSeesLiveRun()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-gate-status-mirror-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var goalId = new GoalId("abcdef01abcdef01abcdef01abcdef01");
+        const int buildSlot = 0;
+        var environment = new DotnetBuildEnvironment(
+            "goal-mirror",
+            root,
+            Path.Combine(root, "artifacts"),
+            Path.Combine(root, "build-slots", $"build-{buildSlot}.lock"),
+            [],
+            "goal-mirror",
+            BuildPermitIndex: buildSlot);
+        var stdoutPath = Path.Combine(root, "run.out");
+        var stderrPath = Path.Combine(root, "run.err");
+        const int childPid = 4242;
+
+        try
+        {
+            TryDeleteStableSlotHeartbeat(buildSlot);
+
+            // The attempt-results prefix is exactly what made gate-status structurally blind: it forces the
+            // PRIMARY heartbeat onto an attempt-scoped path that GateHeartbeatArtifacts.ReadStableSlots never
+            // reads.
+            using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner"));
+
+            var (primaryPath, stableSlotPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                goalId,
+                environment,
+                childPid,
+                stdoutPath,
+                stderrPath);
+
+            var expectedStableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(buildSlot);
+
+            // Blindness precondition: with the attempt prefix active the primary heartbeat is attempt-scoped
+            // and is NOT the stable slot path gate-status reads.
+            Assert.StartsWith(
+                Path.Combine(root, "attempt-owner"),
+                primaryPath,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.NotEqual(expectedStableSlotPath, primaryPath);
+
+            // The fix mirrors each beat onto the stable per-build-slot heartbeat keyed to the environment's
+            // build-concurrency slot (BuildPermitIndex) — the exact file gate-status reads.
+            Assert.Equal(expectedStableSlotPath, stableSlotPath);
+            Assert.True(
+                File.Exists(expectedStableSlotPath),
+                $"Stable-slot heartbeat mirror missing: {expectedStableSlotPath}");
+
+            // gate-status's read path now observes the LIVE gate on the build slot.
+            var runningSlot = GateHeartbeatArtifacts.ReadStableSlots()
+                .Single(status => status.SlotIndex == buildSlot);
+            Assert.True(
+                runningSlot.IsAvailable,
+                $"gate-status could not read slot {buildSlot}: {runningSlot.UnavailableReason}");
+            Assert.NotNull(runningSlot.Snapshot);
+            Assert.Equal("running", runningSlot.Snapshot!.State);
+            Assert.Equal(goalId.Value, runningSlot.Snapshot.GoalId);
+            Assert.Equal("infrastructure lane", runningSlot.Snapshot.CurrentTarget);
+            Assert.Equal(childPid, runningSlot.Snapshot.ChildPid);
+
+            // When the gate ends, the terminal beat overwrites the mirror on the same cadence, so gate-status
+            // stops showing "running" (no stale live state leaks onto the slot after the run).
+            GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                goalId,
+                environment,
+                childPid,
+                stdoutPath,
+                stderrPath,
+                finalState: "completed");
+
+            var finalSlot = GateHeartbeatArtifacts.ReadStableSlots()
+                .Single(status => status.SlotIndex == buildSlot);
+            Assert.True(finalSlot.IsAvailable);
+            Assert.NotNull(finalSlot.Snapshot);
+            Assert.Equal("completed", finalSlot.Snapshot!.State);
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(buildSlot);
+            try { DeleteDirectoryWithRetry(root); } catch { }
+        }
+    }
+
     [OptInRealAcceptanceVerifierFact(DisplayName = "GoalAcceptanceVerifier_real_runner_smoke_is_opt_in")]
     [Xunit.Trait("Category", "AcceptanceOptIn")]
     public async Task GoalAcceptanceVerifierRealRunnerSmokeIsOptIn()
