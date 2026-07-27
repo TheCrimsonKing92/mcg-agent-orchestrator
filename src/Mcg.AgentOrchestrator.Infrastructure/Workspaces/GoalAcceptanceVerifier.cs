@@ -5093,8 +5093,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Console.Error.WriteLine(
+                Console.WriteLine(
                     $"ATTEMPT_RECEIPT_COPY_FAILED source=\"{sourcePath}\" destination=\"{destinationPath}\" error=\"{ex.Message}\"");
+                Console.Out.Flush();
                 durablePaths[index] = sourcePath;
             }
         }

@@ -9,14 +9,15 @@ public sealed class TestCoverageInvariantTests
         var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
         var previousPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
-        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
-            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var environment = new DotnetBuildEnvironment(
+            "run-slot-3",
+            Path.Combine(root, "slots", "slot-3"),
+            Path.Combine(root, "slots", "slot-3", "artifacts"),
+            Path.Combine(root, "slots", "slot-3", "lease.lock"),
+            [],
+            "slot-3");
         try
         {
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                root);
-            var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(3);
             var sourcePath = Path.Combine(
                 GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment),
                 "lane.trx");
@@ -47,9 +48,6 @@ public sealed class TestCoverageInvariantTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            Environment.SetEnvironmentVariable(
-                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
-                previousIsolatedRoot);
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
@@ -76,10 +74,15 @@ public sealed class TestCoverageInvariantTests
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 attemptPrefix);
 
-            var durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath])!;
+            IReadOnlyList<string>? durablePaths = null;
+            var output = CaptureConsole(
+                () => durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath]));
 
             Assert.Equal([sourcePath], durablePaths);
             Assert.True(File.Exists(sourcePath));
+            Assert.Contains("ATTEMPT_RECEIPT_COPY_FAILED", output, StringComparison.Ordinal);
+            Assert.Contains(sourcePath, output, StringComparison.Ordinal);
+            Assert.Contains(receiptDirectory, output, StringComparison.Ordinal);
         }
         finally
         {

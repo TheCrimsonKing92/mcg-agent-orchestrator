@@ -393,11 +393,16 @@ public sealed class DotnetBuildEnvironmentManagerTests
             AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath),
             FileMode.Open,
             FileAccess.Read,
-            FileShare.None);
+            FileShare.Read);
 
-        AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId);
+        var output = CaptureConsoleError(
+            () => AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attemptId));
 
-        Assert.True(markerLock.CanRead);
+        var markerPath = AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath);
+        Assert.True(File.Exists(markerPath));
+        Assert.Contains("CUSTODY_RELEASE_FAILED", output, StringComparison.Ordinal);
+        Assert.Contains(attemptId, output, StringComparison.Ordinal);
+        Assert.Contains(markerPath, output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_missing_custody_marker_preserves_foreign_owner_takeover")]
