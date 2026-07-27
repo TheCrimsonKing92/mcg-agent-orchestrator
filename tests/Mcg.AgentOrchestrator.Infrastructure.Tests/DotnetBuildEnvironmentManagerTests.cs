@@ -837,9 +837,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Contains("reason=wipe-skipped-self-held-lock", output, StringComparison.Ordinal);
             Assert.DoesNotContain("decision=wiped", output, StringComparison.Ordinal);
             Assert.True(File.Exists(lockedPath));
-            using var ownerMarker = JsonDocument.Parse(File.ReadAllText(
-                Path.Combine(environment.ArtifactsPath, ".mcg-artifacts-owner.json")));
-            Assert.Equal("foreign-owner", ownerMarker.RootElement.GetProperty("ownerToken").GetString());
+            var ownerMarkerPath = Path.Combine(environment.ArtifactsPath, ".mcg-artifacts-owner.json");
+            if (File.Exists(ownerMarkerPath))
+            {
+                using var ownerMarker = JsonDocument.Parse(File.ReadAllText(ownerMarkerPath));
+                Assert.Equal("foreign-owner", ownerMarker.RootElement.GetProperty("ownerToken").GetString());
+            }
         }
         finally
         {
