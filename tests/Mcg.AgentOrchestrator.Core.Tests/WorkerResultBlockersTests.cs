@@ -132,22 +132,80 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-NEW").State);
     }
 
-    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_recycled_stable_id_at_existing_anchor")]
-    public void ReviewFindingConvergenceRejectsRecycledStableIdAtExistingAnchor()
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_recycled_stable_id_at_open_anchor")]
+    public void ReviewFindingConvergenceRejectsRecycledStableIdAtOpenAnchor()
     {
         var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         var previous = new[]
         {
-            new ReviewFinding("F-1", ReviewFindingState.Resolved, anchor, "Original issue.")
+            new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Original issue.")
         };
         var next = new ReviewFindingRound(
-            [new ReviewFinding("F-RECYCLED", ReviewFindingState.Open, anchor, "Same anchor, new identity.")],
+            [
+                new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Original issue."),
+                new ReviewFinding("F-RECYCLED", ReviewFindingState.Open, anchor, "Same anchor, new identity.")
+            ],
             [anchor]);
 
         var error = Assert.Throws<ReviewFindingConvergenceException>(
             () => ReviewFindingConvergence.ApplyRound(previous, next));
 
         Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_new_stable_id_at_resolved_anchor")]
+    public void ReviewFindingConvergenceAllowsNewStableIdAtResolvedAnchor()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Resolved, anchor, "Original issue, fixed.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-NEW", ReviewFindingState.Open, anchor, "Genuinely new defect at the fixed site.")],
+            [anchor]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
+        Assert.Equal(ReviewFindingState.Open, state.Single(finding => finding.StableId == "F-NEW").State);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_tolerates_hunk_drift_on_open_finding_and_refreshes_location")]
+    public void ReviewFindingConvergenceToleratesHunkDriftOnOpenFindingAndRefreshesLocation()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "1392-1412"), "Missing guard.")
+        };
+        var drifted = new ReviewFindingLocation("src/A.cs", "A.Run", "1403-1412");
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, drifted, "Missing guard.")],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(1, ReviewFindingConvergence.CountOpen(state));
+        Assert.Equal(drifted, state.Single(finding => finding.StableId == "F-1").Location);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_new_stable_id_in_same_region_at_different_hunk")]
+    public void ReviewFindingConvergenceAllowsNewStableIdInSameRegionAtDifferentHunk()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "guard"), "First defect.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding("F-1", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "guard"), "First defect."),
+                new ReviewFinding("F-2", ReviewFindingState.Open, new ReviewFindingLocation("src/A.cs", "A.Run", "dispose"), "Second, distinct defect in the same region.")
+            ],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(2, ReviewFindingConvergence.CountOpen(state));
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_resolved_finding_reported_at_moved_anchor")]
