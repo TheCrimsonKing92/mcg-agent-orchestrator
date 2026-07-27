@@ -424,6 +424,9 @@ internal static class TerminalGoalSweep
             else if (!blockedByDirtyWorktree &&
                      !branchFacts.BranchAlreadyLanded &&
                      onlyGoalId is null &&
+                     !branchFacts.HasRegisteredWorktree &&
+                     !branchFacts.HasGoalBranch &&
+                     !Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)) &&
                      TryBuildGlobalStaleTerminalExclusionEvidence(goal, out var staleTerminalExclusionEvidence))
             {
                 blockers.Add(new TerminalGoalSweepBlocker(
@@ -431,10 +434,40 @@ internal static class TerminalGoalSweep
                     staleTerminalExclusionEvidence,
                     "excluded"));
             }
-            else if (!blockedByDirtyWorktree &&
-                     !branchFacts.BranchAlreadyLanded &&
-                     hasTerminalTaskDesync &&
-                     kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                originalGoal.Status is GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded &&
+                (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
+                 branchFactIndex.HasGoalBranch(GoalWorktrees.BranchName(goal.Id)) ||
+                 Directory.Exists(GoalWorktrees.WorktreePath(executionDirectory, goal.Id))))
+            {
+                var removeResult = GoalWorktrees.RemoveTerminal(
+                    executionDirectory,
+                    goal.Id,
+                    kernel);
+                if (!removeResult.IsComplete)
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "terminal-worktree-cleanup-needed",
+                        removeResult.Message,
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                }
+                else
+                {
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "terminal-worktree-cleanup",
+                        removeResult.Message,
+                        $"workspace remove {prefix}"));
+                }
+
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
+            }
+
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                !branchFacts.BranchAlreadyLanded &&
+                hasTerminalTaskDesync &&
+                kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",
@@ -475,12 +508,19 @@ internal static class TerminalGoalSweep
                 !skipMergedCleanupThisPass &&
                 (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
             {
-                var removeResult = GoalWorktrees.Remove(
-                    executionDirectory,
-                    goal.Id,
-                    kernel,
-                    branchFacts.HasRegisteredWorktree,
-                    branchFacts.HasGoalBranch);
+                var removeResult = goal.Status == GoalStatus.Verified
+                    ? GoalWorktrees.Remove(
+                        executionDirectory,
+                        goal.Id,
+                        kernel,
+                        branchFacts.HasRegisteredWorktree,
+                        branchFacts.HasGoalBranch)
+                    : GoalWorktrees.RemoveTerminal(
+                        executionDirectory,
+                        goal.Id,
+                        kernel,
+                        branchFacts.HasRegisteredWorktree,
+                        branchFacts.HasGoalBranch);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(

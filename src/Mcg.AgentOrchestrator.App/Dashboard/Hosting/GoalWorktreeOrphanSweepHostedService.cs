@@ -9,7 +9,7 @@ internal sealed class GoalWorktreeOrphanSweepHostedService(OrchestratorWorkspace
     {
         GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
 
-        using var timer = new PeriodicTimer(GoalWorktreeCleanupOptions.Default.SweepInterval);
+        using var timer = new PeriodicTimer(GoalWorktreeOrphanSweepScheduler.Options.SweepInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);

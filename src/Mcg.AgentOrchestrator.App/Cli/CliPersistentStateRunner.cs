@@ -63,6 +63,7 @@ internal static class CliPersistentStateRunner
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
             ConsoleViews.PrintGoals(summaries);
+            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(workspace.ExecutionDirectory));
             return false;
         }
 

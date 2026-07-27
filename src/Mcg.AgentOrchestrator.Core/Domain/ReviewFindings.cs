@@ -109,14 +109,16 @@ public static class ReviewFindingConvergence
 
         foreach (var newFinding in nextById.Values)
         {
-            var priorAtAnchor = previous.FirstOrDefault(prior => SameAnchor(prior.Location, newFinding.Location));
+            var priorAtAnchor = previous.FirstOrDefault(prior =>
+                prior.State == ReviewFindingState.Open &&
+                ExactAnchor(prior.Location, newFinding.Location));
             if (priorAtAnchor is not null)
             {
                 throw new ReviewFindingConvergenceException(
                     RecycledAnchorIdentityViolationCode,
                     CountOpen(previous),
                     CountOpen(nextRound.Findings),
-                    $"Structural anchor '{newFinding.Location}' already belongs to stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.");
+                    $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.");
             }
 
             merged.Add(newFinding);
@@ -126,9 +128,13 @@ public static class ReviewFindingConvergence
         // defect late is doing its job, and rejecting the growth traps it — the structured report would
         // fail an open-set-increase check, a prose-only needs-work fails the no-open-findings rule, and
         // pass would be dishonest. (That trap cost four review rounds on 2026-07-25 before the increase
-        // check was removed.) Re-litigation abuse stays blocked by the remaining guards: a still-open id
-        // cannot move anchors, a resolved id cannot reopen without its anchor being touched, and a retired
-        // anchor cannot be recycled under a new id.
+        // check was removed.) Anchor identity is file+region: hunk line-ranges drift whenever upstream
+        // code is edited, and requiring hunk equality rejected honest re-reports of carried findings six
+        // rounds in a row on 2026-07-27. Recycling is likewise scoped to OPEN priors — a resolved
+        // finding's anchor must be able to host a genuinely new defect under a new id, or that defect
+        // becomes unreportable under any id (the R8/R9 circular trap). Re-litigation abuse stays blocked
+        // by the remaining guards: a still-open id cannot move file/region, a resolved id cannot reopen
+        // without its anchor being touched, and an OPEN finding's exact anchor cannot be re-keyed.
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();
@@ -179,9 +185,17 @@ public static class ReviewFindingConvergence
         IReadOnlyList<ReviewFindingLocation> touchedAnchors) =>
         touchedAnchors.Any(touched => SameAnchor(anchor, touched));
 
+    // Identity-level anchor equality: file + region only. Hunk line-ranges drift whenever code above
+    // the finding is edited, so hunk equality must never decide whether a re-reported finding is "the
+    // same" one (it rejected six consecutive honest reviews on one goal, 2026-07-27).
     private static bool SameAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
         string.Equals(left.File, right.File, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(left.Region, right.Region, StringComparison.Ordinal) &&
+        string.Equals(left.Region, right.Region, StringComparison.Ordinal);
+
+    // Exact anchor equality (including hunk) — used only by the recycle guard so that a second,
+    // distinct defect in the same region but a different hunk stays reportable under a new id.
+    private static bool ExactAnchor(ReviewFindingLocation left, ReviewFindingLocation right) =>
+        SameAnchor(left, right) &&
         string.Equals(left.Hunk ?? string.Empty, right.Hunk ?? string.Empty, StringComparison.Ordinal);
 
     private static void ValidateFindings(IEnumerable<ReviewFinding> findings)

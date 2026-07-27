@@ -288,6 +288,12 @@ public sealed class GoalWorktreeTests
             return new GoalWorktreeRemoveResult("Removed fake worktree.", null, [], null);
         }
 
+        public GoalWorktreeRemoveResult RemoveTerminalNow(
+            string executionDirectory,
+            GoalId goalId,
+            AgentOrchestratorKernel kernel) =>
+            Remove(executionDirectory, goalId, kernel);
+
         public bool IsGitWorkTree(string executionDirectory) => true;
 
         public GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)

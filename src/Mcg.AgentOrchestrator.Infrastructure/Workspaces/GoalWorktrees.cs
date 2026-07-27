@@ -50,7 +50,7 @@ public sealed record GoalWorktreeCleanupDebt(
     DateTimeOffset SkipUntilUtc,
     TimeSpan Age,
     TimeSpan RemainingWait,
-    int SkipCount,
+    int ConsecutiveFailureCount,
     DateTimeOffset? EscalatedAtUtc);
 
 public sealed record GoalWorktreeRemoveResult(
@@ -93,9 +93,33 @@ public sealed record GoalOwnedEphemeralSweepResult(int RemovedCount, IReadOnlyLi
     public bool IsComplete => LeftoverPaths.Count == 0;
 }
 
-public sealed record GoalWorktreeCleanupOptions(TimeSpan SweepInterval)
+public sealed record GoalWorktreeCleanupOptions(
+    TimeSpan SweepInterval,
+    int EscalationThreshold,
+    TimeSpan EscalatedRetryInterval)
 {
-    public static GoalWorktreeCleanupOptions Default { get; } = new(TimeSpan.FromMinutes(5));
+    public static GoalWorktreeCleanupOptions Default { get; } =
+        new(TimeSpan.FromMinutes(5), 3, TimeSpan.FromDays(1));
+
+    public GoalWorktreeCleanupOptions Validate()
+    {
+        if (SweepInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(SweepInterval), "Sweep interval must be positive.");
+        }
+
+        if (EscalationThreshold < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(EscalationThreshold), "Escalation threshold must be at least one.");
+        }
+
+        if (EscalatedRetryInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(EscalatedRetryInterval), "Escalated retry interval must be positive.");
+        }
+
+        return this;
+    }
 }
 
 public sealed record GoalWorktreeGitMetadataAccess(
@@ -168,7 +192,6 @@ public static partial class GoalWorktrees
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
-    private const int CleanupDebtEscalationSkipThreshold = 3;
     private const string CleanupBackoffTableSql = """
         CREATE TABLE IF NOT EXISTS worktree_cleanup_backoff (
             path TEXT PRIMARY KEY NOT NULL,
@@ -198,11 +221,27 @@ public static partial class GoalWorktrees
     internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
     internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
     internal static Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; } = DeleteDirectoryWithReason;
+    internal static Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; } =
+        DefaultRunWorktreeRemove;
+    internal static Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; } =
+        DefaultRunWorktreePrune;
     internal static Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; } = FindLockHolders;
     internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
     internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
     internal static Func<DateTimeOffset> CleanupUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
     internal static TimeSpan CleanupBackoffDuration { get; set; } = TimeSpan.FromMinutes(30);
     internal static TimeSpan CleanupBudgetExhaustedBackoffDuration { get; set; } = TimeSpan.FromMinutes(1);
+    public static GoalWorktreeCleanupOptions CleanupOptions { get; private set; } = GoalWorktreeCleanupOptions.Default;
+    internal static string? CleanupAttentionStoreDirectory { get; private set; }
+
+    public static void ConfigureCleanup(
+        GoalWorktreeCleanupOptions options,
+        string? attentionStoreDirectory = null)
+    {
+        CleanupOptions = options.Validate();
+        CleanupAttentionStoreDirectory = string.IsNullOrWhiteSpace(attentionStoreDirectory)
+            ? null
+            : Path.GetFullPath(attentionStoreDirectory);
+    }
 
 }

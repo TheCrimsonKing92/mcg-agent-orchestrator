@@ -280,6 +280,26 @@ public sealed class CliHelpTests
         Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_startup_help_skips_invalid_worktree_cleanup_config_and_commands_format_the_error")]
+    public void CliStartupHelpSkipsInvalidWorktreeCleanupConfigAndCommandsFormatTheError()
+    {
+        var root = CreateTempDirectory();
+        var environment = new Dictionary<string, string?>
+        {
+            ["WorktreeCleanup__EscalationThreshold"] = "not-an-integer"
+        };
+
+        var help = RunAppCli(root, ["goal", "--help"], environment);
+        var command = RunAppCli(root, ["goals"], environment);
+
+        Xunit.Assert.Equal(0, help.ExitCode);
+        Xunit.Assert.Contains("Usage: goal", help.StandardOutput);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(help.StandardError), help.StandardError);
+        Xunit.Assert.Equal(1, command.ExitCode);
+        Xunit.Assert.StartsWith("InvalidOperationException:", command.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(" at Mcg.", command.StandardError, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_startup_help_and_backlog_commands_skip_orphan_worktree_cleanup")]
     public async Task CliStartupHelpAndBacklogCommandsSkipOrphanWorktreeCleanup()
     {
@@ -528,7 +548,8 @@ public sealed class CliHelpTests
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(
         string workingDirectory,
-        IReadOnlyList<string> args)
+        IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -541,6 +562,13 @@ public sealed class CliHelpTests
         };
 
         startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        if (environment is not null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                startInfo.Environment[key] = value;
+            }
+        }
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
         foreach (var arg in args)

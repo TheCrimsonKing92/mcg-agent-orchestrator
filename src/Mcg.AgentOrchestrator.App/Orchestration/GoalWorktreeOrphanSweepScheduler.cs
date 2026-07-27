@@ -8,7 +8,13 @@ internal static class GoalWorktreeOrphanSweepScheduler
     private static readonly object Gate = new();
     private static readonly Dictionary<string, DateTimeOffset> LastSweepByDirectory = new(StringComparer.OrdinalIgnoreCase);
 
-    public static GoalWorktreeCleanupOptions Options { get; set; } = GoalWorktreeCleanupOptions.Default;
+    public static GoalWorktreeCleanupOptions Options { get; private set; } = GoalWorktreeCleanupOptions.Default;
+
+    public static void Configure(GoalWorktreeCleanupOptions options, string? attentionStoreDirectory = null)
+    {
+        Options = options.Validate();
+        GoalWorktrees.ConfigureCleanup(Options, attentionStoreDirectory);
+    }
 
     public static GoalWorktreeSweepResult SweepNow(string executionDirectory, AgentOrchestratorKernel? kernel = null)
     {
