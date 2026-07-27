@@ -33,33 +33,8 @@ public sealed class FirewallSetupCommand
 
     public int Execute(TextWriter output)
     {
-        if (!_isAdministrator())
-        {
-            output.WriteLine("Windows Firewall setup requires administrator elevation.");
-            output.WriteLine(ElevatedCommand);
-            output.WriteLine("Run that command in PowerShell once to pre-authorize the orchestrator's stable testhost paths.");
-            return ElevationRequiredExitCode;
-        }
-
-        var created = 0;
-        var existing = 0;
-        var engineSettings = AcceptanceGateEngineSettings.Load(_manifestRoot);
-        foreach (var path in DotnetBuildEnvironmentManager.StableSlotTestExecutableFirewallPaths(
-            engineSettings.SlotCount,
-            engineSettings.MtpInvocations))
-        {
-            var ruleName = $"MCG-testhost-slot{path.SlotIndex}-{path.Project}-{path.Configuration}";
-            if (_ruleWriter.CreateInboundAllowRule(new FirewallRuleSpec(ruleName, path.Path)))
-            {
-                created++;
-            }
-            else
-            {
-                existing++;
-            }
-        }
-
-        output.WriteLine($"Firewall setup: created {created} rule(s), already present {existing}, total {created + existing}.");
+        output.WriteLine("Firewall setup is retired: MTP tests execute in-process from owner-scoped paths.");
+        output.WriteLine("After the documented soak period, run scripts/Remove-TestSlotFirewallRules.ps1 from an elevated PowerShell session.");
         return SuccessExitCode;
     }
 

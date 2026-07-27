@@ -518,8 +518,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(
-            candidate.SlotIndex,
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
             TimeSpan.Zero);
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
@@ -530,7 +529,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy busy)
         {
-            var holderPid = busy.BusySlots.FirstOrDefault(slot => slot.SlotIndex == candidate.SlotIndex).OwnerProcessId;
+            var holderPid = busy.BusySlots.FirstOrDefault()?.OwnerProcessId;
             EmitAttemptLeaseReceipt("yield", attempt, candidate, holderPid);
             throw new DotnetBuildSlotsBusyException(busy);
         }
@@ -550,17 +549,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         DotnetBuildEnvironmentLease stableSlotLease,
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
-        var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
-        Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
-        try
-        {
-            return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
-        }
+        using var receiptScope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(prefix);
+        return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
     }
 
     private void EmitAttemptLeaseReceipt(

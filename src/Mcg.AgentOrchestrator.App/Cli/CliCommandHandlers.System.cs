@@ -1125,7 +1125,7 @@ internal static partial class CliCommandHandlers
         using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
         if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
-            RunStableSlotMtpTest(parts, context, lease.Environment);
+            RunStableSlotMtpTest(parts, context, lease);
             return;
         }
 
@@ -1143,8 +1143,9 @@ internal static partial class CliCommandHandlers
     private static void RunStableSlotMtpTest(
         IReadOnlyList<string> parts,
         CliExecutionContext context,
-        DotnetBuildEnvironment environment)
+        DotnetBuildEnvironmentLease buildLease)
     {
+        var environment = buildLease.Environment;
         if (parts.Count < 3)
         {
             throw new ArgumentException("Usage: stable-slot-dotnet mtp-test <project> [--filter <filter>] [--results-directory <path>] [--no-build]");
@@ -1177,6 +1178,7 @@ internal static partial class CliCommandHandlers
             throw new InvalidOperationException($"MTP test executable was not produced: {executable}");
         }
 
+        buildLease.ReleaseExecutionLock();
         var resultsDirectory = ReadStableSlotOption(parts, "--results-directory")
             ?? Path.Combine(environment.ArtifactsPath, "TestResults");
         Directory.CreateDirectory(resultsDirectory);

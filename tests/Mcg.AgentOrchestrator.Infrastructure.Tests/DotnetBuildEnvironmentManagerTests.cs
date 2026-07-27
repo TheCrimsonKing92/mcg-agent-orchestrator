@@ -34,7 +34,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal(first.RootPath, second.RootPath);
             Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
             Assert.True(second.ReusedGoalLease);
-            Assert.True(first.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(Path.Combine(first.RootPath, "artifacts"), first.ArtifactsPath);
+            Assert.Contains(Path.Combine("build-slots", "build-"), first.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
             Assert.True(Directory.Exists(first.ArtifactsPath));
             Assert.True(Directory.Exists(second.ArtifactsPath));
             Assert.False(string.IsNullOrWhiteSpace(second.LeaseMetadataPath));
@@ -46,7 +47,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
             var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
-            Assert.True(other.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(Path.Combine(other.RootPath, "artifacts"), other.ArtifactsPath);
+            Assert.NotEqual(first.ArtifactsPath, other.ArtifactsPath);
             Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(otherGoalId));
             using var metadata = JsonDocument.Parse(File.ReadAllText(second.LeaseMetadataPath!));
             Assert.Equal(goalId.Value, metadata.RootElement.GetProperty("goalId").GetString());
@@ -62,17 +64,18 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_stable_manual_slot")]
-    public void DotnetBuildEnvironmentManagerReusesStableManualSlot()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_manual_attempts_use_invocation_local_artifacts")]
+    public void DotnetBuildEnvironmentManagerManualAttemptsUseInvocationLocalArtifacts()
     {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var first = DotnetBuildEnvironmentManager.CreateAttempt(null, "Acceptance");
         var second = DotnetBuildEnvironmentManager.CreateAttempt(null, "Retry");
 
-        Assert.Equal("run-slot-manual", first.LeaseId);
-        Assert.Equal(first.RootPath, second.RootPath);
-        Assert.Equal(first.ArtifactsPath, second.ArtifactsPath);
-        Assert.True(first.ArtifactsPath.Contains(Path.Combine("slots", "manual", "artifacts"), StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(first.ExecutionLockPath, second.ExecutionLockPath);
+        Assert.StartsWith("run-", first.LeaseId, StringComparison.Ordinal);
+        Assert.NotEqual(first.RootPath, second.RootPath);
+        Assert.NotEqual(first.ArtifactsPath, second.ArtifactsPath);
+        Assert.Contains(Path.Combine("runs", Environment.ProcessId.ToString()), first.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("build-slots", "build-"), first.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
         Assert.True(first.Arguments.Contains(first.ArtifactsPath));
     }
 
@@ -85,7 +88,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "Acceptance", slotCount: 1);
 
-            Assert.Contains(Path.Combine("slots", "slot-0", "artifacts"), environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(Path.Combine(DotnetBuildEnvironmentManager.GoalRoot(goalId), "artifacts"), environment.ArtifactsPath);
             var error = Assert.Throws<ArgumentOutOfRangeException>(
                 () => DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1, slotCount: 1));
             Assert.Contains("requested slot count", error.Message, StringComparison.Ordinal);
@@ -171,7 +174,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", slot.ArtifactsPath, [project]);
 
             Assert.True(restore.AllHit);
-            Assert.Contains(Path.Combine("slots", "slot-0", "artifacts"), slot.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(Path.Combine("runs", $"p{Environment.ProcessId}-build-0", "artifacts"), slot.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(cacheRoot, slot.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
             Assert.True(File.Exists(Path.Combine(slot.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug_net10.0", "cache.txt")));
         }
@@ -1189,7 +1192,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
         using var selected = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(1));
 
-        Assert.NotEqual("slot-0", selected.Environment.SlotOwnerToken);
+        Assert.Equal("build-1", selected.Environment.SlotOwnerToken);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_goal_gate_skips_worker_held_slot_zero")]
@@ -1208,38 +1211,26 @@ public sealed class DotnetBuildEnvironmentManagerTests
         });
 
         Assert.NotNull(gateEnvironment);
-        Assert.DoesNotContain(Path.Combine("slots", "slot-0"), gateEnvironment.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(Path.Combine("slots", "slot-"), gateEnvironment.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("build-slots", "build-1.lock"), gateEnvironment.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("LEASE_ACQUIRE", output);
-        Assert.Contains("slot=slot-", output);
+        Assert.Contains("slot=build-1", output);
         Assert.Contains("lease=goal-90000000", output);
         Assert.Equal(1, CountOccurrences(output, "LEASE_RELEASE"));
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_gate_rescans_when_previous_slot_is_held")]
-    public void DotnetBuildEnvironmentManagerReusedGoalGateRescansWhenPreviousSlotIsHeld()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_keeps_per_goal_artifacts_and_build_pool_lock")]
+    public void DotnetBuildEnvironmentManagerReusedGoalKeepsPerGoalArtifactsAndBuildPoolLock()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var gateGoalId = new GoalId("91000000910000009100000091000000");
         var first = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "first");
-        var previousSlot = SlotIndexFromPath(first.ExecutionLockPath);
-        var previousSlotEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(previousSlot);
-        using var previousSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(previousSlotEnvironment);
-        DotnetBuildEnvironment? reused = null;
-
-        var output = AsyncLocalConsoleRouter.Capture(() =>
-        {
-            reused = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
-            using var gateLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(reused, TimeSpan.FromSeconds(1));
-        });
+        var reused = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
 
         Assert.NotNull(reused);
         Assert.True(reused.ReusedGoalLease);
-        Assert.NotEqual(first.ExecutionLockPath, reused.ExecutionLockPath);
-        Assert.DoesNotContain(Path.Combine("slots", $"slot-{previousSlot}"), reused.ExecutionLockPath, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("LEASE_ACQUIRE", output);
-        Assert.Contains("lease=goal-91000000", output);
-        Assert.Equal(1, CountOccurrences(output, "LEASE_RELEASE"));
+        Assert.Equal(first.ExecutionLockPath, reused.ExecutionLockPath);
+        Assert.Equal(first.ArtifactsPath, reused.ArtifactsPath);
+        Assert.Equal(Path.Combine(first.RootPath, "artifacts"), reused.ArtifactsPath);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reclaims_dead_pid_execution_lease_without_timeout")]
@@ -1353,7 +1344,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var locks = new List<FileStream>();
         try
         {
-            for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
+            for (var slot = 0; slot < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount; slot++)
             {
                 var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(slot);
                 locks.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment));
@@ -1521,8 +1512,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_gate_rescans_when_previous_slot_has_unleased_testhost")]
-    public void DotnetBuildEnvironmentManagerReusedGoalGateRescansWhenPreviousSlotHasUnleasedTesthost()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_does_not_move_artifacts_for_unleased_test_process")]
+    public void DotnetBuildEnvironmentManagerReusedGoalDoesNotMoveArtifactsForUnleasedTestProcess()
     {
         using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var gateGoalId = new GoalId("92000000920000009200000092000000");
@@ -1539,7 +1530,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var reused = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
 
             Assert.True(reused.ReusedGoalLease);
-            Assert.NotEqual(first.ExecutionLockPath, reused.ExecutionLockPath);
+            Assert.Equal(first.ExecutionLockPath, reused.ExecutionLockPath);
+            Assert.Equal(first.ArtifactsPath, reused.ArtifactsPath);
         }
         finally
         {
@@ -1587,47 +1579,49 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stable_slot_build_arguments_are_firewall_covered")]
-    public void DotnetBuildEnvironmentManagerStableSlotBuildArgumentsAreFirewallCovered()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_goal_artifacts_are_per_goal_and_build_lock_is_not_an_artifact_root")]
+    public void DotnetBuildEnvironmentManagerGoalArtifactsArePerGoalAndBuildLockIsNotAnArtifactRoot()
     {
-        var firewallPaths = DotnetBuildEnvironmentManager.StableSlotTesthostFirewallPaths()
-            .Select(path => Path.GetFullPath(path.Path))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var firstGoal = new GoalId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        var secondGoal = new GoalId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        try
         {
-            var arguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(slot);
-            var artifactsPath = ArgumentValue(arguments, "--artifacts-path");
-            foreach (var project in new[] { "Mcg.AgentOrchestrator.Core.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests" })
-            {
-                foreach (var configuration in new[] { "Debug", "Release" })
-                {
-                    var derivedTesthostPath = Path.GetFullPath(Path.Combine(
-                        artifactsPath,
-                        "bin",
-                        project,
-                        $"{configuration.ToLowerInvariant()}_net10.0",
-                        "testhost.exe"));
-
-                    Assert.True(firewallPaths.Contains(derivedTesthostPath));
-                }
-            }
+            var first = DotnetBuildEnvironmentManager.CreateAttempt(firstGoal, "gate");
+            var second = DotnetBuildEnvironmentManager.CreateAttempt(secondGoal, "gate");
+            Assert.Equal(Path.Combine(first.RootPath, "artifacts"), first.ArtifactsPath);
+            Assert.Equal(Path.Combine(second.RootPath, "artifacts"), second.ArtifactsPath);
+            Assert.NotEqual(first.ArtifactsPath, second.ArtifactsPath);
+            Assert.DoesNotContain(
+                $"{Path.DirectorySeparatorChar}slots{Path.DirectorySeparatorChar}",
+                first.ArtifactsPath,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                $"{Path.DirectorySeparatorChar}build-slots{Path.DirectorySeparatorChar}",
+                first.ExecutionLockPath,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(firstGoal);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(secondGoal);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]
     public void DotnetBuildEnvironmentManagerCapsMsbuildParallelismPerSlot()
     {
+        using var rootScope = EnvVarScope.ForIsolatedDotnetRoot();
         using var defaultScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, null);
-        var defaultArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
-        var expectedDefault = Math.Max(2, Environment.ProcessorCount / DotnetBuildEnvironmentManager.StableSlotCount);
+        var defaultArguments = DotnetBuildEnvironmentManager.CreateAttempt(null, "default-cpu").Arguments;
+        var expectedDefault = Math.Max(2, Environment.ProcessorCount / DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
 
         Assert.Equal($"-maxcpucount:{expectedDefault}", MaxCpuCountArgument(defaultArguments));
         Assert.NotEqual("-maxcpucount:1", MaxCpuCountArgument(defaultArguments));
         Assert.Contains("-p:BuildInParallel=false", defaultArguments);
 
         using var configuredScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, "7");
-        var configuredArguments = DotnetBuildEnvironmentManager.StableSlotBuildArguments(0);
+        var configuredArguments = DotnetBuildEnvironmentManager.CreateAttempt(null, "configured-cpu").Arguments;
 
         Assert.Equal("-maxcpucount:7", MaxCpuCountArgument(configuredArguments));
         Assert.Contains("-p:BuildInParallel=false", configuredArguments);
@@ -2407,13 +2401,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
         catch
         {
         }
-    }
-
-    private static int SlotIndexFromPath(string path)
-    {
-        var slotName = Path.GetFileName(Path.GetDirectoryName(path));
-        Assert.StartsWith("slot-", slotName, StringComparison.Ordinal);
-        return int.Parse(slotName["slot-".Length..], System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static SafeFileHandle CreateInheritableFileHandle(string path)

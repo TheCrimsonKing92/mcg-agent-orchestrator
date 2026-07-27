@@ -2766,7 +2766,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             Xunit.Assert.Contains("stable dotnet build slot", ex.Message);
         });
 
-        Xunit.Assert.Contains("waiting for slot-2 lease held by pid 12345", output);
+        Xunit.Assert.Contains("waiting for build-2 permit held by pid 12345", output);
         Xunit.Assert.Contains("BLOCKER step=verification reason=build-slot-timeout", output);
     }
 

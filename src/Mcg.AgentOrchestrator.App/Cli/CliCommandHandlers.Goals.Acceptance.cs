@@ -122,15 +122,14 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             try
             {
                 var onSlotWait = (DotnetBuildStableSlotWait wait) =>
-                    Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
+                    Console.WriteLine($"waiting for build-{wait.SlotIndex} permit held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
                 stableSlotLease = context.StableSlotSelector is { } stableSlotSelector
                     ? stableSlotSelector(context.StableSlotAcquisitionTimeout, onSlotWait)
                     : DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                         context.StableSlotAcquisitionTimeout,
-                        onSlotWait,
-                        slotCount: AcceptanceGateEngineSettings.Load(worktreePath).SlotCount);
+                        onSlotWait);
                 stableSlotIndex = ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
-                    ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
+                    ?? throw new IOException($"Build permit did not identify its pool index: {stableSlotLease.Environment.SlotOwnerToken}");
             }
             catch (DotnetBuildSlotsBusyException ex)
             {
@@ -446,8 +445,8 @@ private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> b
 
 private static int? ParseStableSlotIndex(string slotOwnerToken)
 {
-    return slotOwnerToken.StartsWith("slot-", StringComparison.OrdinalIgnoreCase) &&
-        int.TryParse(slotOwnerToken[5..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
+    return slotOwnerToken.StartsWith("build-", StringComparison.OrdinalIgnoreCase) &&
+        int.TryParse(slotOwnerToken[6..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
             ? slotIndex
             : null;
 }

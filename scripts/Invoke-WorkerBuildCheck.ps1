@@ -21,10 +21,10 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
-function Get-StableSlotName {
+function Get-BuildSlotName {
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) {
-        return "manual"
+        return "build-0"
     }
 
     [int64]$hash = 0
@@ -32,7 +32,7 @@ function Get-StableSlotName {
         $hash = (($hash * 31) + [int][char]$ch) % 2147483647
     }
 
-    return "slot-$([Math]::Abs($hash % 4))"
+    return "build-$([Math]::Abs($hash % 2))"
 }
 
 function Get-IsolatedRootBase {
@@ -206,13 +206,12 @@ if ($missingProjects.Count -gt 0) {
 
 $safeGoalPrefix = ConvertTo-SafePathSegment -Value (Get-GoalPrefix)
 $isolatedRoot = Get-IsolatedRootBase
-$slotName = Get-StableSlotName -Value $safeGoalPrefix
+$buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix
 $leaseId = "goal-$safeGoalPrefix"
 $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
-$slotRoot = Join-Path $isolatedRoot "slots\$slotName"
 $leaseRoot = Join-Path $runRoot "lease"
-$artifactsPath = Join-Path $slotRoot "artifacts"
-$executionLockPath = Join-Path $slotRoot "lease.execution.lock"
+$artifactsPath = Join-Path $runRoot "artifacts"
+$executionLockPath = Join-Path $isolatedRoot "build-slots\$buildSlotName.lock"
 New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
 
 $lockPath = Join-Path $leaseRoot "lease.lock"

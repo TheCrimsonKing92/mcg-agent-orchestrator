@@ -57,7 +57,7 @@ public static class GateHeartbeatArtifacts
     };
 
     public static string GetStableSlotPath(int slotIndex) =>
-        Path.Combine(DotnetBuildEnvironmentManager.StableSlotArtifactsPath(slotIndex), FileName);
+        DotnetBuildEnvironmentManager.BuildSlotHeartbeatPath(slotIndex);
 
     public static string GetManualPath(string worktreePath) =>
         Path.Combine(worktreePath, ".orchestrator", FileName);

@@ -28,12 +28,6 @@ public sealed record DotnetBuildLeaseStatus(
     bool CanCleanup,
     string Detail);
 
-public sealed record DotnetTesthostFirewallPath(
-    int SlotIndex,
-    string Project,
-    string Configuration,
-    string Path);
-
 public sealed record DotnetBuildStableSlotWait(
     int SlotIndex,
     int? OwnerProcessId);
@@ -66,10 +60,11 @@ public static class DotnetBuildEnvironmentManager
 {
     public const string RootDirectoryName = "mcg-dotnet-isolated";
 
-    // Supported escape hatch for tests that need lease-root isolation. Production and acceptance
-    // runs use the default stable slots so their testhost.exe paths stay firewall-covered.
+    // Supported escape hatch for tests that need lease-root isolation.
     public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
-    public const int StableSlotCount = 4;
+    public const int BuildConcurrencySlotCount = 2;
+    // Compatibility name for callers migrating from the former artifact-slot grid.
+    public const int StableSlotCount = BuildConcurrencySlotCount;
     public static readonly TimeSpan DefaultSlotBusyPollTimeout = TimeSpan.FromSeconds(20);
     private const string LeaseDirectoryName = "lease";
     private const string LeaseMetadataFileName = "lease.json";
@@ -109,19 +104,20 @@ public static class DotnetBuildEnvironmentManager
             return CreateGoalLease(goalId, attemptName, slotCount);
         }
 
-        var root = StableSlotRoot("manual");
-        var artifactsPath = StableSlotArtifactsPath("manual");
-        var executionLockPath = StableSlotExecutionLockPath("manual");
+        var owner = $"{Environment.ProcessId}-{Sanitize(attemptName)}-{Guid.NewGuid():N}";
+        var root = Path.Combine(IsolatedRootBase(), "runs", owner);
+        var artifactsPath = Path.Combine(root, "artifacts");
+        var executionLockPath = BuildSlotExecutionLockPath(BuildSlotIndex(owner));
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
 
         return new DotnetBuildEnvironment(
-            "run-slot-manual",
+            $"run-{owner}",
             root,
             artifactsPath,
             executionLockPath,
             BuildArguments(artifactsPath),
-            "manual");
+            owner);
     }
 
     public static string GoalRoot(GoalId goalId)
@@ -132,7 +128,7 @@ public static class DotnetBuildEnvironmentManager
     public static string GoalArtifactsPath(GoalId goalId)
     {
         return TryReadArtifactsPath(Path.Combine(LeaseDirectory(goalId), LeaseMetadataFileName)) ??
-            StableSlotArtifactsPath(StableSlotName(goalId));
+            Path.Combine(GoalRoot(goalId), "artifacts");
     }
 
     public static string BaseBuildCacheRoot()
@@ -140,69 +136,10 @@ public static class DotnetBuildEnvironmentManager
         return DotnetBaseBuildCache.DefaultRootPath(IsolatedRootBase());
     }
 
-    public static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTesthostFirewallPaths()
+    public static string BuildSlotHeartbeatPath(int slotIndex)
     {
-        DotnetTesthostFirewallPath[] paths = new DotnetTesthostFirewallPath[StableSlotCount * 4];
-        var index = 0;
-        for (var slot = 0; slot < StableSlotCount; slot++)
-        {
-            foreach (var project in TesthostFirewallProjects)
-            {
-                foreach (var configuration in TesthostFirewallConfigurations)
-                {
-                    paths[index++] = new DotnetTesthostFirewallPath(
-                        slot,
-                        project.RuleProject,
-                        configuration,
-                        Path.Combine(
-                            StableSlotArtifactsPath($"slot-{slot}"),
-                            "bin",
-                            project.ArtifactProject,
-                            $"{configuration.ToLowerInvariant()}_net10.0",
-                            "testhost.exe"));
-                }
-            }
-        }
-
-        return paths;
-    }
-
-    internal static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotMtpExecutableFirewallPaths(
-        int slotCount,
-        IReadOnlyList<AcceptanceMtpInvocation> invocations)
-    {
-        ValidateRequestedSlotCount(slotCount);
-        var paths = new List<DotnetTesthostFirewallPath>(slotCount * invocations.Count);
-        for (var slot = 0; slot < slotCount; slot++)
-        {
-            foreach (var invocation in invocations)
-            {
-                paths.Add(new DotnetTesthostFirewallPath(
-                    slot,
-                    $"{Path.GetFileNameWithoutExtension(invocation.Project)}-MTP",
-                    "Debug",
-                    invocation.ResolveFirewallExecutablePath(StableSlotArtifactsPath($"slot-{slot}"))));
-            }
-        }
-
-        return paths;
-    }
-
-    internal static IReadOnlyList<DotnetTesthostFirewallPath> StableSlotTestExecutableFirewallPaths(
-        int slotCount,
-        IReadOnlyList<AcceptanceMtpInvocation> invocations) =>
-        [.. StableSlotTesthostFirewallPaths().Where(path => path.SlotIndex < slotCount),
-            .. StableSlotMtpExecutableFirewallPaths(slotCount, invocations)];
-
-    public static string StableSlotArtifactsPath(int slotIndex)
-    {
-        ValidateStableSlotIndex(slotIndex);
-        return StableSlotArtifactsPath($"slot-{slotIndex}");
-    }
-
-    public static IReadOnlyList<string> StableSlotBuildArguments(int slotIndex)
-    {
-        return BuildArguments(StableSlotArtifactsPath(slotIndex));
+        ArgumentOutOfRangeException.ThrowIfNegative(slotIndex);
+        return Path.Combine(IsolatedRootBase(), "build-slots", $"activity-{slotIndex}.heartbeat.json");
     }
 
     public static DotnetBuildEnvironment CreateStableSlotAttempt(
@@ -633,8 +570,9 @@ public static class DotnetBuildEnvironmentManager
         var oldest = (SlotIndex: 0, OwnerProcessId: (int?)null, LastAcquiredAt: DateTimeOffset.MaxValue);
         for (var slot = 0; slot < slotCount; slot++)
         {
-            var marker = TryReadStableSlotOwnerMarker(slot);
-            var acquiredAt = marker?.LastAcquiredAt ?? DateTimeOffset.MinValue;
+            var environment = CreateStableSlotEnvironment(slot, createArtifactsDirectory: false);
+            var marker = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+            var acquiredAt = marker?.AcquiredAt ?? DateTimeOffset.MinValue;
             if (acquiredAt < oldest.LastAcquiredAt)
             {
                 oldest = (slot, marker?.OwnerProcessId, acquiredAt);
@@ -660,9 +598,8 @@ public static class DotnetBuildEnvironmentManager
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
-        var slotName = SelectStableSlotNameForGoal(metadataPath, reused, slotCount);
-        var artifactsPath = StableSlotArtifactsPath(slotName);
-        var executionLockPath = StableSlotExecutionLockPath(slotName);
+        var artifactsPath = Path.Combine(root, "artifacts");
+        var executionLockPath = BuildSlotExecutionLockPath(BuildSlotIndex(Prefix(goalId)));
         Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
@@ -711,120 +648,12 @@ public static class DotnetBuildEnvironmentManager
             return value;
         }
 
-        return Math.Max(2, Environment.ProcessorCount / StableSlotCount);
+        return Math.Max(2, Environment.ProcessorCount / BuildConcurrencySlotCount);
     }
 
     private static string LeaseDirectory(GoalId goalId)
     {
         return Path.Combine(GoalRoot(goalId), LeaseDirectoryName);
-    }
-
-    private static string StableSlotName(
-        GoalId goalId,
-        int slotCount = StableSlotCount)
-    {
-        ValidateRequestedSlotCount(slotCount);
-        var hash = 0;
-        foreach (var ch in Prefix(goalId))
-        {
-            hash = unchecked((hash * 31) + char.ToLowerInvariant(ch));
-        }
-
-        return $"slot-{Math.Abs(hash % slotCount)}";
-    }
-
-    private static string SelectStableSlotNameForGoal(
-        string metadataPath,
-        bool reused,
-        int slotCount)
-    {
-        if (reused &&
-            TryReadGoalLeaseSlotName(metadataPath) is { } existingSlotName &&
-            ParseStableSlotIndex(existingSlotName) < slotCount &&
-            IsStableSlotAvailable(existingSlotName))
-        {
-            return existingSlotName;
-        }
-
-        var scanStart = NextStableSlotScanStart(slotCount);
-        for (var offset = 0; offset < slotCount; offset++)
-        {
-            var slotName = $"slot-{(scanStart + offset) % slotCount}";
-            if (IsStableSlotAvailable(slotName))
-            {
-                return slotName;
-            }
-        }
-
-        var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(slotCount);
-        return $"slot-{leastRecentlyLeased.SlotIndex}";
-    }
-
-    private static string? TryReadGoalLeaseSlotName(string metadataPath)
-    {
-        if (!File.Exists(metadataPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
-            if (!document.RootElement.TryGetProperty("artifactsPath", out var artifactsPath) ||
-                artifactsPath.ValueKind != JsonValueKind.String)
-            {
-                return null;
-            }
-
-            return TryStableSlotNameFromArtifactsPath(artifactsPath.GetString());
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? TryStableSlotNameFromArtifactsPath(string? artifactsPath)
-    {
-        if (string.IsNullOrWhiteSpace(artifactsPath))
-        {
-            return null;
-        }
-
-        var trimmed = artifactsPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var slotName = Path.GetFileName(Path.GetDirectoryName(trimmed));
-        return IsStableSlotName(slotName) ? slotName : null;
-    }
-
-    private static bool IsStableSlotAvailable(string slotName)
-    {
-        if (IsSlotArtifactsBusy(CreateStableSlotEnvironment(ParseStableSlotIndex(slotName))))
-        {
-            return false;
-        }
-
-        var executionLockPath = StableSlotExecutionLockPath(slotName);
-        Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
-        var createdByProbe = !File.Exists(executionLockPath);
-        try
-        {
-            using (var stream = new FileStream(executionLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
-            {
-                stream.Lock(0, 1);
-                stream.Unlock(0, 1);
-            }
-
-            if (createdByProbe && IsEmptyFile(executionLockPath))
-            {
-                File.Delete(executionLockPath);
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
     }
 
     private static bool IsEmptyFile(string path)
@@ -839,30 +668,15 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static bool IsStableSlotName(string? slotName)
-    {
-        if (slotName is null ||
-            !slotName.StartsWith("slot-", StringComparison.Ordinal) ||
-            !int.TryParse(slotName["slot-".Length..], out var slotIndex))
-        {
-            return false;
-        }
-
-        return slotIndex >= 0 && slotIndex < StableSlotCount;
-    }
-
-    private static int ParseStableSlotIndex(string slotName) =>
-        int.Parse(slotName["slot-".Length..], System.Globalization.CultureInfo.InvariantCulture);
-
     private static DotnetBuildEnvironment CreateStableSlotEnvironment(
         int slotIndex,
         bool createArtifactsDirectory = true)
     {
         ValidateStableSlotIndex(slotIndex);
-        var slotName = $"slot-{slotIndex}";
-        var root = StableSlotRoot(slotName);
-        var artifactsPath = StableSlotArtifactsPath(slotName);
-        var executionLockPath = StableSlotExecutionLockPath(slotName);
+        var owner = $"p{Environment.ProcessId}-build-{slotIndex}";
+        var root = Path.Combine(IsolatedRootBase(), "runs", owner);
+        var artifactsPath = Path.Combine(root, "artifacts");
+        var executionLockPath = BuildSlotExecutionLockPath(slotIndex % BuildConcurrencySlotCount);
         if (createArtifactsDirectory)
         {
             Directory.CreateDirectory(artifactsPath);
@@ -870,12 +684,12 @@ public static class DotnetBuildEnvironmentManager
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
 
         return new DotnetBuildEnvironment(
-            $"run-{slotName}",
+            $"run-build-{slotIndex}",
             root,
             artifactsPath,
             executionLockPath,
             BuildArguments(artifactsPath),
-            slotName);
+            $"build-{slotIndex % BuildConcurrencySlotCount}");
     }
 
     private static void ValidateStableSlotIndex(int slotIndex)
@@ -905,19 +719,20 @@ public static class DotnetBuildEnvironmentManager
             : overridden;
     }
 
-    private static string StableSlotRoot(string slotName)
+    private static string BuildSlotExecutionLockPath(int slotIndex)
     {
-        return Path.Combine(IsolatedRootBase(), "slots", slotName);
+        return Path.Combine(IsolatedRootBase(), "build-slots", $"build-{slotIndex}.lock");
     }
 
-    private static string StableSlotArtifactsPath(string slotName)
+    private static int BuildSlotIndex(string owner)
     {
-        return Path.Combine(StableSlotRoot(slotName), "artifacts");
-    }
+        var hash = 0;
+        foreach (var ch in owner)
+        {
+            hash = unchecked((hash * 31) + char.ToLowerInvariant(ch));
+        }
 
-    private static string StableSlotExecutionLockPath(string slotName)
-    {
-        return Path.Combine(StableSlotRoot(slotName), "lease.execution.lock");
+        return (int)((uint)hash % BuildConcurrencySlotCount);
     }
 
     private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(
@@ -956,8 +771,7 @@ public static class DotnetBuildEnvironmentManager
         var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         return TryFindActiveSlotArtifactConsumer(environment)?.ProcessId ??
-            metadata?.OwnerProcessId ??
-            TryReadStableSlotOwnerMarker(slotIndex)?.OwnerProcessId;
+            metadata?.OwnerProcessId;
     }
 
     private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
@@ -1206,14 +1020,6 @@ public static class DotnetBuildEnvironmentManager
         return new LeaseFileStream(environment);
     }
 
-    private static readonly (string RuleProject, string ArtifactProject)[] TesthostFirewallProjects =
-    [
-        ("Core", "Mcg.AgentOrchestrator.Core.Tests"),
-        ("Infrastructure", "Mcg.AgentOrchestrator.Infrastructure.Tests")
-    ];
-
-    private static readonly string[] TesthostFirewallConfigurations = ["Debug", "Release"];
-
     private static void PrepareArtifactsDirectory(
         DotnetBuildEnvironment environment,
         bool forceClean = false,
@@ -1272,24 +1078,6 @@ public static class DotnetBuildEnvironmentManager
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             return false;
-        }
-    }
-
-    private static ArtifactsOwnerMarker? TryReadStableSlotOwnerMarker(int slotIndex)
-    {
-        var ownerPath = Path.Combine(StableSlotArtifactsPath(slotIndex), ArtifactsOwnerFileName);
-        if (!File.Exists(ownerPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<ArtifactsOwnerMarker>(File.ReadAllText(ownerPath), JsonOptions);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            return null;
         }
     }
 
@@ -1648,7 +1436,7 @@ public static class DotnetBuildEnvironmentManager
 
     private static string ReceiptSlotName(DotnetBuildEnvironment environment)
     {
-        var slotName = Path.GetFileName(Path.GetDirectoryName(environment.ExecutionLockPath));
+        var slotName = Path.GetFileNameWithoutExtension(environment.ExecutionLockPath);
         return string.IsNullOrWhiteSpace(slotName) ? environment.SlotOwnerToken : slotName;
     }
 

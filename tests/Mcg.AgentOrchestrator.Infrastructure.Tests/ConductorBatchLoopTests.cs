@@ -739,13 +739,13 @@ public sealed class ConductorBatchLoopTests
     public void BatchLoopParallelAcceptanceSlotExhaustionQueuesExtraGoal()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(0, DotnetBuildEnvironmentManager.StableSlotCount + 1)
+        var goals = Enumerable.Range(0, ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1)
             .Select(index => CreateVerifiedSimpleGoal(
                 kernel,
                 $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Slot{index}.cs"))
             .ToArray();
         using var release = new ManualResetEventSlim(false);
-        using var firstWaveStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount);
+        using var firstWaveStarted = new CountdownEvent(ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         var running = 0;
         var maxRunning = 0;
         var slots = new ConcurrentQueue<int?>();
@@ -756,7 +756,7 @@ public sealed class ConductorBatchLoopTests
 
         try
         {
-            using var allStarted = new CountdownEvent(DotnetBuildEnvironmentManager.StableSlotCount + 1);
+            using var allStarted = new CountdownEvent(ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1);
             var driver = MakeDriver(
                 getFacts: goal => landed.Contains(goal.Id.Value)
                     ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
@@ -806,7 +806,7 @@ public sealed class ConductorBatchLoopTests
                 onTick: t => firstTick = t);
 
             Assert.Equal(0, firstSummary.Advanced);
-            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, firstSummary.Held);
+            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1, firstSummary.Held);
             Assert.True(firstWaveStarted.Wait(TimeSpan.FromSeconds(5)));
             release.Set();
             waitForAttempts();
@@ -836,10 +836,10 @@ public sealed class ConductorBatchLoopTests
                 maxIterations: 1);
             totalAdvanced += finalSummary.Advanced;
 
-            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount + 1, totalAdvanced);
+            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity + 1, totalAdvanced);
             Assert.True(deferredGoalStartedOnFirstFreeTick);
-            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, maxRunning);
-            Assert.Equal(DotnetBuildEnvironmentManager.StableSlotCount, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
+            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, maxRunning);
+            Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, slots.Where(slot => slot.HasValue).Select(slot => slot!.Value).Distinct().Count());
             Assert.DoesNotContain(slots, slot => !slot.HasValue);
             Assert.Contains(firstTick!.ProgressLines!, line =>
                 line.Contains("ADMISSION", StringComparison.Ordinal) &&
@@ -908,7 +908,7 @@ public sealed class ConductorBatchLoopTests
                 {
                     throw new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
                         "goal-slots-busy",
-                        Enumerable.Range(0, DotnetBuildEnvironmentManager.StableSlotCount)
+                        Enumerable.Range(0, ConductorBatchLoop.DefaultParallelAcceptanceCapacity)
                             .Select(slot => new DotnetBuildStableSlotWait(slot, 1000 + slot))
                             .ToArray()));
                 }
@@ -957,7 +957,7 @@ public sealed class ConductorBatchLoopTests
                 if (attempts == 1)
                 {
                     throw new BuildLockBlockedException(new BuildLockAttribution(
-                        @"C:\mcg-dotnet-isolated\slots\slot-0\artifacts\bin\Mcg.AgentOrchestrator.Core.dll",
+                        @"C:\mcg-dotnet-isolated\goals\deadbeef\artifacts\bin\Mcg.AgentOrchestrator.Core.dll",
                         [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
                         "handle64-timeout",
                         "acceptance-output",
@@ -1754,7 +1754,7 @@ public sealed class ConductorBatchLoopTests
         AssertBackgroundOutcome(
             "BuildLockTyped.cs",
             (_, _) => throw new BuildLockBlockedException(new BuildLockAttribution(
-                @"C:\mcg-dotnet-isolated\slots\slot-0\artifacts\bin\Mcg.AgentOrchestrator.Core.dll",
+                @"C:\mcg-dotnet-isolated\goals\deadbeef\artifacts\bin\Mcg.AgentOrchestrator.Core.dll",
                 [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
                 "handle64-timeout",
                 "acceptance-output",

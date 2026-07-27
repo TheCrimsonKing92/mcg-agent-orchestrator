@@ -12,7 +12,6 @@ internal sealed class AcceptanceGateEngineSettings
     public IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes { get; init; } = [];
     public IReadOnlyList<AcceptanceMtpInvocation> MtpInvocations { get; init; } = [];
     public AcceptanceGateTimeoutSettings Timeouts { get; init; } = new();
-    public int SlotCount { get; init; } = DotnetBuildEnvironmentManager.StableSlotCount;
     public int MaxConcurrentShards { get; init; } = 1;
     public bool EnforceStructuralCoverage { get; init; }
 
@@ -65,12 +64,6 @@ internal sealed class AcceptanceGateEngineSettings
 
     private void Validate()
     {
-        if (SlotCount is < 1 or > DotnetBuildEnvironmentManager.StableSlotCount)
-        {
-            throw new InvalidDataException(
-                $"Acceptance manifest engine slotCount must be between 1 and the trusted host maximum {DotnetBuildEnvironmentManager.StableSlotCount}.");
-        }
-
         if (MaxConcurrentShards < 1)
         {
             throw new InvalidDataException("Acceptance manifest engine maxConcurrentShards must be at least 1.");
@@ -122,7 +115,6 @@ internal sealed class AcceptanceMtpInvocation
 {
     public string Project { get; init; } = string.Empty;
     public string ExecutablePathTemplate { get; init; } = string.Empty;
-    public string FirewallExecutablePathTemplate { get; init; } = string.Empty;
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
     public string ResolveExecutablePath(DotnetBuildEnvironment environment)
@@ -141,30 +133,13 @@ internal sealed class AcceptanceMtpInvocation
         return candidate;
     }
 
-    public string ResolveFirewallExecutablePath(string artifactsPath)
-    {
-        var projectName = Path.GetFileNameWithoutExtension(Project);
-        var relativePath = RenderTemplate(FirewallExecutablePathTemplate, projectName);
-        var candidate = Path.GetFullPath(Path.Combine(artifactsPath, relativePath));
-        var artifactsRoot = Path.GetFullPath(artifactsPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!candidate.StartsWith(artifactsRoot, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException(
-                $"MTP firewall executable path for '{Project}' escapes the trusted artifacts root.");
-        }
-
-        return candidate;
-    }
-
     internal void Validate()
     {
         if (string.IsNullOrWhiteSpace(Project) ||
-            string.IsNullOrWhiteSpace(ExecutablePathTemplate) ||
-            string.IsNullOrWhiteSpace(FirewallExecutablePathTemplate))
+            string.IsNullOrWhiteSpace(ExecutablePathTemplate))
         {
             throw new InvalidDataException(
-                "Acceptance manifest MTP invocations require project, executablePathTemplate, and firewallExecutablePathTemplate.");
+                "Acceptance manifest MTP invocations require project and executablePathTemplate.");
         }
 
         if (Arguments.Count == 0 ||

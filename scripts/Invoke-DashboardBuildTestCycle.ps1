@@ -92,7 +92,7 @@ function Wait-DashboardHealth {
 }
 
 function New-IsolatedDotnetArguments {
-    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
+    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\runs\dashboard-$PID"
     $artifactsPath = Join-Path $runRoot "artifacts"
     New-Item -ItemType Directory -Force -Path $artifactsPath | Out-Null
     $maxCpuCount = 0

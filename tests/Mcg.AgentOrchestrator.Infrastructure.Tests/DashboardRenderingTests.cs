@@ -2126,7 +2126,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal("large paid subscription start", workSummary.NextAction.Control!.CostRisk);
     Assert.True(workSummary.NextAction.Control.CostRecommendation?.Contains("Inspect the generated prompt", StringComparison.Ordinal) == true);
     Assert.Equal($"goal-{goalPrefix}", workSummary.BuildEnvironment.LeaseId);
-    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+    Assert.True(workSummary.BuildEnvironment.ArtifactsPath.Contains(Path.Combine("goals", goalPrefix, "artifacts"), StringComparison.OrdinalIgnoreCase));
     Assert.True(workSummary.BuildEnvironment.LeaseMetadataPath.Contains(Path.Combine("goals", goalPrefix, "lease", "lease.json"), StringComparison.OrdinalIgnoreCase));
     Assert.False(workSummary.BuildEnvironment.LeaseExists);
     Assert.Equal("focused CLI infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);

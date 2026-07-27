@@ -10,7 +10,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 2,
                 "maxConcurrentShards": 2,
                 "timeouts": { "defaultMinutes": 3, "buildServerShutdownMinutes": 1 },
                 "infrastructureTestLanes": [
@@ -42,7 +41,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             var settings = AcceptanceGateEngineSettings.Load(root);
 
             Xunit.Assert.True(result.Passed);
-            Xunit.Assert.Equal(2, settings.SlotCount);
             Xunit.Assert.Equal(2, settings.MaxConcurrentShards);
             Xunit.Assert.Equal(TimeSpan.FromMinutes(1), calls[0].Timeout);
             var testCall = Xunit.Assert.Single(calls.Skip(1));
@@ -62,7 +60,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1
               },
               "checks": [{
@@ -96,7 +93,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "mtpInvocations": [
                   {
@@ -188,8 +184,6 @@ public sealed class AcceptanceGateEngineSettingsTests
                   "project": "tests/Example.Tests/Example.Tests.csproj",
                   "executablePathTemplate": "safe/{projectName}{executableExtension}",
                   "ExecutablePathTemplate": "../candidate.exe",
-                  "firewallExecutablePathTemplate": "safe/{projectName}.exe",
-                  "FirewallExecutablePathTemplate": "../candidate.exe",
                   "arguments": ["{executable}"]
                 }]
               }
@@ -204,7 +198,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             Xunit.Assert.Equal(
                 "safe/{projectName}{executableExtension}",
                 invocation.ExecutablePathTemplate);
-            Xunit.Assert.Equal("safe/{projectName}.exe", invocation.FirewallExecutablePathTemplate);
         }
         finally
         {
@@ -219,7 +212,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true,
                 "mtpInvocations": [{
@@ -292,7 +284,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true
               },
@@ -363,7 +354,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true,
                 "infrastructureTestLanes": [
