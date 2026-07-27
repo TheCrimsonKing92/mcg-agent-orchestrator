@@ -578,7 +578,10 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed, currentProcessOwnsExecutionLease: true);
+                    PrepareArtifactsDirectory(
+                        environment,
+                        staleExecutionLeaseReclaimed: reclaimed,
+                        currentProcessOwnsExecutionLease: true);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -997,7 +1000,7 @@ public static class DotnetBuildEnvironmentManager
                 try
                 {
                     WriteExecutionLeaseMetadata(stream, environment);
-                    PrepareArtifactsDirectory(environment, forceClean: reclaimed);
+                    PrepareArtifactsDirectory(environment, staleExecutionLeaseReclaimed: reclaimed);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -1231,18 +1234,18 @@ public static class DotnetBuildEnvironmentManager
 
     private static void PrepareArtifactsDirectory(
         DotnetBuildEnvironment environment,
-        bool forceClean = false,
+        bool staleExecutionLeaseReclaimed = false,
         bool currentProcessOwnsExecutionLease = false)
     {
         PrepareArtifactsDirectoryForTests?.Invoke(environment);
-        var clean = forceClean || environment.StaleLockCleared;
+        var clean = staleExecutionLeaseReclaimed || environment.StaleLockCleared;
         var ownerPath = Path.Combine(environment.ArtifactsPath, ArtifactsOwnerFileName);
         if (Directory.Exists(environment.ArtifactsPath) && Directory.EnumerateFileSystemEntries(environment.ArtifactsPath).Any())
         {
             clean |= !OwnerMarkerMatches(ownerPath, environment.SlotOwnerToken);
         }
 
-        if (clean)
+        if (clean && !staleExecutionLeaseReclaimed)
         {
             AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
                 environment.ArtifactsPath,

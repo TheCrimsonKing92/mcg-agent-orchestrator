@@ -324,6 +324,32 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dead_lease_holder_reclaims_slot_despite_live_marker_process")]
+    public void DotnetBuildEnvironmentManagerDeadLeaseHolderReclaimsSlotDespiteLiveMarkerProcess()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var attemptId = "stale-custody-attempt-123";
+        var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
+        var evidencePath = Path.Combine(environment.ArtifactsPath, "TestResults", "stale.trx");
+        Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+        File.WriteAllText(evidencePath, "stale");
+        File.WriteAllText(environment.ExecutionLockPath, "999999");
+        WriteForeignOwnerMarker(environment.ArtifactsPath);
+        WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
+        AcceptanceAttemptArtifactCustody.Write(
+            environment.ArtifactsPath,
+            attemptId,
+            metadataPath,
+            Environment.ProcessId);
+
+        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero);
+
+        Assert.False(File.Exists(evidencePath));
+        Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_remote_custody_marker_allows_foreign_owner_takeover")]
     public void DotnetBuildEnvironmentManagerStaleRemoteCustodyMarkerAllowsForeignOwnerTakeover()
     {
