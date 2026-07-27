@@ -9,6 +9,10 @@ the built test executable with -ReuseArtifacts. The second measurement repeats o
 -ReuseArtifacts invocation. Reuse verifies the slot owner, test assembly, and MTP executable
 before running xUnit directly without invoking MSBuild or the unsupported VSTest target.
 
+Set MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS=1 to force stale-lease recovery to wipe
+the selected slot's artifacts instead of preserving a cache that passes the integrity probe.
+This is an operator recovery escape hatch; unset it after the forced-clean run.
+
 .EXAMPLE
 Measure-Command {
     .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 build tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal
