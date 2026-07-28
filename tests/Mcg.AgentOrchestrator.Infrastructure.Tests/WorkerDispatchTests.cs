@@ -955,7 +955,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             ["src/Admission.cs"],
             "branch",
             "main");
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "dispatch-admission-incumbent");
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-admission-{Guid.NewGuid():N}");
         var readyPath = Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, $"holder-ready-{Guid.NewGuid():N}.txt");
         var releasePath = Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, $"holder-release-{Guid.NewGuid():N}.txt");
@@ -997,9 +997,10 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             Xunit.Assert.Equal(1, earlyChecks);
             Xunit.Assert.Equal(0, preflightRuns);
             Xunit.Assert.Equal(0, paidStarts);
-            Xunit.Assert.False(
+            Xunit.Assert.True(
                 Directory.Exists(environment.ArtifactsPath),
-                "Contending admission recreated the incumbent slot artifact directory before acquiring its lease.");
+                "Contending admission did not preserve the per-goal dotnet cache root.");
+            Xunit.Assert.Empty(Directory.EnumerateFileSystemEntries(environment.ArtifactsPath));
         }
         finally
         {

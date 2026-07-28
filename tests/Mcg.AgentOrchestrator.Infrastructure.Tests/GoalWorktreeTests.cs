@@ -1862,6 +1862,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
     [Xunit.Fact(DisplayName = "GoalWorktree_acceptance_contention_reconciles_blocked_attempt_before_clean_regate")]
     public void GoalWorktreeAcceptanceContentionReconcilesBlockedAttemptBeforeCleanRegate()
     {
+        using var isolatedRoot = new IsolatedDotnetRootScope();
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateCompletedGoal(kernel, "Verify clean acceptance re-gate.", Environment.CurrentDirectory);
         var candidate = ConductorParallelAcceptanceCandidate.Create(
@@ -1870,7 +1871,9 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             ["src/Regate.cs"],
             "branch",
             "main");
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "contention-incumbent");
+        var buildPermit = environment.BuildPermitIndex
+            ?? throw new InvalidOperationException("Goal build permit was not assigned.");
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-regate-{Guid.NewGuid():N}");
 
         try
@@ -1912,7 +1915,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 ConductorParallelAcceptanceAttemptOutcome.Passed,
                 regated.Attempt.Outcome);
             Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
-            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermit));
         }
         finally
         {
@@ -1929,7 +1932,24 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
         using var isolatedRoot = new IsolatedDotnetRootScope();
         var kernel = new AgentOrchestratorKernel();
         var goalA = CreateCompletedGoal(kernel, "Verify isolated acceptance A.", Environment.CurrentDirectory);
+        var goalAPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalA.Id, "permit-probe").BuildPermitIndex
+            ?? throw new InvalidOperationException("Goal A build permit was not assigned.");
         var goalB = CreateCompletedGoal(kernel, "Verify isolated acceptance B.", Environment.CurrentDirectory);
+        var goalBPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "permit-probe").BuildPermitIndex
+            ?? throw new InvalidOperationException("Goal B build permit was not assigned.");
+        for (var attempt = 0;
+             attempt < 128 && goalAPermit == goalBPermit;
+             attempt++)
+        {
+            goalB = CreateCompletedGoal(
+                kernel,
+                $"Verify isolated acceptance B retry {attempt}.",
+                Environment.CurrentDirectory);
+            goalBPermit = DotnetBuildEnvironmentManager.CreateAttempt(goalB.Id, "permit-probe").BuildPermitIndex
+                ?? throw new InvalidOperationException("Goal B build permit was not assigned.");
+        }
+
+        Xunit.Assert.NotEqual(goalAPermit, goalBPermit);
         var candidateA = ConductorParallelAcceptanceCandidate.Create(
             goalA,
             0,
@@ -1996,8 +2016,8 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 GoalStatus.Verified,
                 goalA.Status);
             Xunit.Assert.Equal(GoalStatus.Verified, goalB.Status);
-            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
-            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(1));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(goalAPermit));
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(goalBPermit));
         }
         finally
         {
