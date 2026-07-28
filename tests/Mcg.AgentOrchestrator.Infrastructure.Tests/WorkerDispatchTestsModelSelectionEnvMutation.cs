@@ -107,7 +107,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     Assert.Contains($"--cd '{workingDirectory}'", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.False(developer.LastDispatch.Command.Contains("{workingDirectory}", StringComparison.Ordinal));
     Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
-    Assert.Contains("claude --model 'claude-haiku-4-5'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("claude -p --model 'claude-haiku-4-5'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("Anthropic", researcher.LastDispatch.ProviderName);
     Assert.Equal("claude-haiku-4-5", researcher.LastDispatch.ModelName);
     Assert.True(File.Exists(results.Single(result => result.Task.Id == developer.Id).PromptPath));
@@ -205,8 +205,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     Assert.Single(results);
     var developer = goal.Tasks.Single();
     Assert.Equal("claude-cli", developer.LastDispatch!.WorkerName);
-    Assert.Contains("claude --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", developer.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.DoesNotContain(" -p", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("claude -p --model 'claude-haiku-4-5' --permission-mode 'bypassPermissions'", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains(" -p ", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("Anthropic", developer.LastDispatch.ProviderName);
 }

@@ -25,9 +25,9 @@ public sealed class WorkerProfileTests
     Assert.Contains("--sandbox {sandboxMode}", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--cd {workingDirectory}", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", codex.CommandTemplate, StringComparison.Ordinal);
-    Assert.Contains("claude --model {subscriptionModelName}", claude.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("claude -p --model {subscriptionModelName}", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--permission-mode {permissionMode}", claude.CommandTemplate, StringComparison.Ordinal);
-    Assert.DoesNotContain(" -p", claude.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains(" -p ", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude, claudeProvider).IsPatchCapable);
 }
@@ -178,7 +178,7 @@ public sealed class WorkerProfileTests
     Assert.Contains("codex exec", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--model {subscriptionModelName}", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-    Assert.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("claude -p --model {subscriptionModelName} --permission-mode {permissionMode}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_stale_default_subscription_profiles")]
