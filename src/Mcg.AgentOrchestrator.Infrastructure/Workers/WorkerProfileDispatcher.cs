@@ -196,14 +196,26 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeTotalConflictPathCount,
             reviewerRoundTouchedAnchors);
         var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
+        var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables);
+        var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
+        var commandTemplate = ShouldUseTypedBuiltInCommand(profile, workerProviderKind)
+            ? string.Join(
+                ' ',
+                ProviderCommandBuilder.Build(
+                    workerProviderKind,
+                    GetDispatchVariable(dispatchVariables, "subscriptionModelName"),
+                    GetDispatchVariable(dispatchVariables, "subscriptionReasoningEffort"),
+                    GetDispatchVariable(dispatchVariables, "permissionMode"),
+                    GetDispatchVariable(dispatchVariables, "sandboxMode"),
+                    GetDispatchVariable(dispatchVariables, "workingDirectory")))
+            : profile.CommandTemplate;
         var preparation = WorkerCommandTemplate.Prepare(
             budgetedBrief,
             profile.Name,
-            profile.CommandTemplate,
+            commandTemplate,
             promptRoot,
-            BuildDispatchVariables(task.RequiredRole, workingDirectory, variables),
+            dispatchVariables,
             dispatchedAt);
-        var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -1835,4 +1847,25 @@ public static class WorkerProfileDispatcher
 
         return merged;
     }
+
+    private static bool ShouldUseTypedBuiltInCommand(
+        WorkerProfile profile,
+        ProviderKind providerKind)
+    {
+        if (!ProviderCommandBuilder.IsBuiltIn(providerKind))
+        {
+            return false;
+        }
+
+        // The legacy shim remains authoritative for user-persisted and test-local command overrides
+        // until Slice 3 rejects custom templates that reuse a built-in profile name.
+        return profile.CommandTemplate.Equals(
+            WorkerProfileCatalog.Default().GetRequired(profile.Name).CommandTemplate,
+            StringComparison.Ordinal);
+    }
+
+    private static string GetDispatchVariable(
+        IReadOnlyDictionary<string, string?> variables,
+        string name) =>
+        variables.TryGetValue(name, out var value) ? value ?? string.Empty : string.Empty;
 }
