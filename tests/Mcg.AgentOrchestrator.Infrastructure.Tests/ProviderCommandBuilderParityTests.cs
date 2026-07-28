@@ -3,11 +3,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ProviderCommandBuilderParityTests
 {
-    // Full tests-directory command-shape audit:
-    // built-in/default dispatch assertions are in WorkerProfileTests,
-    // WorkerDispatchTestsDispatchPreparation, WorkerDispatchTestsModelSelection,
-    // WorkerDispatchTestsModelSelectionEnvMutation, and WorkerDispatchTestsSandboxLowIntegrity.
-    // InquiryDispatcherTests covers the separate inquiry path; other matches use test-local commands.
+    // Full tests-directory Contains/DoesNotContain command-shape audit:
+    // built-in/default dispatch assertions are in WorkerProfileTests, WorkerDispatchTestsDispatchPreparation,
+    // WorkerDispatchTestsModelSelection, WorkerDispatchTestsModelSelectionEnvMutation, and
+    // WorkerDispatchTestsSandboxLowIntegrity. InquiryDispatcherTests covers the separate inquiry path.
+    // AdvanceLoopTests, ProgressiveReviewGlanceTests, ProgressiveReviewSteeringTests,
+    // RealWorkerProcessGuardTests, StatePersistenceAndPerformanceTests, WorkerDispatchJobAccountingTests,
+    // and Core RepositoryChangeClassifierTests use test-local commands/profiles rather than built-in dispatch.
     public static IEnumerable<object[]> BuiltInParityCases()
     {
         foreach (var providerKind in new[]
@@ -19,14 +21,14 @@ public sealed class ProviderCommandBuilderParityTests
                      ProviderKind.OllamaQwenCodeCli
                  })
         {
-            yield return [providerKind, false, false];
-            yield return [providerKind, true, false];
-            if (providerKind is ProviderKind.OpenAICodexCli
-                or ProviderKind.OpenAICodexSpark
-                or ProviderKind.OpenAICodexOssCli)
+            foreach (var isWriteCapable in new[] { false, true })
             {
-                yield return [providerKind, false, true];
-                yield return [providerKind, true, true];
+                foreach (var osSandbox in new[] { false, true })
+                {
+                    yield return [providerKind, isWriteCapable, osSandbox, "populated"];
+                    yield return [providerKind, isWriteCapable, osSandbox, "blank"];
+                    yield return [providerKind, isWriteCapable, osSandbox, "null"];
+                }
             }
         }
     }
@@ -36,24 +38,42 @@ public sealed class ProviderCommandBuilderParityTests
     public void ProviderCommandBuilderMatchesLegacyTemplateForEachBuiltInProvider(
         ProviderKind providerKind,
         bool isWriteCapable,
-        bool osSandbox)
+        bool osSandbox,
+        string valueState)
     {
         var provider = WorkerProviderCatalog.Default().Resolve(providerKind);
         var profile = WorkerProfileCatalog.Default().GetRequired(provider.ProfileName);
-        var modelAlias = providerKind == ProviderKind.OllamaQwenCodeCli
+        string? modelAlias = providerKind == ProviderKind.OllamaQwenCodeCli
             ? "qwen3:8b"
             : providerKind == ProviderKind.AnthropicClaudeCli
                 ? "claude-sonnet-4-6"
                 : "gpt-5.5";
-        var reasoningEffort = "high";
-        var permissionMode = isWriteCapable ? "bypassPermissions" : "plan";
-        var sandboxMode = osSandbox
+        string? reasoningEffort = "high";
+        string? permissionMode = isWriteCapable ? "bypassPermissions" : "plan";
+        string? sandboxMode = osSandbox
             ? "danger-full-access"
             : isWriteCapable ? "workspace-write" : "read-only";
-        var workingDirectory = Path.Combine(
+        string? workingDirectory = Path.Combine(
             Path.GetTempPath(),
             "provider command parity",
             "worker's repo");
+        if (valueState == "blank")
+        {
+            modelAlias = string.Empty;
+            reasoningEffort = string.Empty;
+            permissionMode = string.Empty;
+            sandboxMode = string.Empty;
+            workingDirectory = string.Empty;
+        }
+        else if (valueState == "null")
+        {
+            modelAlias = null;
+            reasoningEffort = null;
+            permissionMode = null;
+            sandboxMode = null;
+            workingDirectory = null;
+        }
+
         var promptRoot = Path.Combine(
             Path.GetTempPath(),
             $"provider-command-builder-{Guid.NewGuid():N}");
@@ -80,21 +100,16 @@ public sealed class ProviderCommandBuilderParityTests
                 promptRoot,
                 variables,
                 DateTimeOffset.Parse("2026-07-28T12:00:00Z"));
-            var typedTemplate = string.Join(
-                ' ',
-                ProviderCommandBuilder.Build(
-                    providerKind,
-                    modelAlias,
-                    reasoningEffort,
-                    permissionMode,
-                    sandboxMode,
-                    workingDirectory));
-            var typed = typedTemplate.Replace(
+            var routedTemplate = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
+                profile,
+                providerKind,
+                variables);
+            var routed = routedTemplate.Replace(
                 "{promptPath}",
                 Quote(legacy.PromptPath),
                 StringComparison.OrdinalIgnoreCase);
 
-            Assert.Equal(legacy.Command, typed);
+            Assert.Equal(legacy.Command, routed);
         }
         finally
         {
@@ -122,8 +137,8 @@ public sealed class ProviderCommandBuilderParityTests
             string.Join(' ', command));
     }
 
-    [Xunit.Fact(DisplayName = "ProviderCommandBuilder_omits_unset_codex_optional_arguments")]
-    public void ProviderCommandBuilderOmitsUnsetCodexOptionalArguments()
+    [Xunit.Fact(DisplayName = "ProviderCommandBuilder_preserves_blank_codex_template_literals")]
+    public void ProviderCommandBuilderPreservesBlankCodexTemplateLiterals()
     {
         var command = string.Join(
             ' ',
@@ -136,10 +151,8 @@ public sealed class ProviderCommandBuilderParityTests
                 workingDirectory: null));
 
         Assert.Equal(
-            "codex exec --skip-git-repo-check --model 'gpt-5.5' --sandbox 'read-only'",
+            "codex exec --skip-git-repo-check --model 'gpt-5.5' -c model_reasoning_effort= --sandbox 'read-only' --cd ",
             command);
-        Assert.DoesNotContain("model_reasoning_effort", command, StringComparison.Ordinal);
-        Assert.DoesNotContain("--cd", command, StringComparison.Ordinal);
     }
 
     private static string Quote(string value) => $"'{value.Replace("'", "''")}'";

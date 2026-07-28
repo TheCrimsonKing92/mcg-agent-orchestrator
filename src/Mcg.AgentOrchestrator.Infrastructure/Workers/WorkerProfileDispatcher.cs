@@ -198,17 +198,7 @@ public static class WorkerProfileDispatcher
         var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
         var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
-        var commandTemplate = ShouldUseTypedBuiltInCommand(profile, workerProviderKind)
-            ? string.Join(
-                ' ',
-                ProviderCommandBuilder.Build(
-                    workerProviderKind,
-                    GetDispatchVariable(dispatchVariables, "subscriptionModelName"),
-                    GetDispatchVariable(dispatchVariables, "subscriptionReasoningEffort"),
-                    GetDispatchVariable(dispatchVariables, "permissionMode"),
-                    GetDispatchVariable(dispatchVariables, "sandboxMode"),
-                    GetDispatchVariable(dispatchVariables, "workingDirectory")))
-            : profile.CommandTemplate;
+        var commandTemplate = BuildDispatchCommandTemplate(profile, workerProviderKind, dispatchVariables);
         var preparation = WorkerCommandTemplate.Prepare(
             budgetedBrief,
             profile.Name,
@@ -1847,6 +1837,58 @@ public static class WorkerProfileDispatcher
 
         return merged;
     }
+
+    internal static string BuildDispatchCommandTemplate(
+        WorkerProfile profile,
+        ProviderKind providerKind,
+        IReadOnlyDictionary<string, string?> dispatchVariables)
+    {
+        if (!ShouldUseTypedBuiltInCommand(profile, providerKind) ||
+            !HasRequiredBuiltInVariables(providerKind, dispatchVariables))
+        {
+            // Missing variables must remain as placeholders so the legacy preparation path
+            // reports them before it writes the prompt or mutates dispatch state.
+            return profile.CommandTemplate;
+        }
+
+        return string.Join(
+            ' ',
+            ProviderCommandBuilder.Build(
+                providerKind,
+                GetDispatchVariable(dispatchVariables, "subscriptionModelName"),
+                GetDispatchVariable(dispatchVariables, "subscriptionReasoningEffort"),
+                GetDispatchVariable(dispatchVariables, "permissionMode"),
+                GetDispatchVariable(dispatchVariables, "sandboxMode"),
+                GetDispatchVariable(dispatchVariables, "workingDirectory")));
+    }
+
+    private static bool HasRequiredBuiltInVariables(
+        ProviderKind providerKind,
+        IReadOnlyDictionary<string, string?> variables)
+    {
+        return providerKind switch
+        {
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark =>
+                HasKeys(
+                    variables,
+                    "subscriptionModelName",
+                    "subscriptionReasoningEffort",
+                    "sandboxMode",
+                    "workingDirectory"),
+            ProviderKind.OpenAICodexOssCli =>
+                HasKeys(variables, "subscriptionModelName", "workingDirectory"),
+            ProviderKind.AnthropicClaudeCli =>
+                HasKeys(variables, "subscriptionModelName", "permissionMode"),
+            ProviderKind.OllamaQwenCodeCli =>
+                HasKeys(variables, "subscriptionModelName", "workingDirectory"),
+            _ => false
+        };
+    }
+
+    private static bool HasKeys(
+        IReadOnlyDictionary<string, string?> variables,
+        params string[] names) =>
+        names.All(variables.ContainsKey);
 
     private static bool ShouldUseTypedBuiltInCommand(
         WorkerProfile profile,

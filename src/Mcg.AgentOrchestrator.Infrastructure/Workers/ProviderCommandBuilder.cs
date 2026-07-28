@@ -59,12 +59,8 @@ public static class ProviderCommandBuilder
             "--model",
             Expand(modelAlias)
         };
-        if (!string.IsNullOrWhiteSpace(reasoningEffort))
-        {
-            command.Add("-c");
-            command.Add($"model_reasoning_effort={Quote(reasoningEffort)}");
-        }
-
+        command.Add("-c");
+        command.Add($"model_reasoning_effort={Expand(reasoningEffort)}");
         command.Add("--sandbox");
         command.Add(Expand(resolvedSandboxMode));
         AddWorkingDirectory(command, workingDirectory);
@@ -125,15 +121,13 @@ public static class ProviderCommandBuilder
             "$env:OPENAI_API_KEY='ollama';",
             $"$env:OPENAI_MODEL={Expand(modelAlias)};"
         };
-        if (!string.IsNullOrWhiteSpace(workingDirectory))
-        {
-            command.Add("Set-Location");
-            command.Add($"{Quote(workingDirectory)};");
-        }
-
+        command.Add("Set-Location");
+        command.Add($"{Expand(workingDirectory)};");
         command.Add("qwen");
         command.Add("--yolo");
         command.Add("-p");
+        // Slice 1 still passes the typed command through WorkerCommandTemplate.Prepare,
+        // which owns prompt-path creation and expands this legacy delivery token.
         command.Add("(Get-Content");
         command.Add("-Raw");
         command.Add("{promptPath})");
@@ -142,16 +136,11 @@ public static class ProviderCommandBuilder
 
     private static void AddWorkingDirectory(List<string> command, string? workingDirectory)
     {
-        if (string.IsNullOrWhiteSpace(workingDirectory))
-        {
-            return;
-        }
-
         command.Add("--cd");
-        command.Add(Quote(workingDirectory));
+        command.Add(Expand(workingDirectory));
     }
 
-    private static string Expand(string value) =>
+    private static string Expand(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : Quote(value);
 
     private static string Quote(string value) => $"'{value.Replace("'", "''")}'";
