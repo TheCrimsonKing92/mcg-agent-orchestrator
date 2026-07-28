@@ -46,7 +46,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.Contains("--sandbox {sandboxMode}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.Contains("--cd {workingDirectory}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("claude -p --model {subscriptionModelName} --permission-mode {permissionMode}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.DoesNotContain("{promptPath}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 
         File.Delete(workerPath);
@@ -64,7 +64,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.Contains("--sandbox {sandboxMode}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.Contains("--cd {workingDirectory}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("claude --model {subscriptionModelName} --permission-mode {permissionMode}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
+        Assert.Contains("claude -p --model {subscriptionModelName} --permission-mode {permissionMode}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
         Assert.DoesNotContain("{promptPath}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     }
     [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_uses_local_agent_fallback_when_supplied")]

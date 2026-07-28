@@ -2291,8 +2291,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         sandboxOptions: sandbox);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains("claude --model 'claude-sonnet' --permission-mode 'bypassPermissions'", task.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.DoesNotContain(" -p", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("claude -p --model 'claude-sonnet' --permission-mode 'bypassPermissions'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains(" -p ", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("Get-Content -Raw", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
