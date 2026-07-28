@@ -56,6 +56,8 @@ internal static class SdlcRolePromptRequirements
                 "- Tie each pass/fail conclusion to concrete evidence: command output, changed file behavior, manual smoke steps, or exact reproduction data.",
                 "- Try to falsify the implementation with at least one negative or edge case when practical, and state what failure would have looked like.",
                 "- If a command cannot run, include the exact failure text and the environment condition.",
+                "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report it as inconclusive, raise no product/code blocker from it, and never restate a prior round's conclusion as this round's evidence.",
+                "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
                 "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
                 "- You may build and run tests but must not modify source files."
             ],
@@ -167,6 +169,8 @@ internal static class SdlcRolePromptRequirements
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
+                "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report it inconclusive, raise no code blocker, and do not reuse a prior round's conclusion as evidence.",
+                "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
                 "- You may build and run tests but must not modify source files."
             ],
             AgentRole.Reviewer =>

@@ -10,6 +10,7 @@ Use this skill when building, testing, or diagnosing this repository on Windows.
 ## Command Discipline
 
 - Prefer narrow `dotnet test` filters over full-suite runs until a change is ready.
+- Each shell command runs under a bounded wall-time budget: keep every build/test command comfortably under ~2 minutes. Build once as a separate command, then run tests with `-NoBuild` and a narrow `--filter` in slices; never bundle a build and a broad or full-suite run into one command (that combination has been killed at ~124s with no results). A command that is killed or produces no TRX is inconclusive — an environment/plumbing outcome — so re-run a narrower slice; do not report it as a test failure.
 - Quote filters containing `|`, for example `--filter 'AgentCatalog|WorkerDispatch'`.
 - Use minimal verbosity first; expand output only for failing tests.
 - Run commands from the relevant worktree, not the shared root, when validating a goal branch.
