@@ -122,15 +122,16 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             try
             {
                 var onSlotWait = (DotnetBuildStableSlotWait wait) =>
-                    Console.WriteLine($"waiting for slot-{wait.SlotIndex} lease held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
+                    Console.WriteLine($"waiting for build-{wait.SlotIndex} permit held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
                 stableSlotLease = context.StableSlotSelector is { } stableSlotSelector
                     ? stableSlotSelector(context.StableSlotAcquisitionTimeout, onSlotWait)
-                    : DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                    : SelectGoalBuildPermit(
+                        goal.Id,
                         context.StableSlotAcquisitionTimeout,
-                        onSlotWait,
-                        slotCount: AcceptanceGateEngineSettings.Load(worktreePath).SlotCount);
-                stableSlotIndex = ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
-                    ?? throw new IOException($"Stable slot lease did not identify a slot: {stableSlotLease.Environment.SlotOwnerToken}");
+                        onSlotWait);
+                stableSlotIndex = stableSlotLease.Environment.BuildPermitIndex ??
+                    ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
+                    ?? throw new IOException($"Build permit did not identify its pool index: {stableSlotLease.Environment.SlotOwnerToken}");
             }
             catch (DotnetBuildSlotsBusyException ex)
             {
@@ -433,9 +434,27 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     return true;
 }
 
-private static DotnetBuildEnvironmentLease SelectFirstAvailableStableSlot(TimeSpan? timeout, Action<DotnetBuildStableSlotWait>? onWait)
+private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(
+    GoalId goalId,
+    TimeSpan? timeout,
+    Action<DotnetBuildStableSlotWait>? onWait)
 {
-    return DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(timeout, onWait);
+    var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance");
+    if (environment.BuildPermitIndex is { } permitIndex &&
+        !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex))
+    {
+        onWait?.Invoke(new DotnetBuildStableSlotWait(
+            permitIndex,
+            DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(permitIndex)));
+    }
+
+    return DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, timeout) switch
+    {
+        DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
+        DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
+        DotnetBuildLeaseAcquisition.BuildLockBlocked blocked => throw new BuildLockBlockedException(blocked.Attribution),
+        _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
+    };
 }
 
 private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
@@ -446,8 +465,8 @@ private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> b
 
 private static int? ParseStableSlotIndex(string slotOwnerToken)
 {
-    return slotOwnerToken.StartsWith("slot-", StringComparison.OrdinalIgnoreCase) &&
-        int.TryParse(slotOwnerToken[5..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
+    return slotOwnerToken.StartsWith("build-", StringComparison.OrdinalIgnoreCase) &&
+        int.TryParse(slotOwnerToken[6..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
             ? slotIndex
             : null;
 }

@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -436,7 +437,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var root = CreateManifestWorkspace("""
             {
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true
               },
@@ -726,31 +726,182 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
             using var cts = new CancellationTokenSource();
             var run = verifier.RunAsync(root, goalId, stableSlotIndex: 0, cancellationToken: cts.Token);
-            var heartbeatPath = GateHeartbeatArtifacts.GetStableSlotPath(0);
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (!File.Exists(heartbeatPath) && DateTimeOffset.UtcNow < deadline)
+            while (!progress.Any(item => item.CurrentTarget == "hung gate receipt") &&
+                   DateTimeOffset.UtcNow < deadline)
             {
                 await Task.Delay(100);
             }
 
+            var heartbeatPath = Assert.Single(
+                progress
+                    .Where(item => item.CurrentTarget == "hung gate receipt")
+                    .Select(item => item.HeartbeatPath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase));
             cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
 
-            var status = GateHeartbeatArtifacts.ReadStableSlot(0);
-            Assert.True(status.IsAvailable, status.UnavailableReason);
-            Assert.NotNull(status.Snapshot);
-            Assert.Equal("feedfacefeedfacefeedfacefeedface", status.Snapshot!.GoalId);
-            Assert.Equal("verification-check", status.Snapshot.Phase);
-            Assert.Equal("hung gate receipt", status.Snapshot.CurrentTarget);
-            Assert.True(status.Snapshot.ChildPid.HasValue || status.Snapshot.State is "completed" or "timed-out");
-            Assert.True(status.IdleDuration >= TimeSpan.Zero);
+            Assert.True(File.Exists(heartbeatPath), $"Missing attempt heartbeat '{heartbeatPath}'.");
+            var snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(snapshot);
+            Assert.Equal("feedfacefeedfacefeedfacefeedface", snapshot!.GoalId);
+            Assert.Equal("verification-check", snapshot.Phase);
+            Assert.Equal("hung gate receipt", snapshot.CurrentTarget);
+            Assert.True(snapshot.ChildPid.HasValue || snapshot.State is "completed" or "timed-out");
+            Assert.True(DateTimeOffset.UtcNow - snapshot.LastProgressAt >= TimeSpan.Zero);
             Assert.Contains(progress, item => item.GoalId == goalId.Value && item.CurrentTarget == "hung gate receipt");
         }
         finally
         {
             GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
             GoalAcceptanceVerifier.ProgressInterval = previousProgress;
+            try { DeleteDirectoryWithRetry(root); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_mirrors_are_run_scoped_and_terminal_cleanup_preserves_sibling")]
+    public void GoalAcceptanceVerifierGateHeartbeatMirrorsAreRunScopedAndTerminalCleanupPreservesSibling()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-gate-status-mirror-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var firstGoalId = new GoalId("abcdef01abcdef01abcdef01abcdef01");
+        var secondGoalId = new GoalId("12345678123456781234567812345678");
+        const int buildSlot = 0;
+        var environment = new DotnetBuildEnvironment(
+            "goal-mirror",
+            root,
+            Path.Combine(root, "artifacts"),
+            Path.Combine(root, "build-slots", $"build-{buildSlot}.lock"),
+            [],
+            "goal-mirror",
+            BuildPermitIndex: buildSlot);
+        var stdoutPath = Path.Combine(root, "run.out");
+        var stderrPath = Path.Combine(root, "run.err");
+        var childPid = Environment.ProcessId;
+
+        try
+        {
+            TryDeleteStableSlotHeartbeat(buildSlot);
+
+            // The attempt-results prefix is exactly what made gate-status structurally blind: it forces the
+            // PRIMARY heartbeat onto an attempt-scoped path that GateHeartbeatArtifacts.ReadStableSlots never
+            // reads.
+            string firstPrimaryPath;
+            string? firstMirrorPath;
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-a")))
+            {
+                (firstPrimaryPath, firstMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    firstGoalId,
+                    environment,
+                    childPid,
+                    stdoutPath,
+                    stderrPath);
+            }
+
+            var expectedStableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(buildSlot);
+
+            // Blindness precondition: with the attempt prefix active the primary heartbeat is attempt-scoped
+            // and is NOT the stable slot path gate-status reads.
+            Assert.StartsWith(
+                Path.Combine(root, "attempt-owner"),
+                firstPrimaryPath,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.NotEqual(expectedStableSlotPath, firstPrimaryPath);
+
+            Assert.Equal(
+                GateHeartbeatArtifacts.GetRunScopedStableSlotPath(buildSlot, firstPrimaryPath),
+                firstMirrorPath);
+            Assert.True(
+                File.Exists(firstMirrorPath),
+                $"Run-scoped heartbeat mirror missing: {firstMirrorPath}");
+
+            string secondPrimaryPath;
+            string? secondMirrorPath;
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-b")))
+            {
+                (secondPrimaryPath, secondMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    secondGoalId,
+                    environment,
+                    childPid + 1,
+                    stdoutPath,
+                    stderrPath);
+            }
+            Assert.NotEqual(firstMirrorPath, secondMirrorPath);
+
+            var runningSlots = GateHeartbeatArtifacts.ReadStableSlots()
+                .Where(status => status.SlotIndex == buildSlot)
+                .ToArray();
+            Assert.Equal(2, runningSlots.Length);
+            Assert.Contains(runningSlots, status =>
+                status.Snapshot?.GoalId == firstGoalId.Value &&
+                status.Snapshot.State == "running");
+            Assert.Contains(runningSlots, status =>
+                status.Snapshot?.GoalId == secondGoalId.Value &&
+                status.Snapshot.State == "running");
+
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-a")))
+            {
+                GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    firstGoalId,
+                    environment,
+                    childPid,
+                    stdoutPath,
+                    stderrPath,
+                    finalState: "completed");
+            }
+
+            Assert.False(File.Exists(firstMirrorPath));
+            var remainingSlot = GateHeartbeatArtifacts.ReadStableSlots()
+                .Single(status => status.SlotIndex == buildSlot);
+            Assert.Equal(secondMirrorPath, remainingSlot.Path);
+            Assert.Equal("running", remainingSlot.Snapshot?.State);
+            Assert.Equal(secondGoalId.Value, remainingSlot.Snapshot?.GoalId);
+
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-b")))
+            {
+                GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    secondGoalId,
+                    environment,
+                    childPid,
+                    stdoutPath,
+                    stderrPath,
+                    finalState: "completed");
+            }
+
+            string? orphanMirrorPath;
+            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                Path.Combine(root, "attempt-owner-orphan")))
+            {
+                (_, orphanMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                    "infrastructure lane",
+                    secondGoalId,
+                    environment,
+                    int.MaxValue,
+                    stdoutPath,
+                    stderrPath);
+            }
+
+            Assert.NotNull(orphanMirrorPath);
+            Assert.True(File.Exists(orphanMirrorPath));
+            var afterOrphanPrune = GateHeartbeatArtifacts.ReadStableSlots()
+                .Single(status => status.SlotIndex == buildSlot);
+            Assert.Equal("missing", afterOrphanPrune.UnavailableReason);
+            Assert.False(File.Exists(orphanMirrorPath));
+        }
+        finally
+        {
+            TryDeleteStableSlotHeartbeat(buildSlot);
             try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }
@@ -865,7 +1016,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
             Assert.Contains("--report-trx", mtpCall);
             Assert.Contains("--filter-class", mtpCall);
-            Assert.Equal("run-slot-0", result.Checks.Single().LeaseId);
+            Assert.Equal("goal-abcdef12", result.Checks.Single().LeaseId);
         }
         finally
         {
@@ -910,7 +1061,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 stableSlotIndex: 0);
 
             Assert.True(result.Passed);
-            var artifactsPath = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0).ArtifactsPath;
+            var artifactsPath = DotnetBuildEnvironmentManager.GoalArtifactsPath(
+                new GoalId("abcdef12abcdef12abcdef12abcdef12"));
             Assert.Contains(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build");
             Assert.Contains(calls, call =>
                 call.Length >= 3 &&
@@ -1509,6 +1661,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var calls = new List<string[]>();
         var buildAttempts = 0;
         var sleeper = StartSleepProcess();
+        var goalId = new GoalId("99998888777766665555444433332222");
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -1530,8 +1683,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     if (buildAttempts == 1)
                     {
                         var artifactsPath = GetArtifactsPath(args);
+                        var heartbeatEnvironment =
+                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                        var heartbeatPath =
+                            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                                "core tests",
+                                heartbeatEnvironment,
+                                stableSlotIndex: 0);
                         GateHeartbeatArtifacts.Write(
-                            Path.Combine(artifactsPath, GateHeartbeatArtifacts.FileName),
+                            heartbeatPath,
                             new GateHeartbeatSnapshot(
                                 "99998888777766665555444433332222",
                                 "verification-check",
@@ -1561,7 +1721,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             AcceptanceVerificationResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = verifier.RunAsync(root, new GoalId("99998888777766665555444433332222"), stableSlotIndex: 0)
+                result = verifier.RunAsync(root, goalId, stableSlotIndex: 0)
                     .GetAwaiter()
                     .GetResult());
 
@@ -1602,6 +1762,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             }
             """);
         var buildAttempts = 0;
+        var goalId = new GoalId("aaaabbbbccccddddeeeeffff00001111");
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.err");
         File.WriteAllText(stdoutPath, "fast child stdout");
@@ -1627,8 +1788,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     {
                         var artifactsPath = GetArtifactsPath(args);
                         var lockedPath = Path.Combine(artifactsPath, "bin", "Core.dll");
+                        var heartbeatEnvironment =
+                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                        var heartbeatPath =
+                            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                                "core tests",
+                                heartbeatEnvironment,
+                                stableSlotIndex: 0);
                         GateHeartbeatArtifacts.Write(
-                            Path.Combine(artifactsPath, GateHeartbeatArtifacts.FileName),
+                            heartbeatPath,
                             new GateHeartbeatSnapshot(
                                 "aaaabbbbccccddddeeeeffff00001111",
                                 "verification-check",
@@ -1665,7 +1833,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             AcceptanceVerificationResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = verifier.RunAsync(root, new GoalId("aaaabbbbccccddddeeeeffff00001111"), stableSlotIndex: 0)
+                result = verifier.RunAsync(root, goalId, stableSlotIndex: 0)
                     .GetAwaiter()
                     .GetResult());
 
@@ -2012,7 +2180,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     {
                       "version": 1,
                       "engine": {
-                        "slotCount": 4,
                         "maxConcurrentShards": {{maxConcurrentShards}},
                         "infrastructureTestLanes": [
                           { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },
@@ -2140,26 +2307,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains("\"maxConcurrentShards\"", trustedManifest, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_worker_count_respects_current_free_slots")]
-    public void GoalAcceptanceVerifierShardWorkerCountRespectsCurrentFreeSlots()
-    {
-        GoalAcceptanceVerifier.IsStableSlotAvailableForShardTests = _ => false;
-        try
-        {
-            var workerCount = GoalAcceptanceVerifier.ResolveAvailableShardWorkerCount(
-                primarySlotIndex: 0,
-                shardConcurrencyBudget: 3,
-                shardCount: 8);
-
-            Assert.Equal(1, workerCount);
-        }
-        finally
-        {
-            GoalAcceptanceVerifier.IsStableSlotAvailableForShardTests = null;
-        }
-    }
-
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_real_process_shards_keep_receipts_in_attempt_artifacts_after_releasing_slots")]
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_real_process_shards_keep_receipts_in_attempt_artifacts_after_releasing_build_lease")]
     public async Task GoalAcceptanceVerifierRealProcessShardsKeepReceiptsInAttemptArtifactsAfterReleasingSlots()
     {
         if (!OperatingSystem.IsWindows())
@@ -2187,6 +2335,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             ["MCG_SHARD_SMOKE_BETA_SIGNAL"] = betaSignalPath
         };
         DotnetBuildEnvironmentLease? primaryLease = null;
+        DotnetBuildEnvironment? primaryEnvironment = null;
+        var primaryBuildPermit = -1;
         try
         {
             Environment.SetEnvironmentVariable(
@@ -2198,6 +2348,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 var isTest = IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests");
                 if (isTest)
                 {
+                    Assert.True(
+                        DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(primaryBuildPermit),
+                        "MTP execution must not retain the build-pool lease.");
                     executablePaths.Add(args[0]);
                     var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
                     Assert.InRange(resultsDirectoryIndex, 0, args.Length - 2);
@@ -2221,7 +2374,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             primaryLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
+            primaryEnvironment = primaryLease.Environment;
             var primarySlot = StableSlotIndex(primaryLease.Environment.ArtifactsPath);
+            primaryBuildPermit = primarySlot;
             var run = verifier.RunAsync(
                 root,
                 stableSlotIndex: primarySlot,
@@ -2262,7 +2417,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     path,
                     StringComparison.OrdinalIgnoreCase));
             Assert.All(
-                Enumerable.Range(0, AcceptanceGateEngineSettings.Load(root).SlotCount)
+                Enumerable.Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount)
                     .Where(slot => slot != primarySlot),
                 slot => Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(slot)));
 
@@ -2276,6 +2431,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousAttemptPrefix);
             primaryLease?.Dispose();
+            if (primaryEnvironment is not null)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(primaryEnvironment);
+            }
+
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             DeleteDirectoryWithRetry(root);
         }
@@ -2316,6 +2476,231 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_use_distinct_attempt_heartbeat_files")]
+    public void GoalAcceptanceVerifierConcurrentShardsUseDistinctAttemptHeartbeatFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-shard-heartbeats-{Guid.NewGuid():N}");
+        var environment = new DotnetBuildEnvironment(
+            "goal-heartbeat",
+            root,
+            Path.Combine(root, "build-artifacts"),
+            Path.Combine(root, "build-slots", "build-0.lock"),
+            [],
+            "goal-heartbeat");
+        using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+            Path.Combine(root, "attempt-owner"));
+
+        var first = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane alpha",
+            environment,
+            stableSlotIndex: 0);
+        var second = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane beta",
+            environment,
+            stableSlotIndex: 0);
+        var punctuationFirst = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane alpha+beta",
+            environment,
+            stableSlotIndex: 0);
+        var punctuationSecond = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            "infrastructure lane alpha beta",
+            environment,
+            stableSlotIndex: 0);
+
+        Assert.NotEqual(first, second);
+        Assert.NotEqual(punctuationFirst, punctuationSecond);
+        Assert.StartsWith(root + Path.DirectorySeparatorChar, first, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(root + Path.DirectorySeparatorChar, second, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(environment.ArtifactsPath, first, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(environment.ArtifactsPath, second, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_owner_results_fallback_never_roots_in_goal_worktree")]
+    public void GoalAcceptanceVerifierOwnerResultsFallbackNeverRootsInGoalWorktree()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"mcg-owner-root-{Guid.NewGuid():N}");
+        var worktreePath = Path.Combine(repositoryRoot, ".orchestrator-worktrees", "abc12345");
+
+        var resolved = GoalAcceptanceVerifier.ResolveOwnerResultsRepositoryRoot(worktreePath);
+
+        Assert.Equal(repositoryRoot, resolved, ignoreCase: true);
+        Assert.False(resolved.StartsWith(worktreePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_gate_evidence_and_operator_owners_do_not_cross_contaminate")]
+    public async Task GoalAcceptanceVerifierConcurrentGateEvidenceAndOperatorOwnersDoNotCrossContaminate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-owner-chaos-{Guid.NewGuid():N}");
+        var attemptA = Path.Combine(root, "attempt-a");
+        var attemptB = Path.Combine(root, "attempt-b");
+        var operatorDirectory = Path.Combine(root, "operator");
+        var executionLockPath = Path.Combine(root, "build-slots", "build-0.lock");
+        var gateBuild = new DotnetBuildEnvironment(
+            "gate-chaos",
+            Path.Combine(root, "gate-build"),
+            Path.Combine(root, "gate-build", "artifacts"),
+            executionLockPath,
+            [],
+            "gate-chaos",
+            BuildPermitIndex: 0);
+        var operatorBuild = new DotnetBuildEnvironment(
+            "operator-chaos",
+            Path.Combine(root, "operator-build"),
+            Path.Combine(root, "operator-build", "artifacts"),
+            executionLockPath,
+            [],
+            "operator-chaos",
+            BuildPermitIndex: 0);
+        var environment = new DotnetBuildEnvironment(
+            "goal-chaos",
+            root,
+            Path.Combine(root, "build-artifacts"),
+            Path.Combine(root, "build-slots", "build-0.lock"),
+            [],
+            "goal-chaos");
+        using var ready = new CountdownEvent(2);
+        using var release = new ManualResetEventSlim(false);
+        var faults = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var custodyRefusals = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var activeBuildOwners = 0;
+        var maximumConcurrentBuildOwners = 0;
+        try
+        {
+            static string Trx(string id, string testName) =>
+                $"<TestRun><TestDefinitions><UnitTest id=\"{id}\" name=\"{testName}\"><TestMethod className=\"ChaosTests\" name=\"{testName[(testName.LastIndexOf('.') + 1)..]}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"{id}\" testName=\"{testName}\" outcome=\"Passed\" /></Results></TestRun>";
+
+            static void RecordMaximum(ref int location, int value)
+            {
+                var observed = Volatile.Read(ref location);
+                while (value > observed)
+                {
+                    var prior = Interlocked.CompareExchange(ref location, value, observed);
+                    if (prior == observed)
+                    {
+                        return;
+                    }
+
+                    observed = prior;
+                }
+            }
+
+            Task<(string Path, long Length, string Hash, TestCoverageInvariantResult Coverage)> RunOwnerAsync(
+                string directory,
+                string testName,
+                bool ownsBuildPermit) => Task.Run(() =>
+            {
+                DotnetBuildEnvironmentLease? lease = null;
+                try
+                {
+                    if (ownsBuildPermit)
+                    {
+                        lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                                gateBuild,
+                                TimeSpan.Zero)).Lease;
+                        var concurrent = Interlocked.Increment(ref activeBuildOwners);
+                        RecordMaximum(ref maximumConcurrentBuildOwners, concurrent);
+                    }
+
+                    using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                        Path.Combine(directory, "owner"));
+                    var resolved = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
+                    Directory.CreateDirectory(resolved);
+                    var receipt = Path.Combine(resolved, "lane.trx");
+                    File.WriteAllText(receipt, Trx(Guid.NewGuid().ToString("N"), testName));
+                    var length = new FileInfo(receipt).Length;
+                    var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(receipt)));
+                    ready.Signal();
+                    release.Wait();
+
+                    if (!receipt.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    {
+                        custodyRefusals.Enqueue($"receipt escaped owner directory: {receipt}");
+                    }
+
+                    var coverage = TestCoverageInvariant.Evaluate(
+                        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { testName },
+                        [new TestPartitionCoverage(
+                            testName,
+                            Completed: true,
+                            TestResultPaths: [receipt],
+                            AttemptId: Path.GetFileName(directory))],
+                        currentAttemptId: Path.GetFileName(directory));
+                    return (receipt, length, hash, coverage);
+                }
+                catch (Exception ex)
+                {
+                    faults.Enqueue(ex.ToString());
+                    throw;
+                }
+                finally
+                {
+                    if (ownsBuildPermit)
+                    {
+                        Interlocked.Decrement(ref activeBuildOwners);
+                    }
+
+                    lease?.Dispose();
+                }
+            });
+
+            var ownerA = RunOwnerAsync(attemptA, "ChaosTests.AttemptA", ownsBuildPermit: true);
+            var ownerB = RunOwnerAsync(attemptB, "ChaosTests.AttemptB", ownsBuildPermit: false);
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "Concurrent owners did not reach the event gate.");
+            var operatorBlocked = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(operatorBuild, TimeSpan.Zero));
+            Assert.Contains(
+                operatorBlocked.BusySlots,
+                slot => slot.SlotIndex == gateBuild.BuildPermitIndex);
+            Directory.CreateDirectory(operatorDirectory);
+            var operatorReceipt = Path.Combine(operatorDirectory, "operator.trx");
+            File.WriteAllText(operatorReceipt, Trx("operator", "ChaosTests.Operator"));
+            release.Set();
+
+            var receipts = await Task.WhenAll(ownerA, ownerB);
+            using (var operatorLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    operatorBuild,
+                    TimeSpan.FromSeconds(2))).Lease)
+            {
+                var concurrent = Interlocked.Increment(ref activeBuildOwners);
+                RecordMaximum(ref maximumConcurrentBuildOwners, concurrent);
+                Interlocked.Decrement(ref activeBuildOwners);
+            }
+
+            Assert.StartsWith(attemptA + Path.DirectorySeparatorChar, receipts[0].Path, StringComparison.OrdinalIgnoreCase);
+            Assert.StartsWith(attemptB + Path.DirectorySeparatorChar, receipts[1].Path, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(receipts, receipt => receipt.Path.StartsWith(operatorDirectory, StringComparison.OrdinalIgnoreCase));
+            Assert.All(receipts, receipt =>
+            {
+                Assert.True(File.Exists(receipt.Path));
+                Assert.Equal(receipt.Length, new FileInfo(receipt.Path).Length);
+                Assert.Equal(
+                    receipt.Hash,
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(receipt.Path))));
+                Assert.True(receipt.Coverage.Passed, receipt.Coverage.Summary);
+                Assert.Single(receipt.Coverage.ExecutedTests);
+            });
+            Assert.DoesNotContain(
+                "ChaosTests.AttemptB",
+                TestCoverageInvariant.ReadRecordedTests([receipts[0].Path]));
+            Assert.DoesNotContain(
+                "ChaosTests.AttemptA",
+                TestCoverageInvariant.ReadRecordedTests([receipts[1].Path]));
+            Assert.True(File.Exists(operatorReceipt));
+            Assert.False(operatorReceipt.StartsWith(attemptA, StringComparison.OrdinalIgnoreCase));
+            Assert.False(operatorReceipt.StartsWith(attemptB, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(1, maximumConcurrentBuildOwners);
+            Assert.Empty(faults);
+            Assert.Empty(custodyRefusals);
+        }
+        finally
+        {
+            release.Set();
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -3224,7 +3609,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         AssertIsolatedTestCommand(calls[3]);
         Assert.Equal(GetArtifactsPath(calls[1]), GetArtifactsPath(calls[3]));
         Assert.True(result.ArtifactsPath is not null);
-        Assert.Contains(Path.Combine("slots", "slot-"), result.ArtifactsPath!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.Combine("goals", "abcd1234", "artifacts"), result.ArtifactsPath!, StringComparison.OrdinalIgnoreCase);
         var check = result.Checks!.Single(item => item.Name == "dotnet test");
         Assert.Equal("goal-acceptance-verifier", check.BrokerName);
         Assert.Equal("goal-abcd1234", check.LeaseId);
@@ -4397,7 +4782,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
               "version": 1,
               "engine": {
-                "slotCount": 4,
                 "maxConcurrentShards": {{maxConcurrentShards}},
                 "infrastructureTestLanes": [
                   { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },
@@ -4425,7 +4809,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
               "version": 1,
               "engine": {
-                "slotCount": 4,
                 "maxConcurrentShards": 2,
                 "infrastructureTestLanes": [
                   {
@@ -4608,12 +4991,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     {
         var match = System.Text.RegularExpressions.Regex.Match(
             path,
-            @"slot-(?<slot>\d+)",
+            @"(?:slot-|build-)(?<slot>\d+)",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase |
                 System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         return match.Success
             ? int.Parse(match.Groups["slot"].Value, System.Globalization.CultureInfo.InvariantCulture)
-            : throw new InvalidOperationException($"Expected stable slot path, got '{path}'.");
+            : throw new InvalidOperationException($"Expected build-pool path, got '{path}'.");
     }
 
     private static void ResetPartitionVerdictKeyHooks()
@@ -4763,7 +5146,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static void TryDeleteStableSlotHeartbeat(int slotIndex)
     {
-        try { File.Delete(GateHeartbeatArtifacts.GetStableSlotPath(slotIndex)); } catch { }
+        var stablePath = GateHeartbeatArtifacts.GetStableSlotPath(slotIndex);
+        try { File.Delete(stablePath); } catch { }
+        try
+        {
+            var directory = Path.GetDirectoryName(stablePath) ?? ".";
+            var pattern =
+                $"{Path.GetFileNameWithoutExtension(stablePath)}-*{Path.GetExtension(stablePath)}";
+            foreach (var path in Directory.EnumerateFiles(directory, pattern))
+            {
+                try { File.Delete(path); } catch { }
+            }
+        }
+        catch { }
     }
 
     private static System.Diagnostics.Process StartSleepProcess()

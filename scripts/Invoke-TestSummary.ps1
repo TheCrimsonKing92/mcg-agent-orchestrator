@@ -4,10 +4,9 @@
 
 .DESCRIPTION
   Avoids the huge UTF-16 console dumps that are painful to grep. Writes one TRX
-  (XML) file per test project under .test-results, then prints per-project
+  (XML) file per test project under an invocation-owned .test-results directory, then prints per-project
   pass/fail counts plus the name and first error line of every failing test.
-  The dotnet test process is run through the orchestrator's stable slot lease so
-  testhost.exe lands under the pre-authorized firewall paths.
+  Successful run directories are removed; failed runs are retained for diagnosis.
 
   Exit code is 0 only when every test project reports zero failures.
 
@@ -25,7 +24,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$results = Join-Path $repoRoot ".test-results"
+$resultsRoot = Join-Path $repoRoot ".test-results"
+$results = Join-Path $resultsRoot "run-$PID-$([Guid]::NewGuid().ToString('N'))"
 $orchestrator = Join-Path $repoRoot "mcg-orchestrator.cmd"
 $appDll = Join-Path $repoRoot "src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 
@@ -33,7 +33,6 @@ $appDll = Join-Path $repoRoot "src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/M
 dotnet build-server shutdown | Out-Null
 
 New-Item -ItemType Directory -Force $results | Out-Null
-Get-ChildItem $results -Filter *.trx -ErrorAction SilentlyContinue | Remove-Item -Force
 
 # Let the TRX logger auto-name one file per test project (no fixed LogFileName,
 # which would collide when the target is the whole solution).
@@ -44,8 +43,41 @@ if ($Filter)  { $testArgs += @('--filter', $Filter) }
 
 $hasFilterMetacharacters = $Filter.IndexOfAny([char[]]'&|<>()') -ge 0
 $resolvedTarget = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $Target))
-$usesMtp = (Test-Path -LiteralPath $resolvedTarget -PathType Leaf) -and
-    (Select-String -LiteralPath $resolvedTarget -SimpleMatch '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>' -Quiet)
+$mtpTargets = if ([System.IO.Path]::GetExtension($resolvedTarget).Equals(".sln", [System.StringComparison]::OrdinalIgnoreCase)) {
+    $solutionDirectory = Split-Path -Parent $resolvedTarget
+    $listedProjects = @(& dotnet sln $resolvedTarget list)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to enumerate projects from solution target: $resolvedTarget"
+    }
+
+    $testProjects = @($listedProjects |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -match '\.[A-Za-z]+proj$' } |
+        ForEach-Object { [System.IO.Path]::GetFullPath((Join-Path $solutionDirectory $_)) } |
+        Where-Object {
+            (Select-String -LiteralPath $_ -SimpleMatch '<IsTestProject>true</IsTestProject>' -Quiet) -or
+            (Select-String -LiteralPath $_ -SimpleMatch '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>' -Quiet)
+        })
+    if ($testProjects.Count -eq 0) {
+        throw "Solution target contains no discoverable test projects: $resolvedTarget"
+    }
+
+    Write-Host "Discovered $($testProjects.Count) test project(s) from $resolvedTarget."
+    $testProjects
+}
+else {
+    @($Target)
+}
+$usesMtp = @($mtpTargets | Where-Object {
+    $candidate = if ([System.IO.Path]::IsPathRooted($_)) {
+        [System.IO.Path]::GetFullPath($_)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $repoRoot $_))
+    }
+    (Test-Path -LiteralPath $candidate -PathType Leaf) -and
+        (Select-String -LiteralPath $candidate -SimpleMatch '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>' -Quiet)
+}).Count -eq $mtpTargets.Count
 $requiresExactArguments = $usesMtp -or $hasFilterMetacharacters
 if ($requiresExactArguments) {
     & $orchestrator gate-status | Out-Null
@@ -53,37 +85,41 @@ if ($requiresExactArguments) {
         throw "Unable to prepare orchestrator app DLL for stable-slot-dotnet: $appDll"
     }
 
-    $stableArguments = if ($usesMtp) {
-        $arguments = @('mtp-test', $Target, '--results-directory', $results)
-        if ($NoBuild) { $arguments += '--no-build' }
-        if ($Filter) { $arguments += @('--filter', $Filter) }
-        $arguments
-    }
-    else {
-        @('test') + $testArgs
-    }
+    $testExit = 0
+    $executionTargets = if ($usesMtp) { $mtpTargets } else { @($Target) }
+    foreach ($mtpTarget in $executionTargets) {
+        $stableArguments = if ($usesMtp) {
+            $arguments = @('mtp-test', $mtpTarget, '--results-directory', $results)
+            if ($NoBuild) { $arguments += '--no-build' }
+            if ($Filter) { $arguments += @('--filter', $Filter) }
+            $arguments
+        }
+        else {
+            @('test') + $testArgs
+        }
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = "dotnet"
-    $startInfo.WorkingDirectory = $repoRoot
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = $repoRoot
-    foreach ($argument in @($appDll, 'stable-slot-dotnet') + $stableArguments) {
-        $startInfo.ArgumentList.Add($argument)
-    }
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = "dotnet"
+        $startInfo.WorkingDirectory = $repoRoot
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = $repoRoot
+        foreach ($argument in @($appDll, 'stable-slot-dotnet') + $stableArguments) {
+            $startInfo.ArgumentList.Add($argument)
+        }
 
-    $process = [System.Diagnostics.Process]::Start($startInfo)
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    @($stdout, $stderr) | Set-Content -LiteralPath $rawLog
-    $testExit = $process.ExitCode
-    $process.Dispose()
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        @($stdout, $stderr) | Add-Content -LiteralPath $rawLog
+        if ($process.ExitCode -ne 0) { $testExit = $process.ExitCode }
+        $process.Dispose()
+    }
 }
 else {
     & $orchestrator stable-slot-dotnet test @testArgs *>&1 | Tee-Object -FilePath $rawLog | Out-Null
@@ -125,4 +161,5 @@ if ($anyFailed -or $testExit -ne 0) {
     }
     exit 1
 }
+Remove-Item -LiteralPath $results -Recurse -Force -ErrorAction SilentlyContinue
 "ALL GREEN"; exit 0

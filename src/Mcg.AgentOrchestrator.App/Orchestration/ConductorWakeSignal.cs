@@ -42,7 +42,14 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
             _watcher.Error += (_, args) =>
             {
                 Interlocked.Exchange(ref _watcherFailed, 1);
-                _warn($"[conduct --loop --watch] Warning: dispatch exit-file watcher failed; continuing with timed polling. {args.GetException().Message}");
+                try
+                {
+                    _warn($"[conduct --loop --watch] Warning: dispatch exit-file watcher failed; continuing with timed polling. {args.GetException().Message}");
+                }
+                catch
+                {
+                    // A caller-supplied warn delegate must never crash the watcher callback thread.
+                }
                 Signal();
             };
             _watcher.EnableRaisingEvents = true;
@@ -196,6 +203,11 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
         }
         catch (SemaphoreFullException)
         {
+        }
+        catch (ObjectDisposedException)
+        {
+            // An in-flight FileSystemWatcher callback raced with Dispose; the wake
+            // signal is already gone, so there is nothing to release.
         }
     }
 

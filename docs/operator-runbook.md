@@ -332,7 +332,15 @@ After a durable landing, the conductor enqueues mirror debt and starts a trusted
 
 Two independent constraints bound useful parallelism:
 
-**Test-slot capacity.** The acceptance test grid has 4 slots (5 under Permissive policy). Launching more concurrent goals than available slots means acceptance runs queue — they do not fail, they wait for a slot to free up.
+**Build capacity and test artifacts.** Builds share two machine-wide file locks under the isolated dotnet root. Test execution is not slot-confined: each gate/evidence attempt writes receipts beneath `.orchestrator/acceptance-gate-attempts/<goal-id>/`, and operator test commands use invocation-owned directories. Per-goal build artifacts remain reusable under the isolated dotnet goal root.
+
+After the slot-free gate has soaked cleanly for at least three days, an administrator may remove the obsolete inbound rules once:
+
+```powershell
+.\scripts\Remove-TestSlotFirewallRules.ps1
+```
+
+The script is idempotent, matches only `MCG-testhost-slot*`, and writes every removed rule definition to `.orchestrator/firewall-rule-removal/` before reporting success. Keep that receipt so a rule can be reconstructed if the soak premise proves wrong. This is a one-time operator action; the orchestrator never mutates firewall policy at runtime.
 
 **Provider rate-limit.** Each worker holds a `claude-cli` or `codex-cli` subscription session. Under heavy load the shared subscription can hit the provider's session rate-limit, causing workers to exit with zero bytes of output and retry in a loop. If you observe this pattern (workers exit-1 repeatedly with empty output), reduce the number of concurrent in-flight goals or stagger goal intake. There is no orchestrator-side setting that bypasses the upstream limit.
 

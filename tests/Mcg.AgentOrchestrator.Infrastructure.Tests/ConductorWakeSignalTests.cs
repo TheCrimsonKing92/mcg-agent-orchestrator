@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class ConductorWakeSignalTests
@@ -111,6 +112,29 @@ public sealed class ConductorWakeSignalTests
             Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(10)));
             Assert.Contains(warnings, warning =>
                 warning.Contains("continuing with timed polling", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorWakeSignal_late_watcher_callback_after_dispose_is_ignored")]
+    public void ConductorWakeSignalLateWatcherCallbackAfterDisposeIsIgnored()
+    {
+        var root = CreateTempDirectory("mcg-conductor-wake-disposed");
+        try
+        {
+            var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
+            var signal = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
+                "Signal",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(signal);
+
+            wakeSignal.Dispose();
+
+            var exception = Record.Exception(() => signal.Invoke(wakeSignal, null));
+            Assert.Null(exception);
         }
         finally
         {

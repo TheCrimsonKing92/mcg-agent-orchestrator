@@ -92,7 +92,7 @@ function Wait-DashboardHealth {
 }
 
 function New-IsolatedDotnetArguments {
-    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\slots\manual"
+    $runRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated\runs\dashboard-$PID"
     $artifactsPath = Join-Path $runRoot "artifacts"
     New-Item -ItemType Directory -Force -Path $artifactsPath | Out-Null
     $maxCpuCount = 0
@@ -134,6 +134,7 @@ $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = (Get-Location).Path
 
 $buildIsolation = New-IsolatedDotnetArguments
 $isolatedArguments = $buildIsolation.Arguments
+$cycleSucceeded = $false
 
 try {
     dotnet build $Solution --no-restore --verbosity minimal @isolatedArguments
@@ -145,20 +146,24 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet test failed with exit code $LASTEXITCODE."
     }
+
+    Start-RestartCommand -RestartCommand $plan.RestartCommand
+    Wait-DashboardHealth -TimeoutSeconds $HealthTimeoutSeconds
+
+    $finalPlan = Invoke-DashboardJson -Path "api/system/build-test-cleanup"
+    $cycleSucceeded = $true
+    [pscustomobject]@{
+        BuildSucceeded = $true
+        TestSucceeded = $true
+        RestartCommand = $plan.RestartCommand
+        CurrentProcessId = $finalPlan.CurrentProcessId
+        CurrentListeningPorts = $finalPlan.CurrentListeningPorts
+        SiblingProcessCount = @($finalPlan.SiblingProcesses).Count
+    }
 }
 finally {
     dotnet build-server shutdown *> $null
-}
-
-Start-RestartCommand -RestartCommand $plan.RestartCommand
-Wait-DashboardHealth -TimeoutSeconds $HealthTimeoutSeconds
-
-$finalPlan = Invoke-DashboardJson -Path "api/system/build-test-cleanup"
-[pscustomobject]@{
-    BuildSucceeded = $true
-    TestSucceeded = $true
-    RestartCommand = $plan.RestartCommand
-    CurrentProcessId = $finalPlan.CurrentProcessId
-    CurrentListeningPorts = $finalPlan.CurrentListeningPorts
-    SiblingProcessCount = @($finalPlan.SiblingProcesses).Count
+    if ($cycleSucceeded) {
+        Remove-Item -LiteralPath $buildIsolation.RunRoot -Force -Recurse -ErrorAction SilentlyContinue
+    }
 }

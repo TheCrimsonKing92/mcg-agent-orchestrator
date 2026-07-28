@@ -10,7 +10,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 2,
                 "maxConcurrentShards": 2,
                 "timeouts": { "defaultMinutes": 3, "buildServerShutdownMinutes": 1 },
                 "infrastructureTestLanes": [
@@ -42,7 +41,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             var settings = AcceptanceGateEngineSettings.Load(root);
 
             Xunit.Assert.True(result.Passed);
-            Xunit.Assert.Equal(2, settings.SlotCount);
             Xunit.Assert.Equal(2, settings.MaxConcurrentShards);
             Xunit.Assert.Equal(TimeSpan.FromMinutes(1), calls[0].Timeout);
             var testCall = Xunit.Assert.Single(calls.Skip(1));
@@ -55,14 +53,13 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_slot_count_limits_stable_slot_execution")]
-    public async Task GoalAcceptanceVerifierCandidateSlotCountLimitsStableSlotExecution()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_shard_count_does_not_constrain_build_permit_index")]
+    public async Task GoalAcceptanceVerifierShardCountDoesNotConstrainBuildPermitIndex()
     {
         var root = CreateWorkspace("""
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1
               },
               "checks": [{
@@ -78,10 +75,9 @@ public sealed class AcceptanceGateEngineSettingsTests
             var verifier = new GoalAcceptanceVerifier((_, _, _) =>
                 Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1")));
 
-            var error = await Xunit.Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-                () => verifier.RunAsync(root, stableSlotIndex: 1));
+            var result = await verifier.RunAsync(root, stableSlotIndex: 1);
 
-            Xunit.Assert.Contains("requested slot count", error.Message, StringComparison.Ordinal);
+            Xunit.Assert.True(result.Passed);
         }
         finally
         {
@@ -96,7 +92,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "mtpInvocations": [
                   {
@@ -188,8 +183,6 @@ public sealed class AcceptanceGateEngineSettingsTests
                   "project": "tests/Example.Tests/Example.Tests.csproj",
                   "executablePathTemplate": "safe/{projectName}{executableExtension}",
                   "ExecutablePathTemplate": "../candidate.exe",
-                  "firewallExecutablePathTemplate": "safe/{projectName}.exe",
-                  "FirewallExecutablePathTemplate": "../candidate.exe",
                   "arguments": ["{executable}"]
                 }]
               }
@@ -204,7 +197,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             Xunit.Assert.Equal(
                 "safe/{projectName}{executableExtension}",
                 invocation.ExecutablePathTemplate);
-            Xunit.Assert.Equal("safe/{projectName}.exe", invocation.FirewallExecutablePathTemplate);
         }
         finally
         {
@@ -219,7 +211,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true,
                 "mtpInvocations": [{
@@ -245,13 +236,36 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         const string displayName = "structural coverage discovers Core through direct MTP";
         var calls = new List<string[]>();
+        var buildPermitChecks = 0;
+        DotnetBuildEnvironmentLease? buildLease = null;
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
+            buildLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var buildPermitIndex = buildLease.Environment.BuildPermitIndex
+                ?? throw new InvalidOperationException("Expected a scheduler-managed build permit.");
             var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
             {
                 calls.Add(arguments);
+                if (arguments.Length >= 2 &&
+                    arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    arguments[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+                {
+                    Xunit.Assert.False(
+                        DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermitIndex),
+                        "Every build, including the structural-coverage baseline build, must hold a build permit.");
+                    buildPermitChecks++;
+                }
+                else if (arguments.Contains("--list-tests") ||
+                    arguments.Contains("--report-trx-filename"))
+                {
+                    Xunit.Assert.True(
+                        DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(buildPermitIndex),
+                        "MTP test execution and discovery must not retain a build permit.");
+                }
+
                 if (arguments.Contains("--list-tests"))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, displayName));
@@ -266,9 +280,13 @@ public sealed class AcceptanceGateEngineSettingsTests
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             });
 
-            var result = await verifier.RunAsync(root);
+            var result = await verifier.RunAsync(
+                root,
+                stableSlotIndex: buildPermitIndex,
+                stableSlotLease: buildLease);
 
             Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Equal(2, buildPermitChecks);
             Xunit.Assert.Contains(result.Checks!, check =>
                 check.Name == "structural test coverage" &&
                 check.ResultSummary!.Contains("discovered=1", StringComparison.Ordinal));
@@ -279,6 +297,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
+            buildLease?.Dispose();
             GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
             GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
@@ -292,7 +311,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true
               },
@@ -363,7 +381,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             {
               "version": 1,
               "engine": {
-                "slotCount": 1,
                 "maxConcurrentShards": 1,
                 "enforceStructuralCoverage": true,
                 "infrastructureTestLanes": [

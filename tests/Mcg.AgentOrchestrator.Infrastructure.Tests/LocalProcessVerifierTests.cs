@@ -17,10 +17,10 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
             Assert.False(prepared.Command.Contains('\'', StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("--artifacts-path", StringComparison.Ordinal));
             Assert.False(prepared.Command.Contains("--disable-build-servers", StringComparison.Ordinal));
-            Assert.False(prepared.Command.Contains("-maxcpucount:1", StringComparison.Ordinal));
+            Assert.DoesNotContain("-maxcpucount:1", prepared.Command.Split(' '));
             Assert.False(prepared.Command.Contains("-p:UseSharedCompilation=false", StringComparison.Ordinal));
             Assert.True(prepared.Command.Contains("-maxcpucount:", StringComparison.Ordinal));
-            Assert.True(prepared.Command.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase));
+            Assert.True(prepared.Command.Contains(Path.Combine("goals", goalId.Value[..8], "artifacts"), StringComparison.OrdinalIgnoreCase));
             Assert.Equal("dotnet", prepared.FileName);
             Assert.Equal("test", prepared.Arguments[0]);
             Assert.Contains("--artifacts-path", prepared.Arguments);
@@ -30,7 +30,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
             Assert.Contains(prepared.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Build environment lease: goal-12345678", StringComparison.Ordinal));
             Assert.True(prepared.ArtifactPathEvidence.Contains("Verification artifacts:", StringComparison.Ordinal));
-            Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase) == true);
+            Assert.True(prepared.BuildEnvironment?.ExecutionLockPath.Contains(Path.Combine("build-slots", "build-"), StringComparison.OrdinalIgnoreCase) == true);
         }
         finally
         {

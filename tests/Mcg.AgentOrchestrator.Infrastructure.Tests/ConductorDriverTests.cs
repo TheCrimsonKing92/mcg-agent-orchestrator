@@ -217,7 +217,9 @@ public sealed class ConductorDriverTests
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
-        Func<bool>? hasGateReadyGoal = null)
+        Func<bool>? hasGateReadyGoal = null,
+        Func<Goal, int>? getAcceptanceSlotCount = null,
+        Func<int>? getWorkerAdmissionCapacity = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -249,6 +251,8 @@ public sealed class ConductorDriverTests
             normalizeLifecycleState: normalizeLifecycleState,
             recoverSandboxPrep: recoverSandboxPrep,
             hasGateReadyGoal: hasGateReadyGoal,
+            getAcceptanceSlotCount: getAcceptanceSlotCount,
+            getWorkerAdmissionCapacity: getWorkerAdmissionCapacity,
             runFocusedEvidence: runFocusedEvidence,
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
@@ -663,16 +667,19 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_reserves_gate_slot_when_gate_ready")]
-    public void ConductorDriverWorkspaceReadyReservesGateSlotWhenGateReady()
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_reserves_acceptance_capacity_not_build_permit_count")]
+    public void ConductorDriverWorkspaceReadyReservesAcceptanceCapacityNotBuildPermitCount()
     {
         var (_, goal) = SimpleGoal();
         var policy = ConductorAutonomyPolicy.Conservative;
         var dispatchCalled = false;
 
+        // The gate reservation draws from the paid-worker ADMISSION pool (WorkerAdmissionCapacity),
+        // NOT the parallel-acceptance width / build-permit count. At WorkerAdmissionCapacity - 1
+        // running with a ready gate, the reserved slot holds the next dispatch.
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getRunningCount: () => DotnetBuildEnvironmentManager.StableSlotCount - 1,
+            getRunningCount: () => ConductorBatchLoop.WorkerAdmissionCapacity - 1,
             dispatchAndStart: _ => { dispatchCalled = true; return DispatchStartOutcome.Started(); },
             hasGateReadyGoal: () => true);
 
@@ -685,6 +692,44 @@ public sealed class ConductorDriverTests
         Assert.Contains("gate-ready goal reserving a stable slot", held.Reason, StringComparison.Ordinal);
         Assert.Contains("ADMISSION", output, StringComparison.Ordinal);
         Assert.Contains("reason=reserved-gate-slot", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_gate_reservation_draws_from_worker_admission_not_acceptance_width")]
+    public void ConductorDriverGateReservationDrawsFromWorkerAdmissionNotAcceptanceWidth()
+    {
+        // Decoupling guard: parallel-acceptance WIDTH stays aligned with build concurrency (2)
+        // while the paid-worker ADMISSION pool the gate reservation draws from is independent (4).
+        // These are two distinct concepts and must not share one constant.
+        Assert.Equal(
+            DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
+            ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
+        Assert.Equal(2, ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
+        Assert.Equal(4, ConductorBatchLoop.WorkerAdmissionCapacity);
+        Assert.NotEqual(
+            ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
+            ConductorBatchLoop.WorkerAdmissionCapacity);
+
+        var (_, goal) = SimpleGoal();
+        var policy = ConductorAutonomyPolicy.Conservative; // MaxConcurrentPaidWorkers = 4
+        var dispatchCalled = false;
+
+        // Paid workers already running == acceptance width (2) while a gate is ready. If the
+        // reservation were (wrongly) drawn from acceptance width, the cap would collapse to
+        // min(4, 2 - 1) = 1 and admission would be held. Decoupled from worker admission the
+        // cap is min(4, 4 - 1) = 3, so the third worker is still admitted during the gate.
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
+            dispatchAndStart: _ => { dispatchCalled = true; return DispatchStartOutcome.Started(); },
+            hasGateReadyGoal: () => true);
+
+        var result = driver.AdvanceOnce(goal, policy);
+
+        Assert.True(dispatchCalled);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Equal(
+            GoalLifecycleState.WorkspaceReady,
+            ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_repairs_terminal_goal_with_assigned_task_before_acceptance")]

@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
-Runs dotnet with stable isolated build artifacts, including reusable no-build timing passes.
+    Runs dotnet with isolated build artifacts, including reusable per-goal no-build timing passes.
 
 .DESCRIPTION
 Use the same -GoalPrefix for both timing passes. For Microsoft.Testing.Platform (MTP) test
-projects, the first measurement builds into the goal's stable artifact slot and then runs
+    projects, the first measurement builds into the goal's reusable artifact root and then runs
 the built test executable with -ReuseArtifacts. The second measurement repeats only the
--ReuseArtifacts invocation. Reuse verifies the slot owner, test assembly, and MTP executable
-before running xUnit directly without invoking MSBuild or the unsupported VSTest target.
+    -ReuseArtifacts invocation. Reuse verifies the goal owner, test assembly, and MTP executable
+    before running xUnit directly without invoking MSBuild or the unsupported VSTest target.
+    Builds share a two-lock machine-wide pool; test results never use the lock path.
 
 Set MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS=1 to force stale-lease recovery to wipe
 the selected slot's artifacts instead of preserving a cache that passes the integrity probe.
@@ -19,7 +20,7 @@ Measure-Command {
     .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 -ReuseArtifacts test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --verbosity minimal
 }
 
-Measures total build plus xUnit time and leaves the output in the goal's stable artifact slot.
+    Measures total build plus xUnit time and leaves the output in the goal's reusable artifact root.
 
 .EXAMPLE
 Measure-Command { .\scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix 10f9e458 -ReuseArtifacts test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build --verbosity minimal }
@@ -76,7 +77,7 @@ $RepositoryRoot = (Get-Location).Path
 
 if ($env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "1" -or
     $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "true") {
-    throw "Worker-side .NET self-verification is disabled. Report tests: not-run - orchestrator acceptance gate verifies via stable slots."
+    throw "Worker-side .NET self-verification is disabled. Use Invoke-WorkerBuildCheck for build-only verification; the orchestrator acceptance gate owns test execution."
 }
 
 function ConvertTo-SafePathSegment {
@@ -92,18 +93,32 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
-function Get-StableSlotName {
-    param([string]$Value)
+function Get-BuildConcurrencySlotCount {
+    $sourcePath = Join-Path $PSScriptRoot "..\src\Mcg.AgentOrchestrator.Infrastructure\Workspaces\DotnetBuildEnvironmentManager.cs"
+    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $match = [regex]::Match($source, 'public const int BuildConcurrencySlotCount = (?<count>\d+);')
+    if (-not $match.Success) {
+        throw "Could not resolve BuildConcurrencySlotCount from $sourcePath"
+    }
+
+    return [int]$match.Groups["count"].Value
+}
+
+function Get-BuildSlotName {
+    param(
+        [string]$Value,
+        [int]$SlotCount
+    )
     if ([string]::IsNullOrWhiteSpace($Value)) {
-        return "manual"
+        return "build-0"
     }
 
-    [int64]$hash = 0
+    [int]$hash = 0
     foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
-        $hash = (($hash * 31) + [int][char]$ch) % 2147483647
+        $hash = ($hash + [int][char]$ch) % $SlotCount
     }
 
-    return "slot-$([Math]::Abs($hash % 4))"
+    return "build-$hash"
 }
 
 function Clear-ArtifactsDirectory {
@@ -671,25 +686,25 @@ function Test-AppDllChangedSinceSnapshot {
 $safeAttemptName = ConvertTo-SafePathSegment -Value $AttemptName
 $hostTempBase = Get-HostTempBase
 $isolatedRoot = Get-IsolatedRootBase
+$buildConcurrencySlotCount = Get-BuildConcurrencySlotCount
 if ([string]::IsNullOrWhiteSpace($GoalPrefix)) {
-    $slotRoot = Join-Path $isolatedRoot "slots\manual"
-    $runRoot = Join-Path $isolatedRoot "manual"
-    $artifactsPath = Join-Path $slotRoot "artifacts"
-    $leaseId = "run-slot-manual"
-    $ownerToken = "manual"
-    $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
+    $runId = "manual-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $runRoot = Join-Path $isolatedRoot "runs\$runId"
+    $artifactsPath = Join-Path $runRoot "artifacts"
+    $leaseId = "run-$runId"
+    $ownerToken = $runId
+    $executionLockPath = Join-Path $isolatedRoot "build-slots\build-$($PID % $buildConcurrencySlotCount).lock"
     $staleLockCleared = $false
 }
 else {
     $safeGoalPrefix = ConvertTo-SafePathSegment -Value $GoalPrefix
-    $slotName = Get-StableSlotName -Value $safeGoalPrefix
+    $buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount $buildConcurrencySlotCount
     $leaseId = "goal-$safeGoalPrefix"
     $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
-    $slotRoot = Join-Path $isolatedRoot "slots\$slotName"
     $leaseRoot = Join-Path $runRoot "lease"
-    $artifactsPath = Join-Path $slotRoot "artifacts"
+    $artifactsPath = Join-Path $runRoot "artifacts"
     $ownerToken = $leaseId
-    $executionLockPath = Join-Path $slotRoot "lease.execution.lock"
+    $executionLockPath = Join-Path $isolatedRoot "build-slots\$buildSlotName.lock"
     New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
     $lockPath = Join-Path $leaseRoot "lease.lock"
     $staleLockCleared = $false
@@ -793,6 +808,11 @@ try {
         $appDllBeforeDotnet = Get-AppDllSnapshot
         if ($ReuseArtifacts) {
             $mtpArguments = Get-MtpTestArguments -Values $DotnetArguments
+            & dotnet build-server shutdown *> $null
+            $lockStream.Unlock(0, 1)
+            $lockStream.Dispose()
+            $lockStream = $null
+            $lockHeld = $false
             & $reuse.ExecutablePath @mtpArguments
         }
         else {
@@ -806,12 +826,15 @@ try {
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
+        & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }
 
-    & dotnet build-server shutdown *> $null
     Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($GoalPrefix) -and $exitCode -eq 0) {
+        Remove-Item -LiteralPath $runRoot -Force -Recurse -ErrorAction SilentlyContinue
+    }
 }
 
 exit $exitCode

@@ -21,6 +21,34 @@ function ConvertTo-SafePathSegment {
     return $safe
 }
 
+function Get-BuildConcurrencySlotCount {
+    $sourcePath = Join-Path $PSScriptRoot "..\src\Mcg.AgentOrchestrator.Infrastructure\Workspaces\DotnetBuildEnvironmentManager.cs"
+    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $match = [regex]::Match($source, 'public const int BuildConcurrencySlotCount = (?<count>\d+);')
+    if (-not $match.Success) {
+        throw "Could not resolve BuildConcurrencySlotCount from $sourcePath"
+    }
+
+    return [int]$match.Groups["count"].Value
+}
+
+function Get-BuildSlotName {
+    param(
+        [string]$Value,
+        [int]$SlotCount
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "build-0"
+    }
+
+    [int]$hash = 0
+    foreach ($ch in $Value.ToLowerInvariant().ToCharArray()) {
+        $hash = ($hash + [int][char]$ch) % $SlotCount
+    }
+
+    return "build-$hash"
+}
+
 function Get-IsolatedRootBase {
     if (-not [string]::IsNullOrWhiteSpace($env:MCG_DOTNET_ISOLATED_ROOT)) {
         return $env:MCG_DOTNET_ISOLATED_ROOT
@@ -138,6 +166,114 @@ function Test-OwnerMarkerMatches {
     }
 }
 
+function Test-CustodyMarkerIsLive {
+    param([object]$Marker)
+
+    if ($null -eq $Marker -or [string]::IsNullOrWhiteSpace([string]$Marker.attemptId)) {
+        return $false
+    }
+
+    $hintPath = [string]$Marker.livenessCheckHint
+    if (-not [string]::IsNullOrWhiteSpace($hintPath) -and
+        (Test-Path -LiteralPath $hintPath -PathType Leaf)) {
+        try {
+            $attempt = Get-Content -LiteralPath $hintPath -Raw | ConvertFrom-Json
+            if (-not [string]::Equals(
+                    [string]$attempt.attemptId,
+                    [string]$Marker.attemptId,
+                    [System.StringComparison]::Ordinal)) {
+                return $false
+            }
+
+            $numericOutcome = 0
+            $outcomeText = [string]$attempt.outcome
+            $isRunning = [string]::Equals(
+                $outcomeText,
+                "Running",
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([int]::TryParse($outcomeText, [ref]$numericOutcome) -and $numericOutcome -eq 0)
+            if (-not $isRunning) {
+                return $false
+            }
+
+            $ownerProcessId = [int]$attempt.ownerProcessId
+            if (-not [string]::Equals(
+                    [string]$Marker.machineName,
+                    [Environment]::MachineName,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                $lastHeartbeatAt = [DateTimeOffset]::MinValue
+                return [DateTimeOffset]::TryParse([string]$attempt.lastHeartbeatAt, [ref]$lastHeartbeatAt) -and
+                    ([DateTimeOffset]::UtcNow - $lastHeartbeatAt) -le [TimeSpan]::FromMinutes(2)
+            }
+
+            $owner = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+            if ($null -eq $owner) {
+                return $false
+            }
+
+            $acquiredAt = [DateTimeOffset]::MinValue
+            return -not [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt) -or
+                $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
+        }
+        catch {
+            # Protect a live owner while its atomic lifecycle record is briefly unavailable.
+        }
+    }
+
+    try {
+        $acquiredAt = [DateTimeOffset]::MinValue
+        $hasAcquiredAt = [DateTimeOffset]::TryParse([string]$Marker.acquiredAt, [ref]$acquiredAt)
+        if (-not [string]::Equals(
+                [string]$Marker.machineName,
+                [Environment]::MachineName,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $hasAcquiredAt -and
+                ([DateTimeOffset]::UtcNow - $acquiredAt) -le [TimeSpan]::FromHours(6)
+        }
+
+        $owner = Get-Process -Id ([int]$Marker.ownerProcessId) -ErrorAction SilentlyContinue
+        if ($null -eq $owner) {
+            return $false
+        }
+
+        return -not $hasAcquiredAt -or
+            $owner.StartTime.ToUniversalTime() -le $acquiredAt.UtcDateTime.AddSeconds(1)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Assert-CustodyAllowsTakeover {
+    param([string]$ArtifactsPath)
+
+    $custodyPath = Join-Path $ArtifactsPath ".mcg-artifacts-custody.json"
+    if (-not (Test-Path -LiteralPath $custodyPath -PathType Leaf)) {
+        return
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $custodyPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:MCG_ACCEPTANCE_GATE_ATTEMPT_ID) -and
+        [string]::Equals(
+            [string]$marker.attemptId,
+            $env:MCG_ACCEPTANCE_GATE_ATTEMPT_ID,
+            [System.StringComparison]::Ordinal)) {
+        return
+    }
+
+    if (Test-CustodyMarkerIsLive -Marker $marker) {
+        throw (
+            "Artifact slot takeover refused because acceptance attempt '$([string]$marker.attemptId)' " +
+            "has live custody of '$ArtifactsPath'. Wait for the acceptance attempt to reach a terminal state before retrying.")
+    }
+}
+
 function Initialize-ArtifactsDirectory {
     param(
         [string]$Path,
@@ -148,6 +284,7 @@ function Initialize-ArtifactsDirectory {
     $ownerPath = Join-Path $Path ".mcg-artifacts-owner.json"
     $hasEntries = (Test-Path -LiteralPath $Path) -and $null -ne (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($ForceClean -or ($hasEntries -and -not (Test-OwnerMarkerMatches -Path $ownerPath -OwnerToken $OwnerToken))) {
+        Assert-CustodyAllowsTakeover -ArtifactsPath $Path
         Clear-ArtifactsDirectory -Path $Path
     }
     else {
@@ -192,29 +329,15 @@ if ($missingProjects.Count -gt 0) {
 
 $safeGoalPrefix = ConvertTo-SafePathSegment -Value (Get-GoalPrefix)
 $isolatedRoot = Get-IsolatedRootBase
-$leaseId = "operator-build"
-$runRoot = Join-Path $isolatedRoot "operators\worker-build"
-$slotRoot = Join-Path $isolatedRoot "slots\operator-build"
+$buildConcurrencySlotCount = Get-BuildConcurrencySlotCount
+$buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount $buildConcurrencySlotCount
+$leaseId = "goal-$safeGoalPrefix"
+$runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
 $leaseRoot = Join-Path $runRoot "lease"
-$artifactsPath = Join-Path $slotRoot "artifacts"
-$executionLockPath = Join-Path $slotRoot "lease.execution.lock"
+$artifactsPath = Join-Path $runRoot "artifacts"
+$executionLockPath = Join-Path $isolatedRoot "build-slots\$buildSlotName.lock"
 New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
 
-$lockPath = Join-Path $leaseRoot "lease.lock"
-$staleLockCleared = $false
-if (Test-Path -LiteralPath $lockPath) {
-    $lockText = (Get-Content -LiteralPath $lockPath -Raw).Trim()
-    $lockPid = 0
-    if ([int]::TryParse($lockText, [ref]$lockPid)) {
-        $lockProcess = Get-Process -Id $lockPid -ErrorAction SilentlyContinue
-        if ($null -eq $lockProcess) {
-            Remove-Item -LiteralPath $lockPath -Force
-            $staleLockCleared = $true
-        }
-    }
-}
-
-Set-Content -LiteralPath $lockPath -Value ([string]$PID)
 $metadata = [ordered]@{
     version = 1
     goalPrefix = $safeGoalPrefix
@@ -225,7 +348,7 @@ $metadata = [ordered]@{
     machineName = $env:COMPUTERNAME
     lastUsedAt = (Get-Date).ToUniversalTime().ToString("o")
     lastAttemptName = "worker-build-check"
-    staleLockCleared = $staleLockCleared
+    staleLockCleared = $false
 }
 ($metadata | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath (Join-Path $leaseRoot "lease.json")
 
@@ -254,7 +377,7 @@ try {
         try {
             $lockStream.Lock(0, 1)
             $lockHeld = $true
-            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $staleLockCleared
+            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $false
         }
         catch [System.IO.IOException] {
             $lockStream.Dispose()
@@ -293,11 +416,11 @@ try {
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
+        & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }
 
-    & dotnet build-server shutdown *> $null
     Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
 }
 

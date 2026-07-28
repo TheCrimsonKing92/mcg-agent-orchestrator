@@ -1550,7 +1550,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     Assert.False(preflight.Allowed);
     Assert.True(preflight.Findings.Any(finding => finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains("build environment: goal lease not yet created", StringComparison.Ordinal)));
-    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("slots", "slot-"), StringComparison.OrdinalIgnoreCase)));
+    Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("goals", goal.Id.Value[..8], "artifacts"), StringComparison.OrdinalIgnoreCase)));
     Assert.Contains("worktree has 1 uncommitted change", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastDispatch is null);

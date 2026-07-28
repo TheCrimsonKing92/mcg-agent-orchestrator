@@ -363,9 +363,7 @@ internal static partial class CliCommandHandlers
 
             case "firewall-setup":
             {
-                var exitCode = new FirewallSetupCommand(
-                    new WindowsFirewallRuleWriter(),
-                    manifestRoot: context.Workspace.RootDirectory).Execute(Console.Out);
+                var exitCode = new FirewallSetupCommand().Execute(Console.Out);
                 if (exitCode != FirewallSetupCommand.SuccessExitCode)
                 {
                     throw new CliExitException(exitCode);
@@ -1137,7 +1135,12 @@ internal static partial class CliCommandHandlers
         using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
         if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
-            RunStableSlotMtpTest(parts, context, lease.Environment);
+            var resultsSurviveCleanup = RunStableSlotMtpTest(parts, context, lease);
+            if (resultsSurviveCleanup)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+            }
+
             return;
         }
 
@@ -1150,13 +1153,17 @@ internal static partial class CliCommandHandlers
         {
             throw new CliExitException(exitCode);
         }
+
+        lease.ReleaseExecutionLock();
+        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
     }
 
-    private static void RunStableSlotMtpTest(
+    private static bool RunStableSlotMtpTest(
         IReadOnlyList<string> parts,
         CliExecutionContext context,
-        DotnetBuildEnvironment environment)
+        DotnetBuildEnvironmentLease buildLease)
     {
+        var environment = buildLease.Environment;
         if (parts.Count < 3)
         {
             throw new ArgumentException("Usage: stable-slot-dotnet mtp-test <project> [--filter <filter>] [--results-directory <path>] [--no-build]");
@@ -1189,8 +1196,10 @@ internal static partial class CliCommandHandlers
             throw new InvalidOperationException($"MTP test executable was not produced: {executable}");
         }
 
-        var resultsDirectory = ReadStableSlotOption(parts, "--results-directory")
-            ?? Path.Combine(environment.ArtifactsPath, "TestResults");
+        buildLease.ReleaseExecutionLock();
+        var configuredResultsDirectory = ReadStableSlotOption(parts, "--results-directory");
+        var resultsDirectory = configuredResultsDirectory ??
+            Path.Combine(environment.ArtifactsPath, "TestResults");
         Directory.CreateDirectory(resultsDirectory);
         var mtpArguments = new List<string>
         {
@@ -1218,6 +1227,14 @@ internal static partial class CliCommandHandlers
         {
             throw new CliExitException(testExit);
         }
+
+        return configuredResultsDirectory is not null &&
+            !Path.GetFullPath(resultsDirectory)
+                .StartsWith(
+                    Path.GetFullPath(environment.RootPath)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                    Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool executableExists) =>

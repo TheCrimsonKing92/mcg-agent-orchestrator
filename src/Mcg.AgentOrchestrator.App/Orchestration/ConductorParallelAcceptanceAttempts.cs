@@ -473,14 +473,24 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 try
                 {
-                    AcceptanceAttemptArtifactCustody.ReleaseStableSlots(attempt.AttemptId);
+                    if (stableSlotLease is not null)
+                    {
+                        AcceptanceAttemptArtifactCustody.Release(
+                            stableSlotLease.Environment.ArtifactsPath,
+                            attempt.AttemptId);
+                    }
                 }
                 finally
                 {
                     if (stableSlotLease is not null)
                     {
                         stableSlotLease.Dispose();
-                        EmitAttemptLeaseReceipt("release", attempt, candidate, Environment.ProcessId);
+                        EmitAttemptLeaseReceipt(
+                            "release",
+                            attempt,
+                            candidate,
+                            Environment.ProcessId,
+                            PermitName(stableSlotLease.Environment));
                     }
                 }
             }
@@ -537,20 +547,25 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(
-            candidate.SlotIndex,
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+            candidate.Goal.Id,
+            $"parallel-acceptance-{attempt.AttemptId}");
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+            environment,
             TimeSpan.Zero);
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
-            EmitAttemptLeaseReceipt("acquire", attempt, candidate, Environment.ProcessId);
-            EmitAttemptLeaseReceipt("handoff", attempt, candidate, Environment.ProcessId);
+            var permitName = PermitName(acquired.Lease.Environment);
+            EmitAttemptLeaseReceipt("acquire", attempt, candidate, Environment.ProcessId, permitName);
+            EmitAttemptLeaseReceipt("handoff", attempt, candidate, Environment.ProcessId, permitName);
             return acquired.Lease;
         }
 
         if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy busy)
         {
-            var holderPid = busy.BusySlots.FirstOrDefault(slot => slot.SlotIndex == candidate.SlotIndex).OwnerProcessId;
-            EmitAttemptLeaseReceipt("yield", attempt, candidate, holderPid);
+            var holderPid = busy.BusySlots.FirstOrDefault(slot =>
+                slot.SlotIndex == environment.BuildPermitIndex)?.OwnerProcessId;
+            EmitAttemptLeaseReceipt("yield", attempt, candidate, holderPid, PermitName(environment));
             throw new DotnetBuildSlotsBusyException(busy);
         }
 
@@ -604,13 +619,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         string action,
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
-        int? holderPid)
+        int? holderPid,
+        string? permitName = null)
     {
         var pid = holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-        var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} slot=slot-{candidate.SlotIndex} holderPid={pid}";
+        var slot = permitName ?? $"acceptance-{candidate.SlotIndex}";
+        var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} permit={slot} holderPid={pid}";
         Console.WriteLine(line);
         PersistLeaseReceipt(attempt, line);
     }
+
+    private static string PermitName(DotnetBuildEnvironment environment) =>
+        environment.BuildPermitIndex is { } permitIndex
+            ? $"build-{permitIndex}"
+            : Path.GetFileNameWithoutExtension(environment.ExecutionLockPath);
 
     private void PersistLeaseReceipt(ConductorParallelAcceptanceAttempt attempt, string line)
     {
@@ -663,12 +685,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate)
     {
         ConductorParallelAcceptanceAttemptDecision durablePassed;
-        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
-            IsAttemptExecutionLeaseStillHeld(attempt))
-        {
-            return null;
-        }
-
         if (File.Exists(attempt.ResultPath))
         {
             try
@@ -748,17 +764,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
 
         return null;
-    }
-
-    private static bool IsAttemptExecutionLeaseStillHeld(ConductorParallelAcceptanceAttempt attempt)
-    {
-        if (DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(attempt.SlotIndex))
-        {
-            return false;
-        }
-
-        var ownerProcessId = DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(attempt.SlotIndex);
-        return ownerProcessId.HasValue && ownerProcessId.Value == attempt.OwnerProcessId;
     }
 
     private void MarkStale(ConductorParallelAcceptanceAttempt attempt)
