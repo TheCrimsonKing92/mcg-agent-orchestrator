@@ -395,7 +395,8 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
             new WorkerProfile("codex-spark", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox workspace-write --cd {workingDirectory}"),
             new WorkerProfile("qwen-code-cli", "$env:OPENAI_BASE_URL='http://127.0.0.1:11434/v1'; $env:OPENAI_API_KEY='ollama'; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --yolo -p (Get-Content -Raw {promptPath})"),
-            new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode}")
+            // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.
+            new WorkerProfile("claude-cli", "claude -p --model {subscriptionModelName} --permission-mode {permissionMode}")
         ]);
     }
 }
