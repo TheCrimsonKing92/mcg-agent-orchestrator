@@ -2732,6 +2732,21 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerResultParser_parses_canonical_inconclusive_tests_status")]
+    public void WorkerResultParserParsesCanonicalInconclusiveTestsStatus()
+    {
+        var text = WorkerResultBlock(
+            "none",
+            "dotnet test --no-build --filter Focused",
+            "inconclusive - process killed; no TRX");
+
+        Assert.True(WorkerResultParser.TryParseResult(text, out var result, out var diagnostic), diagnostic);
+        Assert.Equal(WorkerResultParser.TestsStatus.Inconclusive, result.TestsStatus);
+        Assert.Equal("inconclusive - process killed; no TRX", result.Fields["tests"]);
+        Assert.False(WorkerResultParser.TestsReportFailure(result, out _));
+        Assert.False(WorkerResultParser.TryParseSuccessfulResult(text, out _, out _));
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_nonzero_exit_with_commit_and_residual_dirty_worktree_fails")]
     public void BackgroundDispatchRunnerFileRoleNonZeroExitWithCommitAndResidualDirtyWorktreeFails()
 {

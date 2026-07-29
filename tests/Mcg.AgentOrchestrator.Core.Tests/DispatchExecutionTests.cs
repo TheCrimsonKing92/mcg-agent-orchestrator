@@ -1360,6 +1360,129 @@ public sealed class DispatchExecutionTests
         evt.Kind == ProgressKind.TaskRetried &&
         evt.Message.Contains("recoverable subscription usage limit", StringComparison.Ordinal)));
 }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_records_structured_Tester_inconclusive_without_completion")]
+    public void RecordDispatchExecutionResultRecordsStructuredTesterInconclusiveWithoutCompletion()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Record inconclusive Tester receipt");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var tester = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            tester.Id,
+            new TaskDispatchRecord("tester", "test", "C:\\repo", clock.UtcNow));
+        var stdout = WorkerResultStdout(
+            "none",
+            "inconclusive - command timed out; no TRX",
+            "stale blocker from a prior round");
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                "test",
+                "C:\\repo",
+                0,
+                stdout,
+                "",
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.Equal(1, tester.EmptyOutputRetryCount);
+        Assert.Single(tester.VerificationHistory);
+        Assert.Equal(
+            DispatchOutcomeKind.VerificationInconclusive,
+            DispatchFailureClassifier.Classify(tester, tester.LastVerification!).Kind);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == tester.Id && evt.Kind == ProgressKind.TaskCompleted);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("schema conflict retained for audit", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_prioritizes_HUMAN_INPUT_over_worker_result_blocker")]
+    public void RecordDispatchExecutionResultPrioritizesHumanInputOverWorkerResultBlocker()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Prioritize explicit human input");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            developer.Id,
+            new TaskDispatchRecord("developer", "develop", "C:\\repo", clock.UtcNow));
+        var stdout = WorkerResultStdout(
+            "none",
+            "fail - cannot choose safely",
+            "additional product blocker") +
+            Environment.NewLine +
+            "HUMAN_INPUT: Which supported behavior should be authoritative?";
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            developer.Id,
+            new TaskVerificationRecord(
+                "develop",
+                "C:\\repo",
+                0,
+                stdout,
+                "",
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, developer.Status);
+        Assert.Contains("Which supported behavior", request.Question, StringComparison.Ordinal);
+        Assert.Contains("additional product blocker", request.Question, StringComparison.Ordinal);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskFailed);
+    }
+
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_routes_Planner_or_Researcher_premise_invalid_to_clarification")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    public void RecordDispatchExecutionResultRoutesPremiseInvalidToClarification(AgentRole role)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Clarify invalid premise");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == role);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(role.ToString(), "inspect", "C:\\repo", clock.UtcNow));
+        var stdout = WorkerResultStdout(
+            "none",
+            "not-run - repository inspection only",
+            "premise-invalid - required API was removed; src/Api.cs proves replacement semantics");
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "inspect",
+                "C:\\repo",
+                0,
+                stdout,
+                "",
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.Contains("required API was removed", request.Question, StringComparison.Ordinal);
+        Assert.Single(task.VerificationHistory);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id && (evt.Kind is ProgressKind.TaskFailed or ProgressKind.TaskCompleted));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_powershell_wrapped_subscription_usage_limit")]
     public void RecordDispatchExecutionResultReopensTaskOnPowerShellWrappedSubscriptionUsageLimit()
 {

@@ -154,6 +154,37 @@ public sealed class TaskVerificationTests
     Assert.Equal("stdout-24", task.LastVerification!.StandardOutput);
 }
 
+    [Xunit.Fact(DisplayName = "TaskSpec_preserves_all_structured_inconclusive_attempts_beyond_normal_history_cap")]
+    public void TaskSpecPreservesAllStructuredInconclusiveAttemptsBeyondNormalHistoryCap()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Preserve bounded inconclusive retry receipts");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var tester = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+        var attempts = TaskSpec.VerificationHistoryLimit + 5;
+
+        for (var index = 0; index < attempts; index++)
+        {
+            tester.RecordVerification(new TaskVerificationRecord(
+                "test",
+                "C:\\repo",
+                0,
+                $"WORKER_RESULT:\ntests: inconclusive - attempt {index}; no TRX\nblockers: none\nEND_WORKER_RESULT",
+                "",
+                DateTimeOffset.UtcNow.AddMinutes(index),
+                WorkerResultPresent: true));
+        }
+
+        Assert.Equal(attempts, tester.VerificationHistory.Count);
+        Assert.All(tester.VerificationHistory, verification =>
+            Assert.True(
+                WorkerResultBlockers.TryGetTestsStatus(verification, out var status) &&
+                status == WorkerResultBlockers.TestsStatus.Inconclusive));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        Assert.Equal(attempts, restored.GetTask(goal.Id, tester.Id).VerificationHistory.Count);
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
     public void RecordTaskVerificationCompletesGoalOnlyWhenAllGatesPass()
 {

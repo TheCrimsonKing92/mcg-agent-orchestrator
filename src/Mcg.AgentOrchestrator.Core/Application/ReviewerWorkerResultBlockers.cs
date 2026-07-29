@@ -10,7 +10,8 @@ public static class WorkerResultBlockers
         Pass,
         Fail,
         NotRun,
-        Deferred
+        Deferred,
+        Inconclusive
     }
 
     public enum BlockersStatus
@@ -301,6 +302,29 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryFindPremiseInvalidEvidence(TaskVerificationRecord? verification, out string evidence)
+    {
+        evidence = string.Empty;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (!TryFindField(line, "blockers", out var value) ||
+                !string.Equals(ReadLeadingWorkerResultToken(value), "premise-invalid", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            evidence = value["premise-invalid".Length..].TrimStart(' ', '-', ':').Trim();
+            return evidence.Length > 0;
+        }
+
+        return false;
+    }
+
     public static bool TryFindTests(TaskVerificationRecord? verification, out string tests)
     {
         tests = string.Empty;
@@ -463,6 +487,7 @@ public static class WorkerResultBlockers
             "fail" => TestsStatus.Fail,
             "not-run" => TestsStatus.NotRun,
             "deferred" => TestsStatus.Deferred,
+            "inconclusive" => TestsStatus.Inconclusive,
             _ => TestsStatus.Unknown
         };
 

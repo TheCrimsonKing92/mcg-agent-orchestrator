@@ -19,7 +19,8 @@ internal static class WorkerResultParser
         Pass,
         Fail,
         NotRun,
-        Deferred
+        Deferred,
+        Inconclusive
     }
 
     internal enum BlockersStatus
@@ -127,7 +128,7 @@ internal static class WorkerResultParser
         }
 
         if (!HasSubstantiveValue(fields, "tests") ||
-            result.TestsStatus == TestsStatus.NotRun ||
+            result.TestsStatus is TestsStatus.NotRun or TestsStatus.Inconclusive ||
             (result.TestsStatus == TestsStatus.Unknown &&
              (fields["tests"].Equals("not-run", StringComparison.OrdinalIgnoreCase) ||
               fields["tests"].Equals("not run", StringComparison.OrdinalIgnoreCase))))
@@ -319,6 +320,7 @@ internal static class WorkerResultParser
             "fail" => TestsStatus.Fail,
             "not-run" => TestsStatus.NotRun,
             "deferred" => TestsStatus.Deferred,
+            "inconclusive" => TestsStatus.Inconclusive,
             _ => TestsStatus.Unknown
         };
     }

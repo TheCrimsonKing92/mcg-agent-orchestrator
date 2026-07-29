@@ -23,6 +23,7 @@ internal static class SdlcRolePromptRequirements
                 "- Produce a concrete implementation plan with likely files or modules to inspect and the smallest viable change boundary.",
                 "- Challenge ambiguous requirements; name assumptions, sequencing risks, and explicit stop conditions.",
                 "- Define falsifiable proof Developer, Tester, and Reviewer must provide before acceptance.",
+                "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Do not return a generic SDLC checklist or restate the user's goal as a plan.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
@@ -35,6 +36,7 @@ internal static class SdlcRolePromptRequirements
                 "- Separate confirmed facts from inferences; call out stale, missing, or low-confidence evidence and the consequence for implementation.",
                 "- Include the exact repository-local commands or file inspections used as research evidence when available.",
                 "- If no research is needed, say so briefly and explain why using repository evidence.",
+                "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before downstream implementation.",
                 "- Do not restate the goal as research output or rely on unsourced assumptions.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
@@ -56,7 +58,7 @@ internal static class SdlcRolePromptRequirements
                 "- Tie each pass/fail conclusion to concrete evidence: command output, changed file behavior, manual smoke steps, or exact reproduction data.",
                 "- Try to falsify the implementation with at least one negative or edge case when practical, and state what failure would have looked like.",
                 "- If a command cannot run, include the exact failure text and the environment condition.",
-                "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report it as inconclusive, raise no product/code blocker from it, and never restate a prior round's conclusion as this round's evidence.",
+                "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and never restate a prior round's conclusion as this round's evidence.",
                 "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
                 "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
                 "- You may build and run tests but must not modify source files."
@@ -146,6 +148,7 @@ internal static class SdlcRolePromptRequirements
                 "## Planner Requirements",
                 "- Produce a concrete plan with likely files or modules, smallest viable change boundary, assumptions, and stop conditions.",
                 "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
+                "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
@@ -154,6 +157,7 @@ internal static class SdlcRolePromptRequirements
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
                 "- Prefer /api/source-survey?max=8 when available; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
                 "- Separate confirmed facts from inferences, risks, and unknowns.",
+                "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before downstream implementation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Developer =>
@@ -169,7 +173,7 @@ internal static class SdlcRolePromptRequirements
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
-                "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report it inconclusive, raise no code blocker, and do not reuse a prior round's conclusion as evidence.",
+                "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
                 "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
                 "- You may build and run tests but must not modify source files."
             ],

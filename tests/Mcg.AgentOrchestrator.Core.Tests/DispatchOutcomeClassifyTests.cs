@@ -1041,4 +1041,35 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
+
+    [Xunit.Fact(DisplayName = "Classify treats structured Tester inconclusive as first class outcome despite stale blocker")]
+    public void ClassifyTreatsStructuredTesterInconclusiveAsFirstClassOutcomeDespiteStaleBlocker()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(
+                WorkerResultStdout(
+                    "inconclusive - command timed out; no TRX",
+                    "stale product blocker from a prior round")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("command timed out; no TRX", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains("schema conflict", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify keeps Tester fail plus blocker on genuine failure path")]
+    public void ClassifyKeepsTesterFailPlusBlockerOnGenuineFailurePath()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(
+                WorkerResultStdout(
+                    "fail - focused assertion failed",
+                    "product behavior returns the wrong value")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+    }
 }

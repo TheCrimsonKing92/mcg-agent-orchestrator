@@ -3,6 +3,47 @@ using System.Text.Json;
 
 public sealed class WorkerResultBlockersTests
 {
+    [Xunit.Fact(DisplayName = "WorkerResultBlockers_parses_inconclusive_tests_and_preserves_receipt")]
+    public void WorkerResultBlockersParsesInconclusiveTestsAndPreservesReceipt()
+    {
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\repo",
+            0,
+            "WORKER_RESULT:\ntests: inconclusive - command timed out; no TRX\nblockers: none\nEND_WORKER_RESULT",
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(verification, out var status));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Inconclusive, status);
+        Assert.True(WorkerResultBlockers.TryFindTests(verification, out var tests));
+        Assert.Equal("inconclusive - command timed out; no TRX", tests);
+        Assert.False(WorkerResultBlockers.TryFindFailingTests(verification, out _));
+    }
+
+    [Xunit.Theory(DisplayName = "WorkerResultBlockers_parses_only_canonical_premise_invalid_evidence")]
+    [Xunit.InlineData("premise-invalid - required API does not exist; see src/Api.cs", true, "required API does not exist; see src/Api.cs")]
+    [Xunit.InlineData("premise-invalid", false, "")]
+    [Xunit.InlineData("goal premise may be invalid", false, "")]
+    public void WorkerResultBlockersParsesOnlyCanonicalPremiseInvalidEvidence(
+        string blockers,
+        bool expected,
+        string expectedEvidence)
+    {
+        var verification = new TaskVerificationRecord(
+            "plan",
+            "C:\\repo",
+            0,
+            $"WORKER_RESULT:\nblockers: {blockers}\nEND_WORKER_RESULT",
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.Equal(expected, WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var evidence));
+        Assert.Equal(expectedEvidence, evidence);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindReviewFindingRound_parses_structured_findings_and_touched_anchors")]
     public void TryFindReviewFindingRoundParsesStructuredFindingsAndTouchedAnchors()
     {

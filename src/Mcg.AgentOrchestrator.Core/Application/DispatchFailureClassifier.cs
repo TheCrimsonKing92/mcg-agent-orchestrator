@@ -24,6 +24,7 @@ public enum DispatchOutcomeKind
     ProviderConnectivity,
     ProviderModelRejection,
     DirtyWorktreeRecoverable,
+    VerificationInconclusive,
     UnknownFailure
 }
 
@@ -316,6 +317,34 @@ public static class DispatchFailureClassifier
         hasCommittedChanges = hasCommittedChanges || verification.HasCommittedChanges || HasDispatchResultCommitEvidence(task);
         var exitCode = verification.ExitCode;
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
+
+        if (task.RequiredRole == AgentRole.Tester &&
+            workerResultPresent &&
+            WorkerResultBlockers.TryGetTestsStatus(verification, out var inconclusiveStatus) &&
+            inconclusiveStatus == WorkerResultBlockers.TestsStatus.Inconclusive)
+        {
+            WorkerResultBlockers.TryFindTests(verification, out var testsEvidence);
+            var evidenceSummary = $"structured Tester verification is inconclusive: {testsEvidence}";
+            if (WorkerResultBlockers.TryFindBlocker(verification, out var conflictingBlocker))
+            {
+                evidenceSummary += $"; schema conflict retained for audit: blockers: {conflictingBlocker}";
+            }
+
+            return BuildOutcome(
+                "tester-verification-inconclusive",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.VerificationInconclusive,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.AutoRetry,
+                    evidenceSummary));
+        }
 
         if (verification.Succeeded &&
             GetDispatchRoleOutputCapability(task.RequiredRole) != DispatchRoleOutputCapability.ReadOnly &&
