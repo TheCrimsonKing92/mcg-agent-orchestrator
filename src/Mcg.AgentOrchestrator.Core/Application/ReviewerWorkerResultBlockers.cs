@@ -450,6 +450,7 @@ public static class WorkerResultBlockers
 
             if (IsWorkerResultOpener(line))
             {
+                fieldScanFallback.Clear();
                 inBlock = true;
                 currentBlock.Clear();
                 continue;
