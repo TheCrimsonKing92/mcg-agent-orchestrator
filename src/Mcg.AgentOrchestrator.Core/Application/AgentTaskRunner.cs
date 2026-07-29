@@ -144,13 +144,17 @@ public sealed class AgentTaskRunner
             WorkerResultBlockers.TryGetTestsStatus(output, out var testsStatus) &&
             testsStatus == WorkerResultBlockers.TestsStatus.Inconclusive)
         {
-            WorkerResultBlockers.TryFindTests(output, out var testsEvidence);
-            _kernel.ReportTaskProgress(
+            _kernel.RecordTaskVerification(
                 goal.Id,
                 task.Id,
-                WorkTaskStatus.Failed,
-                $"Tester verification inconclusive; same Tester retry or operator escalation required. " +
-                $"structured Tester verification is inconclusive: {testsEvidence}");
+                new TaskVerificationRecord(
+                    $"api-run {resolvedModel.ProviderName}/{resolvedModel.ModelName}",
+                    string.Empty,
+                    0,
+                    output,
+                    string.Empty,
+                    execution.CompletedAt,
+                    WorkerResultPresent: true));
             return new AgentTaskRunResult(goal, task, execution);
         }
 

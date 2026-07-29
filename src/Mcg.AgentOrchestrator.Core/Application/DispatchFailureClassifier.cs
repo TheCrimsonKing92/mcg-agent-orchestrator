@@ -320,6 +320,7 @@ public static class DispatchFailureClassifier
 
         if (task.RequiredRole == AgentRole.Tester &&
             workerResultPresent &&
+            !IsDirtyDispatchGuardFailure(verification) &&
             WorkerResultBlockers.TryGetTestsStatus(verification, out var inconclusiveStatus) &&
             inconclusiveStatus == WorkerResultBlockers.TestsStatus.Inconclusive)
         {

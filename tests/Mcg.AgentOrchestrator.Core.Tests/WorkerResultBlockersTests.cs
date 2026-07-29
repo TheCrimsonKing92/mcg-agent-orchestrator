@@ -72,6 +72,24 @@ public sealed class WorkerResultBlockersTests
             status);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerResultBlockers_field_scan_without_opener_matches_dispatch_parser")]
+    public void WorkerResultBlockersFieldScanWithoutOpenerMatchesDispatchParser()
+    {
+        const string output = """
+            files: none
+            commands: dotnet test --no-build --filter Focused
+            tests: inconclusive - command timed out; no TRX
+            blockers: none
+            model_fit: OpenAI/test - adequate - verification - sufficient
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            """;
+
+        Assert.True(WorkerResultBlockers.HasCompleteWorkerResult(output));
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(output, out var status));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Inconclusive, status);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindReviewFindingRound_parses_structured_findings_and_touched_anchors")]
     public void TryFindReviewFindingRoundParsesStructuredFindingsAndTouchedAnchors()
     {

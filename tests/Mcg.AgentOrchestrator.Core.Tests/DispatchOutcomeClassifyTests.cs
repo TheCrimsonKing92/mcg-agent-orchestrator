@@ -1088,4 +1088,48 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("latest command timed out; no TRX", outcome.EvidenceSummary, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("stale first result", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
+
+    [Xunit.Fact(DisplayName = "Classify field-scan Tester inconclusive without opener")]
+    public void ClassifyFieldScanTesterInconclusiveWithoutOpener()
+    {
+        const string output = """
+            files: none
+            commands: dotnet test --no-build --filter Focused
+            tests: inconclusive - command timed out; no TRX
+            blockers: none
+            model_fit: OpenAI/test - adequate - verification - sufficient
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            """;
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(output));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify dirty Tester inconclusive keeps dirty guard precedence")]
+    public void ClassifyDirtyTesterInconclusiveKeepsDirtyGuardPrecedence()
+    {
+        const string dirtyGuardStderr =
+            "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
+            "branch=goal/abc; head=def; worktree=dirty; commits_after_dispatch=0; " +
+            "status_short=M src/Foo.cs.";
+        var verification = WorkerResultVerification(
+            WorkerResultStdout("inconclusive - command timed out; no TRX")) with
+        {
+            ExitCode = 1,
+            StandardError = dirtyGuardStderr
+        };
+        var task = SimpleTask(AgentRole.Tester);
+        task.RecordVerification(verification);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            task,
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
 }

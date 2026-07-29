@@ -940,6 +940,12 @@ public sealed class ModelExecutionTests
         await runner.RunAsync(goal.Id, task.Id);
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.NotNull(task.LastVerification);
+        Assert.True(task.LastVerification.WorkerResultPresent);
+        Assert.Equal(1, task.EmptyOutputRetryCount);
+        Assert.Equal(
+            DispatchOutcomeKind.VerificationInconclusive,
+            DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
         Assert.Contains(
             goal.Timeline,
             evt => evt.TaskId == task.Id &&

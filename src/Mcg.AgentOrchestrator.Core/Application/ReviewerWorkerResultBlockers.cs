@@ -437,11 +437,17 @@ public static class WorkerResultBlockers
     {
         List<string>? latestBlock = null;
         var currentBlock = new List<string>();
+        var fieldScanFallback = new List<string>();
         var inBlock = false;
 
         foreach (var rawLine in evidenceLines)
         {
             var line = NormalizeWorkerResultLine(rawLine);
+            if (line.Length > 0)
+            {
+                fieldScanFallback.Add(line);
+            }
+
             if (IsWorkerResultOpener(line))
             {
                 inBlock = true;
@@ -474,6 +480,14 @@ public static class WorkerResultBlockers
 
         if (latestBlock is null)
         {
+            foreach (var line in fieldScanFallback)
+            {
+                if (TryFindField(line, out _, out _))
+                {
+                    yield return line;
+                }
+            }
+
             yield break;
         }
 
