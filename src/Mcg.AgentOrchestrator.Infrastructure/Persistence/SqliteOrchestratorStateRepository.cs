@@ -1285,18 +1285,20 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return true;
     }
 
-    private static TaskSnapshot MergeTaskSnapshot(TaskSnapshot baseline, TaskSnapshot stored, TaskSnapshot current) =>
-        stored with
+    private static TaskSnapshot MergeTaskSnapshot(TaskSnapshot baseline, TaskSnapshot stored, TaskSnapshot current)
+    {
+        var attemptAuthority = PickChangedAttemptAuthority(baseline, stored, current);
+        return stored with
         {
             Description = PickStoreOwned(baseline.Description, stored.Description, current.Description),
             RequiredRole = PickStoreOwned(baseline.RequiredRole, stored.RequiredRole, current.RequiredRole),
-            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
-            AssignedAgentId = PickTickOwned(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId),
-            LastExecution = PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution),
-            LastVerification = PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification),
+            Status = attemptAuthority is null ? PickTickOwned(baseline.Status, stored.Status, current.Status) : attemptAuthority.Status,
+            AssignedAgentId = attemptAuthority is null ? PickTickOwned(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId) : attemptAuthority.AssignedAgentId,
+            LastExecution = attemptAuthority is null ? PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution) : attemptAuthority.LastExecution,
+            LastVerification = attemptAuthority is null ? PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification) : attemptAuthority.LastVerification,
             VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
-            LastDispatch = PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch),
-            LastProcess = PickTickOwned(baseline.LastProcess, stored.LastProcess, current.LastProcess),
+            LastDispatch = attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
+            LastProcess = attemptAuthority is null ? PickSameAttemptProcess(baseline.LastProcess, stored.LastProcess, current.LastProcess) : attemptAuthority.LastProcess,
             VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
             SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
             SubscriptionLimitReviewNote = PickStoreOwned(baseline.SubscriptionLimitReviewNote, stored.SubscriptionLimitReviewNote, current.SubscriptionLimitReviewNote),
@@ -1308,6 +1310,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
             PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind)
         };
+    }
 
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
         IReadOnlyList<ProgressEventSnapshot> baseline,
@@ -1334,6 +1337,93 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
     private static T PickStoreOwned<T>(T baseline, T stored, T current) =>
         PickWithSameFieldPrecedence(baseline, stored, current, preferStoredOnConflict: true);
+
+    private static TaskSnapshot? PickChangedAttemptAuthority(
+        TaskSnapshot baseline,
+        TaskSnapshot stored,
+        TaskSnapshot current)
+    {
+        var storedDispatchChanged = !SameDispatchAttempt(baseline.LastDispatch, stored.LastDispatch);
+        var currentDispatchChanged = !SameDispatchAttempt(baseline.LastDispatch, current.LastDispatch);
+        if (storedDispatchChanged != currentDispatchChanged)
+            return storedDispatchChanged ? stored : current;
+        if (storedDispatchChanged)
+            return PickNewerDispatchAttempt(stored, current);
+
+        var storedProcessChanged = !SameProcessAttempt(baseline.LastProcess, stored.LastProcess);
+        var currentProcessChanged = !SameProcessAttempt(baseline.LastProcess, current.LastProcess);
+        if (storedProcessChanged != currentProcessChanged)
+            return storedProcessChanged ? stored : current;
+        if (storedProcessChanged)
+            return PickNewerProcessAttempt(stored, current);
+
+        if (stored.LastProcess?.WasCancelled != current.LastProcess?.WasCancelled)
+            return stored.LastProcess?.WasCancelled is true ? stored : current;
+
+        return null;
+    }
+
+    private static TaskSnapshot PickNewerDispatchAttempt(TaskSnapshot stored, TaskSnapshot current)
+    {
+        if (stored.LastDispatch is null)
+            return current.LastDispatch is null ? stored : current;
+        if (current.LastDispatch is null)
+            return stored;
+
+        return stored.LastDispatch.DispatchedAt >= current.LastDispatch.DispatchedAt ? stored : current;
+    }
+
+    private static TaskSnapshot PickNewerProcessAttempt(TaskSnapshot stored, TaskSnapshot current)
+    {
+        if (stored.LastProcess is null)
+            return current.LastProcess is null ? stored : current;
+        if (current.LastProcess is null)
+            return stored;
+        if (stored.LastProcess.StartedAt != current.LastProcess.StartedAt)
+            return stored.LastProcess.StartedAt > current.LastProcess.StartedAt ? stored : current;
+        if (stored.LastProcess.WasCancelled != current.LastProcess.WasCancelled)
+            return stored.LastProcess.WasCancelled ? stored : current;
+        if (stored.LastProcess.CompletedAt is null != current.LastProcess.CompletedAt is null)
+            return stored.LastProcess.CompletedAt is not null ? stored : current;
+
+        return stored.LastProcess.CompletedAt >= current.LastProcess.CompletedAt ? stored : current;
+    }
+
+    private static bool SameDispatchAttempt(TaskDispatchSnapshot? left, TaskDispatchSnapshot? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.DispatchedAt == right.DispatchedAt;
+    }
+
+    private static bool SameProcessAttempt(TaskProcessSnapshot? left, TaskProcessSnapshot? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.ProcessId == right.ProcessId && left.StartedAt == right.StartedAt;
+    }
+
+    private static TaskProcessSnapshot? PickSameAttemptProcess(
+        TaskProcessSnapshot? baseline,
+        TaskProcessSnapshot? stored,
+        TaskProcessSnapshot? current)
+    {
+        var storedChanged = !SnapshotEquals(baseline, stored);
+        var currentChanged = !SnapshotEquals(baseline, current);
+        if (!storedChanged || !currentChanged)
+            return PickTickOwned(baseline, stored, current);
+
+        if (stored?.WasCancelled != current?.WasCancelled)
+            return stored?.WasCancelled is true ? stored : current;
+        if (stored?.CompletedAt is null != current?.CompletedAt is null)
+            return stored?.CompletedAt is not null ? stored : current;
+        if (stored?.CompletedAt != current?.CompletedAt)
+            return stored?.CompletedAt > current?.CompletedAt ? stored : current;
+
+        return current;
+    }
 
     private static T PickWithSameFieldPrecedence<T>(T baseline, T stored, T current, bool preferStoredOnConflict)
     {

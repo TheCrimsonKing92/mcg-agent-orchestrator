@@ -1142,6 +1142,274 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_never_replaces_newer_dispatch_attempt_with_stale_completion")]
+    public async Task TickMergeNeverReplacesNewerDispatchAttemptWithStaleCompletion()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect newer dispatch attempt");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var firstStartedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("claude-cli", "old command", "C:\\work", firstStartedAt));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(1234, "old command", "C:\\work", "old.out", "old.err", "old.exit", firstStartedAt, null, null));
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            tickKernel.GetTask(goal.Id, task.Id).LastProcess! with
+            {
+                CompletedAt = firstStartedAt.AddMinutes(3),
+                ExitCode = 0
+            },
+            new TaskVerificationRecord(
+                "old command",
+                "C:\\work",
+                0,
+                "completed old attempt",
+                string.Empty,
+                firstStartedAt.AddMinutes(3)));
+        Assert.Equal(WorkTaskStatus.Completed, tickKernel.GetTask(goal.Id, task.Id).Status);
+        var staleTickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        var secondStartedAt = firstStartedAt.AddMinutes(5);
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                operatorKernel.RequeueInterruptedDispatch(goal.Id, task.Id, "recover old attempt");
+                operatorKernel.RecordTaskDispatch(
+                    goal.Id,
+                    task.Id,
+                    new TaskDispatchRecord("claude-cli", "new command", "C:\\work", secondStartedAt));
+                operatorKernel.RecordTaskProcessStarted(
+                    goal.Id,
+                    task.Id,
+                    new TaskProcessRecord(5678, "new command", "C:\\work", "new.out", "new.err", "new.exit", secondStartedAt, null, null));
+                return Task.FromResult((true, operatorKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, staleTickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal("new command", restoredTask.LastDispatch!.Command);
+        Assert.Equal(secondStartedAt, restoredTask.LastDispatch.DispatchedAt);
+        Assert.Equal(5678, restoredTask.LastProcess!.ProcessId);
+        Assert.Equal(secondStartedAt, restoredTask.LastProcess.StartedAt);
+        Assert.True(restoredTask.LastProcess.IsRunning);
+        Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
+        Assert.Null(restoredTask.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_retry_tombstone_over_stale_completion")]
+    public async Task TickMergePreservesRetryTombstoneOverStaleCompletion()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect retry tombstone");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("claude-cli", "old command", "C:\\work", startedAt));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(1234, "old command", "C:\\work", "old.out", "old.err", "old.exit", startedAt, null, null));
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            tickKernel.GetTask(goal.Id, task.Id).LastProcess! with
+            {
+                CompletedAt = startedAt.AddMinutes(3),
+                ExitCode = 0
+            },
+            new TaskVerificationRecord(
+                "old command",
+                "C:\\work",
+                0,
+                "completed old attempt",
+                string.Empty,
+                startedAt.AddMinutes(3)));
+        var staleTickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                operatorKernel.RequeueInterruptedDispatch(goal.Id, task.Id, "recover old attempt");
+                return Task.FromResult((true, operatorKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, staleTickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
+        Assert.Null(restoredTask.LastDispatch);
+        Assert.Null(restoredTask.LastProcess);
+        Assert.Null(restoredTask.LastExecution);
+        Assert.Null(restoredTask.LastVerification);
+        Assert.Single(restoredTask.VerificationHistory);
+        Assert.NotNull(restoredTask.LatestRetryAt);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_same_attempt_process_refresh_and_verification")]
+    public async Task TickMergePreservesSameAttemptProcessRefreshAndVerification()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Merge same-attempt process and verification");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("claude-cli", "same command", "C:\\work", startedAt));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(1234, "same command", "C:\\work", "same.out", "same.err", "same.exit", startedAt, null, null));
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            tickKernel.GetTask(goal.Id, task.Id).LastProcess! with
+            {
+                CompletedAt = startedAt.AddMinutes(3),
+                ExitCode = 0
+            },
+            new TaskVerificationRecord(
+                "same command",
+                "C:\\work",
+                0,
+                "completed same attempt",
+                string.Empty,
+                startedAt.AddMinutes(3)));
+        var tickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var storeKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                storeKernel.RecordTaskProcessRefreshed(
+                    goal.Id,
+                    task.Id,
+                    storeKernel.GetTask(goal.Id, task.Id).LastProcess! with
+                    {
+                        CompletedAt = startedAt.AddMinutes(4),
+                        ExitCode = 0
+                    },
+                    null);
+                return Task.FromResult((true, storeKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
+        Assert.Equal(startedAt.AddMinutes(4), restoredTask.LastProcess!.CompletedAt);
+        Assert.Equal(0, restoredTask.LastProcess.ExitCode);
+        Assert.Equal("completed same attempt", restoredTask.LastVerification!.StandardOutput);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_cancellation_over_same_attempt_completion")]
+    public async Task TickMergePreservesCancellationOverSameAttemptCompletion()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect same-attempt cancellation");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("claude-cli", "old command", "C:\\work", startedAt));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(1234, "old command", "C:\\work", "old.out", "old.err", "old.exit", startedAt, null, null));
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        tickKernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            tickKernel.GetTask(goal.Id, task.Id).LastProcess! with
+            {
+                CompletedAt = startedAt.AddMinutes(4),
+                ExitCode = 0
+            },
+            new TaskVerificationRecord(
+                "old command",
+                "C:\\work",
+                0,
+                "completed old attempt",
+                string.Empty,
+                startedAt.AddMinutes(4)));
+        var staleTickSnapshot = tickKernel.ExportSnapshot().Goals.Single();
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                operatorKernel.RecordTaskProcessCancelled(
+                    goal.Id,
+                    task.Id,
+                    operatorKernel.GetTask(goal.Id, task.Id).LastProcess! with
+                    {
+                        CompletedAt = startedAt.AddMinutes(3),
+                        ExitCode = 130,
+                        WasCancelled = true
+                    });
+                return Task.FromResult((true, operatorKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, staleTickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Cancelled, restoredTask.Status);
+        Assert.True(restoredTask.LastProcess!.WasCancelled);
+        Assert.Equal(130, restoredTask.LastProcess.ExitCode);
+        Assert.Null(restoredTask.LastVerification);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_acceptance_retry_counters")]
     public async Task TickMergePreservesAcceptanceRetryCounters()
     {
