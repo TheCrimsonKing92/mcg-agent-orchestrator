@@ -1054,6 +1054,45 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("CAS retry goal concurrent update", restored.GetGoal(goal.Id).Objective);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalStateAsync_persists_goal_and_human_wait_together")]
+    public async Task TransactGoalStateAsyncPersistsGoalAndHumanWaitTogether()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Validate premise", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Persist premise clarification", [task]);
+        await repo.SaveAsync(kernel);
+
+        await repo.TransactGoalStateAsync<bool>(
+            goal.Id,
+            (state, _) =>
+            {
+                Assert.NotNull(state);
+                var transactionKernel = AgentOrchestratorKernel.FromSnapshot(
+                    new OrchestratorSnapshot([state.Goal], state.HumanInputRequests));
+                transactionKernel.RequestHumanInput(
+                    goal.Id,
+                    task.Id,
+                    "Planner reported premise-invalid; clarify or abandon.");
+                var snapshot = transactionKernel.ExportSnapshot();
+                var updatedState = new GoalStateSnapshot(
+                    snapshot.Goals.Single(),
+                    snapshot.HumanInputRequests);
+                return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, bool Result)>(
+                    (true, updatedState, true));
+            });
+
+        var restored = await repo.LoadAsync();
+        var request = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(task.Id, request.TaskId);
+        Assert.Contains("premise-invalid", request.Question, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, restored.GetTask(goal.Id, task.Id).Status);
+        Assert.Contains(
+            restored.GetGoal(goal.Id).Timeline,
+            item => item.Kind == ProgressKind.HumanInputRequested);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_mid_tick_retry_and_tick_task_state")]
     public async Task TickMergePreservesMidTickRetryAndTickTaskState()
     {

@@ -1482,7 +1482,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 return result;
 
             // Short BEGIN IMMEDIATE: re-read version, write one row if version unchanged.
-            var casSucceeded = await TryCasWriteGoalRowAsync(goalId, newSnapshot, loadedVersion, resolvedOperation, cancellationToken);
+            var casSucceeded = await TryCasWriteGoalRowAsync(
+                goalId,
+                newSnapshot,
+                humanInputRequests: null,
+                loadedVersion,
+                resolvedOperation,
+                cancellationToken);
             if (casSucceeded)
                 return result;
 
@@ -1492,6 +1498,61 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             if (attempt >= MaxBusyRetries)
                 throw new InvalidOperationException(
                     $"TransactGoalAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
+
+            await Task.Delay(versionMismatchDelay, cancellationToken);
+            versionMismatchDelay = Math.Min(versionMismatchDelay * 2, 1000);
+        }
+    }
+
+    public async Task<T> TransactGoalStateAsync<T>(
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return await TransactGoalStateAsync(
+            ResolveOperationTag($"{nameof(TransactGoalStateAsync)}({ShortGoalId(goalId.Value)})"),
+            goalId,
+            transaction,
+            cancellationToken);
+    }
+
+    public async Task<T> TransactGoalStateAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        var versionMismatchDelay = 50;
+        var resolvedOperation = ResolveOperationTag($"{nameof(TransactGoalStateAsync)}({ShortGoalId(goalId.Value)})", operationName);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (loadedState, loadedVersion) = await LoadGoalStateAndVersionAsync(goalId, cancellationToken);
+            var (shouldSave, newState, result) = await transaction(loadedState, cancellationToken);
+
+            if (!shouldSave || newState is null)
+                return result;
+
+            if (!string.Equals(newState.Goal.Id, goalId.Value, StringComparison.Ordinal) ||
+                newState.HumanInputRequests.Any(request =>
+                    !string.Equals(request.GoalId, goalId.Value, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"TransactGoalStateAsync for goal {goalId.Value[..8]} cannot persist state owned by another goal.");
+            }
+
+            var casSucceeded = await TryCasWriteGoalRowAsync(
+                goalId,
+                newState.Goal,
+                newState.HumanInputRequests,
+                loadedVersion,
+                resolvedOperation,
+                cancellationToken);
+            if (casSucceeded)
+                return result;
+
+            if (attempt >= MaxBusyRetries)
+                throw new InvalidOperationException(
+                    $"TransactGoalStateAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
             await Task.Delay(versionMismatchDelay, cancellationToken);
             versionMismatchDelay = Math.Min(versionMismatchDelay * 2, 1000);
@@ -1517,12 +1578,54 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         }, cancellationToken);
     }
 
+    private async Task<(GoalStateSnapshot? State, int Version)> LoadGoalStateAndVersionAsync(
+        GoalId goalId,
+        CancellationToken cancellationToken)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            GoalSnapshot? goalSnapshot;
+            int version;
+            await using (var goalCommand = conn.CreateCommand())
+            {
+                goalCommand.CommandText = "SELECT snapshot_json, COALESCE(version, 0) FROM goals WHERE id = $id";
+                goalCommand.Parameters.AddWithValue("$id", goalId.Value);
+                await using var reader = await goalCommand.ExecuteReaderAsync(cancellationToken);
+                if (!await reader.ReadAsync(cancellationToken))
+                    return ((GoalStateSnapshot?)null, 0);
+
+                goalSnapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions);
+                version = reader.GetInt32(1);
+            }
+
+            var humanInputRequests = new List<HumanInputRequestSnapshot>();
+            await using (var inputCommand = conn.CreateCommand())
+            {
+                inputCommand.CommandText = "SELECT snapshot_json FROM human_input_requests WHERE goal_id = $goal_id";
+                inputCommand.Parameters.AddWithValue("$goal_id", goalId.Value);
+                await using var reader = await inputCommand.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var request = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(
+                        reader.GetString(0),
+                        SerializerOptions);
+                    if (request is not null)
+                        humanInputRequests.Add(request);
+                }
+            }
+
+            return (new GoalStateSnapshot(goalSnapshot!, humanInputRequests), version);
+        }, cancellationToken);
+    }
+
     // Attempts a short CAS write for one goal row. Acquires BEGIN IMMEDIATE, re-reads the version,
     // writes only if it matches expectedVersion, increments version, then commits.
     // Returns true on success, false when the version has changed (caller should retry).
     private async Task<bool> TryCasWriteGoalRowAsync(
         GoalId goalId,
         GoalSnapshot snapshot,
+        IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests,
         int expectedVersion,
         string operationName,
         CancellationToken cancellationToken)
@@ -1551,6 +1654,27 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             var updatedAt = DateTimeOffset.UtcNow.ToString("O");
             telemetry.AddWrite(await UpsertGoalRowAsync(conn, snapshot, updatedAt, versionSql: "$version", cancellationToken, currentVersion + 1));
             telemetry.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, snapshot, cancellationToken));
+            if (humanInputRequests is not null)
+            {
+                foreach (var request in humanInputRequests)
+                {
+                    var json = JsonSerializer.Serialize(request, SerializerOptions);
+                    await using var inputCommand = conn.CreateCommand();
+                    inputCommand.CommandText = """
+                        INSERT INTO human_input_requests (id, goal_id, snapshot_json)
+                        VALUES ($id, $goal_id, $json)
+                        ON CONFLICT(id) DO UPDATE SET
+                            goal_id       = excluded.goal_id,
+                            snapshot_json = excluded.snapshot_json
+                        """;
+                    inputCommand.Parameters.AddWithValue("$id", request.Id);
+                    inputCommand.Parameters.AddWithValue("$goal_id", request.GoalId);
+                    inputCommand.Parameters.AddWithValue("$json", json);
+                    telemetry.AddWrite(
+                        await inputCommand.ExecuteNonQueryAsync(cancellationToken),
+                        Encoding.UTF8.GetByteCount(json));
+                }
+            }
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");

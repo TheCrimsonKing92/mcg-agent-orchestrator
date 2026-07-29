@@ -303,7 +303,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(methodEnd > methodStart, "Could not isolate ExecuteGoalScopedTaskMutationCommand.");
         var methodSource = source[methodStart..methodEnd];
 
-        Xunit.Assert.Contains("TransactGoalAsync", methodSource, StringComparison.Ordinal);
+        Xunit.Assert.Contains("TransactGoalStateAsync", methodSource, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("LoadSingleGoalKernel", methodSource, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("LoadAsync", methodSource, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("reloadKernel", methodSource, StringComparison.Ordinal);
@@ -1350,6 +1350,59 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
         Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
         Xunit.Assert.NotNull(restoredTask.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatch_atomically_persists_premise_invalid_human_wait")]
+    public async Task PersistentRunnerRefreshDispatchAtomicallyPersistsPremiseInvalidHumanWait()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Validate the implementation premise", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Premise validation canary", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, """
+            WORKER_RESULT:
+            files: none
+            commands: inspected src/Mcg.AgentOrchestrator.Core/Domain/OrchestrationEnums.cs
+            tests: not-run - read-only premise validation
+            commit: none
+            blockers: premise-invalid - AgentRole.Judge is absent from the inspected enum at the current HEAD
+            model_fit: Anthropic/claude-opus-5 - adequate - premise validation - sufficient
+            skills: orchestrator-worker-verification
+            confidence: high
+            END_WORKER_RESULT
+            """);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatch", goal.Id.Value[..8], "1"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restored = await repository.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, restoredTask.Status);
+        Xunit.Assert.True(restoredTask.LastVerification?.WorkerResultPresent);
+        Xunit.Assert.Equal(1, repository.LastSavedGoalStateHumanInputCount);
+        var request = Xunit.Assert.Single(restored.HumanInputRequests);
+        Xunit.Assert.False(request.IsCompleted);
+        Xunit.Assert.Contains("premise-invalid", request.Question, StringComparison.Ordinal);
+        Xunit.Assert.Equal(task.Id, request.TaskId);
+        Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+        Xunit.Assert.Equal(1, repository.TransactGoalCount);
     }
 
 
