@@ -362,18 +362,26 @@ public sealed class RepositoryChangeClassifierTests
         Assert.True(plan.Summary.Contains("Documentation-only", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_infrastructure_tests_for_infrastructure_changes")]
-    public void RepositoryTestImpactPlannerSelectsInfrastructureTestsForInfrastructureChanges()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_splits_worker_changes_into_parallel_focused_partitions")]
+    public void RepositoryTestImpactPlannerSplitsWorkerChangesIntoParallelFocusedPartitions()
     {
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"
         ]);
 
         Assert.True(plan.RequiresBuild);
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("infrastructure tests", check.Name);
-        Assert.True(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal)));
-        Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
+        Assert.Equal(3, plan.Checks.Count);
+        Assert.All(plan.Checks, check =>
+        {
+            Assert.StartsWith("infrastructure tests: Worker dispatch", check.Name, StringComparison.Ordinal);
+            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
+            Assert.Contains("--filter", check.Command);
+            Assert.DoesNotContain(
+                "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                check.Command);
+        });
+        Assert.DoesNotContain(plan.Checks, check =>
+            check.Name == "infrastructure tests: Worker dispatch results");
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_cli_filter_for_cli_only_changes")]
@@ -425,6 +433,47 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_splits_conductor_changes_into_parallel_focused_partitions")]
+    public void RepositoryTestImpactPlannerSplitsConductorChangesIntoParallelFocusedPartitions()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"
+        ]);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests: Conductor control", check.Name);
+        Assert.Contains("--filter", check.Command);
+        Assert.Contains(check.Command, argument => argument.Contains("ConductorDriverTests", StringComparison.Ordinal));
+        Assert.DoesNotContain(check.Command, argument => argument.Contains("ConductorSelfRelaunchTests", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_keeps_representative_core_conductor_worker_scope_off_slow_unrelated_fixtures")]
+    public void RepositoryTestImpactPlannerKeepsRepresentativeCoreConductorWorkerScopeOffSlowUnrelatedFixtures()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Core/Application/ReviewerWorkerResultBlockers.cs",
+            "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerResultParser.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerResultParserEvidenceTests.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs",
+            ".agents/skills/dotnet-windows-build-hygiene/SKILL.md"
+        ]);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
+        Assert.Equal(3, plan.Checks.Count);
+        Assert.Contains(plan.Checks, check => check.Name == "core tests");
+        Assert.Contains(plan.Checks, check => check.Name == "infrastructure tests: Conductor control");
+        Assert.Contains(plan.Checks, check => check.Name == "infrastructure tests: Worker dispatch results");
+        Assert.DoesNotContain(plan.Checks, check =>
+            check.Command.Any(argument =>
+                argument.Contains("GoalWorktreeTests", StringComparison.Ordinal) ||
+                argument.Contains("DispatchProcessHostTests", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
@@ -537,9 +586,12 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
-        Assert.Equal(2, plan.Checks.Count);
+        Assert.Equal(4, plan.Checks.Count);
         Assert.True(plan.Checks.Any(check => check.Name == "core tests"));
-        Assert.True(plan.Checks.Any(check => check.Name == "infrastructure tests"));
+        Assert.Equal(
+            3,
+            plan.Checks.Count(check =>
+                check.Name.StartsWith("infrastructure tests: Worker dispatch", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_two_per_project_checks_never_a_solution_run")]

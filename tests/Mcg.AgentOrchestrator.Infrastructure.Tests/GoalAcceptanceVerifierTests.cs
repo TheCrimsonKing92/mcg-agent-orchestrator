@@ -3947,8 +3947,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Equal("dotnet test", result.Checks![0].Name);
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_selects_infrastructure_tests_from_default_plan")]
-    public async Task GoalAcceptanceVerifierSelectsInfrastructureTestsFromDefaultPlan()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_selects_parallel_worker_partitions_from_default_plan")]
+    public async Task GoalAcceptanceVerifierSelectsParallelWorkerPartitionsFromDefaultPlan()
     {
         var calls = new List<string[]>();
         var root = CreatePartitionedInfrastructureManifestWorkspace();
@@ -3977,8 +3977,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
-        Assert.Equal(laneCount, infrastructureCalls.Length);
+        Assert.Equal(3, infrastructureCalls.Length);
         Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.Ordinal));
         foreach (var call in infrastructureCalls)
         {
@@ -3988,12 +3987,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("--report-trx", call);
         }
 
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker profiles");
-        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker dispatch model and sandbox");
+        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker dispatch preparation");
+        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker dispatch orchestration");
+        Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests: Worker dispatch results");
+        Assert.DoesNotContain(result.Checks!, check => check.Name == "infrastructure tests: Goal worktree cleanup");
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+            check.ResultSummary?.Contains(
+                "covered by: infrastructure tests: Worker dispatch",
+                StringComparison.Ordinal) == true);
         DeleteDirectoryWithRetry(root);
     }
 
@@ -4466,8 +4470,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.False(result.Checks.Any(c => c.Name == "infrastructure tests"));
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_core_and_dependent_infrastructure_shards_for_core_scope")]
-    public async Task GoalAcceptanceVerifierRunsCoreAndDependentInfrastructureShardsForCoreScope()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_core_scope_does_not_select_unrelated_infrastructure_fixtures")]
+    public async Task GoalAcceptanceVerifierCoreScopeDoesNotSelectUnrelatedInfrastructureFixtures()
     {
         var root = CreateCheckedInManifestShapeWorkspace();
         var calls = new List<string[]>();
@@ -4486,9 +4490,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        Assert.Equal(
-            AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 4,
-            calls.Count);
+        Assert.Equal(4, calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
         var infrastructureCalls = calls
             .Where(call => call.Length > 2 &&
@@ -4496,16 +4498,62 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call[1] == "test" &&
                 call[2] == "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")
             .ToArray();
-        var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
-        Assert.Equal(laneCount, infrastructureCalls.Length);
-        foreach (var call in infrastructureCalls)
-            Assert.Contains("--filter", call);
+        Assert.Empty(infrastructureCalls);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         Assert.Contains(result.Checks!, check => check.Name == "core tests");
+        var infrastructureReceipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.True(infrastructureReceipt.Passed);
+        Assert.Contains("skipped: no changed file in dependency closure", infrastructureReceipt.ResultSummary, StringComparison.Ordinal);
+        Assert.Contains("selected test projects: Core.Tests", infrastructureReceipt.ResultSummary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_representative_core_conductor_worker_scope_keeps_coverage_without_slow_unrelated_fixtures")]
+    public async Task GoalAcceptanceVerifierRepresentativeCoreConductorWorkerScopeKeepsCoverageWithoutSlowUnrelatedFixtures()
+    {
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var calls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        {
+            calls.Add(args);
+            if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
+                IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            {
+                WriteMtpTrx(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            }
+
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+        });
+
+        var result = await verifier.RunAsync(
+            root,
+            changedFiles:
+            [
+                "src/Mcg.AgentOrchestrator.Core/Application/ReviewerWorkerResultBlockers.cs",
+                "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerResultParser.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerResultParserEvidenceTests.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs"
+            ]);
+
+        Assert.True(result.Passed);
+        Assert.Contains(result.Checks!, check => check.Name == "core tests" && check.Passed);
+        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Conductor control" && check.Passed);
+        Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker dispatch results" && check.Passed);
+        Assert.DoesNotContain(result.Checks!, check =>
+            check.Name.Contains("Goal worktree", StringComparison.OrdinalIgnoreCase) ||
+            check.Name.Contains("Process spawning", StringComparison.OrdinalIgnoreCase));
+        var infrastructureCalls = calls.Where(IsInfrastructurePartitionTestCall).ToArray();
+        Assert.Equal(2, infrastructureCalls.Length);
+        Assert.DoesNotContain(infrastructureCalls, call => call.Any(argument =>
+            argument.Contains("GoalWorktreeTests", StringComparison.Ordinal) ||
+            argument.Contains("DispatchProcessHostTests", StringComparison.Ordinal)));
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
-            check.Passed &&
-            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+            check.ResultSummary?.Contains("covered by: infrastructure tests:", StringComparison.Ordinal) == true);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_partitioned_infrastructure_checks_for_infra_scope")]
@@ -4532,7 +4580,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         var result = await verifier.RunAsync(
             root,
-            changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/Foo.cs"]);
+            changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/Foo.cs"]);
 
         Assert.True(result.Passed);
         var infrastructureCalls = calls
@@ -4589,7 +4637,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             changedFiles:
             [
                 "src/Mcg.AgentOrchestrator.Core/Application/Foo.cs",
-                "src/Mcg.AgentOrchestrator.Infrastructure/Workers/Foo.cs"
+                "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/Foo.cs"
             ]);
 
         Assert.True(result.Passed);

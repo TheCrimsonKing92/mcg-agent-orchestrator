@@ -1355,11 +1355,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var closure = BuildProjectDependencyClosure(changedProjects);
-        var evidence = BuildPolicyShardEvidence(changedProjects, closure);
+        var selectedTestProjects = RepositoryTestImpactPlanner.Plan(summary)
+            .Checks
+            .Select(TryMapImpactCheckToProject)
+            .OfType<string>()
+            .Where(project =>
+                project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ||
+                project.Equals(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var evidence = BuildPolicyShardEvidence(changedProjects, closure, selectedTestProjects);
         var fullShardReason = FullShardReason(normalizedFiles, summary, changedProjects);
         return fullShardReason is not null
-            ? PolicyShardPlan.Full($"{fullShardReason}; {evidence}", closure)
-            : PolicyShardPlan.Scoped(evidence, closure);
+            ? PolicyShardPlan.Full($"{fullShardReason}; {evidence}", closure, selectedTestProjects)
+            : PolicyShardPlan.Scoped(evidence, closure, selectedTestProjects);
     }
 
     private static string? FullShardReason(
@@ -1430,7 +1438,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string BuildPolicyShardEvidence(
         IReadOnlyList<string> changedProjects,
-        IReadOnlySet<string> closure)
+        IReadOnlySet<string> closure,
+        IReadOnlySet<string> selectedTestProjects)
     {
         var changed = changedProjects.Count == 0
             ? "(none)"
@@ -1438,7 +1447,22 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var affected = closure.Count == 0
             ? "(none)"
             : string.Join(", ", closure.OrderBy(ProjectLabel, StringComparer.OrdinalIgnoreCase).Select(ProjectLabel));
-        return $"changed projects: {changed}; dependency closure: {affected}";
+        var selectedTests = selectedTestProjects.Count == 0
+            ? "(none)"
+            : string.Join(", ", selectedTestProjects.OrderBy(ProjectLabel, StringComparer.OrdinalIgnoreCase).Select(ProjectLabel));
+        return $"changed projects: {changed}; dependency closure: {affected}; selected test projects: {selectedTests}";
+    }
+
+    private static string? TryMapImpactCheckToProject(RepositoryTestImpactCheck check)
+    {
+        if (check.Command.Count < 3 ||
+            !check.Command[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+            !check.Command[1].Equals("test", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return NormalizePath(check.Command[2]);
     }
 
     private static string? TryMapPathToProject(string? path)
@@ -6103,22 +6127,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool Applies,
         bool ForceFull,
         string Evidence,
-        IReadOnlySet<string> DependencyClosure)
+        IReadOnlySet<string> DependencyClosure,
+        IReadOnlySet<string> SelectedTestProjects)
     {
         public static PolicyShardPlan NotApplicable(string evidence) =>
-            new(false, false, evidence, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            new(
+                false,
+                false,
+                evidence,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
-        public static PolicyShardPlan Full(string evidence, IReadOnlySet<string> dependencyClosure) =>
-            new(true, true, evidence, dependencyClosure);
+        public static PolicyShardPlan Full(
+            string evidence,
+            IReadOnlySet<string> dependencyClosure,
+            IReadOnlySet<string> selectedTestProjects) =>
+            new(true, true, evidence, dependencyClosure, selectedTestProjects);
 
-        public static PolicyShardPlan Scoped(string evidence, IReadOnlySet<string> dependencyClosure) =>
-            new(true, false, evidence, dependencyClosure);
+        public static PolicyShardPlan Scoped(
+            string evidence,
+            IReadOnlySet<string> dependencyClosure,
+            IReadOnlySet<string> selectedTestProjects) =>
+            new(true, false, evidence, dependencyClosure, selectedTestProjects);
 
         public bool IncludesProject(string? project) =>
             ForceFull ||
             !Applies ||
             (!string.IsNullOrWhiteSpace(project) &&
-                DependencyClosure.Contains(NormalizePath(project)!));
+                SelectedTestProjects.Contains(NormalizePath(project)!));
     }
 
     private sealed class AcceptanceManifest
