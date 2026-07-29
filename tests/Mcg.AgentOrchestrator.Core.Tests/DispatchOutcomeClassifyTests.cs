@@ -1041,4 +1041,95 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
+
+    [Xunit.Fact(DisplayName = "Classify treats structured Tester inconclusive as first class outcome despite stale blocker")]
+    public void ClassifyTreatsStructuredTesterInconclusiveAsFirstClassOutcomeDespiteStaleBlocker()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(
+                WorkerResultStdout(
+                    "inconclusive - command timed out; no TRX",
+                    "stale product blocker from a prior round")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("command timed out; no TRX", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains("schema conflict", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify keeps Tester fail plus blocker on genuine failure path")]
+    public void ClassifyKeepsTesterFailPlusBlockerOnGenuineFailurePath()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(
+                WorkerResultStdout(
+                    "fail - focused assertion failed",
+                    "product behavior returns the wrong value")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify binds structured Tester outcome to latest WORKER_RESULT")]
+    public void ClassifyBindsStructuredTesterOutcomeToLatestWorkerResult()
+    {
+        var output =
+            WorkerResultStdout("pass - stale first result", "none") +
+            Environment.NewLine +
+            WorkerResultStdout("inconclusive - latest command timed out; no TRX", "none");
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(output));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+        Xunit.Assert.Contains("latest command timed out; no TRX", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("stale first result", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify field-scan Tester inconclusive without opener")]
+    public void ClassifyFieldScanTesterInconclusiveWithoutOpener()
+    {
+        const string output = """
+            files: none
+            commands: dotnet test --no-build --filter Focused
+            tests: inconclusive - command timed out; no TRX
+            blockers: none
+            model_fit: OpenAI/test - adequate - verification - sufficient
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            """;
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(output));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify dirty Tester inconclusive keeps dirty guard precedence")]
+    public void ClassifyDirtyTesterInconclusiveKeepsDirtyGuardPrecedence()
+    {
+        const string dirtyGuardStderr =
+            "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
+            "branch=goal/abc; head=def; worktree=dirty; commits_after_dispatch=0; " +
+            "status_short=M src/Foo.cs.";
+        var verification = WorkerResultVerification(
+            WorkerResultStdout("inconclusive - command timed out; no TRX")) with
+        {
+            ExitCode = 1,
+            StandardError = dirtyGuardStderr
+        };
+        var task = SimpleTask(AgentRole.Tester);
+        task.RecordVerification(verification);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            task,
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
 }

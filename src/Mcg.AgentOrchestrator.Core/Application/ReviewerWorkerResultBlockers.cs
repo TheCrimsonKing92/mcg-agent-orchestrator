@@ -10,7 +10,8 @@ public static class WorkerResultBlockers
         Pass,
         Fail,
         NotRun,
-        Deferred
+        Deferred,
+        Inconclusive
     }
 
     public enum BlockersStatus
@@ -281,6 +282,13 @@ public static class WorkerResultBlockers
             TryParseTestsStatus(tests, out status);
     }
 
+    public static bool TryGetTestsStatus(string workerOutput, out TestsStatus status)
+    {
+        status = TestsStatus.Unknown;
+        return TryFindTests(workerOutput, out var tests) &&
+            TryParseTestsStatus(tests, out status);
+    }
+
     public static bool TryGetBlockersStatus(TaskVerificationRecord? verification, out BlockersStatus status)
     {
         status = BlockersStatus.Unknown;
@@ -293,6 +301,58 @@ public static class WorkerResultBlockers
         {
             if (TryFindField(line, "blockers", out var value) &&
                 TryParseBlockersStatus(value, out status))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool TryFindBlocker(string workerOutput, out string blocker)
+    {
+        blocker = string.Empty;
+        foreach (var line in EnumerateWorkerResultLines(SplitRetainedLines(workerOutput)))
+        {
+            if (TryFindBlockersField(line, out blocker) ||
+                TryFindBlockerMarkedFinding(line, out blocker))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool TryFindPremiseInvalidEvidence(TaskVerificationRecord? verification, out string evidence)
+    {
+        evidence = string.Empty;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (!TryFindField(line, "blockers", out var value) ||
+                !TryReadCanonicalEvidence(value, "premise-invalid", out evidence))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool TryFindPremiseInvalidEvidence(string workerOutput, out string evidence)
+    {
+        evidence = string.Empty;
+        foreach (var line in EnumerateWorkerResultLines(SplitRetainedLines(workerOutput)))
+        {
+            if (TryFindField(line, "blockers", out var value) &&
+                TryReadCanonicalEvidence(value, "premise-invalid", out evidence))
             {
                 return true;
             }
@@ -320,17 +380,77 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryFindTests(string workerOutput, out string tests)
+    {
+        tests = string.Empty;
+        foreach (var line in EnumerateWorkerResultLines(SplitRetainedLines(workerOutput)))
+        {
+            if (TryFindField(line, "tests", out tests))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool HasCompleteWorkerResult(string workerOutput)
+    {
+        var fields = EnumerateWorkerResultLines(SplitRetainedLines(workerOutput))
+            .Select(line => TryFindField(line, out var fieldName, out _) ? fieldName : null)
+            .OfType<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return AgentOutputDirectives.WorkerResultFieldNames.All(fields.Contains);
+    }
+
+    public static bool TryFindMalformedEvidenceBoundOutcome(string workerOutput, out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        foreach (var line in EnumerateWorkerResultLines(SplitRetainedLines(workerOutput)))
+        {
+            if (TryFindField(line, "tests", out var tests) &&
+                string.Equals(ReadLeadingWorkerResultToken(tests), "inconclusive", StringComparison.Ordinal) &&
+                !TryReadCanonicalEvidence(tests, "inconclusive", out _))
+            {
+                diagnostic = "tests: inconclusive requires 'inconclusive - <current-round evidence>'.";
+                return true;
+            }
+
+            if (TryFindField(line, "blockers", out var blockers) &&
+                string.Equals(ReadLeadingWorkerResultToken(blockers), "premise-invalid", StringComparison.Ordinal) &&
+                !TryReadCanonicalEvidence(blockers, "premise-invalid", out _))
+            {
+                diagnostic = "blockers: premise-invalid requires 'premise-invalid - <fact and evidence>'.";
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static IEnumerable<string> EnumerateWorkerResultLines(TaskVerificationRecord verification)
+    {
+        return EnumerateWorkerResultLines(EnumerateEvidenceLines(verification));
+    }
+
+    private static IEnumerable<string> EnumerateWorkerResultLines(IEnumerable<string> evidenceLines)
     {
         List<string>? latestBlock = null;
         var currentBlock = new List<string>();
+        var fieldScanFallback = new List<string>();
         var inBlock = false;
 
-        foreach (var rawLine in EnumerateEvidenceLines(verification))
+        foreach (var rawLine in evidenceLines)
         {
             var line = NormalizeWorkerResultLine(rawLine);
+            if (line.Length > 0)
+            {
+                fieldScanFallback.Add(line);
+            }
+
             if (IsWorkerResultOpener(line))
             {
+                fieldScanFallback.Clear();
                 inBlock = true;
                 currentBlock.Clear();
                 continue;
@@ -361,6 +481,14 @@ public static class WorkerResultBlockers
 
         if (latestBlock is null)
         {
+            foreach (var line in fieldScanFallback)
+            {
+                if (TryFindField(line, out _, out _))
+                {
+                    yield return line;
+                }
+            }
+
             yield break;
         }
 
@@ -419,18 +547,26 @@ public static class WorkerResultBlockers
     private static bool TryFindField(string line, string fieldName, out string value)
     {
         value = string.Empty;
+        if (!TryFindField(line, out var key, out value) ||
+            !string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryFindField(string line, out string key, out string value)
+    {
+        key = string.Empty;
+        value = string.Empty;
         var sep = line.IndexOf(':', StringComparison.Ordinal);
         if (sep <= 0)
         {
             return false;
         }
 
-        var key = NormalizeWorkerResultKey(line[..sep]);
-        if (!string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
+        key = NormalizeWorkerResultKey(line[..sep]);
         value = line[(sep + 1)..].Trim();
         return true;
     }
@@ -463,10 +599,25 @@ public static class WorkerResultBlockers
             "fail" => TestsStatus.Fail,
             "not-run" => TestsStatus.NotRun,
             "deferred" => TestsStatus.Deferred,
+            "inconclusive" when TryReadCanonicalEvidence(value, "inconclusive", out _) => TestsStatus.Inconclusive,
             _ => TestsStatus.Unknown
         };
 
         return status != TestsStatus.Unknown;
+    }
+
+    private static bool TryReadCanonicalEvidence(string value, string token, out string evidence)
+    {
+        evidence = string.Empty;
+        var prefix = $"{token} - ";
+        var trimmed = value.Trim();
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        evidence = trimmed[prefix.Length..].Trim();
+        return evidence.Length > 0;
     }
 
     private static bool TryParseBlockersStatus(string value, out BlockersStatus status)

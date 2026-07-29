@@ -3,6 +3,93 @@ using System.Text.Json;
 
 public sealed class WorkerResultBlockersTests
 {
+    [Xunit.Fact(DisplayName = "WorkerResultBlockers_parses_inconclusive_tests_and_preserves_receipt")]
+    public void WorkerResultBlockersParsesInconclusiveTestsAndPreservesReceipt()
+    {
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\repo",
+            0,
+            "WORKER_RESULT:\ntests: inconclusive - command timed out; no TRX\nblockers: none\nEND_WORKER_RESULT",
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(verification, out var status));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Inconclusive, status);
+        Assert.True(WorkerResultBlockers.TryFindTests(verification, out var tests));
+        Assert.Equal("inconclusive - command timed out; no TRX", tests);
+        Assert.False(WorkerResultBlockers.TryFindFailingTests(verification, out _));
+    }
+
+    [Xunit.Theory(DisplayName = "WorkerResultBlockers_parses_only_canonical_premise_invalid_evidence")]
+    [Xunit.InlineData("premise-invalid - required API does not exist; see src/Api.cs", true, "required API does not exist; see src/Api.cs")]
+    [Xunit.InlineData("premise-invalid", false, "")]
+    [Xunit.InlineData("premise-invalid: required API does not exist", false, "")]
+    [Xunit.InlineData("premise-invalid required API does not exist", false, "")]
+    [Xunit.InlineData("premise-invalid - ", false, "")]
+    [Xunit.InlineData("goal premise may be invalid", false, "")]
+    public void WorkerResultBlockersParsesOnlyCanonicalPremiseInvalidEvidence(
+        string blockers,
+        bool expected,
+        string expectedEvidence)
+    {
+        var verification = new TaskVerificationRecord(
+            "plan",
+            "C:\\repo",
+            0,
+            $"WORKER_RESULT:\nblockers: {blockers}\nEND_WORKER_RESULT",
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.Equal(expected, WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var evidence));
+        Assert.Equal(expectedEvidence, evidence);
+    }
+
+    [Xunit.Theory(DisplayName = "WorkerResultBlockers_requires_current_round_evidence_for_inconclusive")]
+    [Xunit.InlineData("inconclusive - command timed out; no TRX", true)]
+    [Xunit.InlineData("inconclusive", false)]
+    [Xunit.InlineData("inconclusive: command timed out", false)]
+    [Xunit.InlineData("inconclusive command timed out", false)]
+    [Xunit.InlineData("inconclusive - ", false)]
+    public void WorkerResultBlockersRequiresCurrentRoundEvidenceForInconclusive(
+        string tests,
+        bool expected)
+    {
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\repo",
+            0,
+            $"WORKER_RESULT:\ntests: {tests}\nblockers: none\nEND_WORKER_RESULT",
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.Equal(expected, WorkerResultBlockers.TryGetTestsStatus(verification, out var status));
+        Assert.Equal(
+            expected ? WorkerResultBlockers.TestsStatus.Inconclusive : WorkerResultBlockers.TestsStatus.Unknown,
+            status);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerResultBlockers_field_scan_without_opener_matches_dispatch_parser")]
+    public void WorkerResultBlockersFieldScanWithoutOpenerMatchesDispatchParser()
+    {
+        const string output = """
+            files: none
+            commands: dotnet test --no-build --filter Focused
+            tests: inconclusive - command timed out; no TRX
+            blockers: none
+            model_fit: OpenAI/test - adequate - verification - sufficient
+            skills: dotnet-windows-build-hygiene
+            confidence: high
+            """;
+
+        Assert.True(WorkerResultBlockers.HasCompleteWorkerResult(output));
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(output, out var status));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Inconclusive, status);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindReviewFindingRound_parses_structured_findings_and_touched_anchors")]
     public void TryFindReviewFindingRoundParsesStructuredFindingsAndTouchedAnchors()
     {

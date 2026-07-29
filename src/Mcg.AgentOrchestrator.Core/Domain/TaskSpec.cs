@@ -100,7 +100,8 @@ public sealed class TaskSpec
                     LastVerification.ProviderFailureKind,
                     LastVerification.ReviewFindingTouchedAnchors,
                     LastVerification.ReviewedCommit,
-                    LastVerification.MergedReviewFindings),
+                    LastVerification.MergedReviewFindings,
+                    LastVerification.WorkerResultPresent),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -115,7 +116,8 @@ public sealed class TaskSpec
                     verification.ProviderFailureKind,
                     verification.ReviewFindingTouchedAnchors,
                     verification.ReviewedCommit,
-                    verification.MergedReviewFindings))
+                    verification.MergedReviewFindings,
+                    verification.WorkerResultPresent))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -219,6 +221,7 @@ public sealed class TaskSpec
                     verification.StandardOutputPath,
                     verification.StandardErrorPath,
                     ProviderFailureKind: verification.ProviderFailureKind,
+                    WorkerResultPresent: verification.WorkerResultPresent,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
                     ReviewedCommit: verification.ReviewedCommit,
                     MergedReviewFindings: verification.MergedReviewFindings));
@@ -238,6 +241,7 @@ public sealed class TaskSpec
                 snapshot.LastVerification.StandardOutputPath,
                 snapshot.LastVerification.StandardErrorPath,
                 ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind,
+                WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
                 ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
                 MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings);
@@ -327,10 +331,14 @@ public sealed class TaskSpec
     {
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
-        // EmptyOutputRetryCount is the bounded retry budget for dispatch failures that
-        // produce no worker output, including sandbox preflight failures before worker start.
+        // EmptyOutputRetryCount is the shared bounded transient-dispatch retry budget. It covers
+        // missing worker output, sandbox preflight failures, and structured Tester inconclusive
+        // results without consuming Developer or Reviewer convergence allowances.
         var dispatchFlakeKind = DispatchFailureClassifier.Classify(this, verification).Kind;
-        EmptyOutputRetryCount = dispatchFlakeKind is DispatchOutcomeKind.EmptyOutputFlake or DispatchOutcomeKind.PreflightFailure
+        EmptyOutputRetryCount = dispatchFlakeKind is
+            DispatchOutcomeKind.EmptyOutputFlake or
+            DispatchOutcomeKind.PreflightFailure or
+            DispatchOutcomeKind.VerificationInconclusive
             ? EmptyOutputRetryCount + 1
             : 0;
         if (verification.ModelFitNote is null)
@@ -342,11 +350,12 @@ public sealed class TaskSpec
             }
         }
 
-        _verificationHistory.Add(verification);
+        _verificationHistory.Add(verification, RequiredRole);
         LastVerification = verification;
     }
 
-    internal void RestoreVerificationHistory(TaskVerificationRecord verification) => _verificationHistory.Add(verification);
+    internal void RestoreVerificationHistory(TaskVerificationRecord verification) =>
+        _verificationHistory.Add(verification, RequiredRole);
 
     internal void ClearLatestVerification() => LastVerification = null;
 
@@ -461,13 +470,40 @@ public sealed class TaskSpec
 
     private sealed class CappedVerificationHistory : List<TaskVerificationRecord>
     {
-        public new void Add(TaskVerificationRecord item)
+        public void Add(TaskVerificationRecord item, AgentRole role)
         {
             base.Add(item);
-            if (Count > VerificationHistoryLimit)
+            while (Count > VerificationHistoryLimit)
             {
-                RemoveRange(0, Count - VerificationHistoryLimit);
+                var removableIndex = FindIndex(
+                    0,
+                    Count - 1,
+                    candidate => !MustPreserveStructuredOutcome(role, candidate));
+                if (removableIndex < 0)
+                {
+                    break;
+                }
+
+                RemoveAt(removableIndex);
             }
+        }
+
+        private static bool MustPreserveStructuredOutcome(AgentRole role, TaskVerificationRecord verification)
+        {
+            if (!verification.WorkerResultPresent)
+            {
+                return false;
+            }
+
+            if (role == AgentRole.Tester &&
+                WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+                testsStatus == WorkerResultBlockers.TestsStatus.Inconclusive)
+            {
+                return true;
+            }
+
+            return role is AgentRole.Planner or AgentRole.Researcher &&
+                WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out _);
         }
     }
 }

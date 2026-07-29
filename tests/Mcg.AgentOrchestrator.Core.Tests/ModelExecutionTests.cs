@@ -840,6 +840,156 @@ public sealed class ModelExecutionTests
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested));
 }
 
+    [Xunit.Theory(DisplayName = "ExecuteAssignedTask_routes_structured_planning_premise_invalid_to_human_input")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    public async Task ExecuteAssignedTaskRoutesStructuredPlanningPremiseInvalidToHumanInput(AgentRole role)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Do work based on a disputed premise",
+            [new TaskSpec(TaskId.New(), "Inspect the premise", role)]);
+        var agent = DefaultAgents().Single(candidate => candidate.Role == role);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var output = """
+            WORKER_RESULT:
+            files: none
+            commands: inspected source
+            tests: not-run - read-only task
+            blockers: premise-invalid - required API does not exist; see src/Api.cs
+            model_fit: OpenAI/test - adequate - inspection - sufficient
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        var provider = new FakeModelProvider("OpenAI", output);
+        var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(task.Id, request.TaskId);
+        Assert.Contains("required API does not exist", request.Question, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_prioritizes_human_input_and_displays_accompanying_blocker")]
+    public async Task ExecuteAssignedTaskPrioritizesHumanInputAndDisplaysAccompanyingBlocker()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Plan work that needs an operator decision",
+            [new TaskSpec(TaskId.New(), "Inspect the premise", AgentRole.Planner)]);
+        var agent = DefaultAgents().Single(candidate => candidate.Role == AgentRole.Planner);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var output = """
+            HUMAN_INPUT: Should this goal be superseded?
+            WORKER_RESULT:
+            files: none
+            commands: inspected source
+            tests: not-run - read-only task
+            blockers: premise-invalid - required API does not exist; see src/Api.cs
+            model_fit: OpenAI/test - adequate - inspection - sufficient
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        var provider = new FakeModelProvider("OpenAI", output);
+        var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.StartsWith("Should this goal be superseded?", request.Question, StringComparison.Ordinal);
+        Assert.Contains("required API does not exist", request.Question, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_does_not_complete_structured_Tester_inconclusive")]
+    public async Task ExecuteAssignedTaskDoesNotCompleteStructuredTesterInconclusive()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Verify an implementation",
+            [new TaskSpec(TaskId.New(), "Run focused verification", AgentRole.Tester)]);
+        var agent = DefaultAgents().Single(candidate => candidate.Role == AgentRole.Tester);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var output = """
+            WORKER_RESULT:
+            files: none
+            commands: dotnet test --no-build --filter Focused
+            tests: inconclusive - command timed out; no TRX
+            blockers: none
+            model_fit: OpenAI/test - adequate - verification - sufficient
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        var provider = new FakeModelProvider("OpenAI", output);
+        var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.NotNull(task.LastVerification);
+        Assert.True(task.LastVerification.WorkerResultPresent);
+        Assert.Equal(1, task.EmptyOutputRetryCount);
+        Assert.Equal(
+            DispatchOutcomeKind.VerificationInconclusive,
+            DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
+        Assert.Contains(
+            goal.Timeline,
+            evt => evt.TaskId == task.Id &&
+                evt.Kind == ProgressKind.TaskFailed &&
+                evt.Message.Contains("command timed out; no TRX", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    }
+
+    [Xunit.Fact(DisplayName = "ExecuteAssignedTask_fails_malformed_evidence_bound_outcome")]
+    public async Task ExecuteAssignedTaskFailsMalformedEvidenceBoundOutcome()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Verify an implementation",
+            [new TaskSpec(TaskId.New(), "Run focused verification", AgentRole.Tester)]);
+        var agent = DefaultAgents().Single(candidate => candidate.Role == AgentRole.Tester);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var output = """
+            WORKER_RESULT:
+            files: none
+            commands: dotnet test --no-build --filter Focused
+            tests: inconclusive
+            blockers: none
+            model_fit: OpenAI/test - adequate - verification - sufficient
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """;
+        var provider = new FakeModelProvider("OpenAI", output);
+        var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Contains(
+            goal.Timeline,
+            evt => evt.TaskId == task.Id &&
+                evt.Kind == ProgressKind.TaskFailed &&
+                evt.Message.Contains("requires", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    }
+
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_marks_task_failed_when_provider_throws")]
     public async Task ExecuteAssignedTaskMarksTaskFailedWhenProviderThrows()
 {

@@ -135,6 +135,38 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, verification);
     }
 
+    private static void RecordInconclusiveTester(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec tester,
+        string receipt)
+    {
+        DispatchTask(kernel, goal, tester, "test-inconclusive");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: dotnet test --no-build --filter Focused",
+            $"tests: inconclusive - {receipt}",
+            "commit: none",
+            "blockers: none",
+            "model_fit: fixture/model - adequate - tester retry",
+            "skills: dotnet-windows-build-hygiene",
+            "confidence: medium",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                "test-inconclusive",
+                "C:\\tmp",
+                0,
+                stdout,
+                "",
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true));
+    }
+
     private static WorkerSandboxPrepRecoverableAction NewSandboxRecoveryAction() =>
         new(
             Worktree: @"C:\repo\.orchestrator-worktrees\abc12345",
@@ -1978,6 +2010,175 @@ public sealed class ConductorDriverTests
         Assert.Equal(tester.Id, retriedTaskId);
         Assert.NotEqual(developer.Id, retriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Tester_inconclusive_retries_same_task_and_preserves_upstream_commit")]
+    public void ConductorDriverTesterInconclusiveRetriesSameTaskAndPreservesUpstreamCommit()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks)
+        {
+            PassVerification(kernel, goal, task, hasCommittedChanges: task == developer);
+        }
+
+        kernel.RecordDispatchBaseCommit(goal.Id, developer.Id, "base1234");
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, "result5678");
+        var developerVerification = developer.LastVerification;
+        var developerDispatch = developer.LastDispatch;
+        kernel.RetryTask(goal.Id, tester.Id, "simulate environmental re-verification");
+        DispatchTask(kernel, goal, tester, "test-inconclusive");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: dotnet test --no-build --filter Focused",
+            "tests: inconclusive - command timed out; no TRX",
+            "commit: none",
+            "blockers: stale product blocker from prior round",
+            "model_fit: fixture/model - adequate - tester retry",
+            "skills: dotnet-windows-build-hygiene",
+            "confidence: medium",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                "test-inconclusive",
+                "C:\\tmp",
+                0,
+                stdout,
+                "",
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true));
+
+        TaskId? retriedTaskId = null;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, message, roundKind) =>
+            {
+                retriedTaskId = tid;
+                retryMessage = message;
+                return kernel.RetryTask(gid, tid, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTaskId);
+        Assert.NotEqual(developer.Id, retriedTaskId);
+        Assert.Contains("verification-inconclusive Tester task", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("schema conflict retained for audit", retryMessage, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Same(developerVerification, developer.LastVerification);
+        Assert.Same(developerDispatch, developer.LastDispatch);
+        Assert.Equal("result5678", developer.LastDispatch!.ResultCommit);
+        Assert.Equal(2, tester.VerificationHistory.Count);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetried);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_Tester_inconclusive_budget_exhaustion_escalates_with_latest_receipt")]
+    public void ConductorDriverTesterInconclusiveBudgetExhaustionEscalatesWithLatestReceipt()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.RequiredRole != AgentRole.Tester))
+        {
+            PassVerification(kernel, goal, task, hasCommittedChanges: task == developer);
+        }
+
+        var policy = ConductorAutonomyPolicy.Permissive with
+        {
+            MaxEmptyOutputDispatchRetries = 1,
+            MaxEmptyOutputAutoRecoverCycles = 1
+        };
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, message, roundKind) =>
+                kernel.RetryTask(gid, tid, message, retryRoundKind: roundKind));
+
+        RecordInconclusiveTester(kernel, goal, tester, "round 1 process killed; no TRX");
+        var result = driver.AdvanceOnce(goal, policy);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+
+        RecordInconclusiveTester(kernel, goal, tester, "round 2 timed out; no results");
+        string? escalationMessage = null;
+        var escalationDriver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => throw new Xunit.Sdk.XunitException("Developer or Tester dispatch must not start after retry exhaustion."),
+            retryTaskWithRoundKind: (_, _, _, _) => throw new Xunit.Sdk.XunitException("Retry budget is exhausted."),
+            writeEscalation: (_, _, message) => escalationMessage = message);
+
+        result = escalationDriver.AdvanceOnce(goal, policy);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+        Assert.Contains(tester.Id.Value[..8], escalationMessage, StringComparison.Ordinal);
+        Assert.Contains("round 2 timed out; no results", escalationMessage, StringComparison.Ordinal);
+        Assert.Equal(2, tester.VerificationHistory.Count);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskRetried);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_premise_invalid_planner_waits_for_operator_before_Developer_dispatch")]
+    public void ConductorDriverPremiseInvalidPlannerWaitsForOperatorBeforeDeveloperDispatch()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var planner = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Planner);
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        DispatchTask(kernel, goal, planner, "plan");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: inspect src/Api.cs",
+            "tests: not-run - repository inspection only",
+            "commit: none",
+            "blockers: premise-invalid - required API does not exist; src/Api.cs proves replacement semantics",
+            "model_fit: fixture/model - adequate - planner inspection",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            planner.Id,
+            new TaskVerificationRecord(
+                "plan",
+                "C:\\tmp",
+                0,
+                stdout,
+                "",
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true));
+
+        var dispatched = false;
+        string? escalationMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ =>
+            {
+                dispatched = true;
+                return DispatchStartOutcome.Started();
+            },
+            writeEscalation: (_, _, message) => escalationMessage = message);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(dispatched);
+        Assert.Null(developer.LastDispatch);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+        Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Contains("AwaitingHumanInput", escalationMessage, StringComparison.Ordinal);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_auto_review_retry_drops_superseded_findings_before_retry_feedback")]

@@ -114,7 +114,8 @@ public sealed record TaskVerificationSnapshot(
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     string? ReviewedCommit = null,
-    IReadOnlyList<ReviewFinding>? MergedReviewFindings = null)
+    IReadOnlyList<ReviewFinding>? MergedReviewFindings = null,
+    bool WorkerResultPresent = false)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

@@ -114,9 +114,58 @@ public sealed class AgentTaskRunner
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
 
+        var hasCompleteWorkerResult = WorkerResultBlockers.HasCompleteWorkerResult(output);
         if (humanInputQuestion is not null)
         {
+            if (hasCompleteWorkerResult &&
+                WorkerResultBlockers.TryFindBlocker(output, out var accompanyingBlocker))
+            {
+                humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
+            }
+
             _kernel.RequestHumanInput(goal.Id, task.Id, humanInputQuestion);
+            return new AgentTaskRunResult(goal, task, execution);
+        }
+
+        if (hasCompleteWorkerResult &&
+            task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
+            WorkerResultBlockers.TryFindPremiseInvalidEvidence(output, out var premiseEvidence))
+        {
+            _kernel.RequestHumanInput(
+                goal.Id,
+                task.Id,
+                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
+                "Clarify, supersede, or abandon the goal before Developer dispatch.");
+            return new AgentTaskRunResult(goal, task, execution);
+        }
+
+        if (hasCompleteWorkerResult &&
+            task.RequiredRole == AgentRole.Tester &&
+            WorkerResultBlockers.TryGetTestsStatus(output, out var testsStatus) &&
+            testsStatus == WorkerResultBlockers.TestsStatus.Inconclusive)
+        {
+            _kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(
+                    $"api-run {resolvedModel.ProviderName}/{resolvedModel.ModelName}",
+                    string.Empty,
+                    0,
+                    output,
+                    string.Empty,
+                    execution.CompletedAt,
+                    WorkerResultPresent: true));
+            return new AgentTaskRunResult(goal, task, execution);
+        }
+
+        if (hasCompleteWorkerResult &&
+            WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(output, out var outcomeDiagnostic))
+        {
+            _kernel.ReportTaskProgress(
+                goal.Id,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Malformed WORKER_RESULT structured outcome: {outcomeDiagnostic}");
             return new AgentTaskRunResult(goal, task, execution);
         }
 

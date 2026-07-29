@@ -16,6 +16,17 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Verification {status} ({verification.ExitCode}): {verification.Command}");
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)
+        {
+            ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Tester verification inconclusive; same Tester retry or operator escalation required. {outcome.EvidenceSummary}");
+            return;
+        }
+
         if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: false))
         {
             return;
@@ -101,13 +112,55 @@ public sealed partial class AgentOrchestratorKernel
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
-        if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: true))
+
+        var humanInputQuestion = verification.HumanInputQuestion
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput)
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardError);
+        if (humanInputQuestion is not null)
         {
+            if (WorkerResultBlockers.TryFindBlocker(verification, out var accompanyingBlocker))
+            {
+                humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
+            }
+
+            RequestHumanInput(goal.Id, task.Id, humanInputQuestion);
             return;
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
+            WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
+        {
+            RequestHumanInput(
+                goal.Id,
+                task.Id,
+                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
+                "Clarify, supersede, or abandon the goal before Developer dispatch.");
+            return;
+        }
+
+        if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)
+        {
+            if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
+            {
+                Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
+            }
+
+            ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Tester verification inconclusive; same Tester retry or operator escalation required. {outcome.EvidenceSummary}");
+            return;
+        }
+
+        if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: true))
+        {
+            return;
+        }
+
         if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
         {
             Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
@@ -156,15 +209,6 @@ public sealed partial class AgentOrchestratorKernel
                 taskId,
                 WorkTaskStatus.Failed,
                 $"Dispatch provider connectivity failed after {ProviderConnectivityRetryLimit} automatic retry attempt(s); evidence: {outcome.EvidenceSummary}: {task.LastDispatch.Command}");
-            return;
-        }
-
-        var humanInputQuestion = verification.HumanInputQuestion
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput)
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardError);
-        if (humanInputQuestion is not null)
-        {
-            RequestHumanInput(goal.Id, task.Id, humanInputQuestion);
             return;
         }
 

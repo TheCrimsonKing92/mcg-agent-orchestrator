@@ -726,6 +726,41 @@ internal sealed class ConductorDriver
         // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
+            var inconclusiveTester = goal.Tasks.FirstOrDefault(t =>
+                t.RequiredRole == AgentRole.Tester &&
+                t.Status == WorkTaskStatus.Failed &&
+                t.LastVerification is { } latest &&
+                DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.VerificationInconclusive);
+            if (inconclusiveTester is not null)
+            {
+                var outcome = DispatchFailureClassifier.Classify(inconclusiveTester, inconclusiveTester.LastVerification!);
+                var maxAttempts = policy.MaxEmptyOutputDispatchRetries * policy.MaxEmptyOutputAutoRecoverCycles;
+                if (inconclusiveTester.EmptyOutputRetryCount > maxAttempts)
+                {
+                    return Escalate(
+                        goal,
+                        goalPrefix,
+                        policy,
+                        state,
+                        $"Tester task {inconclusiveTester.Id.Value[..8]} exhausted verification-inconclusive recovery " +
+                        $"({inconclusiveTester.EmptyOutputRetryCount}/{maxAttempts}); operator action required. " +
+                        $"Latest current-round receipt: {outcome.EvidenceSummary}");
+                }
+
+                var delay = ComputeEmptyOutputBackoff(policy, inconclusiveTester.EmptyOutputRetryCount);
+                if (delay > TimeSpan.Zero)
+                {
+                    _emptyOutputBackoffDelay(delay);
+                }
+
+                var note =
+                    $"Auto-retry verification-inconclusive Tester task {inconclusiveTester.Id.Value[..8]} " +
+                    $"on the shared transient budget ({inconclusiveTester.EmptyOutputRetryCount}/{maxAttempts}) " +
+                    $"without reopening upstream Developer work. Latest current-round receipt: {outcome.EvidenceSummary}";
+                _retryTask(goal.Id, inconclusiveTester.Id, note, null);
+                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+            }
+
             var staleRecoveryTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 TryGetDispatchRecoveryAction(t.LastVerification, out var action) &&
@@ -1044,6 +1079,8 @@ internal sealed class ConductorDriver
         }
 
         if (task.RequiredRole != AgentRole.Tester ||
+            !WorkerResultBlockers.TryGetTestsStatus(task.LastVerification, out var testsStatus) ||
+            testsStatus != WorkerResultBlockers.TestsStatus.Fail ||
             !WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out blocker))
         {
             return null;
