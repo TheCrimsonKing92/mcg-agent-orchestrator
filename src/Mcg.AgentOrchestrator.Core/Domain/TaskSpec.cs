@@ -100,7 +100,8 @@ public sealed class TaskSpec
                     LastVerification.ProviderFailureKind,
                     LastVerification.ReviewFindingTouchedAnchors,
                     LastVerification.ReviewedCommit,
-                    LastVerification.MergedReviewFindings),
+                    LastVerification.MergedReviewFindings,
+                    LastVerification.WorkerResultPresent),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -115,7 +116,8 @@ public sealed class TaskSpec
                     verification.ProviderFailureKind,
                     verification.ReviewFindingTouchedAnchors,
                     verification.ReviewedCommit,
-                    verification.MergedReviewFindings))
+                    verification.MergedReviewFindings,
+                    verification.WorkerResultPresent))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -219,6 +221,7 @@ public sealed class TaskSpec
                     verification.StandardOutputPath,
                     verification.StandardErrorPath,
                     ProviderFailureKind: verification.ProviderFailureKind,
+                    WorkerResultPresent: verification.WorkerResultPresent,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
                     ReviewedCommit: verification.ReviewedCommit,
                     MergedReviewFindings: verification.MergedReviewFindings));
@@ -238,6 +241,7 @@ public sealed class TaskSpec
                 snapshot.LastVerification.StandardOutputPath,
                 snapshot.LastVerification.StandardErrorPath,
                 ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind,
+                WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
                 ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
                 MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings);

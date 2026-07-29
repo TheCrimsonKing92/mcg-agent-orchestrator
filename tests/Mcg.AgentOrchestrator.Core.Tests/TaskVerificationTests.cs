@@ -182,7 +182,15 @@ public sealed class TaskVerificationTests
                 status == WorkerResultBlockers.TestsStatus.Inconclusive));
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
-        Assert.Equal(attempts, restored.GetTask(goal.Id, tester.Id).VerificationHistory.Count);
+        var restoredHistory = restored.GetTask(goal.Id, tester.Id).VerificationHistory;
+        Assert.Equal(attempts, restoredHistory.Count);
+        Assert.All(restoredHistory, verification =>
+        {
+            Assert.True(verification.WorkerResultPresent);
+            Assert.True(
+                WorkerResultBlockers.TryGetTestsStatus(verification, out var status) &&
+                status == WorkerResultBlockers.TestsStatus.Inconclusive);
+        });
     }
 
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
