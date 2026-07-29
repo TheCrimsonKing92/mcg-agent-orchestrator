@@ -69,7 +69,8 @@ internal static class WorkerResultParser
         // An opener implies intent: missing fields are reported as substance failures.
         if (Array.Exists(lines, line => IsOpener(line.Trim())))
         {
-            return TryParseBlock(lines, out fields, out diagnostic);
+            return TryParseBlock(lines, out fields, out diagnostic) &&
+                ValidateEvidenceBoundOutcomeFields(fields, out diagnostic);
         }
 
         // No opener at all: scan the full text for known field patterns. This
@@ -77,7 +78,7 @@ internal static class WorkerResultParser
         // cannot be treated as a successful worker result.
         if (TryScanFields(lines, out fields, out diagnostic))
         {
-            return true;
+            return ValidateEvidenceBoundOutcomeFields(fields, out diagnostic);
         }
 
         return false;
@@ -157,7 +158,9 @@ internal static class WorkerResultParser
         fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         diagnostic = string.Empty;
 
-        var start = Array.FindIndex(lines, line => IsOpener(line.Trim()));
+        // The final block is authoritative because workers can emit a corrected
+        // result after an earlier draft. Core outcome routing uses the same rule.
+        var start = Array.FindLastIndex(lines, line => IsOpener(line.Trim()));
         if (start < 0)
         {
             diagnostic = "missing WORKER_RESULT block.";
@@ -320,9 +323,47 @@ internal static class WorkerResultParser
             "fail" => TestsStatus.Fail,
             "not-run" => TestsStatus.NotRun,
             "deferred" => TestsStatus.Deferred,
-            "inconclusive" => TestsStatus.Inconclusive,
+            "inconclusive" when TryReadCanonicalEvidence(value, "inconclusive", out _) => TestsStatus.Inconclusive,
             _ => TestsStatus.Unknown
         };
+    }
+
+    private static bool TryReadCanonicalEvidence(string value, string token, out string evidence)
+    {
+        evidence = string.Empty;
+        var prefix = $"{token} - ";
+        var trimmed = value.Trim();
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        evidence = trimmed[prefix.Length..].Trim();
+        return evidence.Length > 0;
+    }
+
+    private static bool ValidateEvidenceBoundOutcomeFields(
+        IReadOnlyDictionary<string, string> fields,
+        out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        if (fields.TryGetValue("tests", out var tests) &&
+            string.Equals(ReadLeadingWorkerResultToken(tests), "inconclusive", StringComparison.Ordinal) &&
+            !TryReadCanonicalEvidence(tests, "inconclusive", out _))
+        {
+            diagnostic = "WORKER_RESULT tests: inconclusive requires 'inconclusive - <current-round evidence>'.";
+            return false;
+        }
+
+        if (fields.TryGetValue("blockers", out var blockers) &&
+            string.Equals(ReadLeadingWorkerResultToken(blockers), "premise-invalid", StringComparison.Ordinal) &&
+            !TryReadCanonicalEvidence(blockers, "premise-invalid", out _))
+        {
+            diagnostic = "WORKER_RESULT blockers: premise-invalid requires 'premise-invalid - <fact and evidence>'.";
+            return false;
+        }
+
+        return true;
     }
 
     internal static BlockersStatus ParseBlockersStatus(string value)

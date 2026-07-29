@@ -1072,4 +1072,20 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
     }
+
+    [Xunit.Fact(DisplayName = "Classify binds structured Tester outcome to latest WORKER_RESULT")]
+    public void ClassifyBindsStructuredTesterOutcomeToLatestWorkerResult()
+    {
+        var output =
+            WorkerResultStdout("pass - stale first result", "none") +
+            Environment.NewLine +
+            WorkerResultStdout("inconclusive - latest command timed out; no TRX", "none");
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            WorkerResultVerification(output));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+        Xunit.Assert.Contains("latest command timed out; no TRX", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("stale first result", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
 }
