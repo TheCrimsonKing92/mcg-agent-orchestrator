@@ -2181,9 +2181,13 @@ internal static class CliPersistentStateRunner
         GoalId goalId,
         CancellationToken cancellationToken = default)
     {
-        var snapshot = stateRepository.LoadGoalAsync(goalId, cancellationToken).GetAwaiter().GetResult()
-            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
-        return KernelFromGoalSnapshot(snapshot);
+        var kernel = stateRepository.LoadGoalsAsync([goalId], cancellationToken).GetAwaiter().GetResult();
+        if (!kernel.Goals.Any(goal => goal.Id == goalId))
+        {
+            throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        }
+
+        return kernel;
     }
 
     private static AgentOrchestratorKernel LoadGoalSnapshotsById(
