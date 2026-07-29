@@ -82,12 +82,12 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return new AgentCatalog(
         [
-            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex())
+            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false)
         ]);
     }
 
@@ -104,12 +104,12 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return new AgentCatalog(
         [
-            new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-ideation"), "Anthropic ideation", AgentRole.Ideation, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-reviewer"), "Anthropic reviewer", AgentRole.Reviewer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-ideation"), "Anthropic ideation", AgentRole.Ideation, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-reviewer"), "Anthropic reviewer", AgentRole.Reviewer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
         ]);
     }
 
@@ -202,7 +202,11 @@ public static class AgentCatalogStore
             ComplexModel = agent.ComplexModel is null
                 ? null
                 : NormalizeModel(agent.ComplexModel, AgentCatalog.ComplexApiMaxOutputTokens, AgentCatalog.ComplexReasoningEffort),
-            Subscription = NormalizeSubscription(agent)
+            Subscription = NormalizeSubscription(agent),
+            // Catalogs written before provider constraints existed represent explicit
+            // operator configuration. Repair them as constrained; built-in defaults
+            // persist an explicit false value and remain eligible for automatic routing.
+            IsProviderRoutingConstrained = agent.IsProviderRoutingConstrained ?? true
         };
     }
 

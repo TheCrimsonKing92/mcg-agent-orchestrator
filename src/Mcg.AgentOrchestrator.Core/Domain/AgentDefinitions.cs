@@ -28,7 +28,8 @@ public sealed record AgentDefinition(
     AgentExecutionPolicy ExecutionPolicy = AgentExecutionPolicy.ApiOnly,
     SubscriptionLaunchProfile? Subscription = null,
     ModelProfile? ComplexModel = null,
-    ReasoningEffortPolicy? ReasoningEffortPolicy = null);
+    ReasoningEffortPolicy? ReasoningEffortPolicy = null,
+    bool? IsProviderRoutingConstrained = null);
 
 public static class AgentExecutionPolicies
 {

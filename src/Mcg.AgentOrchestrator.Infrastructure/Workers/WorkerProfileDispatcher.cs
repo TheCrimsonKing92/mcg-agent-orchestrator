@@ -1361,6 +1361,14 @@ public static class WorkerProfileDispatcher
             return fullSelection with { Reason = "full-profile: role has custom subscription worker profile" };
         }
 
+        if (agent.IsProviderRoutingConstrained == true)
+        {
+            return fullSelection with
+            {
+                Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
+            };
+        }
+
         if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
         {
             return fullSelection with { Reason = "full-profile: Reviewer high-risk/complex intake labels require exhaustive review" };
