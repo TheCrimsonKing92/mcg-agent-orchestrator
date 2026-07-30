@@ -2612,7 +2612,7 @@ public sealed class ConductorDriverTests
         var focusedRuns = 0;
         var dispatches = 0;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => FocusedPreReviewContext("abc123"),
             runFocusedEvidence: (_, request) =>
             {
@@ -2652,7 +2652,7 @@ public sealed class ConductorDriverTests
             GreenPreReviewReceipt(goal, "old-sha"));
         var focusedRuns = 0;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => FocusedPreReviewContext("new-sha"),
             runFocusedEvidence: (_, request) =>
             {
@@ -2682,7 +2682,7 @@ public sealed class ConductorDriverTests
 
         string? retryMessage = null;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => FocusedPreReviewContext("red-sha"),
             runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
                 request,
@@ -2730,7 +2730,7 @@ public sealed class ConductorDriverTests
         var focusedRuns = 0;
         var dispatched = false;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
                 "docs-sha",
                 [],
@@ -2772,7 +2772,7 @@ public sealed class ConductorDriverTests
         var dispatched = false;
         string? escalation = null;
         var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
                 "unmapped-sha",
                 ["dotnet test broad"],
