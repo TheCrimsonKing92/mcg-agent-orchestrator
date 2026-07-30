@@ -16,8 +16,12 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var output = GoalAcceptanceVerifier.DecodeCapturedOutput(
             [.. Encoding.ASCII.GetBytes("case:"), (byte)legacyByte, (byte)legacyByte, (byte)legacyByte]);
 
+        Assert.StartsWith("case:", output, StringComparison.Ordinal);
         Assert.DoesNotContain('\uFFFD', output);
+        Assert.DoesNotContain('\0', output);
         Assert.Equal(8, output.Length);
+        Assert.Equal(output[5], output[6]);
+        Assert.Equal(output[6], output[7]);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_prefers_strict_UTF8_over_legacy_console_decoding")]

@@ -5967,7 +5967,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new string(chars);
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern int MultiByteToWideChar(
         uint codePage,
         uint flags,
