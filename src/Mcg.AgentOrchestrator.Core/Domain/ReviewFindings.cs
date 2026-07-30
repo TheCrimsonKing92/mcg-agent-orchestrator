@@ -61,6 +61,74 @@ public sealed class FindingSeverityJsonConverter : JsonConverter<FindingSeverity
                 : nameof(FindingSeverity.Blocking));
 }
 
+[JsonConverter(typeof(FindingCategoryJsonConverter))]
+public enum FindingCategory
+{
+    Unspecified,
+    SpecCompliance,
+    SpecDefect,
+    Correctness,
+    TestEvidence,
+    TestCoverage,
+    CodeQuality,
+    OperatorOwned
+}
+
+public sealed class FindingCategoryJsonConverter : JsonConverter<FindingCategory>
+{
+    private static readonly IReadOnlyDictionary<string, FindingCategory> Categories =
+        new Dictionary<string, FindingCategory>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["spec-compliance"] = FindingCategory.SpecCompliance,
+            ["spec-defect"] = FindingCategory.SpecDefect,
+            ["correctness"] = FindingCategory.Correctness,
+            ["test-evidence"] = FindingCategory.TestEvidence,
+            ["test-coverage"] = FindingCategory.TestCoverage,
+            ["code-quality"] = FindingCategory.CodeQuality,
+            ["operator-owned"] = FindingCategory.OperatorOwned,
+            ["unspecified"] = FindingCategory.Unspecified
+        };
+
+    public override bool HandleNull => true;
+
+    public override FindingCategory Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String &&
+            Categories.TryGetValue(reader.GetString() ?? string.Empty, out var category))
+        {
+            return category;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject)
+        {
+            using var ignored = JsonDocument.ParseValue(ref reader);
+        }
+
+        return FindingCategory.Unspecified;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        FindingCategory value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(ToWireValue(value));
+
+    public static string ToWireValue(FindingCategory value) => value switch
+    {
+        FindingCategory.SpecCompliance => "spec-compliance",
+        FindingCategory.SpecDefect => "spec-defect",
+        FindingCategory.Correctness => "correctness",
+        FindingCategory.TestEvidence => "test-evidence",
+        FindingCategory.TestCoverage => "test-coverage",
+        FindingCategory.CodeQuality => "code-quality",
+        FindingCategory.OperatorOwned => "operator-owned",
+        _ => "unspecified"
+    };
+}
+
 public sealed record ReviewFindingLocation(
     [property: JsonPropertyName("file")] string File,
     [property: JsonPropertyName("region")] string Region,
@@ -79,7 +147,10 @@ public sealed record ReviewFinding(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("severity")]
     [property: JsonConverter(typeof(FindingSeverityJsonConverter))]
-    FindingSeverity Severity = FindingSeverity.Blocking);
+    FindingSeverity Severity = FindingSeverity.Blocking,
+    [property: JsonPropertyName("category")]
+    [property: JsonConverter(typeof(FindingCategoryJsonConverter))]
+    FindingCategory Category = FindingCategory.Unspecified);
 
 public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
