@@ -2313,7 +2313,8 @@ internal sealed class ConductorBatchLoop
     private static bool IsTerminalWithoutLandingDependencyStatus(string status) =>
         status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase);
+        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("Retired", StringComparison.OrdinalIgnoreCase);
 
     private static void MarkCompletedDependencyGoals(
         AgentOrchestratorKernel kernel,

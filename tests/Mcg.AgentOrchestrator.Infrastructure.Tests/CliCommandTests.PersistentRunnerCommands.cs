@@ -1543,9 +1543,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == failed.Id);
         Xunit.Assert.All(
-            terminalGoalIds.Where(id => id != cleanedUp.Id.Value),
+            terminalGoalIds,
             id => Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
-        Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(cleanedUp.Id));
         var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
@@ -2227,6 +2226,69 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Empty(plan.FirstBatchCandidates);
         Xunit.Assert.Contains(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
             reason => reason.Equals("dependency could not be scheduled", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_routes_retired_without_landing_as_terminal_dependency")]
+    public void PersistentRunnerConductLoopRoutesRetiredWithoutLandingAsTerminalDependency()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var dependency = kernel.CreateGoal("Unlanded retired dependency", [new TaskSpec(TaskId.New(), "Done", AgentRole.Planner)]);
+        var dependent = kernel.CreateGoal("Held dependent", [new TaskSpec(TaskId.New(), "Plan src/Held.cs", AgentRole.Planner)]);
+        var agents = new[] { SubscriptionPlanner("codex-cli", "Planner Codex") };
+        kernel.ActivateGoal(dependency.Id, agents);
+        kernel.ActivateGoal(dependent.Id, agents);
+        kernel.RecordTaskVerification(dependency.Id, dependency.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel = WithGoalStatus(kernel, dependency.Id, GoalStatus.Completed);
+        kernel.SetGoalDependency(dependent.Id, dependency.Id);
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            dependency,
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Retired,
+                "Landing could not be verified for the missing branch."));
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository, executionDirectory: root);
+        var plan = CrossGoalSubscriptionStartPlanner.Build(loaded, agents, WorkerProfileCatalog.Default());
+
+        Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(dependency.Id));
+        Xunit.Assert.True(loaded.TryGetKnownDependencyGoalStatus(dependency.Id, out var status));
+        Xunit.Assert.Equal("Retired", status);
+        Xunit.Assert.Empty(plan.FirstBatchCandidates);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_keeps_goal_mark_landed_dependency_satisfied")]
+    public void PersistentRunnerConductLoopKeepsGoalMarkLandedDependencySatisfied()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var dependency = kernel.CreateGoal("Out-of-band landed dependency", [new TaskSpec(TaskId.New(), "Done", AgentRole.Planner)]);
+        var agents = new[] { SubscriptionPlanner("codex-cli", "Planner Codex") };
+        kernel.ActivateGoal(dependency.Id, agents);
+        kernel.RecordTaskVerification(dependency.Id, dependency.Tasks.Single().Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel = WithGoalStatus(kernel, dependency.Id, GoalStatus.Completed);
+        GoalOperationJournal.RecordLandingIntent(
+            root,
+            dependency,
+            $"goal/{dependency.Id.Value[..8]}",
+            "main",
+            "abcdef1234567890",
+            "goal-mark-landed");
+        GoalOperationJournal.Completed(root, dependency, "conductor:land", "Out-of-band landing verified.");
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            dependency,
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Retired,
+                "Goal was marked landed out-of-band via goal-mark-landed."));
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var loaded = CliPersistentStateRunner.LoadConductLoopKernel(repository, executionDirectory: root);
+
+        Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(dependency.Id));
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_mark_landed_carries_prompt_budget_through_state_commit")]

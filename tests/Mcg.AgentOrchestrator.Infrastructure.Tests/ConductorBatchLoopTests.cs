@@ -4106,8 +4106,10 @@ public sealed class ConductorBatchLoopTests
         Assert.Empty(createdWorkspaces);
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_terminal_unlanded_dependency_escalates_without_worker_start")]
-    public void BatchLoopTerminalUnlandedDependencyEscalatesWithoutWorkerStart()
+    [Xunit.Theory(DisplayName = "BatchLoop_terminal_unlanded_dependency_escalates_without_worker_start")]
+    [Xunit.InlineData("Failed")]
+    [Xunit.InlineData("Retired")]
+    public void BatchLoopTerminalUnlandedDependencyEscalatesWithoutWorkerStart(string terminalStatus)
     {
         var dependencyId = GoalId.New();
         var kernel = new AgentOrchestratorKernel();
@@ -4121,7 +4123,7 @@ public sealed class ConductorBatchLoopTests
                 .ToArray()
         });
         kernel.MarkKnownDependencyGoalStatuses([
-            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Failed.ToString())
+            new KeyValuePair<GoalId, string>(dependencyId, terminalStatus)
         ]);
         var workerStarts = 0;
         var summary = new ConductorBatchLoop().Run(
@@ -4142,7 +4144,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(
             kernel.GetGoal(active.Id).Timeline,
             progress => progress.Message.Contains(
-                $"dependency-terminal-without-landing: {dependencyId.Value[..8]}",
+                $"dependency-terminal-without-landing: {dependencyId.Value[..8]} state={terminalStatus}",
                 StringComparison.Ordinal));
     }
 
@@ -4183,6 +4185,9 @@ public sealed class ConductorBatchLoopTests
         Assert.DoesNotContain(
             kernel.GetGoal(active.Id).Timeline,
             progress => progress.Message.Contains("dependency-terminal-without-landing", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            kernel.GetGoal(active.Id).Timeline,
+            progress => progress.Message.Contains("waiting on dependency", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_landed_dependency_remains_satisfied_after_terminal_metadata_changes")]
