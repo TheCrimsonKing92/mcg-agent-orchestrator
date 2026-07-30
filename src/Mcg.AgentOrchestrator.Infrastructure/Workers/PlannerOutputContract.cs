@@ -38,7 +38,15 @@ internal static partial class PlannerOutputContract
         // Planner plans are an stdout contract. Stderr can contain tool traces or echoed
         // file contents and must not make an otherwise incomplete Planner result pass.
         var captured = standardOutput;
-        if (TryValidate(captured, out var plan, out var diagnostic) &&
+        if (TryExtractDurablePlan(captured, out var plan, out _))
+        {
+            // A durable receipt is written only after the plan has passed this contract.
+            // Reconciliation must trust and reuse that receipt instead of treating its
+            // section headings as fresh Planner output and appending another copy.
+            return new PlannerOutputContractResult(true, plan, null, string.Empty);
+        }
+
+        if (TryValidate(captured, out plan, out var diagnostic) &&
             ValidateCitedPaths(plan, workingDirectory, out diagnostic))
         {
             return new PlannerOutputContractResult(true, plan, null, string.Empty);
@@ -334,7 +342,18 @@ internal static partial class PlannerOutputContract
     private static int FindPlanEnd(string text, int afterLastHeading)
     {
         var workerResult = text.IndexOf("\nWORKER_RESULT:", afterLastHeading, StringComparison.OrdinalIgnoreCase);
-        return workerResult >= 0 ? workerResult : text.Length;
+        var durableReceiptEnd = text.IndexOf(
+            $"\n{DurablePlanEndMarker}",
+            afterLastHeading,
+            StringComparison.Ordinal);
+        if (workerResult < 0)
+        {
+            return durableReceiptEnd >= 0 ? durableReceiptEnd : text.Length;
+        }
+
+        return durableReceiptEnd >= 0
+            ? Math.Min(workerResult, durableReceiptEnd)
+            : workerResult;
     }
 
     private static IReadOnlyList<string> FindCandidatePlanPaths(

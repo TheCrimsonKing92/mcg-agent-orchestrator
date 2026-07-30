@@ -322,7 +322,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Record worker dispatch resources");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
         "codex-cli",
         "Write-Output $env:DOTNET_CLI_USE_MSBUILD_SERVER; Write-Output $env:MSBUILDDISABLENODEREUSE; Write-Output $env:UseSharedCompilation",
@@ -2859,11 +2859,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Test success diagnostic record", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var goal = kernel.CreateGoal("Test success diagnostic record", [new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher)]);
     var agent = new AgentDefinition(
-        new AgentId("test-planner"),
-        "Test Planner",
-        AgentRole.Planner,
+        new AgentId("test-researcher"),
+        "Test Researcher",
+        AgentRole.Researcher,
         new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
@@ -2970,11 +2970,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Test diagnostic exception swallowing", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var goal = kernel.CreateGoal("Test diagnostic exception swallowing", [new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher)]);
     var agent = new AgentDefinition(
-        new AgentId("test-planner"),
-        "Test Planner",
-        AgentRole.Planner,
+        new AgentId("test-researcher"),
+        "Test Researcher",
+        AgentRole.Researcher,
         new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
@@ -3002,11 +3002,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var exit = Path.Combine(logDir, "abc12345-def67890-20260623.exit.txt");
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
     var kernel = new AgentOrchestratorKernel();
-    var goal = kernel.CreateGoal("Test FileDiagnosticWriter JSONL output", [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+    var goal = kernel.CreateGoal("Test FileDiagnosticWriter JSONL output", [new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher)]);
     var agent = new AgentDefinition(
-        new AgentId("test-planner"),
-        "Test Planner",
-        AgentRole.Planner,
+        new AgentId("test-researcher"),
+        "Test Researcher",
+        AgentRole.Researcher,
         new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();

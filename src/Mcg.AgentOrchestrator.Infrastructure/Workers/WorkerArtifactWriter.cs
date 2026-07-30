@@ -32,14 +32,10 @@ internal sealed class WorkerArtifactWriter
     {
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
-        OrchestratorGeneratedArtifactIgnore.EnsureIgnored(
-            workingDirectory,
-            "/.orchestrator-context/",
-            "/.orchestrator-handoff.md");
         Directory.CreateDirectory(contextDirectory);
 
-        // Self-ignore the scratch tree so it never dirties the worktree, even in
-        // repositories/worktrees whose root .gitignore lacks an orchestrator rule.
+        // Self-ignore the scratch tree so it never dirties repositories whose root
+        // .gitignore lacks the tracked orchestrator rule.
         // A ".gitignore" containing "*" ignores every file in the directory
         // (including itself), so "git status" stays clean before acceptance.
         var scratchIgnore = Path.Combine(scratchRoot, ".gitignore");

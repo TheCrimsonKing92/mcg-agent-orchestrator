@@ -614,8 +614,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             string.Empty,
             clock);
 
-        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
-            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+        var runner = new BackgroundDispatchRunner(clock, isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         var durableOutput = PlannerOutputContract.ReadCapturedOutputTail(process.StandardOutputPath);
@@ -623,12 +623,23 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             PlannerOutputContract.TryExtractDurablePlan(durableOutput, out var plan, out var diagnostic),
             diagnostic);
         Assert.Equal(PlannerContractPlanFixture().ReplaceLineEndings("\n"), plan);
+
+        for (var reconciliation = 0; reconciliation < 5; reconciliation++)
+        {
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.LastVerification!.ExitCode);
+            Assert.Equal(durableOutput, PlannerOutputContract.ReadCapturedOutputTail(process.StandardOutputPath));
+        }
     }
 
     [Xunit.Fact(DisplayName = "Developer_context_receives_complete_ingested_Planner_plan_without_paid_start")]
     public void DeveloperContextReceivesCompleteIngestedPlannerPlanWithoutPaidStart()
     {
         var root = CreateSeededDispatchRepository();
+        File.Copy(FindRepositoryFile(".gitignore"), Path.Combine(root, ".gitignore"));
+        RunGit(root, ["add", ".gitignore"], DateTimeOffset.Parse("2026-07-29T11:50:00Z"));
+        RunGit(root, ["commit", "-m", "Track repository ignore rules"], DateTimeOffset.Parse("2026-07-29T11:50:00Z"));
         var kernel = new AgentOrchestratorKernel();
         var plannerSpec = new TaskSpec(TaskId.New(), "Produce the complete implementation plan.", AgentRole.Planner);
         var developerSpec = new TaskSpec(TaskId.New(), "Implement the accepted plan.", AgentRole.Developer);
@@ -695,8 +706,6 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         File.Delete(externalPlanPath);
 
         var promptRoot = Path.Combine(root, "prompts");
-        var seedPath = Path.Combine(worktree, "seed.txt");
-        File.Delete(seedPath);
         var prepared = WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
@@ -705,7 +714,6 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             promptRoot,
             worktree,
             dispatchedAt.AddMinutes(1));
-        File.WriteAllText(seedPath, "seed");
 
         var contextDirectory = Path.Combine(worktree, ".orchestrator-context", goal.Id.Value);
         var priorEvidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
@@ -722,9 +730,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
                 ".orchestrator-handoff.md",
                 $".orchestrator-context/{goal.Id.Value}/prior-task-evidence.md"
             ]);
+        Assert.Contains(".gitignore", ignoredArtifacts, StringComparison.Ordinal);
         Assert.Contains(".orchestrator-handoff.md", ignoredArtifacts, StringComparison.Ordinal);
-        Assert.Contains(".orchestrator-context/", ignoredArtifacts, StringComparison.Ordinal);
-        Assert.False(File.Exists(Path.Combine(worktree, ".gitignore")));
+        Assert.Contains("**/.orchestrator-context/", ignoredArtifacts, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(worktree, ".gitignore")));
         Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     }
 
