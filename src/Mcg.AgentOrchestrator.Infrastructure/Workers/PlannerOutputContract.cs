@@ -13,7 +13,10 @@ internal static partial class PlannerOutputContract
 {
     internal const int MaxPlanChars = 40_000;
     internal const int MinimumPlanChars = 800;
-    private const int CapturedOutputTailChars = MaxPlanChars + 8_000;
+    internal const string DurablePlanBeginMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:BEGIN -->";
+    internal const string DurablePlanEndMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:END -->";
+    private const int CapturedOutputTailBytes = (MaxPlanChars * 4) + 32_000;
+    private const int AppendAttempts = 4;
 
     private static readonly (string Label, Regex Heading)[] RequiredSections =
     [
@@ -29,9 +32,12 @@ internal static partial class PlannerOutputContract
     internal static PlannerOutputContractResult Resolve(
         string standardOutput,
         string standardError,
-        string workingDirectory)
+        string workingDirectory,
+        string? modelHomeDirectory = null)
     {
-        var captured = $"{standardOutput}{Environment.NewLine}{standardError}";
+        // Planner plans are an stdout contract. Stderr can contain tool traces or echoed
+        // file contents and must not make an otherwise incomplete Planner result pass.
+        var captured = standardOutput;
         if (TryValidate(captured, out var plan, out var diagnostic) &&
             ValidateCitedPaths(plan, workingDirectory, out diagnostic))
         {
@@ -39,7 +45,7 @@ internal static partial class PlannerOutputContract
         }
 
         var pathFailures = new List<string>();
-        foreach (var path in FindCandidatePlanPaths(captured, workingDirectory))
+        foreach (var path in FindCandidatePlanPaths(captured, workingDirectory, modelHomeDirectory))
         {
             if (!TryReadBoundedPlan(path, out var externalPlan, out var readFailure))
             {
@@ -71,9 +77,9 @@ internal static partial class PlannerOutputContract
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > CapturedOutputTailChars)
+            if (stream.Length > CapturedOutputTailBytes)
             {
-                stream.Seek(-CapturedOutputTailChars, SeekOrigin.End);
+                stream.Seek(-CapturedOutputTailBytes, SeekOrigin.End);
             }
 
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
@@ -86,27 +92,87 @@ internal static partial class PlannerOutputContract
         }
     }
 
-    internal static bool TryAppendIngestedReceipt(
+    internal static bool TryPersistDurableReceipt(
         string standardOutputPath,
         string sourcePath,
         string plan,
         out string diagnostic)
     {
-        try
+        var receipt = BuildIngestedReceipt(sourcePath, plan);
+        var existingTail = ReadCapturedOutputTail(standardOutputPath);
+        if (TryExtractDurablePlan(existingTail, out var existingPlan, out _) &&
+            string.Equals(existingPlan, plan, StringComparison.Ordinal))
         {
-            File.AppendAllText(
-                standardOutputPath,
-                BuildIngestedReceipt(sourcePath, plan),
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             diagnostic = string.Empty;
             return true;
         }
-        catch (Exception error) when (
-            error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+
+        for (var attempt = 1; attempt <= AppendAttempts; attempt++)
         {
-            diagnostic = $"could not append ingested Planner plan to captured stdout: {error.Message}";
+            try
+            {
+                var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(receipt);
+                using var stream = new FileStream(
+                    standardOutputPath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete);
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+                diagnostic = string.Empty;
+                return true;
+            }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                if (attempt == AppendAttempts || error is not IOException)
+                {
+                    diagnostic = $"could not append durable Planner plan to captured stdout: {error.Message}";
+                    return false;
+                }
+
+                Thread.Sleep(20 * attempt);
+            }
+        }
+
+        diagnostic = "could not append durable Planner plan to captured stdout";
+        return false;
+    }
+
+    internal static bool TryExtractDurablePlan(string text, out string plan, out string diagnostic)
+    {
+        plan = string.Empty;
+        diagnostic = string.Empty;
+        var begin = text.LastIndexOf(DurablePlanBeginMarker, StringComparison.Ordinal);
+        if (begin < 0)
+        {
+            diagnostic = "durable Planner plan begin marker is missing";
             return false;
         }
+
+        var contentStart = begin + DurablePlanBeginMarker.Length;
+        var end = text.IndexOf(DurablePlanEndMarker, contentStart, StringComparison.Ordinal);
+        if (end < 0)
+        {
+            diagnostic = "durable Planner plan end marker is missing";
+            return false;
+        }
+
+        plan = text[contentStart..end].Trim();
+        if (plan.Length == 0)
+        {
+            diagnostic = "durable Planner plan is empty";
+            return false;
+        }
+
+        if (plan.Length > MaxPlanChars)
+        {
+            diagnostic = $"durable Planner plan is {plan.Length} characters; maximum is {MaxPlanChars}";
+            plan = string.Empty;
+            return false;
+        }
+
+        return true;
     }
 
     internal static bool TryValidate(string text, out string plan, out string diagnostic)
@@ -258,7 +324,11 @@ internal static partial class PlannerOutputContract
     internal static string BuildIngestedReceipt(string path, string plan) =>
         $"{Environment.NewLine}{Environment.NewLine}" +
         $"## Durable Planner Plan (ingested by orchestrator from {path}){Environment.NewLine}" +
+        DurablePlanBeginMarker +
+        Environment.NewLine +
         plan +
+        Environment.NewLine +
+        DurablePlanEndMarker +
         Environment.NewLine;
 
     private static int FindPlanEnd(string text, int afterLastHeading)
@@ -267,13 +337,26 @@ internal static partial class PlannerOutputContract
         return workerResult >= 0 ? workerResult : text.Length;
     }
 
-    private static IReadOnlyList<string> FindCandidatePlanPaths(string text, string workingDirectory)
+    private static IReadOnlyList<string> FindCandidatePlanPaths(
+        string text,
+        string workingDirectory,
+        string? modelHomeDirectory)
     {
-        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<(int Index, string Path)>();
         foreach (Match match in AbsoluteTextPath().Matches(text))
         {
             var raw = match.Groups["path"].Value.Trim().TrimEnd('.', ',', ';', ':', ')', ']');
             if (!Path.IsPathFullyQualified(raw))
+            {
+                continue;
+            }
+
+            var lineStart = text.LastIndexOfAny(['\r', '\n'], Math.Max(0, match.Index - 1));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            var lineEnd = text.IndexOfAny(['\r', '\n'], match.Index + match.Length);
+            lineEnd = lineEnd < 0 ? text.Length : lineEnd;
+            var referenceLine = text[lineStart..lineEnd];
+            if (!ExternalPlanReference().IsMatch(referenceLine))
             {
                 continue;
             }
@@ -288,27 +371,56 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            if (IsAllowedPlanPath(fullPath, workingDirectory))
+            if (IsAllowedPlanPath(fullPath, workingDirectory, modelHomeDirectory))
             {
-                candidates.Add(fullPath);
+                candidates.Add((match.Index, fullPath));
             }
         }
 
-        return candidates.ToArray();
+        return candidates
+            .OrderByDescending(candidate => candidate.Index)
+            .Select(candidate => candidate.Path)
+            .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+            .ToArray();
     }
 
-    private static bool IsAllowedPlanPath(string path, string workingDirectory)
+    private static bool IsAllowedPlanPath(
+        string path,
+        string workingDirectory,
+        string? modelHomeDirectory)
     {
-        var relative = Path.GetRelativePath(Path.GetFullPath(workingDirectory), path);
-        if (!relative.Equals("..", StringComparison.Ordinal) &&
-            !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        if (IsContainedPath(path, workingDirectory))
         {
             return true;
         }
 
-        var normalized = path.Replace('\\', '/');
-        return normalized.Contains("/.claude/plans/", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("/.codex/plans/", StringComparison.OrdinalIgnoreCase);
+        var home = string.IsNullOrWhiteSpace(modelHomeDirectory)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : modelHomeDirectory;
+        return !string.IsNullOrWhiteSpace(home) &&
+            (IsContainedPath(path, Path.Combine(home, ".claude", "plans")) ||
+             IsContainedPath(path, Path.Combine(home, ".codex", "plans")));
+    }
+
+    private static bool IsContainedPath(string path, string root)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(fullPath, fullRoot, comparison) ||
+                fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, comparison);
+        }
+        catch (Exception error) when (
+            error is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static bool TryReadBoundedPlan(string path, out string text, out string diagnostic)
@@ -318,9 +430,9 @@ internal static partial class PlannerOutputContract
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > MaxPlanChars)
+            if (stream.Length > (MaxPlanChars * 4L) + 4)
             {
-                diagnostic = $"artifact is {stream.Length} bytes; maximum durable size is {MaxPlanChars}";
+                diagnostic = $"artifact is {stream.Length} bytes; maximum bounded UTF-8 size is {(MaxPlanChars * 4L) + 4}";
                 return false;
             }
 
@@ -367,6 +479,9 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?im)(?:[`""](?<path>(?:[A-Z]:\\|/)[^`""\r\n]+?\.(?:md|txt))[`""]|(?<path>[A-Z]:\\[^\r\n`""<>|?*]+?\.(?:md|txt)))")]
     private static partial Regex AbsoluteTextPath();
+
+    [GeneratedRegex(@"(?i)(?:\b(?:plan|planning)\b.{0,120}\b(?:written|saved|created|available|located|file|path)\b|\b(?:written|saved|created|available|located|file|path)\b.{0,120}\b(?:plan|planning)\b)")]
+    private static partial Regex ExternalPlanReference();
 
     [GeneratedRegex(@"(?i)(?:src[/\\]|tests[/\\]|\.cs\b|`[A-Za-z_][A-Za-z0-9_.]+`)")]
     private static partial Regex TargetCitation();

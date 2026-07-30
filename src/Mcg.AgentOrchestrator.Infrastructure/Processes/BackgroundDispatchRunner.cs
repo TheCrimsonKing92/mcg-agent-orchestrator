@@ -960,7 +960,7 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var task = kernel.GetTask(goalId, taskId);
-        var ingestedPlannerReceipt = string.Empty;
+        var durablePlannerReceipt = string.Empty;
         if (task.RequiredRole == AgentRole.Planner && exitCode == 0)
         {
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
@@ -975,25 +975,26 @@ public sealed class BackgroundDispatchRunner
                     standardErrorDiagnostic ?? string.Empty,
                     plannerContract.Diagnostic);
             }
-            else if (plannerContract.IngestedPath is { } ingestedPath)
+            else
             {
-                ingestedPlannerReceipt = PlannerOutputContract.BuildIngestedReceipt(
-                    ingestedPath,
+                var durableSource = plannerContract.IngestedPath ?? processRecord.StandardOutputPath;
+                durablePlannerReceipt = PlannerOutputContract.BuildIngestedReceipt(
+                    durableSource,
                     plannerContract.Plan);
-                if (!PlannerOutputContract.TryAppendIngestedReceipt(
+                if (!PlannerOutputContract.TryPersistDurableReceipt(
                         processRecord.StandardOutputPath,
-                        ingestedPath,
+                        durableSource,
                         plannerContract.Plan,
                         out var appendDiagnostic))
                 {
                     exitCode = 1;
                     standardErrorDiagnostic = AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
-                        $"Planner output contract could not make the external plan durable: {appendDiagnostic}. Retry Planner for contract repair.");
+                        $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair.");
                 }
                 else
                 {
-                    decisionStandardOutput += ingestedPlannerReceipt;
+                    decisionStandardOutput += durablePlannerReceipt;
                 }
             }
         }
@@ -1167,7 +1168,7 @@ public sealed class BackgroundDispatchRunner
 
         var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
             ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
-        var standardOutput = outputSnapshot.BoundedText + ingestedPlannerReceipt;
+        var standardOutput = outputSnapshot.BoundedText + durablePlannerReceipt;
         var standardError = AppendDiagnostic(
             errorSnapshot.BoundedText,
             standardErrorDiagnostic);

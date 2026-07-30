@@ -24,6 +24,10 @@ public static partial class WorkerCommandTemplate
             return;
         }
 
+        OrchestratorGeneratedArtifactIgnore.EnsureIgnored(
+            workingDirectory,
+            "/.orchestrator-handoff.md");
+
         var lines = new List<string> { "# Prior Task Handoff" };
         foreach (var priorTask in priorCompletedTasks)
         {

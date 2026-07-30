@@ -459,6 +459,127 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("Retry Planner for contract repair", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Planner_output_contract_does_not_accept_complete_plan_echoed_only_on_stderr")]
+    public void PlannerOutputContractDoesNotAcceptCompletePlanEchoedOnlyOnStderr()
+    {
+        var result = PlannerOutputContract.Resolve(
+            "Summary only; no complete plan was returned.",
+            PlannerContractPlanFixture(),
+            CreateTempDirectory());
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("missing required section 'premise validity'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Planner_output_contract_selects_latest_explicit_allowed_external_plan")]
+    public void PlannerOutputContractSelectsLatestExplicitAllowedExternalPlan()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "worktree");
+        var modelHome = Path.Combine(root, "model-home");
+        var planDirectory = Path.Combine(modelHome, ".claude", "plans");
+        Directory.CreateDirectory(workingDirectory);
+        Directory.CreateDirectory(planDirectory);
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var stalePath = Path.Combine(planDirectory, "stale-plan.md");
+        var selectedPath = Path.Combine(planDirectory, "selected-plan.md");
+        File.WriteAllText(
+            stalePath,
+            PlannerContractPlanFixture().Replace(
+                "Stop when any required section is absent",
+                "STALE-PLAN-159. Stop when any required section is absent",
+                StringComparison.Ordinal));
+        var selectedPlan = PlannerContractPlanFixture().Replace(
+            "Stop when any required section is absent",
+            "SELECTED-PLAN-753. Stop when any required section is absent",
+            StringComparison.Ordinal);
+        File.WriteAllText(selectedPath, selectedPlan);
+
+        var result = PlannerOutputContract.Resolve(
+            $"Plan saved to `{stalePath}`.{Environment.NewLine}Final plan saved to `{selectedPath}`.",
+            string.Empty,
+            workingDirectory,
+            modelHome);
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal(selectedPath, result.IngestedPath);
+        Assert.Equal(selectedPlan.ReplaceLineEndings("\n"), result.Plan);
+    }
+
+    [Xunit.Fact(DisplayName = "Planner_output_contract_rejects_external_plan_outside_worktree_and_model_home")]
+    public void PlannerOutputContractRejectsExternalPlanOutsideWorktreeAndModelHome()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "worktree");
+        var modelHome = Path.Combine(root, "model-home");
+        var unrelatedPlanDirectory = Path.Combine(root, "unrelated", ".claude", "plans");
+        Directory.CreateDirectory(workingDirectory);
+        Directory.CreateDirectory(unrelatedPlanDirectory);
+        var unrelatedPath = Path.Combine(unrelatedPlanDirectory, "complete-plan.md");
+        File.WriteAllText(unrelatedPath, PlannerContractPlanFixture());
+
+        var result = PlannerOutputContract.Resolve(
+            $"Plan saved to `{unrelatedPath}`.",
+            string.Empty,
+            workingDirectory,
+            modelHome);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(
+            "no readable orchestrator-workspace or model-home plan artifact was referenced",
+            result.Diagnostic,
+            StringComparison.Ordinal);
+
+        if (OperatingSystem.IsWindows())
+        {
+            var workingRoot = Path.GetPathRoot(Path.GetFullPath(workingDirectory));
+            var otherVolume = DriveInfo.GetDrives()
+                .FirstOrDefault(drive =>
+                    drive.IsReady &&
+                    !string.Equals(drive.RootDirectory.FullName, workingRoot, StringComparison.OrdinalIgnoreCase));
+            if (otherVolume is not null)
+            {
+                var crossVolumePath = Path.Combine(otherVolume.RootDirectory.FullName, "mcg-unrelated-plan.md");
+                var crossVolumeResult = PlannerOutputContract.Resolve(
+                    $"Plan saved to `{crossVolumePath}`.",
+                    string.Empty,
+                    workingDirectory,
+                    modelHome);
+                Assert.Contains(
+                    "no readable orchestrator-workspace or model-home plan artifact was referenced",
+                    crossVolumeResult.Diagnostic,
+                    StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Durable_Planner_receipt_appends_while_log_is_shared_for_read_and_extracts_exact_plan")]
+    public void DurablePlannerReceiptAppendsWhileLogIsSharedForReadAndExtractsExactPlan()
+    {
+        var root = CreateTempDirectory();
+        var stdoutPath = Path.Combine(root, "planner.out.log");
+        File.WriteAllText(stdoutPath, "Planner summary.");
+        using var sharedReader = new FileStream(
+            stdoutPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        var plan = PlannerContractPlanFixture();
+
+        var persisted = PlannerOutputContract.TryPersistDurableReceipt(
+            stdoutPath,
+            stdoutPath,
+            plan,
+            out var diagnostic);
+
+        Assert.True(persisted, diagnostic);
+        var captured = PlannerOutputContract.ReadCapturedOutputTail(stdoutPath);
+        Assert.True(
+            PlannerOutputContract.TryExtractDurablePlan(captured, out var extracted, out diagnostic),
+            diagnostic);
+        Assert.Equal(plan.ReplaceLineEndings("\n"), extracted);
+    }
+
     [Xunit.Fact(DisplayName = "Planner_dispatch_completion_fails_loudly_when_plan_contract_is_incomplete")]
     public void PlannerDispatchCompletionFailsLoudlyWhenPlanContractIsIncomplete()
     {
@@ -481,6 +602,29 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("Retry Planner for contract repair", task.LastVerification.StandardError, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Planner_dispatch_persists_canonical_receipt_for_plan_captured_on_stdout")]
+    public void PlannerDispatchPersistsCanonicalReceiptForPlanCapturedOnStdout()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-07-29T11:30:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Planner,
+            WorkerResultBlock("none", "source survey", "pass - complete plan prepared"),
+            string.Empty,
+            clock);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        var durableOutput = PlannerOutputContract.ReadCapturedOutputTail(process.StandardOutputPath);
+        Assert.True(
+            PlannerOutputContract.TryExtractDurablePlan(durableOutput, out var plan, out var diagnostic),
+            diagnostic);
+        Assert.Equal(PlannerContractPlanFixture().ReplaceLineEndings("\n"), plan);
+    }
+
     [Xunit.Fact(DisplayName = "Developer_context_receives_complete_ingested_Planner_plan_without_paid_start")]
     public void DeveloperContextReceivesCompleteIngestedPlannerPlanWithoutPaidStart()
     {
@@ -496,7 +640,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var developer = kernel.GetTask(goal.Id, developerSpec.Id);
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
 
-        var externalPlanDirectory = Path.Combine(root, ".claude", "plans");
+        var externalPlanDirectory = Path.Combine(worktree, ".planner-output");
         Directory.CreateDirectory(externalPlanDirectory);
         var externalPlanPath = Path.Combine(externalPlanDirectory, "complete-planner-handoff.md");
         var completePlan = PlannerContractPlanFixture()
@@ -545,9 +689,14 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             "Durable Planner Plan (ingested by orchestrator",
             File.ReadAllText(stdoutPath),
             StringComparison.Ordinal);
+        Assert.Contains(PlannerOutputContract.DurablePlanBeginMarker, File.ReadAllText(stdoutPath), StringComparison.Ordinal);
+        Assert.Contains(PlannerOutputContract.DurablePlanEndMarker, File.ReadAllText(stdoutPath), StringComparison.Ordinal);
         Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", File.ReadAllText(stdoutPath), StringComparison.Ordinal);
+        File.Delete(externalPlanPath);
 
         var promptRoot = Path.Combine(root, "prompts");
+        var seedPath = Path.Combine(worktree, "seed.txt");
+        File.Delete(seedPath);
         var prepared = WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
@@ -556,14 +705,26 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             promptRoot,
             worktree,
             dispatchedAt.AddMinutes(1));
+        File.WriteAllText(seedPath, "seed");
 
         var contextDirectory = Path.Combine(worktree, ".orchestrator-context", goal.Id.Value);
         var priorEvidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
         var prompt = File.ReadAllText(prepared.PromptPath!);
         Assert.Contains("### Durable Planner Plan", priorEvidence, StringComparison.Ordinal);
         Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", priorEvidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("### Stdout", priorEvidence, StringComparison.Ordinal);
         Assert.Contains("complete Durable Planner Plan", prompt, StringComparison.Ordinal);
         Assert.Null(developer.LastProcess);
+        var ignoredArtifacts = ReadGit(
+            worktree,
+            [
+                "check-ignore",
+                ".orchestrator-handoff.md",
+                $".orchestrator-context/{goal.Id.Value}/prior-task-evidence.md"
+            ]);
+        Assert.Contains(".orchestrator-handoff.md", ignoredArtifacts, StringComparison.Ordinal);
+        Assert.Contains(".orchestrator-context/", ignoredArtifacts, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(worktree, ".gitignore")));
         Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     }
 

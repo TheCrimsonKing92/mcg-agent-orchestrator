@@ -32,6 +32,10 @@ internal sealed class WorkerArtifactWriter
     {
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
+        OrchestratorGeneratedArtifactIgnore.EnsureIgnored(
+            workingDirectory,
+            "/.orchestrator-context/",
+            "/.orchestrator-handoff.md");
         Directory.CreateDirectory(contextDirectory);
 
         // Self-ignore the scratch tree so it never dirties the worktree, even in
@@ -557,10 +561,11 @@ internal sealed class WorkerArtifactWriter
             lines.Add($"Verification result: {SummarizeVerificationResult(verification)}");
             lines.Add($"Risks: {SummarizeRisks(verification)}");
             lines.Add($"Model fit: {SummarizeModelFit(verification)}");
-            if (priorTask.RequiredRole == AgentRole.Planner &&
-                TryResolveDurablePlannerPlan(verification, out _))
+            if (priorTask.RequiredRole == AgentRole.Planner)
             {
-                lines.Add("Durable plan: complete Planner plan is in prior-task-evidence.md and is required implementation input.");
+                lines.Add(TryResolveDurablePlannerPlan(verification, out _, out var diagnostic)
+                    ? "Durable plan: complete Planner plan is in prior-task-evidence.md and is required implementation input."
+                    : $"Durable plan: UNAVAILABLE ({diagnostic}); retry Planner before implementation.");
             }
         }
 
@@ -595,14 +600,21 @@ internal sealed class WorkerArtifactWriter
             }
 
             lines.Add(string.Empty);
-            if (priorTask.RequiredRole == AgentRole.Planner &&
-                TryResolveDurablePlannerPlan(verification, out var plannerPlan))
+            if (priorTask.RequiredRole == AgentRole.Planner)
             {
-                lines.Add("### Durable Planner Plan");
-                lines.Add(plannerPlan);
-                lines.Add(string.Empty);
-                lines.Add("### Planner WORKER_RESULT Receipt");
-                lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, SummaryFieldMaxChars * 4));
+                if (TryResolveDurablePlannerPlan(verification, out var plannerPlan, out var diagnostic))
+                {
+                    lines.Add("### Durable Planner Plan");
+                    lines.Add(plannerPlan);
+                    lines.Add(string.Empty);
+                    lines.Add("### Planner WORKER_RESULT Receipt");
+                    lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, SummaryFieldMaxChars * 4));
+                }
+                else
+                {
+                    lines.Add("### Durable Planner Plan Retrieval Failure");
+                    lines.Add($"{diagnostic}. Retry Planner before implementation; truncated stdout is not a plan substitute.");
+                }
             }
             else
             {
@@ -623,21 +635,33 @@ internal sealed class WorkerArtifactWriter
 
     private static bool TryResolveDurablePlannerPlan(
         TaskVerificationRecord verification,
-        out string plan)
+        out string plan,
+        out string diagnostic)
     {
-        var capturedOutput = verification.StandardOutput;
+        plan = string.Empty;
+        diagnostic = string.Empty;
         if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
             File.Exists(verification.StandardOutputPath))
         {
-            capturedOutput = PlannerOutputContract.ReadCapturedOutputTail(verification.StandardOutputPath);
+            var capturedOutput = PlannerOutputContract.ReadCapturedOutputTail(verification.StandardOutputPath);
+            if (PlannerOutputContract.TryExtractDurablePlan(capturedOutput, out plan, out diagnostic))
+            {
+                return true;
+            }
         }
 
-        var result = PlannerOutputContract.Resolve(
-            capturedOutput,
-            verification.StandardError,
-            verification.WorkingDirectory);
-        plan = result.Plan ?? string.Empty;
-        return result.Succeeded && plan.Length > 0;
+        if (PlannerOutputContract.TryExtractDurablePlan(
+                verification.StandardOutput,
+                out plan,
+                out var verificationDiagnostic))
+        {
+            return true;
+        }
+
+        diagnostic = string.IsNullOrWhiteSpace(diagnostic)
+            ? verificationDiagnostic
+            : $"{diagnostic}; verification snapshot: {verificationDiagnostic}";
+        return false;
     }
 
     private static List<string> CopyGuidanceFiles(string workingDirectory, string contextDirectory)
