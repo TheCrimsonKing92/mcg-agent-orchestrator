@@ -1198,6 +1198,13 @@ public sealed class TaskBriefTests
         var reviewer = new TaskSpec(TaskId.New(), "Review repairs.", AgentRole.Reviewer);
         var goal = kernel.CreateGoal("Preserve every actionable finding", [developer, reviewer]);
         kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var findings = Enumerable.Range(0, 14)
+            .Select(index => new ReviewFinding(
+                $"finding-{index:D2}",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation($"src/{index:D2}.cs", $"Method{index:D2}"),
+                $"Distinct actionable finding {index:D2}."))
+            .ToArray();
         kernel.RecordTaskVerification(
             goal.Id,
             reviewer.Id,
@@ -1208,19 +1215,7 @@ public sealed class TaskBriefTests
                 "structured review",
                 "",
                 DateTimeOffset.UtcNow,
-                MergedReviewFindings:
-                [
-                    new ReviewFinding(
-                        "finding-alpha",
-                        ReviewFindingState.Open,
-                        new ReviewFindingLocation("src/A.cs", "MethodA"),
-                        "First distinct actionable finding."),
-                    new ReviewFinding(
-                        "finding-beta",
-                        ReviewFindingState.Open,
-                        new ReviewFindingLocation("src/B.cs", "MethodB"),
-                        "Second distinct actionable finding.")
-                ]));
+                MergedReviewFindings: findings));
         for (var index = 0; index < 12; index++)
         {
             kernel.RecordTaskNote(goal.Id, developer.Id, $"operational retry noise {index:D2} {new string('x', 300)}");
@@ -1231,10 +1226,11 @@ public sealed class TaskBriefTests
         var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
 
         Assert.Contains("Structured actionable findings (not subject to operational retry caps)", brief, StringComparison.Ordinal);
-        Assert.Contains("finding-alpha", brief, StringComparison.Ordinal);
-        Assert.Contains("First distinct actionable finding.", brief, StringComparison.Ordinal);
-        Assert.Contains("finding-beta", brief, StringComparison.Ordinal);
-        Assert.Contains("Second distinct actionable finding.", brief, StringComparison.Ordinal);
+        Assert.Contains("finding-00", brief, StringComparison.Ordinal);
+        Assert.Contains("Distinct actionable finding 00.", brief, StringComparison.Ordinal);
+        Assert.Contains("finding-13", brief, StringComparison.Ordinal);
+        Assert.Contains("Distinct actionable finding 13.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("structured_finding_overflow", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_executed_test_evidence_is_newest_first_and_capped")]

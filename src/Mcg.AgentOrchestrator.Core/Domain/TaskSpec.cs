@@ -374,7 +374,7 @@ public sealed class TaskSpec
     internal bool RecordPreReviewEvidence(PreReviewEvidenceReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        if (PreReviewEvidenceReceipt == receipt)
+        if (PreReviewEvidenceReceipt?.ContentEquals(receipt) == true)
         {
             return false;
         }

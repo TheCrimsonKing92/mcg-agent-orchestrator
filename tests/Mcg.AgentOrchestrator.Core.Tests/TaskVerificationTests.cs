@@ -35,6 +35,50 @@ public sealed class TaskVerificationTests
         Assert.Equal("receipt\\result.trx", receipt.EvidencePointer);
     }
 
+    [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_is_structurally_idempotent_and_current_head_owned")]
+    public void PreReviewEvidenceReceiptIsStructurallyIdempotentAndCurrentHeadOwned()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist one current-head receipt", [reviewer]);
+        var recordedAt = DateTimeOffset.UtcNow;
+        PreReviewEvidenceReceipt CreateReceipt() =>
+            new(
+                goal.Id.Value,
+                1,
+                "candidate-sha",
+                ["dotnet test --filter FocusedTests"],
+                PreReviewEvidenceDisposition.Green,
+                1,
+                0,
+                [
+                    new PreReviewEvidenceCheckReceipt(
+                        "focused",
+                        "dotnet test --filter FocusedTests",
+                        true,
+                        0,
+                        "receipt",
+                        ["receipt\\result.trx"])
+                ],
+                [],
+                "mapped",
+                "receipt\\result.trx",
+                recordedAt);
+
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
+
+        Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.PreReviewEvidenceRecorded));
+        Assert.True(reviewer.PreReviewEvidenceReceipt!.MatchesCurrentCandidate(
+            goal.Id.Value,
+            "candidate-sha",
+            ["dotnet test --filter FocusedTests"]));
+        Assert.False(reviewer.PreReviewEvidenceReceipt.MatchesCurrentCandidate(
+            goal.Id.Value,
+            "stale-sha",
+            ["dotnet test --filter FocusedTests"]));
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_persists_result_and_timeline_event")]
     public void RecordTaskVerificationPersistsResultAndTimelineEvent()
 {

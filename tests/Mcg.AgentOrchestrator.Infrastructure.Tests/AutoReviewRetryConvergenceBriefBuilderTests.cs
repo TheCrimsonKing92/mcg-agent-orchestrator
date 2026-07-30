@@ -474,6 +474,62 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Contains("accepted_count: 0", brief);
     }
 
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_merges_open_reviewer_and_tester_ledgers")]
+    public void StructuredConvergenceBriefMergesOpenReviewerAndTesterLedgers()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Structured findings stay complete across roles");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "reviewer-open",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run", "reviewer-guard"),
+                    "Reviewer guard remains open.")
+            ],
+            []);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            tester,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "tester-open",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("tests/A.Tests.cs", "A.Tests", "tester-case"),
+                    "Tester edge case remains open.")
+            ],
+            []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            tester,
+            "Tester edge case remains open.",
+            "structured Tester findings",
+            AgentRole.Developer,
+            2,
+            "tester.out",
+            ["src/A.cs", "tests/A.Tests.cs"]);
+
+        Assert.Contains("open_count: 2", brief);
+        Assert.Contains("stable_id: reviewer-open", brief);
+        Assert.Contains("source_role: Reviewer", brief);
+        Assert.Contains("stable_id: tester-open", brief);
+        Assert.Contains("source_role: Tester", brief);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_deduplicates_multi_round_findings")]
     public void BuildConvergenceBriefDeduplicatesMultiRoundFindings()
     {

@@ -600,7 +600,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
             "## Accumulated retry/review feedback",
-            $"Newest first; capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. Status legend: still-open, resolved-in-round-N, superseded.",
+            $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars; structured findings below are uncapped. Status legend: still-open, resolved-in-round-N, superseded.",
             "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests.",
         };
 
@@ -629,6 +629,7 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"Prior outcome: {priorOutcomeEvent.OccurredAt:u}; {DescribeTimelineTask(goal, priorOutcomeEvent)}; {priorOutcomeEvent.Kind}: {PromptContextFormatter.TrimPromptBlock(priorOutcomeEvent.Message)}");
         }
 
+        var operationalSectionChars = string.Join(Environment.NewLine, lines).Length;
         var structuredFindings = goal.Tasks
             .Where(candidate => candidate.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
             .SelectMany(candidate => candidate.VerificationHistory.SelectMany(verification =>
@@ -636,7 +637,6 @@ public sealed partial class AgentOrchestratorKernel
                 {
                     candidate.RequiredRole,
                     verification.CompletedAt,
-                    verification.StandardOutputPath,
                     Finding = finding
                 })))
             .GroupBy(
@@ -653,26 +653,11 @@ public sealed partial class AgentOrchestratorKernel
         {
             lines.Add("## Structured actionable findings (not subject to operational retry caps)");
             lines.Add($"finding_count: {structuredFindings.Length}; operational retry entries are budgeted separately.");
-            const int maxInlineStructuredFindings = 12;
-            foreach (var item in structuredFindings.Take(maxInlineStructuredFindings))
+            foreach (var item in structuredFindings)
             {
                 lines.Add(
                     $"- role={item.RequiredRole}; stable_id={item.Finding.StableId}; severity={item.Finding.Severity}; " +
                     $"location={item.Finding.Location}; description={PromptContextFormatter.TrimPromptBlock(item.Finding.Description)}");
-            }
-
-            if (structuredFindings.Length > maxInlineStructuredFindings)
-            {
-                var overflow = structuredFindings.Length - maxInlineStructuredFindings;
-                var pointers = structuredFindings
-                    .Skip(maxInlineStructuredFindings)
-                    .Select(item => item.StandardOutputPath)
-                    .Where(path => !string.IsNullOrWhiteSpace(path))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                lines.Add(
-                    $"structured_finding_overflow: included={maxInlineStructuredFindings}; overflow={overflow}; " +
-                    $"worker-readable artifact(s)={(pointers.Length == 0 ? "verification history (no output path recorded)" : string.Join(", ", pointers))}");
             }
         }
 
@@ -688,7 +673,6 @@ public sealed partial class AgentOrchestratorKernel
                 ReadLatestFailedAcceptanceOperation(workingDirectory, goal.Id, latestRetry.OccurredAt)));
         }
 
-        var sectionChars = string.Join(Environment.NewLine, lines).Length;
         var emittedCount = 0;
         var omittedCount = 0;
         for (var index = 0; index < feedbackEvents.Count; index++)
@@ -706,14 +690,14 @@ public sealed partial class AgentOrchestratorKernel
                 : $"Retry {RetryOrdinalAt(retryEvents, evt.OccurredAt)} of {retryEvents.Count}";
             var line = $"- [{status}] {retryDescriptor}; {evt.OccurredAt:u}; {DescribeTimelineTask(goal, evt)}; {evt.Kind}: {PromptContextFormatter.TrimPromptBlock(message)}";
             if (emittedCount >= AccumulatedRetryFeedbackMaxEntries ||
-                sectionChars + line.Length + Environment.NewLine.Length > AccumulatedRetryFeedbackMaxChars)
+                operationalSectionChars + line.Length + Environment.NewLine.Length > AccumulatedRetryFeedbackMaxChars)
             {
                 omittedCount = feedbackEvents.Count - index;
                 break;
             }
 
             lines.Add(line);
-            sectionChars += line.Length + Environment.NewLine.Length;
+            operationalSectionChars += line.Length + Environment.NewLine.Length;
             emittedCount++;
         }
 

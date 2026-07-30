@@ -1007,9 +1007,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var project = InfrastructureTestsProject;
             var expression = item;
+            var hasExplicitProject = false;
             var separator = item.IndexOf(':', StringComparison.Ordinal);
             if (separator >= 0)
             {
+                hasExplicitProject = true;
                 var alias = item[..separator].Trim();
                 expression = item[(separator + 1)..].Trim();
                 if (!TryResolveFocusedEvidenceProject(alias, out project))
@@ -1019,7 +1021,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
             }
 
-            if (!TryNormalizeFocusedEvidenceFilter(expression, out var filter, out var targetCount, out rejection))
+            if (!TryNormalizeFocusedEvidenceFilter(
+                    expression,
+                    allowMappedProject: hasExplicitProject,
+                    out var filter,
+                    out var targetCount,
+                    out rejection))
             {
                 return false;
             }
@@ -1033,14 +1040,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             built.Add(new AcceptanceManifestCheck
             {
-                Name = $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
+                Name = filter is null
+                    ? $"reviewer mapped project evidence: {ProjectLabel(project)}"
+                    : $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
                 Type = "dotnet-test",
                 // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
                 // without this the check defaults to the VSTest runner and fails on .NET 10 with
                 // "VSTest target is no longer supported", making every reviewer evidence run fail.
                 Runner = "mtp",
                 Project = project,
-                Arguments = ["--verbosity", "minimal", "--filter", filter],
+                Arguments = filter is null
+                    ? ["--verbosity", "minimal"]
+                    : ["--verbosity", "minimal", "--filter", filter],
                 TimeoutMinutes = 10
             });
         }
@@ -1065,11 +1076,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool TryNormalizeFocusedEvidenceFilter(
         string expression,
-        out string filter,
+        bool allowMappedProject,
+        out string? filter,
         out int targetCount,
         out string rejection)
     {
-        filter = string.Empty;
+        filter = null;
         targetCount = 0;
         rejection = string.Empty;
         var trimmed = expression.Trim();
@@ -1079,12 +1091,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
+        if (trimmed.Equals("mapped-project", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!allowMappedProject)
+            {
+                rejection = "mapped-project evidence requires an explicit supported project alias";
+                return false;
+            }
+
+            // This is the bounded representation of a deterministic planner check that has no
+            // narrower class filter. It runs one known test project, never the solution-level
+            // acceptance manifest, and counts as one broker target.
+            targetCount = 1;
+            return true;
+        }
+
         if (trimmed.Equals("all", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("full", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Contains("full-suite", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Contains(".sln", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Contains('*', StringComparison.Ordinal) ||
-            trimmed.Contains('!', StringComparison.Ordinal))
+            trimmed.Contains('*', StringComparison.Ordinal))
         {
             rejection = "unbounded evidence request rejected; use focused FullyQualifiedName~TestClass filters only";
             return false;
@@ -1100,6 +1126,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             filter = Regex.Replace(trimmed, @"\s+", "");
+            try
+            {
+                _ = TranslateMtpFilter(filter).ToArray();
+            }
+            catch (InvalidOperationException)
+            {
+                rejection = "focused evidence filter contains an unsupported token";
+                filter = null;
+                targetCount = 0;
+                return false;
+            }
+
             return true;
         }
 

@@ -2717,6 +2717,54 @@ public sealed class ConductorDriverTests
             reviewer.PreReviewEvidenceReceipt?.FailingTestIdentities);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_red_without_trx_does_not_invent_a_failing_test")]
+    public void ConductorDriverPreReviewRedWithoutTrxDoesNotInventFailingTest()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var developerRetried = false;
+        string? escalation = null;
+        const string checkName = "reviewer mapped project evidence: Core.Tests";
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => FocusedPreReviewContext("plumbing-red-sha"),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: false,
+                Summary: "test process produced no TRX",
+                Checks:
+                [
+                    new AcceptanceCheckResult(
+                        checkName,
+                        false,
+                        1,
+                        $"[FAIL] {checkName}: failed — no TRX produced")
+                ]),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (_, _, _, _) =>
+            {
+                developerRetried = true;
+                throw new InvalidOperationException("Developer must not receive a synthetic test identity.");
+            },
+            writeEscalation: (_, _, message) => escalation = message);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(developerRetried);
+        Assert.Contains("produced no exact failing test identities", escalation, StringComparison.Ordinal);
+        Assert.Equal(
+            PreReviewEvidenceDisposition.MappingNeedsInput,
+            reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Empty(reviewer.PreReviewEvidenceReceipt?.FailingTestIdentities ?? []);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_no_applicable_tests_is_explicit_green_path")]
     public void ConductorDriverPreReviewNoApplicableTestsIsExplicitGreenPath()
     {
@@ -2795,6 +2843,30 @@ public sealed class ConductorDriverTests
         Assert.Contains("PRE_REVIEW_MAPPING_NEEDS_INPUT", escalation, StringComparison.Ordinal);
         Assert.Equal(PreReviewEvidenceDisposition.MappingNeedsInput, reviewer.PreReviewEvidenceReceipt?.Disposition);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_mapper_routes_project_and_exclusion_checks_to_bounded_evidence")]
+    public void ConductorDriverPreReviewMapperRoutesProjectAndExclusionChecksToBoundedEvidence()
+    {
+        var core = ConductorDriver.BuildPreReviewEvidenceContext(
+            "core-sha",
+            ["src/Mcg.AgentOrchestrator.Core/Domain/TaskSpec.cs"]);
+        var fullSuite = ConductorDriver.BuildPreReviewEvidenceContext(
+            "build-sha",
+            ["Directory.Build.props"]);
+        var dashboard = ConductorDriver.BuildPreReviewEvidenceContext(
+            "dashboard-sha",
+            ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"]);
+
+        Assert.False(core.MappingNeedsInput);
+        Assert.Equal("Core.Tests: mapped-project", core.FocusedRequest);
+        Assert.False(fullSuite.MappingNeedsInput);
+        Assert.Equal(
+            "Core.Tests: mapped-project; Infrastructure.Tests: mapped-project",
+            fullSuite.FocusedRequest);
+        Assert.False(dashboard.MappingNeedsInput);
+        Assert.Contains("Infrastructure.Tests:", dashboard.FocusedRequest, StringComparison.Ordinal);
+        Assert.Contains("Category!=HostIntegration", dashboard.FocusedRequest, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_contract_violation_mechanically_retries_the_same_reviewer")]

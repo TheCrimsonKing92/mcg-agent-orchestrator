@@ -1909,7 +1909,7 @@ internal sealed class ConductorDriver
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
         if (reviewerTask.PreReviewEvidenceReceipt is { } current &&
-            current.Matches(goal.Id.Value, round, context.CandidateSha, context.SelectedFocusedTests))
+            current.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
         {
             if (current.Disposition is PreReviewEvidenceDisposition.Green or PreReviewEvidenceDisposition.NoApplicableTests)
             {
@@ -2082,9 +2082,7 @@ internal sealed class ConductorDriver
             var filterIndex = FindArgument(check.Command, "--filter");
             var project = check.Command.FirstOrDefault(argument =>
                 argument.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
-            if (filterIndex < 0 ||
-                filterIndex + 1 >= check.Command.Count ||
-                string.IsNullOrWhiteSpace(project))
+            if (string.IsNullOrWhiteSpace(project))
             {
                 return new PreReviewEvidenceContext(
                     candidateSha,
@@ -2111,7 +2109,21 @@ internal sealed class ConductorDriver
                     MappingNeedsInput: true);
             }
 
-            requests.Add($"{alias}: {check.Command[filterIndex + 1]}");
+            if (filterIndex >= 0 && filterIndex + 1 >= check.Command.Count)
+            {
+                return new PreReviewEvidenceContext(
+                    candidateSha,
+                    selected,
+                    null,
+                    $"Mapped test command has an empty --filter argument: {check.CommandLine}",
+                    NoApplicableTests: false,
+                    MappingNeedsInput: true);
+            }
+
+            requests.Add(
+                filterIndex < 0
+                    ? $"{alias}: mapped-project"
+                    : $"{alias}: {check.Command[filterIndex + 1]}");
         }
 
         return new PreReviewEvidenceContext(
@@ -2189,7 +2201,13 @@ internal sealed class ConductorDriver
                     check.OutputTail ?? string.Empty,
                     @"(?m)^\[FAIL\]\s+(?<test>[^:\r\n]+):",
                     RegexOptions.CultureInvariant)
-                .Select(match => match.Groups["test"].Value.Trim()))
+                .Select(match => match.Groups["test"].Value.Trim())
+                // The verifier emits a synthetic "[FAIL] <check name>" line when no usable
+                // TRX exists. That is red plumbing evidence, not an exact failing-test identity,
+                // and must not send the Developer a made-up test name.
+                .Where(identity =>
+                    !identity.Equals(check.Name, StringComparison.Ordinal) &&
+                    !check.Name.StartsWith($"{identity}:", StringComparison.Ordinal)))
             .Where(identity => identity.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
