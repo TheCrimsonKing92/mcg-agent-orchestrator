@@ -1915,15 +1915,9 @@ internal sealed class ConductorDriver
             {
                 return false;
             }
-
-            result = Escalate(
-                goal,
-                goalPrefix,
-                policy,
-                fromState,
-                $"PRE_REVIEW_{current.Disposition.ToString().ToUpperInvariant()}: current receipt for round {round}, " +
-                $"candidate {context.CandidateSha} is not Reviewer-eligible; pointer={current.EvidencePointer ?? "none"}.");
-            return true;
+            // Red or inconclusive evidence caused an upstream retry. Once that task completes,
+            // re-run the deterministic evidence even when the candidate SHA did not change;
+            // otherwise the stale non-green receipt can never be replaced by a current result.
         }
 
         if (context.NoApplicableTests)
@@ -2007,42 +2001,42 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        if (evidence.Checks.Count != context.SelectedFocusedTests.Count)
+        if (evidence.Passed)
         {
-            RecordPreReviewReceipt(
-                goal,
-                reviewerTask,
-                context,
-                round,
-                PreReviewEvidenceDisposition.MappingNeedsInput,
-                evidence.Checks,
-                [],
-                evidencePointer);
-            var mismatch =
-                $"pre-review evidence cardinality mismatch for candidate {context.CandidateSha}: " +
-                $"planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
-            if (TryRoutePreReviewEvidenceToTester(
+            if (evidence.Checks.Count != context.SelectedFocusedTests.Count)
+            {
+                RecordPreReviewReceipt(
                     goal,
                     reviewerTask,
+                    context,
+                    round,
+                    PreReviewEvidenceDisposition.MappingNeedsInput,
+                    evidence.Checks,
+                    [],
+                    evidencePointer);
+                var mismatch =
+                    $"pre-review evidence cardinality mismatch for candidate {context.CandidateSha}: " +
+                    $"planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
+                if (TryRoutePreReviewEvidenceToTester(
+                        goal,
+                        reviewerTask,
+                        goalPrefix,
+                        policy,
+                        mismatch,
+                        out result))
+                {
+                    return true;
+                }
+
+                result = Escalate(
+                    goal,
                     goalPrefix,
                     policy,
-                    mismatch,
-                    out result))
-            {
+                    fromState,
+                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available.");
                 return true;
             }
 
-            result = Escalate(
-                goal,
-                goalPrefix,
-                policy,
-                fromState,
-                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available.");
-            return true;
-        }
-
-        if (evidence.Passed)
-        {
             RecordPreReviewReceipt(
                 goal,
                 reviewerTask,

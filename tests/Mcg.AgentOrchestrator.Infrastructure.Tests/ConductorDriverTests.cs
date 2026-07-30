@@ -2682,9 +2682,19 @@ public sealed class ConductorDriverTests
         }
 
         string? retryMessage = null;
+        TaskId? retriedTaskId = null;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => FocusedPreReviewContext("red-sha"),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "red-sha",
+                [
+                    "dotnet test Core.Tests --filter FullyQualifiedName~CoreFailure",
+                    "dotnet test Infrastructure.Tests --filter FullyQualifiedName~InfrastructureFailure"
+                ],
+                "Core.Tests: FullyQualifiedName~CoreFailure; Infrastructure.Tests: FullyQualifiedName~InfrastructureFailure",
+                "Cross-project change mapped to two focused checks.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
             runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,
@@ -2705,6 +2715,7 @@ public sealed class ConductorDriverTests
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
+                retriedTaskId = taskId;
                 retryMessage = message;
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
             });
@@ -2712,6 +2723,7 @@ public sealed class ConductorDriverTests
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Contains("Mcg.Tests.ConductorDriverBlocksReview(value: 42)", retryMessage, StringComparison.Ordinal);
+        Assert.Equal(developer.Id, retriedTaskId);
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
         Assert.Equal(PreReviewEvidenceDisposition.Red, reviewer.PreReviewEvidenceReceipt?.Disposition);
         Assert.Equal(
@@ -2732,23 +2744,30 @@ public sealed class ConductorDriverTests
 
         TaskId? retriedTaskId = null;
         string? escalation = null;
+        var evidenceRuns = 0;
         const string checkName = "reviewer mapped project evidence: Core.Tests";
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getPreReviewEvidenceContext: _ => FocusedPreReviewContext("plumbing-red-sha"),
-            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
-                request,
-                Accepted: true,
-                Passed: false,
-                Summary: "test process produced no TRX",
-                Checks:
-                [
-                    new AcceptanceCheckResult(
-                        checkName,
-                        false,
-                        1,
-                        $"[FAIL] {checkName}: failed — no TRX produced")
-                ]),
+            runFocusedEvidence: (_, request) =>
+            {
+                evidenceRuns++;
+                return evidenceRuns == 1
+                    ? new FocusedEvidenceRunResult(
+                        request,
+                        Accepted: true,
+                        Passed: false,
+                        Summary: "test process produced no TRX",
+                        Checks:
+                        [
+                            new AcceptanceCheckResult(
+                                checkName,
+                                false,
+                                1,
+                                $"[FAIL] {checkName}: failed — no TRX produced")
+                        ])
+                    : PassingPreReviewEvidence(request);
+            },
             recordPreReviewEvidence: (goalId, taskId, receipt) =>
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -2763,6 +2782,13 @@ public sealed class ConductorDriverTests
 
         Assert.Equal(tester.Id, retriedTaskId);
         Assert.Null(escalation);
+
+        PassVerification(kernel, goal, tester);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, evidenceRuns);
+        Assert.Null(escalation);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_no_applicable_tests_is_explicit_green_path")]
