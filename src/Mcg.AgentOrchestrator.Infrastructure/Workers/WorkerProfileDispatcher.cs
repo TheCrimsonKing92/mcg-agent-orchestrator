@@ -1,4 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -128,6 +130,9 @@ public static class WorkerProfileDispatcher
     public const string ReviewerScopeUnavailableErrorCode = WorkerGitContext.ReviewerScopeUnavailableErrorCode;
     public const string ReviewerMergeBaseUnavailableErrorCode = WorkerGitContext.ReviewerMergeBaseUnavailableErrorCode;
     public const string ReviewerMergeTreeUnavailableErrorCode = WorkerGitContext.ReviewerMergeTreeUnavailableErrorCode;
+    public const string MissingResearchArtifactErrorCode = "missing-research-artifact";
+    public const string MissingPlannerArtifactErrorCode = "missing-planner-artifact";
+    public const string ArtifactTooLargeErrorCode = "artifact-too-large";
     private const string HighRiskReviewerReasoningEffort = "xhigh";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
@@ -160,6 +165,22 @@ public static class WorkerProfileDispatcher
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
+        var durableArtifactFindings = new List<string>();
+        AddDurableArtifactDependencyFindings(
+            durableArtifactFindings,
+            goal,
+            task,
+            providerName ?? "unknown",
+            modelName ?? "unknown");
+        if (durableArtifactFindings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)))
+        {
+            var errorCode = ResolvePreflightErrorCode(durableArtifactFindings);
+            throw new WorkerSubscriptionPreflightException(
+                "Worker dispatch blocked: " + string.Join("; ", durableArtifactFindings),
+                errorCode,
+                durableArtifactFindings);
+        }
+
         EnsureReviewerScopeForPreparation(
             task,
             workingDirectory,
@@ -195,7 +216,23 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount,
             reviewerRoundTouchedAnchors);
-        var budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
+        TaskBrief budgetedBrief;
+        try
+        {
+            budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
+        }
+        catch (WorkerPromptInputBudgetExceededException error)
+            when (UsesResearchFirstArtifactHandoff(goal, task))
+        {
+            var findings = new[]
+            {
+                $"blocked: {ArtifactTooLargeErrorCode}: complete durable artifacts plus the required {task.RequiredRole} brief are {error.TokenCount} tokens, exceeding {error.ProviderName}/{error.ModelName} input budget {error.TokenBudget}; artifacts will not be truncated"
+            };
+            throw new WorkerSubscriptionPreflightException(
+                "Worker dispatch blocked: " + findings[0],
+                ArtifactTooLargeErrorCode,
+                findings);
+        }
         var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         var commandTemplate = BuildDispatchCommandTemplate(profile, workerProviderKind, dispatchVariables);
@@ -462,6 +499,12 @@ public static class WorkerProfileDispatcher
             var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
             findings.Add($"model: {dispatchProviderName}/{effectiveModelName}");
             findings.Add($"complexity: {roleSelection.Complexity}");
+            AddDurableArtifactDependencyFindings(
+                findings,
+                goal,
+                task,
+                dispatchProviderName,
+                effectiveModelName);
 
             AddProfileFinding(
                 findings,
@@ -590,6 +633,21 @@ public static class WorkerProfileDispatcher
 
     private static string? ResolvePreflightErrorCode(IReadOnlyList<string> findings)
     {
+        if (findings.Any(finding => finding.Contains(MissingResearchArtifactErrorCode, StringComparison.Ordinal)))
+        {
+            return MissingResearchArtifactErrorCode;
+        }
+
+        if (findings.Any(finding => finding.Contains(MissingPlannerArtifactErrorCode, StringComparison.Ordinal)))
+        {
+            return MissingPlannerArtifactErrorCode;
+        }
+
+        if (findings.Any(finding => finding.Contains(ArtifactTooLargeErrorCode, StringComparison.Ordinal)))
+        {
+            return ArtifactTooLargeErrorCode;
+        }
+
         if (findings.Any(finding => finding.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal)))
         {
             return ClaudeCliAuthProbe.AuthUnavailableErrorCode;
@@ -611,6 +669,106 @@ public static class WorkerProfileDispatcher
         }
 
         return null;
+    }
+
+    private static void AddDurableArtifactDependencyFindings(
+        List<string> findings,
+        Goal goal,
+        TaskSpec task,
+        string providerName,
+        string modelName)
+    {
+        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Planner);
+        var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Researcher);
+        var taskIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == task.Id);
+        var usesResearchFirstPipeline = researcherIndex >= 0 && plannerIndex > researcherIndex;
+        if (!usesResearchFirstPipeline || taskIndex <= researcherIndex)
+        {
+            findings.Add("artifact-dependency: research-first durable handoff not required for this persisted task graph position");
+            return;
+        }
+
+        var researchTask = goal.Tasks[researcherIndex];
+        if (researchTask.Status != WorkTaskStatus.Completed ||
+            !TryResolveLatestResearchArtifact(researchTask, out var research))
+        {
+            findings.Add(
+                $"blocked: {MissingResearchArtifactErrorCode}: Planner task {goal.Tasks[plannerIndex].Id.Value} requires complete Researcher task {researchTask.Id.Value} artifact; keep Planner assigned and retry the existing Researcher stage");
+            return;
+        }
+
+        var artifacts = new List<(string Role, string Text)> { ("Researcher", research) };
+        findings.Add($"ok: research-artifact: task={researchTask.Id.Value} sha256:{Sha256(research)} chars={research.Length}");
+
+        if (taskIndex > plannerIndex)
+        {
+            var plannerTask = goal.Tasks[plannerIndex];
+            if (plannerTask.Status != WorkTaskStatus.Completed ||
+                !TryResolveLatestPlannerArtifact(plannerTask, out var plan))
+            {
+                findings.Add(
+                    $"blocked: {MissingPlannerArtifactErrorCode}: downstream {task.RequiredRole} task {task.Id.Value} requires complete Planner task {plannerTask.Id.Value} artifact");
+                return;
+            }
+
+            artifacts.Add(("Planner", plan));
+            findings.Add($"ok: planner-artifact: task={plannerTask.Id.Value} sha256:{Sha256(plan)} chars={plan.Length}");
+        }
+
+        var artifactCharacters = artifacts.Sum(artifact => artifact.Text.Length);
+        var artifactTokens = WorkerPromptInputBudget.CountTokens(
+            string.Join(Environment.NewLine, artifacts.Select(artifact => artifact.Text)));
+        var tokenBudget = WorkerPromptInputBudget.InputTokenBudget(providerName, modelName);
+        if (artifactTokens > tokenBudget)
+        {
+            findings.Add(
+                $"blocked: {ArtifactTooLargeErrorCode}: complete {string.Join("+", artifacts.Select(artifact => artifact.Role))} artifacts are {artifactCharacters} characters/{artifactTokens} tokens, exceeding {providerName}/{modelName} input budget {tokenBudget}; artifacts will not be truncated");
+        }
+    }
+
+    private static bool TryResolveLatestResearchArtifact(TaskSpec task, out string research)
+    {
+        foreach (var verification in task.VerificationHistory.Reverse())
+        {
+            if (WorkerArtifactWriter.TryResolveDurableResearch(
+                    verification,
+                    out research,
+                    out _))
+            {
+                return true;
+            }
+        }
+
+        research = string.Empty;
+        return false;
+    }
+
+    private static bool TryResolveLatestPlannerArtifact(TaskSpec task, out string plan)
+    {
+        foreach (var verification in task.VerificationHistory.Reverse())
+        {
+            if (WorkerArtifactWriter.TryResolveDurablePlannerPlan(
+                    verification,
+                    out plan,
+                    out _))
+            {
+                return true;
+            }
+        }
+
+        plan = string.Empty;
+        return false;
+    }
+
+    private static string Sha256(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+
+    private static bool UsesResearchFirstArtifactHandoff(Goal goal, TaskSpec task)
+    {
+        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Planner);
+        var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Researcher);
+        var taskIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == task.Id);
+        return researcherIndex >= 0 && plannerIndex > researcherIndex && taskIndex > researcherIndex;
     }
 
     private static ReviewerChangedFileScope? AddReviewerChangedFileScopeFindings(
@@ -896,6 +1054,7 @@ public static class WorkerProfileDispatcher
                 commandExists: commandExists);
             if (!preflight.Allowed)
             {
+                TryRouteMissingResearchDependency(kernel, goal, selection.Task, preflight);
                 blocked.Add(BuildReadyBlockedDiagnostic(goal, selection.Task, preflight));
                 continue;
             }
@@ -936,6 +1095,41 @@ public static class WorkerProfileDispatcher
         return new WorkerProfileReadyBatchResult(results, blocked);
     }
 
+    private static bool TryRouteMissingResearchDependency(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec blockedTask,
+        WorkerSubscriptionPreflightResult preflight)
+    {
+        if (blockedTask.RequiredRole != AgentRole.Planner ||
+            !string.Equals(preflight.ErrorCode, MissingResearchArtifactErrorCode, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == blockedTask.Id);
+        if (plannerIndex <= 0)
+        {
+            return false;
+        }
+
+        var researcher = goal.Tasks
+            .Take(plannerIndex)
+            .LastOrDefault(candidate => candidate.RequiredRole == AgentRole.Researcher);
+        if (researcher is null ||
+            researcher.Status is WorkTaskStatus.Running or WorkTaskStatus.Assigned ||
+            researcher.VerificationHistory.Count > 1)
+        {
+            return false;
+        }
+
+        kernel.RetryTask(
+            goal.Id,
+            researcher.Id,
+            $"{MissingResearchArtifactErrorCode}: Planner {blockedTask.Id.Value} is held until Researcher {researcher.Id.Value} produces a complete durable artifact.");
+        return true;
+    }
+
     public static ReadyBlockedDiagnostic BuildReadyBlockedDiagnostic(
         Goal goal,
         TaskSpec task,
@@ -957,6 +1151,12 @@ public static class WorkerProfileDispatcher
         var blockedFindings = findings
             .Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase))
             .ToList();
+        if (blockedFindings.Any(finding => finding.Contains(MissingResearchArtifactErrorCode, StringComparison.Ordinal)))
+            return MissingResearchArtifactErrorCode;
+        if (blockedFindings.Any(finding => finding.Contains(MissingPlannerArtifactErrorCode, StringComparison.Ordinal)))
+            return MissingPlannerArtifactErrorCode;
+        if (blockedFindings.Any(finding => finding.Contains(ArtifactTooLargeErrorCode, StringComparison.Ordinal)))
+            return ArtifactTooLargeErrorCode;
         if (blockedFindings.Any(finding => finding.Contains("uncommitted change", StringComparison.OrdinalIgnoreCase)))
             return "dirty-worktree";
         if (blockedFindings.Any(finding => finding.Contains("worker profile", StringComparison.OrdinalIgnoreCase)))

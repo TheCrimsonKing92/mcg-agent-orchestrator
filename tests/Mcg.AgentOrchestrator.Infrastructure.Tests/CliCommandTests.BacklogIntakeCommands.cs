@@ -389,7 +389,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         Xunit.Assert.Contains("scope-implicit", plan.RiskLabels);
         Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
-        Xunit.Assert.Equal([AgentRole.Planner, AgentRole.Researcher, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer], plan.TaskBoundaries.Select(boundary => boundary.Role));
+        Xunit.Assert.Equal([AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer], plan.TaskBoundaries.Select(boundary => boundary.Role));
     }
 
 

@@ -11,7 +11,7 @@ internal sealed record PlannerOutputContractResult(
 
 internal static partial class PlannerOutputContract
 {
-    internal const int MaxPlanChars = 40_000;
+    internal const int MaxPlanChars = 256_000;
     internal const int MinimumPlanChars = 800;
     internal const string DurablePlanBeginMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:BEGIN -->";
     internal const string DurablePlanEndMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:END -->";
@@ -33,7 +33,8 @@ internal static partial class PlannerOutputContract
         string standardOutput,
         string standardError,
         string workingDirectory,
-        string? modelHomeDirectory = null)
+        string? modelHomeDirectory = null,
+        IReadOnlyList<string>? acceptanceCriteria = null)
     {
         // Planner plans are an stdout contract. Stderr can contain tool traces or echoed
         // file contents and must not make an otherwise incomplete Planner result pass.
@@ -44,7 +45,8 @@ internal static partial class PlannerOutputContract
                     plan,
                     workingDirectory,
                     out var revalidatedPlan,
-                    out var receiptDiagnostic))
+                    out var receiptDiagnostic,
+                    acceptanceCriteria))
             {
                 // Reconciliation reuses the existing receipt without treating its headings
                 // as fresh Planner output or appending another copy.
@@ -58,7 +60,7 @@ internal static partial class PlannerOutputContract
                 $"Planner durable receipt failed revalidation: {receiptDiagnostic}. Retry Planner for contract repair.");
         }
 
-        if (TryValidatePlan(captured, workingDirectory, out plan, out var diagnostic))
+        if (TryValidatePlan(captured, workingDirectory, out plan, out var diagnostic, acceptanceCriteria))
         {
             return new PlannerOutputContractResult(true, plan, null, string.Empty);
         }
@@ -72,7 +74,7 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            if (TryValidatePlan(externalPlan, workingDirectory, out plan, out var externalDiagnostic))
+            if (TryValidatePlan(externalPlan, workingDirectory, out plan, out var externalDiagnostic, acceptanceCriteria))
             {
                 return new PlannerOutputContractResult(true, plan, path, string.Empty);
             }
@@ -218,7 +220,11 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
-    internal static bool TryValidate(string text, out string plan, out string diagnostic)
+    internal static bool TryValidate(
+        string text,
+        out string plan,
+        out string diagnostic,
+        IReadOnlyList<string>? acceptanceCriteria = null)
     {
         plan = string.Empty;
         diagnostic = string.Empty;
@@ -235,6 +241,21 @@ internal static partial class PlannerOutputContract
             }
 
             sections.Add((label, match.Index, match.Index + match.Length));
+        }
+
+        if (acceptanceCriteria is not null)
+        {
+            var externalHeading = ExternalEdgeContractsHeading().Match(normalized);
+            if (!externalHeading.Success)
+            {
+                diagnostic = "missing required section 'external and edge contracts'";
+                return false;
+            }
+
+            sections.Add((
+                "external and edge contracts",
+                externalHeading.Index,
+                externalHeading.Index + externalHeading.Length));
         }
 
         sections.Sort((left, right) => left.Start.CompareTo(right.Start));
@@ -254,6 +275,12 @@ internal static partial class PlannerOutputContract
                 diagnostic = $"required section '{section.Label}' lacks its mechanical evidence marker";
                 return false;
             }
+        }
+
+        if (acceptanceCriteria is { Count: > 0 } &&
+            !TryValidateCriterionMappings(normalized, sections, acceptanceCriteria.Count, out diagnostic))
+        {
+            return false;
         }
 
         var planStart = sections[0].Start;
@@ -280,9 +307,37 @@ internal static partial class PlannerOutputContract
         string text,
         string workingDirectory,
         out string plan,
-        out string diagnostic) =>
-        TryValidate(text, out plan, out diagnostic) &&
+        out string diagnostic,
+        IReadOnlyList<string>? acceptanceCriteria = null) =>
+        TryValidate(text, out plan, out diagnostic, acceptanceCriteria) &&
         ValidateCitedPaths(plan, workingDirectory, out diagnostic);
+
+    private static bool TryValidateCriterionMappings(
+        string normalized,
+        IReadOnlyList<(string Label, int Start, int BodyStart)> sections,
+        int criterionCount,
+        out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        var mappingIndex = sections.ToList().FindIndex(section => section.Label == "acceptance criterion mapping");
+        var mapping = sections[mappingIndex];
+        var end = mappingIndex + 1 < sections.Count
+            ? sections[mappingIndex + 1].Start
+            : FindPlanEnd(normalized, mapping.BodyStart);
+        var body = normalized[mapping.BodyStart..end];
+        for (var criterion = 1; criterion <= criterionCount; criterion++)
+        {
+            if (!Regex.IsMatch(
+                    body,
+                    $@"(?im)^[ \t]*(?:[-*][ \t]+)?(?:criterion[ \t]+)?{criterion}(?:[.)\]:-]|[ \t]+(?:maps?|→|=>))"))
+            {
+                diagnostic = $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped";
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool ValidateCitedPaths(string plan, string workingDirectory, out string diagnostic)
     {
@@ -358,6 +413,8 @@ internal static partial class PlannerOutputContract
                 TargetCitation().IsMatch(body),
             "ownership and lifecycle" =>
                 OwnershipMarker().IsMatch(body),
+            "external and edge contracts" =>
+                ExternalEdgeMarker().IsMatch(body),
             "integration seams" =>
                 IntegrationSequenceMarker().IsMatch(body),
             "verification commands and classes" =>
@@ -528,6 +585,9 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+ownership[ \t]+and[ \t]+lifecycle[ \t]*$")]
     private static partial Regex OwnershipLifecycleHeading();
 
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+external[ \t]+and[ \t]+edge[ \t]+contracts?[ \t]*$")]
+    private static partial Regex ExternalEdgeContractsHeading();
+
     [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+integration[ \t]+seams?[ \t]*$")]
     private static partial Regex IntegrationSeamsHeading();
 
@@ -557,6 +617,9 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?i)\b(?:own|owns|owned|ownership)\b")]
     private static partial Regex OwnershipMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:failure|edge|external|unhappy|invalid|missing|oversized|timeout)\b")]
+    private static partial Regex ExternalEdgeMarker();
 
     [GeneratedRegex(@"(?i)\bstop(?:s|ped|ping)?\b")]
     private static partial Regex StopConditionMarker();

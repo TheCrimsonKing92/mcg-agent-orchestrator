@@ -188,9 +188,9 @@ public static class GoalChangesReader
 
     private static int SdlcRoleOrder(AgentRole role) => role switch
     {
-        AgentRole.Planner => 0,
-        AgentRole.Ideation => 1,
-        AgentRole.Researcher => 2,
+        AgentRole.Researcher => 0,
+        AgentRole.Planner => 1,
+        AgentRole.Ideation => 2,
         AgentRole.Developer => 3,
         AgentRole.Tester => 4,
         AgentRole.Reviewer => 5,

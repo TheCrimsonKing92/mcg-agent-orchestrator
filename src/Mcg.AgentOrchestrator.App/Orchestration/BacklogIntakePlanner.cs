@@ -117,11 +117,7 @@ internal static class BacklogIntakePlanner
 
     private static List<AgentRole> InferRoles(string text)
     {
-        var roles = new List<AgentRole> { AgentRole.Planner };
-        if (ContainsAny(text, "research", "primary external sources", "APIs"))
-        {
-            roles.Add(AgentRole.Researcher);
-        }
+        var roles = new List<AgentRole> { AgentRole.Researcher, AgentRole.Planner };
 
         if (ContainsAny(text, "add", "implement", "command", "dashboard", "worker", "workflow", "broker", "supervisor", "rollback", "recovery"))
         {

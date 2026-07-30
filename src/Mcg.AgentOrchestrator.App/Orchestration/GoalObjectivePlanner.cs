@@ -479,8 +479,8 @@ internal static class GoalObjectivePlanner
 
         return
         [
-            new GoalObjectiveTaskBoundary(1, AgentRole.Planner, "Clarify plan, scope, and acceptance criteria.", "read-only", "Plan must identify target files and risks."),
-            new GoalObjectiveTaskBoundary(2, AgentRole.Researcher, "Inspect current source and prior evidence before implementation.", "read-only", "Research notes must cite exact files or state that no source change is needed."),
+            new GoalObjectiveTaskBoundary(1, AgentRole.Researcher, "Inspect current source and prior evidence before implementation.", "read-only", "Research notes must cite exact files or state that no source change is needed."),
+            new GoalObjectiveTaskBoundary(2, AgentRole.Planner, "Synthesize the durable research into a criterion-mapped implementation plan.", "read-only", "Plan must map every acceptance criterion and identify target files, ownership, edge contracts, risks, and verification."),
             new GoalObjectiveTaskBoundary(3, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
             new GoalObjectiveTaskBoundary(4, AgentRole.Tester, "Run focused verification and capture failures as evidence.", "workspace-write", verification[0]),
             new GoalObjectiveTaskBoundary(5, AgentRole.Reviewer, "Review diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")

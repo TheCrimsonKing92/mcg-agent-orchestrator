@@ -22,7 +22,9 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Planner =>
             [
                 "## Planner Requirements",
+                "- Synthesize the plan from the complete Durable Research Notes supplied by the orchestrator; do not repeat a broad repository source survey.",
                 "- Produce a concrete implementation plan with likely files or modules to inspect and the smallest viable change boundary.",
+                "- Map every acceptance criterion by number and include target files, ownership/lifecycle, external and edge contracts, risks, integration seams, and focused verification.",
                 "- Challenge ambiguous requirements; name assumptions, sequencing risks, and explicit stop conditions.",
                 "- Define falsifiable proof Developer, Tester, and Reviewer must provide before acceptance.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
@@ -32,6 +34,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
+                "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with concrete findings tied to repository-local files, APIs, tests, or primary external sources; include file paths, commands, URLs, or symbol names for each material claim.",
                 "- Prefer /api/source-survey?max=8 when available, or source reads that exclude generated artifacts such as **/bin/** and **/obj/**; inspect generated output only when it is the subject of the task.",
                 "- Identify integration constraints, dependency risks, contradictory evidence, and unknowns that affect implementation.",
@@ -151,7 +154,9 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Planner =>
             [
                 "## Planner Requirements",
+                "- Synthesize from the supplied Durable Research Notes; do not repeat a broad repository source survey.",
                 "- Produce a concrete plan with likely files or modules, smallest viable change boundary, assumptions, and stop conditions.",
+                "- Map every acceptance criterion by number and include ownership/lifecycle, edge contracts, risks, seams, and focused verification.",
                 "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
@@ -159,6 +164,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Researcher =>
             [
                 "## Researcher Requirements",
+                "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
                 "- Prefer /api/source-survey?max=8 when available; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
                 "- Separate confirmed facts from inferences, risks, and unknowns.",

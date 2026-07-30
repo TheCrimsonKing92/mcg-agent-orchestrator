@@ -17,10 +17,17 @@ public static class AgentOutputDirectives
             lines.Add(
                 "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; a summary or private model-home file path alone is invalid. " +
                 "Use these exact substantive headings: ## Premise validity; ## Acceptance criteria mapping; ## Target seams and symbols; " +
-                "## Ownership and lifecycle; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
-                "State valid/invalid premise evidence, criterion mappings, backticked file/symbol citations, the owner/lifecycle decision, integration sequence, " +
+                "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
+                "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create.");
+        }
+        else if (role == AgentRole.Researcher)
+        {
+            lines.Add(
+                "Researcher: print the complete evidence-backed research artifact in stdout before WORKER_RESULT. " +
+                "Use these exact substantive headings: ## Current source findings; ## Prior goal evidence; " +
+                "## Upstream capabilities; ## Likely seams and risks. A summary or provider-private path alone is invalid.");
         }
 
         lines.Add("WORKER_RESULT:");

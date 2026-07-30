@@ -28,7 +28,7 @@ public sealed class AdvanceLoopTests
     ]);
 
     Goal? goal = null;
-    TaskSpec? planner = null;
+        TaskSpec? researcher = null;
     try
     {
         goal = GoalLifecycleCommands.CreateActivateAndHandoffGoal(
@@ -38,12 +38,12 @@ public sealed class AdvanceLoopTests
             workspace,
             "Start subscription handoff on create",
             simple: false);
-        planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
 
         Assert.Equal(GoalStatus.Active, goal.Status);
-        Assert.Equal(WorkTaskStatus.Running, planner.Status);
-        Assert.True(planner.LastDispatch is not null);
-        var dispatch = planner.LastDispatch!;
+        Assert.Equal(WorkTaskStatus.Running, researcher.Status);
+        Assert.True(researcher.LastDispatch is not null);
+        var dispatch = researcher.LastDispatch!;
         Assert.True(dispatch.WorkerName is "codex-cli" or "claude-cli", dispatch.WorkerName);
         if (dispatch.WorkerName.Equals("claude-cli", StringComparison.Ordinal))
         {
@@ -51,17 +51,17 @@ public sealed class AdvanceLoopTests
         }
 
         Assert.Equal(workspace.ExecutionDirectory, dispatch.WorkingDirectory);
-        Assert.True(planner.LastProcess is not null);
-        Assert.True(planner.LastProcess!.IsRunning);
-        Assert.Equal(dispatch.Command, planner.LastProcess.Command);
-        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskDispatchRecorded && evt.TaskId == planner.Id));
-        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskProcessStarted && evt.TaskId == planner.Id));
+        Assert.True(researcher.LastProcess is not null);
+        Assert.True(researcher.LastProcess!.IsRunning);
+        Assert.Equal(dispatch.Command, researcher.LastProcess.Command);
+        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskDispatchRecorded && evt.TaskId == researcher.Id));
+        Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskProcessStarted && evt.TaskId == researcher.Id));
     }
     finally
     {
-        if (goal is not null && planner?.LastProcess is { IsRunning: true })
+        if (goal is not null && researcher?.LastProcess is { IsRunning: true })
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, planner.Id);
+            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, researcher.Id);
         }
     }
 }
