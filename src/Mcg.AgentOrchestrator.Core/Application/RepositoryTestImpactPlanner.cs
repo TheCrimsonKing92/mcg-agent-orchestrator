@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record RepositoryTestImpactCheck(
@@ -46,11 +48,11 @@ public static class RepositoryTestImpactPlanner
     [
         new(
             "infrastructure tests: Conductor control",
-            "FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~AdvanceLoopTests|FullyQualifiedName~ConductWatchSweepScopingTests|FullyQualifiedName~ConductorLoopHandoffTests",
+            "FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~AdvanceLoopTests|FullyQualifiedName~ConductWatchSweepScopingTests|FullyQualifiedName~ConductorLoopHandoffTests|FullyQualifiedName~ConductorWakeSignalTests|FullyQualifiedName~ConductorDriverTestsOperatorDispositionSnapshots",
             "Conductor control-flow change; run the mapped driver, advance, watch, and handoff contracts."),
         new(
             "infrastructure tests: Conductor acceptance",
-            "FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~LandingExecutorTests",
+            "FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~ConductorBatchLoopVerificationReconcileTests|FullyQualifiedName~LandingExecutorTests",
             "Conductor landing change; run the mapped batch-loop and landing contracts."),
         new(
             "infrastructure tests: Conductor process",
@@ -62,15 +64,15 @@ public static class RepositoryTestImpactPlanner
     [
         new(
             "infrastructure tests: Worker dispatch results",
-            "FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerResultParserEvidenceTests",
+            "FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerDispatchSpecClarificationTests|FullyQualifiedName~WorkerDispatchAcceptanceAdmissionTests|FullyQualifiedName~WorkerDispatchJobAccountingTests|FullyQualifiedName~WorkerResultParserEvidenceTests|FullyQualifiedName~InquiryDispatcherTests|FullyQualifiedName~ChaosGateWorkerResult|FullyQualifiedName~ChaosGateNoWorkerResultTests|FullyQualifiedName~ChaosGateCommittedWorkerResultFileTests|FullyQualifiedName~ChaosGateUntrackedWorkerResultFileTests",
             "Worker result handling changed; run classification and parser evidence contracts."),
         new(
             "infrastructure tests: Worker dispatch model and sandbox",
-            "FullyQualifiedName~WorkerDispatchTestsModelSelection|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity",
+            "FullyQualifiedName~WorkerDispatchTestsModelSelection|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerSandboxCapabilityPlannerTests",
             "Worker dispatch changed; run model-selection and sandbox contracts."),
         new(
             "infrastructure tests: Worker dispatch preparation",
-            "FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerProfileTests|FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerProcessJobsTests",
+            "FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerProfileTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|FullyQualifiedName~WorkerContextArtifactsVerificationTests|FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerProcessJobsTests|FullyQualifiedName~WorkerShellTests",
             "Worker dispatch changed; run preparation, preflight, profile, process-guard, and job contracts."),
         new(
             "infrastructure tests: Worker dispatch orchestration",
@@ -116,6 +118,8 @@ public static class RepositoryTestImpactPlanner
         var checks = new List<RepositoryTestImpactCheck>();
         var touchesCore = summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/"));
+        var touchesCoreSource = summary.Files.Any(file =>
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/"));
         var touchesInfrastructure = summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/"));
         var coreTestFilter = BuildChangedTestClassFilter(summary, "tests/Mcg.AgentOrchestrator.Core.Tests/");
@@ -179,7 +183,7 @@ public static class RepositoryTestImpactPlanner
                 [.. InfrastructureTests, "--filter", infrastructureTestFilter],
                 "Only Infrastructure test files changed; run the touched test classes."));
         }
-        else if (touchesInfrastructure || touchesApp || touchesScriptsOrConfig)
+        else if (touchesCoreSource || touchesInfrastructure || touchesApp || touchesScriptsOrConfig)
         {
             checks.Add(new RepositoryTestImpactCheck(
                 "infrastructure tests",
@@ -188,6 +192,8 @@ public static class RepositoryTestImpactPlanner
                     ? "Multiple App subsystems changed; run the full Infrastructure test suite."
                     : touchesApp
                     ? "App behavior lacks a focused test-impact mapping; run the full Infrastructure test suite."
+                    : touchesCoreSource
+                    ? "Core behavior lacks a focused reverse-dependency mapping; retain the full Infrastructure integration suite."
                     : "Infrastructure, script, or configuration behavior changed."));
         }
 
@@ -305,6 +311,18 @@ public static class RepositoryTestImpactPlanner
             return null;
 
         var checks = new List<FocusedInfrastructureCheck>();
+        var coreSourceFiles = summary.Files
+            .Where(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/"))
+            .ToArray();
+        if (coreSourceFiles.Length > 0)
+        {
+            var coreChecks = SelectCoreInfrastructureChecks(coreSourceFiles);
+            if (coreChecks is null)
+                return null;
+
+            checks.AddRange(coreChecks);
+        }
+
         var appFilters = new List<string>();
         var names = new List<string>();
         foreach (var subsystem in appSubsystems.Order(StringComparer.OrdinalIgnoreCase))
@@ -409,10 +427,9 @@ public static class RepositoryTestImpactPlanner
             {
                 selected.Add(0);
             }
-            else if (fileName.StartsWith("WorkerProfile", StringComparison.OrdinalIgnoreCase) ||
-                fileName.StartsWith("WorkerCatalog", StringComparison.OrdinalIgnoreCase))
+            else if (fileName.StartsWith("WorkerProfile", StringComparison.OrdinalIgnoreCase))
             {
-                selected.UnionWith([1, 2, 3]);
+                selected.UnionWith(Enumerable.Range(0, WorkerInfrastructureChecks.Length));
             }
             else
             {
@@ -421,6 +438,32 @@ public static class RepositoryTestImpactPlanner
         }
 
         return selected.Order().Select(index => WorkerInfrastructureChecks[index]);
+    }
+
+    private static IReadOnlyList<FocusedInfrastructureCheck>? SelectCoreInfrastructureChecks(
+        IReadOnlyList<RepositoryChangedFile> coreSourceFiles)
+    {
+        var checks = new List<FocusedInfrastructureCheck>();
+        foreach (var file in coreSourceFiles)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(file.Path);
+            if (fileName.StartsWith("ReviewerWorkerResult", StringComparison.OrdinalIgnoreCase) ||
+                fileName.StartsWith("WorkerResult", StringComparison.OrdinalIgnoreCase))
+            {
+                checks.Add(WorkerInfrastructureChecks[0]);
+                continue;
+            }
+
+            // Core is referenced by both App and Infrastructure. Unknown Core surfaces therefore
+            // retain the broad Infrastructure integration suite instead of silently dropping the
+            // reverse dependency from the acceptance plan.
+            return null;
+        }
+
+        return checks
+            .GroupBy(check => check.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
     }
 
     private static bool ChangedInfrastructureTestsAreCovered(
@@ -436,10 +479,16 @@ public static class RepositoryTestImpactPlanner
         return changedClassNames.Length > 0 &&
             changedClassNames.All(className =>
                 checks.Any(check =>
-                    check.Filter.Contains(
-                        $"FullyQualifiedName~{className}",
-                        StringComparison.OrdinalIgnoreCase)));
+                    FilterContainsExactClassOperand(check.Filter, className)));
     }
+
+    private static bool FilterContainsExactClassOperand(string filter, string className) =>
+        Regex.Matches(
+                filter,
+                @"FullyQualifiedName~(?<class>[A-Za-z_][A-Za-z0-9_]*)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            .Select(match => match.Groups["class"].Value)
+            .Any(candidate => candidate.Equals(className, StringComparison.OrdinalIgnoreCase));
 
     private static string? AppSubsystem(string path)
     {

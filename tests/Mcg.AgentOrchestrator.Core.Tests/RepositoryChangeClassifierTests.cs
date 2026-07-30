@@ -370,7 +370,7 @@ public sealed class RepositoryChangeClassifierTests
         ]);
 
         Assert.True(plan.RequiresBuild);
-        Assert.Equal(3, plan.Checks.Count);
+        Assert.Equal(4, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
         {
             Assert.StartsWith("infrastructure tests: Worker dispatch", check.Name, StringComparison.Ordinal);
@@ -380,8 +380,9 @@ public sealed class RepositoryChangeClassifierTests
                 "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
                 check.Command);
         });
-        Assert.DoesNotContain(plan.Checks, check =>
-            check.Name == "infrastructure tests: Worker dispatch results");
+        Assert.Contains(plan.Checks, check =>
+            check.Name == "infrastructure tests: Worker dispatch results" &&
+            check.Command.Any(argument => argument.Contains("WorkerResultParserEvidenceTests", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_cli_filter_for_cli_only_changes")]
@@ -449,6 +450,42 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("ConductorDriverTests", StringComparison.Ordinal));
         Assert.DoesNotContain(check.Command, argument => argument.Contains("ConductorSelfRelaunchTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("ConductorWakeSignalTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("ConductorDriverTestsOperatorDispositionSnapshots", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_worker_fallback_partitions_cover_all_dispatch_contract_classes")]
+    public void RepositoryTestImpactPlannerWorkerFallbackPartitionsCoverAllDispatchContractClasses()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerDispatcher.cs"
+        ]);
+        var filter = string.Join(
+            "|",
+            plan.Checks.SelectMany(check => check.Command).Where(argument => argument.Contains("FullyQualifiedName", StringComparison.Ordinal)));
+
+        Assert.Contains("WorkerDispatchSpecClarificationTests", filter, StringComparison.Ordinal);
+        Assert.Contains("WorkerDispatchAcceptanceAdmissionTests", filter, StringComparison.Ordinal);
+        Assert.Contains("WorkerDispatchJobAccountingTests", filter, StringComparison.Ordinal);
+        Assert.Contains("WorkerContextArtifactsVerificationTests", filter, StringComparison.Ordinal);
+        Assert.Contains("InquiryDispatcherTests", filter, StringComparison.Ordinal);
+        Assert.Contains("WorkerSandboxCapabilityPlannerTests", filter, StringComparison.Ordinal);
+        Assert.Contains("WorkerShellTests", filter, StringComparison.Ordinal);
+        Assert.Contains("ChaosGateWorkerResult", filter, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_changed_test_coverage_requires_an_exact_filter_operand")]
+    public void RepositoryTestImpactPlannerChangedTestCoverageRequiresAnExactFilterOperand()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerResultParser.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs"
+        ]);
+
+        Assert.Contains(plan.Checks, check => check.Name == "focused changed infrastructure tests");
+        Assert.Contains(plan.Checks, check =>
+            check.Name == "infrastructure tests: Worker dispatch results" &&
+            check.Command.Any(argument => argument.Contains("WorkerDispatchSpecClarificationTests", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_keeps_representative_core_conductor_worker_scope_off_slow_unrelated_fixtures")]
@@ -570,10 +607,13 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("core tests", check.Name);
-        Assert.True(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
-        Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal)));
+        Assert.Equal(2, plan.Checks.Count);
+        Assert.Contains(plan.Checks, check =>
+            check.Name == "core tests" &&
+            check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
+        Assert.Contains(plan.Checks, check =>
+            check.Name == "infrastructure tests" &&
+            !check.Command.Contains("--filter"));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_and_infrastructure_tests_for_mixed_changes")]
@@ -586,12 +626,9 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
-        Assert.Equal(4, plan.Checks.Count);
+        Assert.Equal(2, plan.Checks.Count);
         Assert.True(plan.Checks.Any(check => check.Name == "core tests"));
-        Assert.Equal(
-            3,
-            plan.Checks.Count(check =>
-                check.Name.StartsWith("infrastructure tests: Worker dispatch", StringComparison.Ordinal)));
+        Assert.Contains(plan.Checks, check => check.Name == "infrastructure tests" && !check.Command.Contains("--filter"));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_two_per_project_checks_never_a_solution_run")]

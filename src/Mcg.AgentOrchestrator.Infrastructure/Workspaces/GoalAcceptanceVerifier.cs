@@ -332,7 +332,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             policyShardPlan,
             infrastructureTestLanes);
         var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
-        var structurallyCompleteChecks = structuralCoverageApplies
+        // Structural coverage may restore missing trusted projects only for an unscoped/full run.
+        // In a scoped run, the impact plan is the deterministic project-selection authority and
+        // structural coverage validates the selected filtered checks without broadening them.
+        var structurallyCompleteChecks = structuralCoverageApplies &&
+            (!policyShardPlan.Applies || policyShardPlan.ForceFull)
             ? EnsureTrustedStructuralCoverageExecutionChecks(
                 policyEffectiveChecks,
                 manifest.Checks,
@@ -499,6 +503,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 partitionVerdictCache?.AttemptId,
+                requireCompleteTrustedProjectCoverage: !policyShardPlan.Applies || policyShardPlan.ForceFull,
                 cancellationToken).ConfigureAwait(false));
         }
 
@@ -1381,6 +1386,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (!ChangeScopedAcceptanceEnabled())
             return "MCG_ACCEPTANCE_CHANGE_SCOPED disabled";
 
+        if (summary.HasGeneratedArtifacts)
+            return "generated artifacts are present";
+
         foreach (var path in changedFiles)
         {
             var fileName = Path.GetFileName(path);
@@ -1794,7 +1802,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     null,
                     null,
                     ResultSummary:
-                    $"skipped: no changed file in dependency closure; shard project: {ProjectLabel(NormalizePath(shard.Project)!)}; {policyShardPlan.Evidence}"));
+                    $"skipped: test project not selected by impact plan; shard project: {ProjectLabel(NormalizePath(shard.Project)!)}; {policyShardPlan.Evidence}"));
                 continue;
             }
 
@@ -3978,6 +3986,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         string? currentAttemptId,
+        bool requireCompleteTrustedProjectCoverage,
         CancellationToken cancellationToken)
     {
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
@@ -3991,17 +4000,33 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ResultSummary: "main discovery unavailable");
         }
 
-        var broadChecks = DiscoverTrustedTestProjects(worktreePath, mainWorktreePath)
-            .Select(project => BuildTrustedStructuralCoverageCheck(project, effectiveChecks))
+        var trustedProjects = DiscoverTrustedTestProjects(worktreePath, mainWorktreePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var coverageScopes = effectiveChecks
+            .Where(check =>
+                check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(check.Project) &&
+                trustedProjects.Contains(NormalizePath(check.Project)!))
+            .GroupBy(check => NormalizePath(check.Project)!, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var executionChecks = group.ToArray();
+                return (
+                    DiscoveryCheck: BuildStructuralCoverageScope(
+                        group.Key,
+                        executionChecks,
+                        requireCompleteTrustedProjectCoverage),
+                    ExecutionChecks: executionChecks);
+            })
             .ToArray();
-        if (broadChecks.Length == 0)
+        if (coverageScopes.Length == 0)
         {
             return new AcceptanceCheckResult(
                 "structural test coverage",
                 false,
                 1,
-                "Structural coverage is enabled but trusted discovery found no test projects.",
-                ResultSummary: "no trusted test project");
+                "Structural coverage is enabled but no selected check targets a trusted test project.",
+                ResultSummary: "no selected trusted test check");
         }
 
         var environment = ResolveExecutionEnvironment(
@@ -4011,10 +4036,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotLease);
         var deletedTestFiles = ResolveDeletedTestFiles(worktreePath);
         var allSummaries = new List<string>();
-        foreach (var broadCheck in broadChecks)
+        foreach (var coverageScope in coverageScopes)
         {
+            var coverageCheck = coverageScope.DiscoveryCheck;
             var candidateDiscoveryArguments = BuildUnattendedDiscoveryArguments(
-                broadCheck,
+                coverageCheck,
                 EngineSettings,
                 environment);
             var candidateDiscovery = await _runner(
@@ -4025,7 +4051,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (candidateDiscovery.ExitCode != 0)
             {
                 return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
+                    $"structural test coverage: {coverageCheck.Name}",
                     false,
                     candidateDiscovery.ExitCode,
                     TailOutput(candidateDiscovery.Output),
@@ -4036,7 +4062,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             IReadOnlySet<string>? mainDiscoveredTests = null;
             var mainProjectPath = Path.Combine(
                 mainWorktreePath,
-                broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
+                coverageCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(mainProjectPath))
             {
                 var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
@@ -4044,7 +4070,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 {
                     "dotnet",
                     "build",
-                    broadCheck.Project,
+                    coverageCheck.Project,
                     "--artifacts-path",
                     mainArtifactsPath,
                     "--verbosity",
@@ -4063,7 +4089,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     mainBuild = await _runner(
                         mainBuildArguments,
                         mainWorktreePath,
-                        EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
+                        EngineSettings.ResolveCheckTimeout(coverageCheck.TimeoutMinutes),
                         cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -4075,7 +4101,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 if (mainBuild.ExitCode != 0)
                 {
                     return new AcceptanceCheckResult(
-                        $"structural test coverage: {broadCheck.Name}",
+                        $"structural test coverage: {coverageCheck.Name}",
                         false,
                         mainBuild.ExitCode,
                         TailOutput(mainBuild.Output),
@@ -4083,7 +4109,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
 
                 var mainDiscoveryArguments = BuildUnattendedDiscoveryArguments(
-                    broadCheck,
+                    coverageCheck,
                     EngineSettings,
                     environment with { ArtifactsPath = mainArtifactsPath });
                 var mainDiscovery = await _runner(
@@ -4094,7 +4120,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 if (mainDiscovery.ExitCode != 0)
                 {
                     return new AcceptanceCheckResult(
-                        $"structural test coverage: {broadCheck.Name}",
+                        $"structural test coverage: {coverageCheck.Name}",
                         false,
                         mainDiscovery.ExitCode,
                         TailOutput(mainDiscovery.Output),
@@ -4104,19 +4130,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 discoveryDecodeFault |= mainDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
                 mainDiscoveredTests = TestCoverageInvariant.ParseDiscoveredTests(
                     mainDiscovery.Output,
-                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck));
+                    bareTestList: UsesMicrosoftTestingPlatform(coverageCheck));
             }
 
-            IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
-                ? ExpandBroadInfrastructureCheck(broadCheck)
-                : [broadCheck];
-            var partitions = partitionChecks
-                .Select(shard =>
+            var partitions = coverageScope.ExecutionChecks
+                .Select(check =>
                 {
                     var result = completedChecks.LastOrDefault(candidate =>
-                        candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
+                        candidate.Name.Equals(check.Name, StringComparison.OrdinalIgnoreCase));
                     return new TestPartitionCoverage(
-                        shard.Name,
+                        check.Name,
                         result?.Passed == true,
                         result?.TestResultPaths ?? [],
                         result?.LockRemediationApplied == true,
@@ -4128,10 +4151,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var coverage = TestCoverageInvariant.Evaluate(
                 TestCoverageInvariant.ParseDiscoveredTests(
                     candidateDiscovery.Output,
-                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
+                    bareTestList: UsesMicrosoftTestingPlatform(coverageCheck)),
                 partitions,
                 mainDiscoveredTests,
-                DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
+                DeletedTestFilesForProject(deletedTestFiles, coverageCheck.Project!),
                 currentAttemptId);
             if (!coverage.Passed)
             {
@@ -4148,7 +4171,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
                 details.AddRange(coverage.MissingTests.Take(10).Select(name => $"missing test: {name}"));
                 return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
+                    $"structural test coverage: {coverageCheck.Name}",
                     false,
                     1,
                     string.Join(Environment.NewLine, details),
@@ -4284,6 +4307,59 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Project = project,
             Runner = EngineSettings.HasMtpInvocation(project) ? "mtp" : "vstest"
         };
+    }
+
+    private static AcceptanceManifestCheck BuildStructuralCoverageScope(
+        string project,
+        IReadOnlyList<AcceptanceManifestCheck> executionChecks,
+        bool requireCompleteProjectCoverage)
+    {
+        if (executionChecks.FirstOrDefault(IsBroadTestProjectCheck) is { } broadCheck)
+            return broadCheck;
+
+        var template = executionChecks[0];
+        if (requireCompleteProjectCoverage)
+        {
+            var laneSeparator = template.Name.LastIndexOf(": ", StringComparison.Ordinal);
+            return new AcceptanceManifestCheck
+            {
+                Name = laneSeparator > 0 ? template.Name[..laneSeparator] : template.Name,
+                Type = template.Type,
+                Project = template.Project,
+                Arguments = RemoveTestFilter(template.Arguments),
+                TimeoutMinutes = template.TimeoutMinutes,
+                Runner = template.Runner
+            };
+        }
+
+        var filters = executionChecks
+            .Select(TryGetTestFilter)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(filter => $"({filter})")
+            .ToArray();
+        return new AcceptanceManifestCheck
+        {
+            Name = $"structural coverage scope: {Path.GetFileNameWithoutExtension(project)}",
+            Type = template.Type,
+            Project = template.Project,
+            Arguments = filters.Length == 0
+                ? RemoveTestFilter(template.Arguments)
+                : [.. RemoveTestFilter(template.Arguments), "--filter", string.Join("|", filters)],
+            TimeoutMinutes = template.TimeoutMinutes,
+            Runner = template.Runner
+        };
+    }
+
+    private static string? TryGetTestFilter(AcceptanceManifestCheck check)
+    {
+        for (var index = 0; index + 1 < check.Arguments.Count; index++)
+        {
+            if (check.Arguments[index].Equals("--filter", StringComparison.OrdinalIgnoreCase))
+                return check.Arguments[index + 1];
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<string> RemoveTestFilter(IReadOnlyList<string> arguments)
@@ -5575,7 +5651,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var normalizedGlob = glob.Replace('\\', '/').TrimStart('/');
         var normalizedPath = path.Replace('\\', '/').TrimStart('/');
-        var pattern = "^" + Regex.Escape(normalizedGlob)
+        var anchor = normalizedGlob.StartsWith("**/", StringComparison.Ordinal)
+            ? "^"
+            : "^(?:.*/)?";
+        var pattern = anchor + Regex.Escape(normalizedGlob)
             .Replace("\\*\\*", ".*", StringComparison.Ordinal)
             .Replace("\\*", "[^/]*", StringComparison.Ordinal) + "$";
         return Regex.IsMatch(normalizedPath, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
