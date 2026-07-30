@@ -939,7 +939,7 @@ protected static string WorkerResultBlock(
         """;
 }
 
-protected static string PlannerContractPlanFixture() =>
+internal static string PlannerContractPlanFixture() =>
     """
     ## Premise validity
     The premise is valid because the named source seams were inspected in the fixture repository and the task can be completed without inventing missing dependencies or external behavior.

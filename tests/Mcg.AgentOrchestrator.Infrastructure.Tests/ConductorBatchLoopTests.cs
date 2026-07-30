@@ -6401,8 +6401,12 @@ public sealed class ConductorBatchLoopTests
         var stdout = Path.Combine(root, "planner.out.log");
         var stderr = Path.Combine(root, "planner.err.log");
         var exit = Path.Combine(root, "planner.exit.txt");
+        var plannerPlan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
+            "`seed.txt`, ",
+            string.Empty,
+            StringComparison.Ordinal);
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
-            "Planner complete.",
+            plannerPlan,
             "WORKER_RESULT:",
             "files: none",
             "commands: none",

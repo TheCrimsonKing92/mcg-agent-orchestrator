@@ -140,10 +140,11 @@ internal static partial class PlannerOutputContract
         string plan,
         out string diagnostic)
     {
-        var receipt = BuildIngestedReceipt(sourcePath, plan);
+        var normalizedPlan = plan.ReplaceLineEndings("\n");
+        var receipt = BuildIngestedReceipt(sourcePath, normalizedPlan);
         var existingTail = ReadCapturedOutputTail(standardOutputPath);
         if (TryExtractDurablePlan(existingTail, out var existingPlan, out _) &&
-            string.Equals(existingPlan, plan, StringComparison.Ordinal))
+            string.Equals(existingPlan.ReplaceLineEndings("\n"), normalizedPlan, StringComparison.Ordinal))
         {
             diagnostic = string.Empty;
             return true;
@@ -374,7 +375,7 @@ internal static partial class PlannerOutputContract
         $"## Durable Planner Plan (ingested by orchestrator from {path}){Environment.NewLine}" +
         DurablePlanBeginMarker +
         Environment.NewLine +
-        plan +
+        plan.ReplaceLineEndings("\n") +
         Environment.NewLine +
         DurablePlanEndMarker +
         Environment.NewLine;
