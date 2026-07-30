@@ -861,9 +861,18 @@ public sealed class AdvanceLoopTests
             workspace,
             goal,
             agents,
-            profiles);
+            profiles,
+            approveHighRiskOwnership: true);
 
-        Assert.True(third.Dispatches.Count > 0);
+        Assert.True(
+            third.Dispatches.Count > 0,
+            string.Join(
+                Environment.NewLine,
+                third.BlockedDiagnostics.Select(item =>
+                {
+                    var blockedTask = goal.Tasks.Single(task => task.Id.Value == item.TaskId);
+                    return $"{blockedTask.RequiredRole} {item.TaskId}: {item.Reason}: {string.Join(" | ", item.Details ?? [])}";
+                })));
         foreach (var dispatch in third.Dispatches)
         {
             Assert.Equal(AgentRole.Developer, dispatch.Task.RequiredRole);

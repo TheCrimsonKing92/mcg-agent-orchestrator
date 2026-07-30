@@ -1127,10 +1127,9 @@ public static class WorkerProfileDispatcher
             return true;
         }
 
-        kernel.ReportTaskProgress(
+        kernel.EscalateTaskFailure(
             goal.Id,
             upstreamTask.Id,
-            WorkTaskStatus.Failed,
             $"{errorCode}: unmet durable artifact dependency after one reroute; {blockedTask.RequiredRole} task {blockedTask.Id.Value} requires a complete {artifactRole} artifact from task {upstreamTask.Id.Value}. Operator recovery: repair the {artifactRole} output contract, then retry task {upstreamTask.Id.Value}; manual downstream verification cannot override this gate.");
         return true;
     }

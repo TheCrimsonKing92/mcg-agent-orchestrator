@@ -103,6 +103,25 @@ public sealed class GitCliTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_ignores_orchestrator_owned_context_artifacts")]
+    public void GitCliIsWorktreeDirtyIgnoresOrchestratorOwnedContextArtifacts()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, ".orchestrator-handoff.md"), "durable handoff");
+            var contextDirectory = Path.Combine(repo, ".orchestrator-context", "goal");
+            Directory.CreateDirectory(contextDirectory);
+            File.WriteAllText(Path.Combine(contextDirectory, "planner-plan.md"), "durable plan");
+
+            Assert.False(GitCli.IsWorktreeDirty(repo));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_returns_true_when_staged_change_present")]
     public void GitCliIsWorktreeDirtyReturnsTrueWhenStagedChangePresent()
     {

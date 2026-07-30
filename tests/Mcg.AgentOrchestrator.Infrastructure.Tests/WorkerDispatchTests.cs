@@ -961,6 +961,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
                 item.Message.Contains("unmet durable artifact dependency after one reroute", StringComparison.Ordinal) &&
                 item.Message.Contains("Operator recovery:", StringComparison.Ordinal) &&
                 item.Message.Contains("manual downstream verification cannot override", StringComparison.Ordinal));
+
+        kernel.RetryTask(goal.Id, researcher.Id, "Operator repaired the Researcher output contract.");
+        Assert.Equal(WorkTaskStatus.Assigned, researcher.Status);
+        Assert.Equal(GoalStatus.Active, goal.Status);
     }
 
     [Xunit.Fact(DisplayName = "Ready_batch_reroutes_missing_planner_artifact_once_then_fails_with_recovery")]
@@ -1062,6 +1066,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
                 item.TaskId == planner.Id &&
                 item.Message.Contains(WorkerProfileDispatcher.MissingPlannerArtifactErrorCode, StringComparison.Ordinal) &&
                 item.Message.Contains("Operator recovery:", StringComparison.Ordinal));
+
+        kernel.RetryTask(goal.Id, planner.Id, "Operator repaired the Planner output contract.");
+        Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
+        Assert.Equal(GoalStatus.Active, goal.Status);
     }
 
     [Xunit.Fact(DisplayName = "Research_first_pipeline_blocks_Planner_then_injects_full_artifacts_without_survey_or_retry_trimming")]
