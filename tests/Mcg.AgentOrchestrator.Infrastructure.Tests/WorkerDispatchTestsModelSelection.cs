@@ -1528,21 +1528,37 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, planItem.SubscriptionModelName);
 }
 
-    [Xunit.Fact(DisplayName = "AgentCatalogStore_legacy_built_in_catalog_preserves_automatic_routing")]
-    public void AgentCatalogStoreLegacyBuiltInCatalogPreservesAutomaticRouting()
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_legacy_built_in_catalog_routing_is_fallback_independent")]
+    public void AgentCatalogStoreLegacyBuiltInCatalogRoutingIsFallbackIndependent()
 {
     var root = CreateTempDirectory();
-    var path = Path.Combine(root, "agents.json");
-    var legacyCatalog = new AgentCatalog(AgentCatalog.Default().Agents
-        .Select(agent => agent with { IsProviderRoutingConstrained = null })
-        .ToList());
-    AgentCatalogStore.Save(path, legacyCatalog);
+    var legacyCatalogs = new[]
+    {
+        ("openai", AgentCatalog.Default()),
+        ("ollama", AgentCatalog.OllamaDefault())
+    };
 
-    AgentCatalog repairedCatalog = null!;
-    var warning = CaptureConsoleError(() => repairedCatalog = AgentCatalogStore.Load(path, AgentCatalog.Default()));
+    foreach (var (name, builtInCatalog) in legacyCatalogs)
+    {
+        var path = Path.Combine(root, $"{name}-agents.json");
+        var legacyCatalog = new AgentCatalog(builtInCatalog.Agents
+            .Select(agent => agent with { IsProviderRoutingConstrained = null })
+            .ToList());
+        AgentCatalogStore.Save(path, legacyCatalog);
 
-    Assert.All(repairedCatalog.Agents, agent => Assert.False(agent.IsProviderRoutingConstrained));
-    Assert.Contains("6 built-in-compatible assignment(s) remain automatic", warning, StringComparison.Ordinal);
+        AgentCatalog defaultLoad = null!;
+        AgentCatalog ollamaFallbackLoad = null!;
+        var defaultWarning = CaptureConsoleError(() => defaultLoad = AgentCatalogStore.Load(path));
+        var ollamaFallbackWarning = CaptureConsoleError(
+            () => ollamaFallbackLoad = AgentCatalogStore.Load(path, AgentCatalog.OllamaDefault()));
+
+        Assert.All(defaultLoad.Agents, agent => Assert.False(agent.IsProviderRoutingConstrained));
+        Assert.Equal(
+            defaultLoad.Agents.Select(agent => agent.IsProviderRoutingConstrained),
+            ollamaFallbackLoad.Agents.Select(agent => agent.IsProviderRoutingConstrained));
+        Assert.Contains("6 built-in-compatible assignment(s) remain automatic", defaultWarning, StringComparison.Ordinal);
+        Assert.Contains("6 built-in-compatible assignment(s) remain automatic", ollamaFallbackWarning, StringComparison.Ordinal);
+    }
 }
 
     [Xunit.Fact(DisplayName = "AgentCatalog_Ollama_defaults_explicitly_enable_automatic_routing")]

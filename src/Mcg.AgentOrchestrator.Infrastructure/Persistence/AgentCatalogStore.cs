@@ -191,12 +191,17 @@ public static class AgentCatalogStore
 
     private static AgentCatalog NormalizePaidProviderCaps(AgentCatalog catalog, AgentCatalog defaultCatalog)
     {
+        var builtInRoutingCandidates = AgentCatalog.Default().Agents
+            .Concat(AgentCatalog.AnthropicDefault().Agents)
+            .Concat(AgentCatalog.OllamaDefault().Agents)
+            .Concat(defaultCatalog.Agents)
+            .ToList();
         var normalizedAgents = new List<AgentDefinition>(catalog.Agents.Count);
         var repairedAutomaticCount = 0;
         var repairedConstrainedCount = 0;
         foreach (var agent in catalog.Agents)
         {
-            var normalized = NormalizeAgent(agent, defaultCatalog);
+            var normalized = NormalizeAgent(agent, builtInRoutingCandidates);
             normalizedAgents.Add(normalized);
             if (agent.IsProviderRoutingConstrained is null)
             {
@@ -223,7 +228,9 @@ public static class AgentCatalogStore
         return new AgentCatalog(normalizedAgents);
     }
 
-    private static AgentDefinition NormalizeAgent(AgentDefinition agent, AgentCatalog defaultCatalog)
+    private static AgentDefinition NormalizeAgent(
+        AgentDefinition agent,
+        IReadOnlyList<AgentDefinition> builtInRoutingCandidates)
     {
         var normalized = NormalizeAgentConfiguration(agent);
 
@@ -232,11 +239,11 @@ public static class AgentCatalogStore
             return normalized;
         }
 
-        var matchingDefault = defaultCatalog.Agents.FirstOrDefault(candidate =>
-            candidate.Id == normalized.Id &&
-            candidate.Role == normalized.Role);
-        var matchesBuiltInRouting = matchingDefault is not null &&
-            RoutingConfigurationMatches(normalized, NormalizeAgentConfiguration(matchingDefault));
+        var matchesBuiltInRouting = builtInRoutingCandidates
+            .Where(candidate => candidate.Id == normalized.Id && candidate.Role == normalized.Role)
+            .Any(candidate => RoutingConfigurationMatches(
+                normalized,
+                NormalizeAgentConfiguration(candidate)));
         return normalized with { IsProviderRoutingConstrained = !matchesBuiltInRouting };
     }
 
