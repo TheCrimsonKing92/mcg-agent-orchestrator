@@ -218,7 +218,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("Roles:", output);
         Xunit.Assert.Contains("Risks: subscription-cost, operator-ux", output);
         Xunit.Assert.Contains("Target files/scopes:", output);
-        Xunit.Assert.Contains("src/Mcg.AgentOrchestrator.App/Dashboard", output);
+        Xunit.Assert.Contains("Scope confidence: unknown", output);
+        Xunit.Assert.Contains("Includes:", output);
+        Xunit.Assert.DoesNotContain("src/Mcg.AgentOrchestrator.App/Dashboard", output);
         Xunit.Assert.Contains("Create commands:", output);
         Xunit.Assert.Contains("--create-goal", output);
     }
@@ -259,7 +261,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Single(kernel.Goals);
         Xunit.Assert.Single(currentGoal!.Tasks);
         Xunit.Assert.Contains("Backlog slice: Add deterministic build/test broker", currentGoal.Objective);
-        Xunit.Assert.Contains("scripts/Invoke-IsolatedDotnet.ps1", currentGoal.Objective);
+        Xunit.Assert.Contains("Scope confidence: unknown", currentGoal.Objective);
+        Xunit.Assert.Contains("Includes:", currentGoal.Objective);
+        Xunit.Assert.DoesNotContain("scripts/Invoke-IsolatedDotnet.ps1", currentGoal.Objective);
         Xunit.Assert.Contains("Created simple goal from backlog slice.", output);
     }
 
