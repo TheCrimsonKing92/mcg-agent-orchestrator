@@ -27,7 +27,8 @@ public sealed record AcceptanceCheckResult(
     string? FailureClassification = null,
     string? TestResultAttemptId = null,
     int TestResultRunOrdinal = 0,
-    bool TestResultIsExplicitCrossAttemptReuse = false);
+    bool TestResultIsExplicitCrossAttemptReuse = false,
+    IReadOnlyList<string>? FailingTestIdentities = null);
 
 public static class AcceptanceFailureClassifications
 {
@@ -2603,6 +2604,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         elapsed.Stop();
         var passed = !result.TimedOut && result.ExitCode == 0;
         EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+        IReadOnlyList<string> failingTestIdentities = passed
+            ? []
+            : ExtractTrxFailureIdentities(telemetry.Paths);
         var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry.Paths);
         return (new AcceptanceCheckResult(
             result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
@@ -2614,7 +2618,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
             ResultSummary: BuildGenericCommandResultSummary(result),
-            TestResultPaths: durableTestResultPaths), false);
+            TestResultPaths: durableTestResultPaths,
+            FailingTestIdentities: failingTestIdentities), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -2994,6 +2999,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            IReadOnlyList<string> failingTestIdentities = passed
+                ? []
+                : ExtractTrxFailureIdentities(telemetry?.Paths);
             var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
@@ -3008,7 +3016,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 lockRemediationApplied,
                 BuildManagedDotnetResultSummary(result, lockRemediationApplied),
-                TestResultPaths: durableTestResultPaths), lockRemediationApplied);
+                TestResultPaths: durableTestResultPaths,
+                FailingTestIdentities: failingTestIdentities), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -3053,6 +3062,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            IReadOnlyList<string> failingTestIdentities = passed
+                ? []
+                : ExtractTrxFailureIdentities(telemetry?.Paths);
             var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
@@ -3067,7 +3079,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 true,
                 BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true),
-                TestResultPaths: durableTestResultPaths), true);
+                TestResultPaths: durableTestResultPaths,
+                FailingTestIdentities: failingTestIdentities), true);
         }
         finally
         {
@@ -5403,6 +5416,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ?.Value;
                 return $"[FAIL] {testName}: {FirstNonEmptyLine(message) ?? "failure message unavailable"}";
             })
+            .ToArray();
+    }
+
+    internal static IReadOnlyList<string> ExtractTrxFailureIdentities(string trxPath)
+    {
+        var document = XDocument.Load(trxPath, LoadOptions.None);
+        var definitionsByTestId = document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
+            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        return document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                string.Equals(
+                    element.Attribute("outcome")?.Value,
+                    "Failed",
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(result =>
+            {
+                definitionsByTestId.TryGetValue(
+                    result.Attribute("testId")?.Value ?? string.Empty,
+                    out var definition);
+                return ResolveTrxTestName(result, definition);
+            })
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> ExtractTrxFailureIdentities(IEnumerable<string>? trxPaths)
+    {
+        if (trxPaths is null)
+        {
+            return [];
+        }
+
+        var identities = new List<string>();
+        foreach (var trxPath in trxPaths.Where(File.Exists))
+        {
+            try
+            {
+                identities.AddRange(ExtractTrxFailureIdentities(trxPath));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                // An unreadable receipt is evidence-inconclusive. Never infer a code failure from its output tail.
+            }
+        }
+
+        return identities
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
     }
 

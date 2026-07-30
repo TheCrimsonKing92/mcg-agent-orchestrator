@@ -1766,11 +1766,6 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         GoalLifecycleState fromState)
     {
-        if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
-        {
-            return preReviewResult;
-        }
-
         var running = _getRunningPaidWorkerCount();
         var workerCap = policy.MaxConcurrentPaidWorkers;
         if (_hasGateReadyGoal())
@@ -1797,6 +1792,11 @@ internal sealed class ConductorDriver
                     reservedGateSlot
                         ? $"At worker cap ({running}/{workerCap}) with a gate-ready goal reserving a stable slot; will advance when a slot opens"
                         : $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
+        }
+
+        if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
+        {
+            return preReviewResult;
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
@@ -1951,6 +1951,17 @@ internal sealed class ConductorDriver
                 [],
                 [],
                 evidencePointer: null);
+            if (TryRoutePreReviewEvidenceToTester(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    $"pre-review mapping requires Tester selection for candidate {context.CandidateSha}: {context.MappingReason}",
+                    out result))
+            {
+                return true;
+            }
+
             result = Escalate(
                 goal,
                 goalPrefix,
@@ -1975,6 +1986,17 @@ internal sealed class ConductorDriver
                 evidence.Checks,
                 [],
                 evidencePointer);
+            if (TryRoutePreReviewEvidenceToTester(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    $"pre-review focused-evidence request was rejected for candidate {context.CandidateSha}: {FormatFocusedEvidenceResult(evidence)}",
+                    out result))
+            {
+                return true;
+            }
+
             result = Escalate(
                 goal,
                 goalPrefix,
@@ -1982,6 +2004,40 @@ internal sealed class ConductorDriver
                 fromState,
                 $"PRE_REVIEW_MAPPING_NEEDS_INPUT: mapped focused evidence request was rejected; Reviewer dispatch is blocked. " +
                 $"{FormatFocusedEvidenceResult(evidence)}");
+            return true;
+        }
+
+        if (evidence.Checks.Count != context.SelectedFocusedTests.Count)
+        {
+            RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.MappingNeedsInput,
+                evidence.Checks,
+                [],
+                evidencePointer);
+            var mismatch =
+                $"pre-review evidence cardinality mismatch for candidate {context.CandidateSha}: " +
+                $"planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
+            if (TryRoutePreReviewEvidenceToTester(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    mismatch,
+                    out result))
+            {
+                return true;
+            }
+
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available.");
             return true;
         }
 
@@ -2011,6 +2067,18 @@ internal sealed class ConductorDriver
                 evidence.Checks,
                 [],
                 evidencePointer);
+            if (TryRoutePreReviewEvidenceToTester(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    $"pre-review checks were red but yielded no typed TRX failure identities for candidate {context.CandidateSha}; " +
+                    $"pointer={evidencePointer ?? "none"}",
+                    out result))
+            {
+                return true;
+            }
+
             result = Escalate(
                 goal,
                 goalPrefix,
@@ -2050,7 +2118,34 @@ internal sealed class ConductorDriver
             $"pre-review focused-test repair: candidate {context.CandidateSha}; exact failing tests: " +
             $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}",
             RetryRoundKind.Mechanical);
-        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+        var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
+        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
+        return true;
+    }
+
+    private bool TryRoutePreReviewEvidenceToTester(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        string reason,
+        out ConductorAdvanceResult result)
+    {
+        var testerTask = TasksBefore(goal, reviewerTask)
+            .LastOrDefault(task => task.RequiredRole == AgentRole.Tester);
+        if (testerTask is null)
+        {
+            result = default!;
+            return false;
+        }
+
+        _retryTask(
+            goal.Id,
+            testerTask.Id,
+            reason,
+            RetryRoundKind.Mechanical);
+        var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
+        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
         return true;
     }
 
@@ -2155,9 +2250,9 @@ internal sealed class ConductorDriver
             checks.Count(check => !check.Passed),
             checks.Select((check, index) => new PreReviewEvidenceCheckReceipt(
                 check.Name,
-                index < context.SelectedFocusedTests.Count
+                checks.Count == context.SelectedFocusedTests.Count
                     ? context.SelectedFocusedTests[index]
-                    : context.FocusedRequest ?? "(mapped focused evidence)",
+                    : "(unmapped: check/command cardinality mismatch)",
                 check.Passed,
                 check.ExitCode,
                 check.ArtifactsPath,
@@ -2197,17 +2292,7 @@ internal sealed class ConductorDriver
     private static IReadOnlyList<string> ExtractFailingTestIdentities(
         IEnumerable<AcceptanceCheckResult> checks) =>
         checks
-            .SelectMany(check => Regex.Matches(
-                    check.OutputTail ?? string.Empty,
-                    @"(?m)^\[FAIL\]\s+(?<test>[^:\r\n]+):",
-                    RegexOptions.CultureInvariant)
-                .Select(match => match.Groups["test"].Value.Trim())
-                // The verifier emits a synthetic "[FAIL] <check name>" line when no usable
-                // TRX exists. That is red plumbing evidence, not an exact failing-test identity,
-                // and must not send the Developer a made-up test name.
-                .Where(identity =>
-                    !identity.Equals(check.Name, StringComparison.Ordinal) &&
-                    !check.Name.StartsWith($"{identity}:", StringComparison.Ordinal)))
+            .SelectMany(check => check.FailingTestIdentities ?? [])
             .Where(identity => identity.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();

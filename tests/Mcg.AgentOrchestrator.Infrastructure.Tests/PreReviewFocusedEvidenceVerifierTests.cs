@@ -93,6 +93,42 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
         }
     }
 
+    [Xunit.Fact(DisplayName = "PreReviewFocusedEvidenceVerifier_typed_trx_identity_preserves_theory_colons")]
+    public void TypedTrxIdentityPreservesTheoryColons()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var trxPath = Path.Combine(root, "theory.trx");
+            File.WriteAllText(
+                trxPath,
+                """
+                <TestRun>
+                  <Results>
+                    <UnitTestResult
+                      testId="test-1"
+                      testName="Mcg.Tests.Theory(value: 42)"
+                      outcome="Failed" />
+                  </Results>
+                </TestRun>
+                """);
+
+            var identities = GoalAcceptanceVerifier.ExtractTrxFailureIdentities(trxPath);
+
+            Assert.Equal(["Mcg.Tests.Theory(value: 42)"], identities);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     private static bool IsMtpExecutableCall(string[] args, string projectName) =>
         args.Length > 0 &&
         Path.GetFileNameWithoutExtension(args[0]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
