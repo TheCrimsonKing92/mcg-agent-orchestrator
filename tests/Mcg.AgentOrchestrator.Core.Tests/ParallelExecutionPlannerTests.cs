@@ -19,6 +19,27 @@ public sealed class ParallelExecutionPlannerTests
         Assert.Equal(ParallelExecutionDisposition.Serialized, Decision(plan, "known").Disposition);
     }
 
+    [Xunit.Fact(DisplayName = "ParallelExecutionPlanner_preserves_same_goal_parallelism_for_unknown_scope_without_declared_paths")]
+    public void ParallelExecutionPlannerPreservesSameGoalParallelismForUnknownScopeWithoutDeclaredPaths()
+    {
+        var plan = ParallelExecutionPlanner.Build(
+        [
+            new ParallelExecutionIntent(
+                "first",
+                "shared-goal",
+                ScopeConfidence: RepositoryScopeConfidence.Unknown),
+            new ParallelExecutionIntent(
+                "second",
+                "shared-goal",
+                ScopeConfidence: RepositoryScopeConfidence.Unknown)
+        ]);
+
+        var batch = Assert.Single(plan.Batches);
+        Assert.Equal(2, batch.IntentIds.Count);
+        Assert.All(plan.Decisions, decision =>
+            Assert.Equal(ParallelExecutionDisposition.Concurrent, decision.Disposition));
+    }
+
     [Xunit.Fact(DisplayName = "ParallelExecutionPlanner_batches_independent_file_touching_goals")]
     public void ParallelExecutionPlannerBatchesIndependentFileTouchingGoals()
 {

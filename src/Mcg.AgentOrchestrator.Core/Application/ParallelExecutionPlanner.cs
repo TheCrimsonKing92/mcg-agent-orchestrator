@@ -146,10 +146,11 @@ public static class ParallelExecutionPlanner
                 return true;
             }
 
-            if ((intent.ScopeConfidence == RepositoryScopeConfidence.Unknown ||
+            if (!SharesGoal(intent, other) &&
+                (intent.ScopeConfidence == RepositoryScopeConfidence.Unknown ||
                  other.ScopeConfidence == RepositoryScopeConfidence.Unknown) &&
-                TouchesWorkspace(intent) &&
-                TouchesWorkspace(other))
+                MayTouchWorkspace(intent) &&
+                MayTouchWorkspace(other))
             {
                 reason = "unknown repository scope requires serialization";
                 return true;
@@ -234,10 +235,15 @@ public static class ParallelExecutionPlanner
 
     private static bool TouchesWorkspace(ParallelExecutionIntent intent)
     {
-        return intent.ScopeConfidence == RepositoryScopeConfidence.Unknown ||
-            intent.TargetPaths.Count > 0 ||
+        return intent.TargetPaths.Count > 0 ||
             intent.MutatesWorkspaceLifecycle ||
             intent.RunsAcceptance;
+    }
+
+    private static bool MayTouchWorkspace(ParallelExecutionIntent intent)
+    {
+        return intent.ScopeConfidence == RepositoryScopeConfidence.Unknown ||
+            TouchesWorkspace(intent);
     }
 
     private static bool SharesGoal(ParallelExecutionIntent left, ParallelExecutionIntent right)
