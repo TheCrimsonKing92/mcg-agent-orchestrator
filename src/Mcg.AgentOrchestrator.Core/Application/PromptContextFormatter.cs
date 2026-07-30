@@ -221,7 +221,7 @@ internal static class PromptContextFormatter
         };
         if (priorCompletedTasks.Any(task => task.RequiredRole == AgentRole.Planner))
         {
-            lines.Add("A completed Planner is present: read its complete Durable Planner Plan in prior-task-evidence.md before implementation; a summary or external path is not the downstream handoff.");
+            lines.Add("A completed Planner is present: check prior-task-summaries.md for its durable-plan status. When available, read the complete Durable Planner Plan in prior-task-evidence.md before implementation; when marked UNAVAILABLE, stop and retry Planner rather than using a summary or external path.");
         }
 
         foreach (var priorTask in priorCompletedTasks)

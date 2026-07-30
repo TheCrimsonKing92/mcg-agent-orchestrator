@@ -40,14 +40,25 @@ internal static partial class PlannerOutputContract
         var captured = standardOutput;
         if (TryExtractDurablePlan(captured, out var plan, out _))
         {
-            // A durable receipt is written only after the plan has passed this contract.
-            // Reconciliation must trust and reuse that receipt instead of treating its
-            // section headings as fresh Planner output and appending another copy.
-            return new PlannerOutputContractResult(true, plan, null, string.Empty);
+            if (TryValidatePlan(
+                    plan,
+                    workingDirectory,
+                    out var revalidatedPlan,
+                    out var receiptDiagnostic))
+            {
+                // Reconciliation reuses the existing receipt without treating its headings
+                // as fresh Planner output or appending another copy.
+                return new PlannerOutputContractResult(true, revalidatedPlan, null, string.Empty);
+            }
+
+            return new PlannerOutputContractResult(
+                false,
+                null,
+                null,
+                $"Planner durable receipt failed revalidation: {receiptDiagnostic}. Retry Planner for contract repair.");
         }
 
-        if (TryValidate(captured, out plan, out var diagnostic) &&
-            ValidateCitedPaths(plan, workingDirectory, out diagnostic))
+        if (TryValidatePlan(captured, workingDirectory, out plan, out var diagnostic))
         {
             return new PlannerOutputContractResult(true, plan, null, string.Empty);
         }
@@ -61,8 +72,7 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            if (TryValidate(externalPlan, out plan, out var externalDiagnostic) &&
-                ValidateCitedPaths(plan, workingDirectory, out externalDiagnostic))
+            if (TryValidatePlan(externalPlan, workingDirectory, out plan, out var externalDiagnostic))
             {
                 return new PlannerOutputContractResult(true, plan, path, string.Empty);
             }
@@ -85,18 +95,42 @@ internal static partial class PlannerOutputContract
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var startedAtBeginning = true;
             if (stream.Length > CapturedOutputTailBytes)
             {
                 stream.Seek(-CapturedOutputTailBytes, SeekOrigin.End);
+                startedAtBeginning = false;
+                SkipUtf8ContinuationBytes(stream);
             }
 
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            using var reader = new StreamReader(
+                stream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: startedAtBeginning);
             return reader.ReadToEnd();
         }
         catch (Exception error) when (
             error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return $"[captured Planner output unreadable: {error.Message}]";
+        }
+    }
+
+    private static void SkipUtf8ContinuationBytes(Stream stream)
+    {
+        while (stream.Position < stream.Length)
+        {
+            var value = stream.ReadByte();
+            if (value < 0)
+            {
+                return;
+            }
+
+            if ((value & 0b1100_0000) != 0b1000_0000)
+            {
+                stream.Seek(-1, SeekOrigin.Current);
+                return;
+            }
         }
     }
 
@@ -241,6 +275,14 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
+    internal static bool TryValidatePlan(
+        string text,
+        string workingDirectory,
+        out string plan,
+        out string diagnostic) =>
+        TryValidate(text, out plan, out diagnostic) &&
+        ValidateCitedPaths(plan, workingDirectory, out diagnostic);
+
     private static bool ValidateCitedPaths(string plan, string workingDirectory, out string diagnostic)
     {
         diagnostic = string.Empty;
@@ -263,11 +305,10 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            var prefixStart = Math.Max(0, match.Index - 32);
-            var prefix = targetSection[prefixStart..match.Index];
-            if (prefix.Contains("new file", StringComparison.OrdinalIgnoreCase) ||
-                prefix.Contains("create", StringComparison.OrdinalIgnoreCase) ||
-                prefix.Contains("add", StringComparison.OrdinalIgnoreCase))
+            var lineStart = targetSection.LastIndexOf('\n', Math.Max(0, match.Index - 1));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            var prefix = targetSection[lineStart..match.Index];
+            if (NewFileCitationPrefix().IsMatch(prefix))
             {
                 continue;
             }
@@ -308,15 +349,14 @@ internal static partial class PlannerOutputContract
         return label switch
         {
             "premise validity" =>
-                body.Contains("valid", StringComparison.OrdinalIgnoreCase) ||
-                body.Contains("invalid", StringComparison.OrdinalIgnoreCase),
+                PremiseValidityMarker().IsMatch(body),
             "acceptance criterion mapping" =>
-                body.Contains("map", StringComparison.OrdinalIgnoreCase),
+                AcceptanceMappingMarker().IsMatch(body),
             "target seams and symbols" =>
                 body.Contains('`') &&
                 TargetCitation().IsMatch(body),
             "ownership and lifecycle" =>
-                body.Contains("own", StringComparison.OrdinalIgnoreCase),
+                OwnershipMarker().IsMatch(body),
             "integration seams" =>
                 IntegrationSequenceMarker().IsMatch(body),
             "verification commands and classes" =>
@@ -324,7 +364,7 @@ internal static partial class PlannerOutputContract
                 (body.Contains("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
                  body.Contains("REAL-WORLD-DEPENDENT", StringComparison.OrdinalIgnoreCase)),
             "risks and stop conditions" =>
-                body.Contains("stop", StringComparison.OrdinalIgnoreCase),
+                StopConditionMarker().IsMatch(body),
             _ => false
         };
     }
@@ -507,6 +547,21 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?i)\b(?:before|after|between|into|from|then|sequence)\b")]
     private static partial Regex IntegrationSequenceMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
+    private static partial Regex PremiseValidityMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:map|maps|mapped|mapping)\b")]
+    private static partial Regex AcceptanceMappingMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:own|owns|owned|ownership)\b")]
+    private static partial Regex OwnershipMarker();
+
+    [GeneratedRegex(@"(?i)\bstop(?:s|ped|ping)?\b")]
+    private static partial Regex StopConditionMarker();
+
+    [GeneratedRegex(@"(?i)(?:\bnew[ \t]+file\b|\b(?:create|add)\b(?:[ \t]+(?:a|an|the|new))?)[^`\r\n]{0,24}$")]
+    private static partial Regex NewFileCitationPrefix();
 
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
     private static partial Regex BacktickedCitation();
