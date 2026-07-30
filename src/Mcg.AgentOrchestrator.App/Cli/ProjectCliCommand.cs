@@ -116,8 +116,9 @@ internal static class ProjectCliCommand
             });
             RunCreateStep("runtime store initialization", () =>
             {
-                new SqliteOrchestratorStateRepository(
-                        Path.Combine(stagingDirectory, Path.GetFileName(workspace.SqliteStatePath)))
+                var statePath = Path.Combine(stagingDirectory, Path.GetFileName(workspace.SqliteStatePath));
+                _ = StateDbMigrations.EnsureUpToDate(statePath);
+                new SqliteOrchestratorStateRepository(statePath)
                     .SaveAsync(new AgentOrchestratorKernel())
                     .GetAwaiter()
                     .GetResult();

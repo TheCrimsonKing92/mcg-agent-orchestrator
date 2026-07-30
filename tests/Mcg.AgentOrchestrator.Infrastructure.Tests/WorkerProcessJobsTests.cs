@@ -22,6 +22,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
     {
         var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? owned = null;
         Process? sentinel = null;
         try
@@ -64,6 +65,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
     {
         var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? wrapper = null;
         try
         {
@@ -99,6 +101,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
         var dbPath = Path.Combine(root, "state.db");
         Directory.CreateDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? incumbentWorker = null;
         Process? successorWorker = null;
         try

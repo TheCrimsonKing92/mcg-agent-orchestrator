@@ -51,7 +51,6 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(sourceBacklogItemId))
             throw new ArgumentException("Value cannot be empty.", nameof(sourceBacklogItemId));
 
-        EnsureSchema();
         var now = DateTimeOffset.UtcNow;
         var stdoutPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH");
         var stderrPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH");
@@ -116,7 +115,6 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(goalId))
             throw new ArgumentException("Value cannot be empty.", nameof(goalId));
 
-        EnsureSchema();
         var now = DateTimeOffset.UtcNow.ToString("O");
         WithBusyRetry(() =>
         {
@@ -154,29 +152,6 @@ public sealed class BacklogIntakeRecordStore
         {
             return null;
         }
-    }
-
-    private void EnsureSchema()
-    {
-        WithBusyRetry(() =>
-        {
-            using var conn = OpenConnection();
-            RunNonQuery(conn, """
-                CREATE TABLE IF NOT EXISTS backlog_intake_records (
-                    source_backlog_item_id TEXT PRIMARY KEY,
-                    heading                TEXT NOT NULL,
-                    status                 TEXT NOT NULL,
-                    goal_id                TEXT NULL,
-                    started_at             TEXT NOT NULL,
-                    last_heartbeat_at      TEXT NOT NULL,
-                    owner_process_id       INTEGER NULL,
-                    stdout_path            TEXT NULL,
-                    stderr_path            TEXT NULL
-                )
-                """);
-            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_backlog_intake_records_goal_id ON backlog_intake_records(goal_id)");
-            return true;
-        });
     }
 
     private SqliteConnection OpenConnection() =>

@@ -145,11 +145,6 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-ProgramStartupLifecycle.InitializeWorkerProcessTracking(
-    RunsStartupCleanup(startupArgs),
-    ConductorLoopHandoff.IsAuthorityTransferRequested,
-    workspace.SqliteStatePath,
-    workspace.ExecutionDirectory);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
@@ -218,15 +213,22 @@ AgentOrchestratorKernel kernel;
 Goal? currentGoal;
 try
 {
+    if (CliPersistentStateRunner.IsConductLoop(startupArgs))
+    {
+        // A handoff successor must not migrate or load state until the incumbent
+        // explicitly transfers its sole-writer authority.
+        ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
+    }
+
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+    ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+        RunsStartupCleanup(startupArgs),
+        authorityTransferRequested: false,
+        workspace.SqliteStatePath,
+        workspace.ExecutionDirectory);
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
-    if (CliPersistentStateRunner.IsConductLoop(startupArgs))
-    {
-        // A handoff successor completes normal startup and state/config loading while the
-        // incumbent retains exclusive authority, then waits for the explicit lease transfer.
-        ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
-    }
 }
 catch (Exception ex)
 {

@@ -38,11 +38,10 @@ public sealed class PracticeRegistryStore
     {
         ArgumentNullException.ThrowIfNull(practice);
         using var conn = OpenConnection();
-        EnsureSchemaAndSeed(conn);
         Upsert(conn, practice, overwriteExisting: true);
     }
 
-    internal static void EnsureSchemaAndSeed(SqliteConnection conn)
+    internal static void ApplySchemaMigration(SqliteConnection conn)
     {
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS engineering_practices (

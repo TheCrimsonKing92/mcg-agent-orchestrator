@@ -13,13 +13,21 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     public void ExistingSchemaStartupSkipsDdl()
     {
         var db = TempDb();
-        _ = new SqliteOrchestratorStateRepository(db);
 
         var statements = new List<string>();
         _ = new SqliteOrchestratorStateRepository(db, statements.Add);
 
-        Assert.DoesNotContain(statements, IsWriteCategoryStartupStatement);
-        Assert.Contains(statements, s => s.StartsWith("PRAGMA busy_timeout", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(statements);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_constructor_does_not_create_or_migrate_database")]
+    public void ConstructorDoesNotCreateOrMigrateDatabase()
+    {
+        var db = TempDb(migrate: false);
+
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        Assert.False(File.Exists(db));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_read_only_open_loads_one_goal_without_writing")]
@@ -88,9 +96,9 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ExecuteSql(connection, "PRAGMA journal_mode=DELETE");
         }
 
-        var repository = new SqliteOrchestratorStateRepository(db);
+        var journalMode = StateDbMigrations.EnsureUpToDate(db);
 
-        Assert.Equal("wal", repository.JournalMode, ignoreCase: true);
+        Assert.Equal("wal", journalMode, ignoreCase: true);
         Assert.Equal("wal", SqliteOrchestratorStateRepository.VerifyJournalMode(db), ignoreCase: true);
     }
 
@@ -156,7 +164,20 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         conn.Open();
 
         Xunit.Assert.Equal(
-            ["engineering_practices", "goals", "human_input_requests", "meta", "model_fit_history", "state_outbox"],
+            [
+                "backlog_intake_records",
+                "engineering_practices",
+                "goals",
+                "human_input_requests",
+                "meta",
+                "model_fit_history",
+                "schema_migrations",
+                "spawn_registry",
+                "sqlite_sequence",
+                "state_outbox",
+                "worktree_cleanup_backoff",
+                "worktree_cleanup_journal"
+            ],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
         Xunit.Assert.Equal(
             ["ix_engineering_practices_enabled_priority", "ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role", "ix_state_outbox_kind"],
@@ -224,6 +245,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         {
             DiagnosticsPath = diagnosticsPath,
             BusyTimeoutMilliseconds = 100,
+            BusyRetryBudget = TimeSpan.FromMilliseconds(250),
             MaxBusyRetries = 1,
             BeginImmediateCommandTimeoutSeconds = 1,
             MirrorToConductEventStream = false
@@ -245,13 +267,17 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             });
 
         await holderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        await Assert.ThrowsAsync<SqliteException>(() =>
-            blockedRepo.TransactAsync(
-                "blocked-writer-test",
-                (kernel, _) => Task.FromResult((ShouldSave: true, Result: kernel.Goals.Count))));
-
         await holderTask;
+
+        using (var holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite))
+        {
+            ExecuteSql(holder, "BEGIN IMMEDIATE");
+            await Assert.ThrowsAsync<SqliteException>(() =>
+                blockedRepo.TransactAsync(
+                    "blocked-writer-test",
+                    (kernel, _) => Task.FromResult((ShouldSave: true, Result: kernel.Goals.Count))));
+            ExecuteSql(holder, "ROLLBACK");
+        }
 
         var receipts = File.ReadAllLines(diagnosticsPath)
             .Where(line => !string.IsNullOrWhiteSpace(line))
@@ -871,7 +897,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     public void IdempotentSchemaMigrationAddsVersionAndOutcomeColumns()
     {
         // Simulate a DB created by an old binary (no version column) by creating schema manually.
-        var db = TempDb();
+        var db = TempDb(migrate: false);
         using var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
         setupConn.Open();
         // Microsoft.Data.Sqlite executes only one statement per ExecuteNonQuery; split each DDL.
@@ -887,8 +913,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
         setupConn.Close();
 
-        // Opening the repo on this old-schema DB should add the version column without recreating tables.
-        _ = new SqliteOrchestratorStateRepository(db);
+        // The explicit authority path upgrades the old schema without constructor writes.
+        _ = StateDbMigrations.EnsureUpToDate(db);
 
         using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
         checkConn.Open();
@@ -916,13 +942,14 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             Exec(setupConn, "DROP TABLE state_outbox");
             Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
             Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
+            Exec(setupConn, "DELETE FROM schema_migrations WHERE migration_number = 1");
         }
 
         Assert.Equal(
             SqliteOrchestratorStateRepository.CurrentSchemaVersion,
             SqliteOrchestratorStateRepository.ValidateReadOnlySchema(db));
 
-        _ = new SqliteOrchestratorStateRepository(db);
+        _ = StateDbMigrations.EnsureUpToDate(db);
 
         using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
         checkConn.Open();
@@ -951,8 +978,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             Exec(setupConn, "DROP TABLE state_outbox");
             Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
             Exec(setupConn, "INSERT INTO state_outbox (id, kind, payload_json, created_at) VALUES ('legacy-message', 'acceptance-retry-audit', '{}', '2026-07-26T00:00:00.0000000+00:00')");
+            Exec(setupConn, "DELETE FROM schema_migrations WHERE migration_number = 1");
         }
 
+        _ = StateDbMigrations.EnsureUpToDate(db);
         var repository = new SqliteOrchestratorStateRepository(db);
 
         using (var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
@@ -982,7 +1011,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
     public async Task BackfillsOutcomeColumnsFromClassifierTimeline()
     {
-        var db = TempDb();
+        var db = TempDb(migrate: false);
         var kernel = new AgentOrchestratorKernel();
         var known = RecordDispatchOutcome(
             kernel,
@@ -1006,6 +1035,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         SeedOldSchemaState(db, kernel, unknown.Id.Value);
         var before = ReadOutcomeClassCounts(db, hasOutcomeColumns: false);
 
+        _ = StateDbMigrations.EnsureUpToDate(db);
         var repo = new SqliteOrchestratorStateRepository(db);
         var after = ReadOutcomeClassCounts(db, hasOutcomeColumns: true);
         var rows = await repo.ListModelFitHistoryAsync();
@@ -1908,10 +1938,13 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(goal.Tasks, task => task.Description == "TASK_DESCRIPTION_SENTINEL_0");
     }
 
-    private static string TempDb()
+    private static string TempDb(bool migrate = true)
     {
         var dir = CreateTempDirectory();
-        return Path.Combine(dir, "state.db");
+        var path = Path.Combine(dir, "state.db");
+        if (migrate)
+            _ = StateDbMigrations.EnsureUpToDate(path);
+        return path;
     }
 
     private static GoalSnapshot BuildTerminalGoalSnapshot(int index)

@@ -363,16 +363,10 @@ public static partial class GoalWorktrees
         return OpenCleanupStateReadConnection(statePath);
     }
 
-    private static SqliteConnection OpenCleanupStateConnection(string statePath)
-    {
-        var conn = StateDbConnectionFactory.Open(
+    private static SqliteConnection OpenCleanupStateConnection(string statePath) =>
+        StateDbConnectionFactory.Open(
             statePath,
             StateDbConnectionProfile.ReadWrite);
-        using var command = conn.CreateCommand();
-        command.CommandText = CleanupBackoffTableSql + Environment.NewLine + CleanupDebtJournalTableSql;
-        command.ExecuteNonQuery();
-        return conn;
-    }
 
     private static SqliteConnection OpenCleanupStateReadConnection(string statePath) =>
         StateDbConnectionFactory.Open(

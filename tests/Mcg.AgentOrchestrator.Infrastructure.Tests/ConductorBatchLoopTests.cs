@@ -98,6 +98,12 @@ public sealed class ConductorBatchLoopTests
     private static string NoStopPath() =>
         Path.Combine(Path.GetTempPath(), $"conduct-stop-{Guid.NewGuid():N}.txt");
 
+    private static SqliteOrchestratorStateRepository OpenStateRepository(string dbPath)
+    {
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        return new SqliteOrchestratorStateRepository(dbPath);
+    }
+
     private static Goal CreateVerifiedSimpleGoal(AgentOrchestratorKernel kernel, string objective)
     {
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), objective);
@@ -2451,7 +2457,7 @@ public sealed class ConductorBatchLoopTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs");
-        var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var stateRepository = OpenStateRepository(workspace.SqliteStatePath);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var calls = new List<string[]>();
         var firstTargetCompleted = false;
@@ -4525,7 +4531,7 @@ public sealed class ConductorBatchLoopTests
     public async Task LoopPersistsEachTickDispatchSurvivesReload()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-persist-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
 
         // Seed a single-task goal and commit it.
         GoalId goalId = default;
@@ -4573,7 +4579,7 @@ public sealed class ConductorBatchLoopTests
     public async Task CriticalDispatchStartRetriesAndPersistsDispatchRecordsBeforeSlotRelease()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
 
         GoalId goalId = default;
         TaskId taskId = default;
@@ -4638,7 +4644,7 @@ public sealed class ConductorBatchLoopTests
     public async Task FinalCheckpointPreservesCliRetryWrittenAfterLastTick()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-final-checkpoint-merge-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
         var developerTaskId = TaskId.New();
         var testerTaskId = TaskId.New();
         var kernel = new AgentOrchestratorKernel();
@@ -4725,7 +4731,7 @@ public sealed class ConductorBatchLoopTests
     public async Task CriticalDispatchStartExhaustionPersistsNeitherRecord()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-fail-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
 
         GoalId goalId = default;
         TaskId taskId = default;

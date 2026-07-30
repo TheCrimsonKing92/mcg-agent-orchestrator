@@ -65,6 +65,8 @@ public sealed class PracticeRegistryStoreTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "mcg-practice-registry-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        return Path.Combine(dir, "state.db");
+        var path = Path.Combine(dir, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(path);
+        return path;
     }
 }

@@ -40,8 +40,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             statementObserver: null,
             telemetryOptions: null,
             beforeOutboxCommit: null,
-            StateDbConnectionProfile.QueryOnlyRead,
-            ensureSchema: false);
+            StateDbConnectionProfile.QueryOnlyRead);
 
     public static string VerifyJournalMode(string dbPath)
     {
@@ -117,8 +116,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             statementObserver,
             telemetryOptions,
             beforeOutboxCommit,
-            StateDbConnectionProfile.ReadWrite,
-            ensureSchema: true)
+            StateDbConnectionProfile.ReadWrite)
     {
     }
 
@@ -127,19 +125,14 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         Action<string>? statementObserver,
         SqliteWriteTelemetryOptions? telemetryOptions,
         Action? beforeOutboxCommit,
-        StateDbConnectionProfile connectionProfile,
-        bool ensureSchema)
+        StateDbConnectionProfile connectionProfile)
     {
         _dbPath = dbPath;
         _statementObserver = statementObserver;
         _writeTelemetry = new SqliteWriteTelemetry(dbPath, telemetryOptions);
         _beforeOutboxCommit = beforeOutboxCommit;
         _connectionProfile = connectionProfile;
-        if (ensureSchema)
-            EnsureSchema();
     }
-
-    public string JournalMode { get; private set; } = string.Empty;
 
     internal static IDisposable UseWriteOperationTag(string operationTag)
     {
@@ -288,23 +281,16 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         SqliteConnection Connection,
         SqliteWriteTelemetry.WriteTelemetryScope Telemetry);
 
-    private void EnsureSchema()
+    internal void ApplyCoreSchemaMigration(SqliteConnection conn)
     {
-        using var conn = StateDbConnectionFactory.Open(
-            _dbPath,
-            StateDbConnectionProfile.ReadWrite,
-            _writeTelemetry.Options.BusyTimeoutMilliseconds,
-            _statementObserver);
-        JournalMode = StateDbConnectionFactory.ReadJournalMode(conn, _statementObserver);
         if (CoreSchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
             if (!PracticeRegistrySchemaExists(conn))
-                PracticeRegistryStore.EnsureSchemaAndSeed(conn);
+                PracticeRegistryStore.ApplySchemaMigration(conn);
             if (!StateOutboxSchemaExists(conn))
                 EnsureStateOutboxSchema(conn);
             MigrateStateOutboxColumns(conn);
-            BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
 
@@ -357,7 +343,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         EnsureStateOutboxSchema(conn);
         RunNonQuery(conn, $"INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '{CurrentSchemaVersion}')");
-        PracticeRegistryStore.EnsureSchemaAndSeed(conn);
+        PracticeRegistryStore.ApplySchemaMigration(conn);
     }
 
     private void EnsureStateOutboxSchema(SqliteConnection conn)
@@ -417,7 +403,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
     }
 
-    private void BackfillModelFitHistoryOutcomeColumns(SqliteConnection conn)
+    internal void ApplyModelFitHistoryBackfillMigration(SqliteConnection conn)
     {
         var kernel = LoadFromConnectionAsync(conn, goalIds: null, CancellationToken.None).GetAwaiter().GetResult();
         foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))

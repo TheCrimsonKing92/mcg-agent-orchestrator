@@ -27,7 +27,6 @@ internal sealed class SpawnRegistry
 
     public void Register(string ownerId, SpawnProcessIdentity identity)
     {
-        EnsureSchema();
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -77,7 +76,6 @@ internal sealed class SpawnRegistry
 
     public void MarkReleased(int processId, string diagnostic)
     {
-        EnsureSchema();
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -95,7 +93,6 @@ internal sealed class SpawnRegistry
 
     public void RecordDiagnostic(long id, string diagnostic)
     {
-        EnsureSchema();
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -114,24 +111,6 @@ internal sealed class SpawnRegistry
     private SqliteConnection OpenReadConnection() =>
         StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.QueryOnlyRead);
 
-    private void EnsureSchema()
-    {
-        using var conn = OpenConnection();
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS spawn_registry (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_id           TEXT NOT NULL,
-                process_id         INTEGER NOT NULL,
-                process_started_at TEXT NOT NULL,
-                image_path         TEXT NOT NULL,
-                registered_at      TEXT NOT NULL,
-                released_at        TEXT NULL,
-                last_diagnostic    TEXT NULL
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_spawn_registry_active ON spawn_registry(released_at, process_id)");
-    }
-
     private static SpawnRegistryEntry ReadEntry(SqliteDataReader reader)
     {
         return new SpawnRegistryEntry(
@@ -147,12 +126,6 @@ internal sealed class SpawnRegistry
             reader.IsDBNull(7) ? null : reader.GetString(7));
     }
 
-    private static void RunNonQuery(SqliteConnection conn, string sql)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
-    }
 }
 
 internal static class SpawnProcessIdentityReader
