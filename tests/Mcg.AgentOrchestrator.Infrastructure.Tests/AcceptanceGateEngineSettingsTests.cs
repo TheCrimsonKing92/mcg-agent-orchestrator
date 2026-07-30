@@ -10,6 +10,11 @@ public sealed class AcceptanceGateEngineSettingsTests
 
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.All(
+            settings.InfrastructureTestLanes,
+            lane => Xunit.Assert.True(
+                lane.EstimatedSerialSeconds > 0,
+                $"Checked-in lane '{lane.Name}' must carry a positive serial-duration estimate."));
         AssertLanePairPreservesCoverage(
             settings,
             "Goal lifecycle commands",
@@ -75,7 +80,11 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "maxConcurrentShards": 2,
                 "timeouts": { "defaultMinutes": 3, "buildServerShutdownMinutes": 1 },
                 "infrastructureTestLanes": [
-                  { "name": "candidate lane", "filter": "FullyQualifiedName~CandidateLaneTests" }
+                  {
+                    "name": "candidate lane",
+                    "filter": "FullyQualifiedName~CandidateLaneTests",
+                    "estimatedSerialSeconds": 123.5
+                  }
                 ]
               },
               "checks": [
@@ -104,6 +113,7 @@ public sealed class AcceptanceGateEngineSettingsTests
 
             Xunit.Assert.True(result.Passed);
             Xunit.Assert.Equal(2, settings.MaxConcurrentShards);
+            Xunit.Assert.Equal(123.5, Xunit.Assert.Single(settings.InfrastructureTestLanes).EstimatedSerialSeconds);
             Xunit.Assert.Equal(TimeSpan.FromMinutes(1), calls[0].Timeout);
             var testCall = Xunit.Assert.Single(calls.Skip(1));
             Xunit.Assert.Contains("FullyQualifiedName~CandidateLaneTests", testCall.Arguments);

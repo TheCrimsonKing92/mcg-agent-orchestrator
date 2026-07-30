@@ -716,7 +716,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var queue = new ConcurrentQueue<IndexedShard>(
             shardChecks
                 .Select((check, index) => new IndexedShard(index, check))
-                .OrderByDescending(shard => ShardPriority(shard.Check))
+                .OrderByDescending(shard => shard.Check.EstimatedSerialSeconds)
                 .ThenBy(shard => shard.Index));
         var outcomes = new ShardRunOutcome?[shardChecks.Count];
         var workerCount = allShardsUseMtp
@@ -819,13 +819,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
     }
-
-    private static int ShardPriority(AcceptanceManifestCheck check) =>
-        check.Name.Contains("Remainder", StringComparison.OrdinalIgnoreCase) ||
-        check.Name.Contains("Chaos gate", StringComparison.OrdinalIgnoreCase) ? 300 :
-        check.Name.Contains("Goal worktree", StringComparison.OrdinalIgnoreCase) ? 200 :
-        check.Name.Contains("Worker dispatch", StringComparison.OrdinalIgnoreCase) ? 190 :
-        0;
 
     private static void EmitShardTimingProgress(
         GoalId? goalId,
@@ -1517,7 +1510,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             FilePath = check.FilePath,
             TimeoutMinutes = check.TimeoutMinutes,
             Advisory = check.Advisory,
-            Runner = check.Runner
+            Runner = check.Runner,
+            EstimatedSerialSeconds = lane.EstimatedSerialSeconds
         };
 
     private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
@@ -6231,6 +6225,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public int? TimeoutMinutes { get; init; }
         public bool Advisory { get; init; }
         public string? Runner { get; init; } = "vstest";
+        public double EstimatedSerialSeconds { get; init; }
     }
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);

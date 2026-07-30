@@ -2366,6 +2366,143 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_start_longest_estimated_lanes_first")]
+    public async Task GoalAcceptanceVerifierConcurrentShardsStartLongestEstimatedLanesFirst()
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        SetPartitionVerdictKeyHooks("tree-estimates", "main-estimates", "commit-estimates");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Light first",
+                    "filter": "FullyQualifiedName~LightFirstTests",
+                    "estimatedSerialSeconds": 1
+                  },
+                  {
+                    "name": "Heavy alpha",
+                    "filter": "FullyQualifiedName~HeavyAlphaTests",
+                    "estimatedSerialSeconds": 100
+                  },
+                  {
+                    "name": "Light second",
+                    "filter": "FullyQualifiedName~LightSecondTests",
+                    "estimatedSerialSeconds": 2
+                  },
+                  {
+                    "name": "Heavy beta",
+                    "filter": "FullyQualifiedName~HeavyBetaTests",
+                    "estimatedSerialSeconds": 99
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var heavyAlphaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heavyBetaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        try
+        {
+            async Task<GoalAcceptanceVerifier.CommandResult> RunEstimatedShardAsync(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                WriteMtpTrx(args);
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
+                var filter = args[filterIndex + 1];
+                startOrder.Enqueue(filter);
+                if (filter.Contains("HeavyAlphaTests", StringComparison.Ordinal))
+                {
+                    heavyAlphaStarted.TrySetResult();
+                    await heavyBetaStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                else if (filter.Contains("HeavyBetaTests", StringComparison.Ordinal))
+                {
+                    heavyBetaStarted.TrySetResult();
+                    await heavyAlphaStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+
+                return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunEstimatedShardAsync);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("33333333333333333333333333333333"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+
+            Assert.True(result.Passed);
+            var firstWave = startOrder.Take(2).ToArray();
+            Assert.Equal(2, firstWave.Length);
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyAlphaTests", StringComparison.Ordinal));
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyBetaTests", StringComparison.Ordinal));
+            Assert.Equal(
+                [
+                    "infrastructure tests: Light first",
+                    "infrastructure tests: Heavy alpha",
+                    "infrastructure tests: Light second",
+                    "infrastructure tests: Heavy beta"
+                ],
+                result.Checks!
+                    .Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal))
+                    .Select(check => check.Name));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_trusted_manifest_git_read_drains_large_output")]
     public void GoalAcceptanceVerifierTrustedManifestGitReadDrainsLargeOutput()
     {

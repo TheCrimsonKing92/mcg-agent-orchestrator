@@ -83,6 +83,12 @@ internal sealed class AcceptanceGateEngineSettings
             {
                 throw new InvalidDataException("Acceptance manifest test lanes require non-empty names and filters.");
             }
+
+            if (!double.IsFinite(lane.EstimatedSerialSeconds) || lane.EstimatedSerialSeconds < 0)
+            {
+                throw new InvalidDataException(
+                    $"Acceptance manifest test lane '{lane.Name}' estimatedSerialSeconds must be a finite non-negative number.");
+            }
         }
 
         foreach (var invocation in MtpInvocations)
@@ -109,7 +115,10 @@ internal sealed class AcceptanceGateTimeoutSettings
     public int? DiscoveryMinutes { get; init; }
 }
 
-internal sealed record AcceptanceTestLane(string Name, string Filter);
+internal sealed record AcceptanceTestLane(
+    string Name,
+    string Filter,
+    double EstimatedSerialSeconds = 0);
 
 internal sealed class AcceptanceMtpInvocation
 {
