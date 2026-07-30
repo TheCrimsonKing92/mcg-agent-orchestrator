@@ -1542,7 +1542,10 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id.Value == id));
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == failed.Id);
-        Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
+        Xunit.Assert.All(
+            terminalGoalIds.Where(id => id != cleanedUp.Id.Value),
+            id => Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
+        Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(cleanedUp.Id));
         var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();

@@ -139,12 +139,12 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Empty(kernel.Goals);
         Xunit.Assert.Empty(kernel.HumanInputRequests);
         Xunit.Assert.Empty(kernel.ExportSnapshot().Goals);
-        Xunit.Assert.True(kernel.IsKnownCompletedDependencyGoal(goalId));
+        Xunit.Assert.False(kernel.IsKnownCompletedDependencyGoal(goalId));
         Xunit.Assert.True(kernel.TryGetKnownDependencyGoalStatus(goalId, out var status));
         Xunit.Assert.Equal(GoalStatus.Completed.ToString(), status);
     }
 
-    [Xunit.Fact(DisplayName = "IngestNewGoals_tracks_terminal_metadata_without_adding_schedulable_goal")]
+    [Xunit.Fact(DisplayName = "IngestNewGoals_tracks_completed_metadata_without_satisfying_dependency")]
     public void IngestNewGoalsTracksTerminalMetadataWithoutAddingSchedulableGoal()
     {
         var terminalId = GoalId.New();
@@ -164,7 +164,7 @@ public sealed class KernelIngestNewGoalsTests
 
         Xunit.Assert.Equal(0, ingested);
         Xunit.Assert.Empty(kernel.Goals);
-        Xunit.Assert.True(kernel.IsKnownCompletedDependencyGoal(terminalId));
+        Xunit.Assert.False(kernel.IsKnownCompletedDependencyGoal(terminalId));
         Xunit.Assert.True(kernel.TryGetKnownDependencyGoalStatus(terminalId, out var status));
         Xunit.Assert.Equal(GoalStatus.Completed.ToString(), status);
     }
@@ -194,7 +194,7 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Equal(GoalStatus.Failed.ToString(), status);
     }
 
-    [Xunit.Fact(DisplayName = "RefreshTrackedGoals_evicts_tracked_goal_that_became_terminal")]
+    [Xunit.Fact(DisplayName = "RefreshTrackedGoals_evicts_completed_goal_without_satisfying_dependency")]
     public void RefreshTrackedGoalsEvictsTrackedGoalThatBecameTerminal()
     {
         var goalId = GoalId.New();
@@ -225,7 +225,7 @@ public sealed class KernelIngestNewGoalsTests
         Xunit.Assert.Equal(1, refreshed);
         Xunit.Assert.Empty(live.Goals);
         Xunit.Assert.Empty(live.ExportSnapshot().Goals);
-        Xunit.Assert.True(live.IsKnownCompletedDependencyGoal(goalId));
+        Xunit.Assert.False(live.IsKnownCompletedDependencyGoal(goalId));
         Xunit.Assert.True(live.TryGetKnownDependencyGoalStatus(goalId, out var status));
         Xunit.Assert.Equal(GoalStatus.Completed.ToString(), status);
     }

@@ -629,8 +629,9 @@ internal sealed class ConductorBatchLoop
                     goalWalkTimings.Add(new GoalWalkTiming(label, result, singleGoalClock.Elapsed));
                 }
 
-                // Dependency gate: check all DependsOn goals before advancing.
-                var depHoldReason = goal.Tasks.Any(task => task.LastProcess is not null)
+                // Dependency ordering is a goal-start gate. Once any task has dispatched, preserve
+                // the in-flight goal across later task boundaries instead of retroactively holding it.
+                var depHoldReason = HasStartedGoalWork(goal)
                     ? null
                     : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
                 if (depHoldReason is not null)
@@ -2273,6 +2274,14 @@ internal sealed class ConductorBatchLoop
     {
         foreach (var depId in goal.DependsOn)
         {
+            if (completedGoals.Contains(depId.Value) ||
+                kernel.IsKnownCompletedDependencyGoal(depId) ||
+                (kernel.TryGetKnownDependencyGoalStatus(depId, out var dependencyStatus) &&
+                 IsMetadataSatisfiedDependencyStatus(dependencyStatus)))
+            {
+                continue;
+            }
+
             if (kernel.TryGetKnownDependencyGoalStatus(depId, out var terminalStatus) &&
                 IsTerminalWithoutLandingDependencyStatus(terminalStatus))
             {
@@ -2281,14 +2290,6 @@ internal sealed class ConductorBatchLoop
 
             if (escalatedGoals.Contains(depId.Value))
                 return $"dependency escalated: {depId.Value[..8]}";
-
-            if (completedGoals.Contains(depId.Value) ||
-                kernel.IsKnownCompletedDependencyGoal(depId) ||
-                (kernel.TryGetKnownDependencyGoalStatus(depId, out var dependencyStatus) &&
-                 IsMetadataSatisfiedDependencyStatus(dependencyStatus)))
-            {
-                continue;
-            }
 
             if (kernel.TryGetKnownDependencyGoalStatus(depId, out var knownStatus) &&
                 knownStatus.Equals(GoalStatus.Parked.ToString(), StringComparison.OrdinalIgnoreCase))
@@ -2302,6 +2303,9 @@ internal sealed class ConductorBatchLoop
 
         return null;
     }
+
+    private static bool HasStartedGoalWork(Goal goal) =>
+        goal.Tasks.Any(task => task.LastProcess is not null);
 
     private static bool IsMetadataSatisfiedDependencyStatus(string status) =>
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);

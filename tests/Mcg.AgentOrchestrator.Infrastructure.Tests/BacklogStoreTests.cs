@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Cli;
+using Microsoft.Data.Sqlite;
 
 public sealed class BacklogStoreTests
 {
@@ -373,6 +374,39 @@ public sealed class BacklogStoreTests
 
         Assert.Equal([first.Id, second.Id], found!.Dependencies.Select(edge => edge.PrerequisiteId));
         Assert.Contains(prerequisite!.Dependents, edge => edge.DependentId == dependent.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_legacy_schema_without_dependencies_upgrades_with_empty_relationships")]
+    public async Task LegacySchemaWithoutDependenciesUpgradesWithEmptyRelationships()
+    {
+        var path = TempDb();
+        await using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE backlog (
+                    id             TEXT PRIMARY KEY,
+                    title          TEXT NOT NULL,
+                    body           TEXT NOT NULL,
+                    status         TEXT NOT NULL,
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL,
+                    source_goal_id TEXT
+                );
+                INSERT INTO backlog (id, title, body, status, created_at, updated_at, source_goal_id)
+                VALUES ('legacy-item', 'Legacy item', '', 'Open',
+                        '2026-07-30T00:00:00Z', '2026-07-30T00:00:00Z', NULL);
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var upgraded = new BacklogStore(path);
+        var item = await upgraded.GetByExactIdAsync("legacy-item");
+
+        Assert.NotNull(item);
+        Assert.Empty(item.Dependencies);
+        Assert.Empty(item.Dependents);
     }
 
     [Xunit.Fact(DisplayName = "BacklogStore_dependency_add_remove_clear_are_idempotent_or_loud")]
