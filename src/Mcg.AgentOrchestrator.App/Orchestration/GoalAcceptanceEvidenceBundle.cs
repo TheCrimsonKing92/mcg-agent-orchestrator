@@ -243,7 +243,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         }).ToArray();
     }
 
-    private static string ResolvePolicyCheckState(
+    internal static string ResolvePolicyCheckState(
         VerificationPolicyCheck check,
         IReadOnlyList<AcceptanceCheckResult> acceptanceChecks)
     {
@@ -259,12 +259,37 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
 
         var acceptance = acceptanceChecks.FirstOrDefault(result =>
             result.Name.Equals(check.Name, StringComparison.OrdinalIgnoreCase));
+        acceptance ??= FindEquivalentAggregateTestCheck(check, acceptanceChecks);
         if (acceptance is null)
         {
             return "missing";
         }
 
         return acceptance.Passed ? "passed" : "failed";
+    }
+
+    private static AcceptanceCheckResult? FindEquivalentAggregateTestCheck(
+        VerificationPolicyCheck check,
+        IReadOnlyList<AcceptanceCheckResult> acceptanceChecks)
+    {
+        if (!check.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var aggregateName = check.CommandLine.Contains(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase)
+            ? "infrastructure tests"
+            : check.CommandLine.Contains(
+                "Mcg.AgentOrchestrator.Core.Tests.csproj",
+                StringComparison.OrdinalIgnoreCase)
+                ? "core tests"
+                : null;
+        return aggregateName is null
+            ? null
+            : acceptanceChecks.FirstOrDefault(result =>
+                result.Name.Equals(aggregateName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsManualPolicyKind(string kind) =>
