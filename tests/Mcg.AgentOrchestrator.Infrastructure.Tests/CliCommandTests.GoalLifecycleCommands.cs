@@ -437,6 +437,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
         var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        SeedProjectCreationSource(defaultRoot);
 
         var output = CaptureConsole(() =>
         {
@@ -471,6 +472,295 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.True(File.Exists(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "backlog.db")));
         Xunit.Assert.Equal("client_a", registry.ReadSelectedProjectName());
     }
+
+    [Xunit.Fact(DisplayName = "Cli_project_create_seeds_independent_runnable_configuration")]
+    public async Task CliProjectCreateSeedsIndependentRunnableConfiguration()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRootA = CreateTempDirectory();
+        var projectRootB = CreateTempDirectory();
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var sourceWorkspace = SeedProjectCreationSource(defaultRoot);
+        var sourceConfigBefore = SnapshotConfigurationBytes(sourceWorkspace);
+
+        ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", projectRootA],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null);
+        ProjectCliCommand.Execute(
+            ["project", "create", "client_b", "--root", projectRootB],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null);
+
+        var workspaceA = registry.GetRequiredProject("client_a").ResolveWorkspace();
+        var workspaceB = registry.GetRequiredProject("client_b").ResolveWorkspace();
+        var pathGroups = new[]
+        {
+            new[] { sourceWorkspace.OrchestratorDirectory, workspaceA.OrchestratorDirectory, workspaceB.OrchestratorDirectory },
+            new[] { sourceWorkspace.ModelFunctionCatalogPath, workspaceA.ModelFunctionCatalogPath, workspaceB.ModelFunctionCatalogPath },
+            new[] { sourceWorkspace.AgentCatalogPath, workspaceA.AgentCatalogPath, workspaceB.AgentCatalogPath },
+            new[] { sourceWorkspace.WorkerProfilePath, workspaceA.WorkerProfilePath, workspaceB.WorkerProfilePath },
+            new[] { sourceWorkspace.SqliteStatePath, workspaceA.SqliteStatePath, workspaceB.SqliteStatePath },
+            new[] { sourceWorkspace.BacklogStorePath, workspaceA.BacklogStorePath, workspaceB.BacklogStorePath }
+        };
+        foreach (var paths in pathGroups)
+        {
+            Xunit.Assert.Equal(3, paths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        }
+
+        foreach (var configPath in new[]
+        {
+            workspaceA.ModelFunctionCatalogPath,
+            workspaceA.AgentCatalogPath,
+            workspaceA.WorkerProfilePath,
+            workspaceB.ModelFunctionCatalogPath,
+            workspaceB.AgentCatalogPath,
+            workspaceB.WorkerProfilePath
+        })
+        {
+            Xunit.Assert.True(File.Exists(configPath));
+            Xunit.Assert.Null(new FileInfo(configPath).LinkTarget);
+            Xunit.Assert.Equal(0, (int)(File.GetAttributes(configPath) & FileAttributes.ReparsePoint));
+        }
+
+        var modelFunctionsA = ModelFunctionCatalogStore.Load(workspaceA.ModelFunctionCatalogPath);
+        var agentsA = AgentCatalogStore.Load(workspaceA.AgentCatalogPath);
+        var profilesA = WorkerProfileStore.Load(workspaceA.WorkerProfilePath);
+        Xunit.Assert.Single(modelFunctionsA.ForPurpose(ModelFunctionPurposes.SpecRefiner));
+        Xunit.Assert.NotEmpty(agentsA.Agents);
+        Xunit.Assert.NotEmpty(profilesA.Profiles);
+        Xunit.Assert.Contains(projectRootA, profilesA.GetRequired("project-local").CommandTemplate, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.DoesNotContain(defaultRoot, profilesA.GetRequired("project-local").CommandTemplate, StringComparison.OrdinalIgnoreCase);
+
+        var restoredA = await new SqliteOrchestratorStateRepository(workspaceA.SqliteStatePath).LoadAsync();
+        var backlogA = await new BacklogStore(workspaceA.BacklogStorePath).ListAsync(includeAll: true);
+        Xunit.Assert.Empty(restoredA.Goals);
+        Xunit.Assert.Empty(backlogA);
+        Xunit.Assert.Equal(sourceConfigBefore, SnapshotConfigurationBytes(sourceWorkspace));
+
+        var projectBConfigBefore = SnapshotConfigurationBytes(workspaceB);
+        AgentCatalogStore.Save(
+            workspaceA.AgentCatalogPath,
+            new AgentCatalog(agentsA.Agents.Append(TestAgent("client-a-only", AgentRole.Developer)).ToList()));
+        ModelFunctionCatalogStore.Save(
+            workspaceA.ModelFunctionCatalogPath,
+            new ModelFunctionCatalog(modelFunctionsA.Bindings.Append(new ModelFunctionBinding(
+                ModelFunctionPurposes.AcceptanceJudge,
+                ModelLane.Local,
+                new ModelProfile("local-only", "judge", ModelCapability.Text, SubscriptionMode.LocalBridge))).ToList()));
+        WorkerProfileStore.Save(
+            workspaceA.WorkerProfilePath,
+            profilesA.Upsert(new WorkerProfile("client-a-only", "client-a-worker {promptPath}")));
+        Xunit.Assert.Equal(sourceConfigBefore, SnapshotConfigurationBytes(sourceWorkspace));
+        Xunit.Assert.Equal(projectBConfigBefore, SnapshotConfigurationBytes(workspaceB));
+
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalogStore.Load(workspaceA.AgentCatalogPath).Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileStore.Load(workspaceA.WorkerProfilePath);
+        Goal? currentGoal = null;
+        var simpleGoalOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Inspect docs/project.md and summarize"],
+            kernel,
+            workspaceA,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.DoesNotContain("No model-function binding found", simpleGoalOutput, StringComparison.Ordinal);
+        var goal = Xunit.Assert.Single(kernel.Goals);
+        var task = Xunit.Assert.Single(goal.Tasks);
+
+        var worktreePath = GoalWorktrees.WorktreePath(projectRootA, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["subscription-dispatch", "1"],
+            kernel,
+            workspaceA,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.NotNull(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_project_create_is_idempotent_and_rejects_repointing")]
+    public async Task CliProjectCreateIsIdempotentAndRejectsRepointing()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        var otherRoot = CreateTempDirectory();
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        SeedProjectCreationSource(defaultRoot);
+
+        ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", projectRoot],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null);
+        var workspace = registry.GetRequiredProject("client_a").ResolveWorkspace();
+        var customizedAgents = AgentCatalogStore.Load(workspace.AgentCatalogPath)
+            .AddOrReplaceById(TestAgent("client-a-custom", AgentRole.Developer));
+        AgentCatalogStore.Save(workspace.AgentCatalogPath, customizedAgents);
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal("Preserve this goal");
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        await new BacklogStore(workspace.BacklogStorePath).UpsertAsync(new BacklogItem(
+            "preserve-backlog",
+            "Preserve this backlog item",
+            "Idempotent project create must not replace backlog state.",
+            BacklogItemStatus.Open,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            SourceGoalId: null));
+        var filesBefore = SnapshotWorkspaceBytes(workspace);
+
+        var output = CaptureConsole(() => ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", projectRoot],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null));
+
+        Xunit.Assert.Contains("Project already exists: client_a", output);
+        Xunit.Assert.Equal(filesBefore, SnapshotWorkspaceBytes(workspace));
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", otherRoot],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null));
+        Xunit.Assert.Contains("cannot be repointed", error.Message);
+        Xunit.Assert.Equal(projectRoot, registry.GetRequiredProject("client_a").RootDirectory);
+        Xunit.Assert.False(Directory.Exists(OrchestratorWorkspace.ForProject("client_a", otherRoot).OrchestratorDirectory));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_project_create_missing_refiner_fails_before_destination_or_registry_mutation")]
+    public void CliProjectCreateMissingRefinerFailsBeforeDestinationOrRegistryMutation()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", projectRoot],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null));
+
+        Xunit.Assert.Contains("source configuration validation", error.Message);
+        Xunit.Assert.Contains("missing 'spec-refiner'", error.Message);
+        Xunit.Assert.Contains("Configure the invoking default project", error.Message);
+        Xunit.Assert.Empty(registry.ListProjects());
+        Xunit.Assert.False(Directory.Exists(destination.OrchestratorDirectory));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_project_create_rejects_nonempty_destination_without_mutation")]
+    public void CliProjectCreateRejectsNonemptyDestinationWithoutMutation()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        SeedProjectCreationSource(defaultRoot);
+        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+        Directory.CreateDirectory(destination.OrchestratorDirectory);
+        var sentinelPath = Path.Combine(destination.OrchestratorDirectory, "keep.txt");
+        File.WriteAllText(sentinelPath, "keep");
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", projectRoot],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null));
+
+        Xunit.Assert.Contains("destination validation", error.Message);
+        Xunit.Assert.Equal("keep", File.ReadAllText(sentinelPath));
+        Xunit.Assert.Empty(registry.ListProjects());
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_project_create_registry_failure_leaves_recoverable_unregistered_workspace")]
+    public void CliProjectCreateRegistryFailureLeavesRecoverableUnregisteredWorkspace()
+    {
+        var defaultRoot = CreateTempDirectory();
+        var projectRoot = CreateTempDirectory();
+        SeedProjectCreationSource(defaultRoot);
+        var blockedRegistryPath = Path.Combine(CreateTempDirectory(), "registry-blocked");
+        File.WriteAllText(blockedRegistryPath, "not a directory");
+        var registry = new OrchestratorProjectRegistry(blockedRegistryPath);
+        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
+            ["project", "create", "client_a", "--root", projectRoot],
+            registry,
+            defaultRoot,
+            activeProjectOverride: null));
+
+        Xunit.Assert.Contains("registry registration", error.Message);
+        Xunit.Assert.Empty(registry.ListProjects());
+        Xunit.Assert.True(File.Exists(destination.ModelFunctionCatalogPath));
+        Xunit.Assert.True(File.Exists(destination.AgentCatalogPath));
+        Xunit.Assert.True(File.Exists(destination.WorkerProfilePath));
+        Xunit.Assert.True(File.Exists(destination.SqliteStatePath));
+        Xunit.Assert.True(File.Exists(destination.BacklogStorePath));
+    }
+
+    private static OrchestratorWorkspace SeedProjectCreationSource(string root)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        ModelFunctionCatalogStore.Save(
+            workspace.ModelFunctionCatalogPath,
+            new ModelFunctionCatalog(
+            [
+                new ModelFunctionBinding(
+                    ModelFunctionPurposes.SpecRefiner,
+                    ModelLane.CheapApi,
+                    new ModelProfile(
+                        "missing-provider",
+                        "fake-model",
+                        ModelCapability.Text,
+                        SubscriptionMode.ApiKey),
+                    Name: ModelFunctionPurposes.SpecRefiner)
+            ]));
+        AgentCatalogStore.Save(workspace.AgentCatalogPath, AgentCatalog.Default());
+        WorkerProfileStore.Save(
+            workspace.WorkerProfilePath,
+            WorkerProfileCatalog.Default().Upsert(new WorkerProfile(
+                "project-local",
+                $"\"{Path.Combine(root, "tools", "worker.exe")}\" --workspace \"{Path.Combine(root, ".orchestrator", "prompts")}\"")));
+        return workspace;
+    }
+
+    private static string SnapshotConfigurationBytes(OrchestratorWorkspace workspace) =>
+        SnapshotPaths(
+        [
+            workspace.ModelFunctionCatalogPath,
+            workspace.AgentCatalogPath,
+            workspace.WorkerProfilePath
+        ],
+        includeLastWriteTime: false);
+
+    private static string SnapshotWorkspaceBytes(OrchestratorWorkspace workspace) =>
+        SnapshotPaths(
+            Directory.EnumerateFiles(workspace.OrchestratorDirectory, "*", SearchOption.AllDirectories)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase),
+            includeLastWriteTime: true);
+
+    private static string SnapshotPaths(IEnumerable<string> paths, bool includeLastWriteTime) =>
+        string.Join(
+            Environment.NewLine,
+            paths.Select(path =>
+            {
+                var info = new FileInfo(path);
+                var hash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+                return includeLastWriteTime
+                    ? $"{Path.GetFullPath(path)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{hash}"
+                    : $"{Path.GetFullPath(path)}|{info.Length}|{hash}";
+            }));
 
 
     [Xunit.Fact(DisplayName = "Cli_tenant_and_architecture_report_tenant_scoped_runtime_paths")]
