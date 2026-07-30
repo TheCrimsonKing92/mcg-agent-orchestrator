@@ -405,6 +405,28 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }
 
+    [Xunit.Fact(DisplayName = "RetryTask_on_a_Verifying_goal_invalidates_acceptance_and_redispatches")]
+    public void RetryTaskOnVerifyingGoalInvalidatesAcceptanceAndRedispatches()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retry during acceptance", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+    Assert.Equal(GoalStatus.Verifying, goal.Status);
+
+    kernel.RetryTask(goal.Id, task.Id, "acceptance result requires a Developer correction");
+
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.GoalPolicyDecision &&
+        evt.Message.Contains("invalidated acceptance verification", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "RetryTask_on_an_AcceptanceFailed_goal_clears_gate_failure_and_redispatches")]
     public void RetryTaskOnAcceptanceFailedGoalClearsGateFailureAndRedispatches()
 {

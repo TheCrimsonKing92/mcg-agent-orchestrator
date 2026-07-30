@@ -198,7 +198,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             InvalidateDownstreamTasks(goal, task, retryAt);
         }
-        ReopenAcceptanceFailedGoalWithRetry(goal, task, $"Retry cleared failed acceptance gate because task {task.Id.Value[..8]} is dispatchable.");
+        ReopenAcceptanceGoalWithRetry(goal, task, $"Retry invalidated acceptance verification because task {task.Id.Value[..8]} is dispatchable.");
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Retry reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
         return task;
@@ -733,9 +733,9 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    private void ReopenAcceptanceFailedGoalWithRetry(Goal goal, TaskSpec retriedTask, string reason)
+    private void ReopenAcceptanceGoalWithRetry(Goal goal, TaskSpec retriedTask, string reason)
     {
-        if (goal.Status != GoalStatus.AcceptanceFailed ||
+        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.AcceptanceFailed) ||
             retriedTask.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)
         {
             return;
