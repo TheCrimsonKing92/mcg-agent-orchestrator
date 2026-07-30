@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CleanTestBaselineTests
 {
@@ -42,6 +43,27 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
+    public void ResolveSharedFailureTakesPrecedenceOverPassingCandidateEvidence()
+    {
+        var current = GoalId.New();
+        var passing = GoalId.New();
+        var firstFailure = GoalId.New();
+        var secondFailure = GoalId.New();
+        var journals = Journals(
+            (passing, Entry(passing, "main-a", "passed")),
+            (firstFailure, Entry(firstFailure, "main-a", "failed", ["core tests"])),
+            (secondFailure, Entry(secondFailure, "main-a", "failed", ["core tests"])));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, ["core tests"], journals, current, "main-a"));
+
+        Assert.Equal(CleanBaselineAttestation.AttestedRed, receipt.Attestation);
+        Assert.Equal(["core tests"], receipt.SharedFailingChecks);
+        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+    }
+
+    [Xunit.Fact]
     public void ResolveSingleGoalOrDifferentMainRemainsUnattested()
     {
         var current = GoalId.New();
@@ -66,7 +88,7 @@ public sealed class CleanTestBaselineTests
         Directory.CreateDirectory(root);
         try
         {
-            var goal = new Goal(GoalId.New(), "Baseline journal", []);
+            var goal = TestGoal("Baseline journal");
             GoalOperationJournal.AcceptanceFailed(
                 root,
                 goal,
@@ -104,6 +126,46 @@ public sealed class CleanTestBaselineTests
         }
     }
 
+    [Xunit.Fact]
+    public async Task ReconcileAttentionResolvesRedBaselineItemAfterMainMoves()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-clean-baseline-attention-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = CollaborationItemStore.ForDirectory(Path.Combine(root, ".orchestrator"));
+            var goal = TestGoal("Baseline attention");
+            var red = new CleanTestBaselineReceipt(
+                "main-a",
+                null,
+                CleanBaselineAttestation.AttestedRed,
+                goal.Id.Value,
+                DateTimeOffset.UtcNow,
+                ["core tests"],
+                "shared failure");
+            var green = new CleanTestBaselineReceipt(
+                "main-b",
+                null,
+                CleanBaselineAttestation.AttestedGreen,
+                goal.Id.Value,
+                DateTimeOffset.UtcNow,
+                [],
+                "passing receipt");
+
+            ConductorDriver.ReconcileCleanBaselineAttention(store, goal, "main-a", red);
+            ConductorDriver.ReconcileCleanBaselineAttention(store, goal, "main-b", green);
+
+            var item = Assert.Single(await store.ListAsync());
+            Assert.Equal("clean-baseline-red:main-a", item.CorrelationKey);
+            Assert.Equal(CollaborationItemStatus.Resolved, item.Status);
+            Assert.Contains("main-b", item.Resolution, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> Journals(
         params (GoalId GoalId, GoalOperationJournalEntry Entry)[] values) =>
         values
@@ -115,6 +177,12 @@ public sealed class CleanTestBaselineTests
                     var entries = group.Select(value => value.Entry).ToArray();
                     return new GoalOperationJournalSummary("journal", entries, entries, []);
                 });
+
+    private static Goal TestGoal(string objective) =>
+        new(
+            GoalId.New(),
+            objective,
+            [new TaskSpec(TaskId.New(), "Exercise baseline behavior", AgentRole.Developer)]);
 
     private static GoalOperationJournalEntry Entry(
         GoalId goalId,

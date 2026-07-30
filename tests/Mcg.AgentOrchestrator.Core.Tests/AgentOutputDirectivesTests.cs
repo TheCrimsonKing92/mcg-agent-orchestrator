@@ -29,7 +29,7 @@ public sealed class AgentOutputDirectivesTests
             line =>
                 line.StartsWith("findings:", StringComparison.Ordinal) &&
                 line.Contains("category:spec-compliance|spec-defect|correctness", StringComparison.Ordinal));
-        Assert.DoesNotContain(
+        Assert.Contains(
             "criteria_verdicts",
             AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(AgentRole.Reviewer));
         Assert.Contains(

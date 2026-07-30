@@ -22,7 +22,7 @@ public static class AgentOutputDirectives
         role switch
         {
             AgentRole.Researcher => [.. BaseWorkerResultFields, "citations"],
-            AgentRole.Reviewer => [.. BaseWorkerResultFields, "findings", "touched_anchors", "verdict"],
+            AgentRole.Reviewer => [.. BaseWorkerResultFields, "findings", "touched_anchors", "criteria_verdicts", "verdict"],
             _ => BaseWorkerResultFields
         };
 

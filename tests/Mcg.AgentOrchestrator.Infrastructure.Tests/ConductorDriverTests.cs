@@ -363,6 +363,35 @@ public sealed class ConductorDriverTests
 
     // ── Empty-batch escalation diagnostics ───────────────────────────────
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_named_failure_normalization_preserves_baseline_attribution")]
+    public void ConductorDriverNamedFailureNormalizationPreservesBaselineAttribution()
+    {
+        var testResultPaths = new[] { "C:\\tmp\\focused.trx" };
+        var attributions = new[]
+        {
+            new AcceptanceCheckAttribution(
+                "core tests",
+                AcceptanceFailureOrigin.Inherited,
+                "also failed on main")
+        };
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [],
+            "core tests failed",
+            ["core tests"],
+            "branch-a",
+            "main-a",
+            testResultPaths,
+            attributions,
+            "attested-red");
+
+        var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(acceptance);
+
+        Assert.Equal(testResultPaths, normalized.TestResultPaths);
+        Assert.Equal(attributions, normalized.CheckAttributions);
+        Assert.Equal("attested-red", normalized.BaselineAttestation);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_match_per_goal_read_path")]
     public void ConductorDriverRealFactsMatchPerGoalReadPath()
     {

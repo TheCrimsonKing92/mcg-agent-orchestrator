@@ -12,6 +12,7 @@ internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
+    private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
     // Reviewer evidence-on-demand is bounded per review round to break request loops while still
     // letting a reviewer legitimately request focused receipts for more than one changed area
@@ -309,22 +310,17 @@ internal sealed class ConductorDriver
                 }
             }
 
-            if (baselineReceipt.Attestation == CleanBaselineAttestation.AttestedRed)
+            try
             {
-                try
-                {
-                    CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).RaiseAsync(
-                        CollaborationItemType.Decision,
-                        goal.Id.Value,
-                        $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
-                        CleanTestBaseline.FormatJournalDetail(baselineReceipt),
-                        $"clean-baseline-red:{mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown"}",
-                        CancellationToken.None).GetAwaiter().GetResult();
-                }
-                catch
-                {
-                    // Operator attention is advisory; collaboration failures must not affect the gate.
-                }
+                ReconcileCleanBaselineAttention(
+                    CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                    goal,
+                    mainHeadSha,
+                    baselineReceipt);
+            }
+            catch
+            {
+                // Operator attention is advisory; collaboration failures must not affect the gate.
             }
 
             AcceptanceVerificationResult verification;
@@ -1544,7 +1540,7 @@ internal sealed class ConductorDriver
             (task.Status == WorkTaskStatus.Completed &&
              task.LastVerification is { Succeeded: true }));
 
-    private static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
+    internal static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
     {
         if (acceptance.Passed ||
             acceptance.RequiredUnmetCriteria.Count > 0 ||
@@ -1567,7 +1563,55 @@ internal sealed class ConductorDriver
             acceptance.FailureDetail,
             acceptance.FailedChecks,
             acceptance.BranchHeadSha,
-            acceptance.MainHeadSha);
+            acceptance.MainHeadSha,
+            acceptance.TestResultPaths,
+            acceptance.CheckAttributions,
+            acceptance.BaselineAttestation);
+    }
+
+    internal static void ReconcileCleanBaselineAttention(
+        ICollaborationItemStore store,
+        Goal goal,
+        string? mainHeadSha,
+        CleanTestBaselineReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(receipt);
+
+        var currentCorrelationKey =
+            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
+        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
+            ? currentCorrelationKey
+            : null;
+        if (activeCorrelationKey is not null)
+        {
+            store.RaiseAsync(
+                CollaborationItemType.Decision,
+                goal.Id.Value,
+                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
+                CleanTestBaseline.FormatJournalDetail(receipt),
+                activeCorrelationKey,
+                CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
+            .GetAwaiter()
+            .GetResult()
+            .Where(item =>
+                item.CorrelationKey is { Length: > 0 } key &&
+                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
+                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
+                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
+                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
+            .ToArray();
+        foreach (var item in staleItems)
+        {
+            store.TryResolveAsync(
+                item.CorrelationKey!,
+                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
+                CancellationToken.None).GetAwaiter().GetResult();
+        }
     }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(

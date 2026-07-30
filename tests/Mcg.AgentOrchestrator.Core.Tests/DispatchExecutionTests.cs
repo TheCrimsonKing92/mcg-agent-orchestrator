@@ -1077,6 +1077,49 @@ public sealed class DispatchExecutionTests
             evt.Message.Contains("F-1", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_requires_complete_criteria_attestation")]
+    public void RecordDispatchExecutionResultReviewerPassRequiresCompleteCriteriaAttestation()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Require criteria attestation", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Review every acceptance criterion",
+            ["first criterion", "second criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
+        var missing = StructuredReviewerResult("pass", "[]", "none", criteriaVerdictsJson: null);
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 0, missing, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("criteria attestation invalid", StringComparison.Ordinal));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "provide criteria attestation");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
+        var complete = StructuredReviewerResult(
+            "pass",
+            "[]",
+            "none",
+            """[{"criterion_index":0,"verdict":"met","evidence":"src/A.cs:10"},{"criterion_index":1,"verdict":"met","evidence":"tests/A.cs:20"}]""");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, complete, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_merge_preserves_rounds_with_equal_timestamps")]
     public void RecordDispatchExecutionResultReviewerMergePreservesRoundsWithEqualTimestamps()
     {
@@ -1728,7 +1771,11 @@ private static string WorkerResultStdout(string files, string tests, string bloc
         "END_WORKER_RESULT");
 }
 
-private static string StructuredReviewerResult(string verdict, string findingsJson, string blockers)
+private static string StructuredReviewerResult(
+    string verdict,
+    string findingsJson,
+    string blockers,
+    string? criteriaVerdictsJson = "[]")
 {
     return string.Join(Environment.NewLine,
         "WORKER_RESULT:",
@@ -1739,6 +1786,7 @@ private static string StructuredReviewerResult(string verdict, string findingsJs
         $"blockers: {blockers}",
         $"findings: {findingsJson}",
         "touched_anchors: []",
+        criteriaVerdictsJson is null ? string.Empty : $"criteria_verdicts: {criteriaVerdictsJson}",
         $"verdict: {verdict}",
         "model_fit: fixture/model - adequate - deterministic review",
         "skills: none",

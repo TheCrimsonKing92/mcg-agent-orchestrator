@@ -34,22 +34,6 @@ internal static class CleanTestBaseline
             .Where(item => ShaEquals(item.Entry.MainHeadSha, normalizedMain))
             .ToArray();
 
-        var green = matching
-            .Where(item => item.Entry.AcceptanceOutcome?.Equals("passed", StringComparison.OrdinalIgnoreCase) == true)
-            .OrderByDescending(item => item.Entry.At)
-            .FirstOrDefault();
-        if (green is not null)
-        {
-            return new CleanTestBaselineReceipt(
-                normalizedMain,
-                NormalizeSha(mergeBaseSha),
-                CleanBaselineAttestation.AttestedGreen,
-                green.GoalId.Value,
-                green.Entry.At,
-                [],
-                $"integrated acceptance passed for goal {Short(green.GoalId.Value)}");
-        }
-
         var failed = matching
             .Where(item => item.Entry.AcceptanceOutcome?.Equals("failed", StringComparison.OrdinalIgnoreCase) == true)
             .ToArray();
@@ -84,6 +68,22 @@ internal static class CleanTestBaseline
                 source.Entry.At,
                 sharedChecks,
                 $"{sharedChecks.Length} identical check(s) failed across {sourceGoalCount} goals");
+        }
+
+        var green = matching
+            .Where(item => item.Entry.AcceptanceOutcome?.Equals("passed", StringComparison.OrdinalIgnoreCase) == true)
+            .OrderByDescending(item => item.Entry.At)
+            .FirstOrDefault();
+        if (green is not null)
+        {
+            return new CleanTestBaselineReceipt(
+                normalizedMain,
+                NormalizeSha(mergeBaseSha),
+                CleanBaselineAttestation.AttestedGreen,
+                green.GoalId.Value,
+                green.Entry.At,
+                [],
+                $"integrated acceptance passed for goal {Short(green.GoalId.Value)}");
         }
 
         return Unattested(normalizedMain, mergeBaseSha);
