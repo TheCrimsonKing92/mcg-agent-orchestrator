@@ -89,7 +89,8 @@ public enum ProgressKind
     GoalSuperseded = 20,
     GoalPolicyDecision = 21,
     ReviewerEvidenceRequestReceived = 22,
-    ReviewerEvidenceRunRecorded = 23
+    ReviewerEvidenceRunRecorded = 23,
+    ReviewFindingContractViolationRecorded = 24
 }
 
 public enum TaskAttentionKind

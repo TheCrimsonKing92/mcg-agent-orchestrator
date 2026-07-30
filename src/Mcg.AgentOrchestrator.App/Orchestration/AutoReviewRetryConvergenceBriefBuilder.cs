@@ -78,7 +78,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         if (open.Length == 0)
         {
             throw new ReviewFindingConvergenceException(
-                "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS",
+                ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode,
                 0,
                 0,
                 "Reviewer verdict=needs-work contained no structured open findings.");
@@ -214,6 +214,70 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
 
         findings.AddRange(SplitConvergenceFindings(currentFinding));
         return findings;
+    }
+
+    internal static string BuildContractRepairBrief(
+        Goal goal,
+        TaskSpec reviewerTask,
+        ReviewFindingContractViolation violation,
+        int attempt,
+        int maxAttempts,
+        string outputArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(reviewerTask);
+        ArgumentNullException.ThrowIfNull(violation);
+
+        var open = ReadStructuredReviewFindingState(goal, reviewerTask)
+            .Where(finding => finding.State == ReviewFindingState.Open)
+            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        var claimedResolutions =
+            WorkerResultBlockers.TryFindReviewFindingRound(
+                reviewerTask.LastVerification,
+                out var rejectedRound,
+                out _)
+                ? rejectedRound.Findings
+                    .Where(finding => finding.State == ReviewFindingState.Resolved)
+                    .Select(finding => finding.StableId)
+                    .OrderBy(stableId => stableId, StringComparer.Ordinal)
+                    .ToArray()
+                : [];
+        var lines = new List<string>
+        {
+            $"reviewer contract-repair: attempt {attempt}/{maxAttempts}; avoided_developer_reopen=1; Reviewer task {reviewerTask.Id.Value[..8]}",
+            "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME review conclusion; do not re-review the code and do not change your verdict.",
+            $"violation_code: {violation.Code}",
+            $"violation_prior_stable_id: {violation.PriorStableId ?? "none"}",
+            $"violation_submitted_stable_id: {violation.SubmittedStableId ?? "none"}",
+            $"violation_prior_location: {violation.PriorLocation?.ToString() ?? "none"}",
+            $"violation_submitted_location: {violation.SubmittedLocation?.ToString() ?? "none"}",
+            $"violation_detail: {violation.Message}",
+            "## CANONICAL_OPEN_ACTIVE_RECHECK (authoritative; reuse stable_id and location VERBATIM)",
+            $"open_count: {open.Length}"
+        };
+        foreach (var finding in open)
+        {
+            lines.Add(
+                $"- stable_id: {finding.StableId} | severity={finding.Severity.ToString().ToLowerInvariant()} | {finding.Location}");
+        }
+
+        lines.Add("## PREVIOUSLY_CLAIMED_RESOLUTIONS (not applied; re-assert if still true)");
+        if (claimedResolutions.Length == 0)
+        {
+            lines.Add("- none");
+        }
+        else
+        {
+            lines.AddRange(claimedResolutions.Select(stableId => $"- stable_id: {stableId}"));
+        }
+
+        lines.Add(
+            open.Length == 0
+                ? "Rules: the canonical ledger is empty; report every finding as newly opened. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed."
+                : "Rules: reuse every carried stable_id and location exactly as printed. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed.");
+        lines.Add($"Full reviewer output: {outputArtifact}");
+        return string.Join(Environment.NewLine, lines);
     }
 
     internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(

@@ -586,6 +586,89 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Equal(anchor, finding.Location);
     }
 
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_contract_repair_brief_carries_violation_canonical_ledger_and_claimed_resolutions")]
+    public void ContractRepairBriefCarriesViolationCanonicalLedgerAndClaimedResolutions()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Repair reviewer contract");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var firstLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var secondLocation = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var opened = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, firstLocation, "First advisory.", FindingSeverity.Advisory),
+            new ReviewFinding("F-2", ReviewFindingState.Open, secondLocation, "Second advisory.", FindingSeverity.Advisory)
+        };
+        var rejected = new[]
+        {
+            opened[0] with { Location = new ReviewFindingLocation("src/C.cs", "C.Run", "guard") },
+            opened[1] with { State = ReviewFindingState.Resolved }
+        };
+        var firstOutput = ReviewerOutput("pass", opened);
+        var rejectedOutput = ReviewerOutput("pass", rejected);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1",
+            @"C:\tmp",
+            0,
+            firstOutput,
+            "",
+            DateTimeOffset.Parse("2026-07-30T10:00:00Z"),
+            WorkerResultPresent: true));
+        var violation = new ReviewFindingContractViolation(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            "F-1 moved.",
+            "F-1",
+            "F-1",
+            firstLocation,
+            rejected[0].Location);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2",
+            @"C:\tmp",
+            0,
+            rejectedOutput,
+            "",
+            DateTimeOffset.Parse("2026-07-30T10:01:00Z"),
+            StandardOutputPath: @"C:\tmp\reviewer.out.log",
+            WorkerResultPresent: true,
+            ReviewFindingContractViolation: violation));
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
+            goal,
+            reviewer,
+            violation,
+            1,
+            2,
+            @"C:\tmp\reviewer.out.log");
+
+        Assert.StartsWith("reviewer contract-repair: attempt 1/2", brief, StringComparison.Ordinal);
+        Assert.Contains("violation_code: ERR_REVIEW_FINDING_IDENTITY_MOVED", brief, StringComparison.Ordinal);
+        Assert.Contains("open_count: 2", brief, StringComparison.Ordinal);
+        Assert.Contains($"stable_id: F-1 | severity=advisory | {firstLocation}", brief, StringComparison.Ordinal);
+        Assert.Contains("- stable_id: F-2", brief, StringComparison.Ordinal);
+        Assert.Contains("reuse stable_id and location VERBATIM", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("auto-review-retry", brief, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ReviewFindingState.Open, AutoReviewRetryConvergenceBriefBuilder
+            .ReadStructuredReviewFindingState(goal, reviewer)
+            .Single(finding => finding.StableId == "F-2")
+            .State);
+    }
+
+    private static string ReviewerOutput(string verdict, IReadOnlyList<ReviewFinding> findings) =>
+        string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - deterministic fixture",
+            "blockers: none",
+            $"findings: {JsonSerializer.Serialize(findings)}",
+            "touched_anchors: []",
+            $"verdict: {verdict}",
+            "END_WORKER_RESULT");
+
     private static void DispatchTask(
         AgentOrchestratorKernel kernel,
         Goal goal,

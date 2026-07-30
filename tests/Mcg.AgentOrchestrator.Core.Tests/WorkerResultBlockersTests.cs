@@ -239,6 +239,85 @@ public sealed class WorkerResultBlockersTests
             () => ReviewFindingConvergence.ApplyRound(previous, next));
 
         Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
+        Assert.Equal("F-1", error.Violation.PriorStableId);
+        Assert.Equal("F-RECYCLED", error.Violation.SubmittedStableId);
+        Assert.Equal(anchor, error.Violation.PriorLocation);
+        Assert.Equal(anchor, error.Violation.SubmittedLocation);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_canonicalizes_a_lone_new_stable_id_at_an_omitted_open_prior_exact_anchor")]
+    public void ReviewFindingConvergenceCanonicalizesLoneNewStableIdAtOmittedOpenPriorExactAnchor()
+    {
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Original issue.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-2", ReviewFindingState.Resolved, anchor, "Original issue fixed.")],
+            [anchor]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next, out var canonicalizations);
+
+        var finding = Assert.Single(state);
+        Assert.Equal("F-1", finding.StableId);
+        Assert.Equal(ReviewFindingState.Resolved, finding.State);
+        Assert.Equal(anchor, finding.Location);
+        var canonicalization = Assert.Single(canonicalizations);
+        Assert.Equal("F-1", canonicalization.PriorStableId);
+        Assert.Equal("F-2", canonicalization.SubmittedStableId);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_does_not_canonicalize_a_lone_new_stable_id_at_a_different_hunk")]
+    public void ReviewFindingConvergenceDoesNotCanonicalizeLoneNewStableIdAtDifferentHunk()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a"),
+                "First issue.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-2",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run", "guard-b"),
+                    "Second issue.")
+            ],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next, out var canonicalizations);
+
+        Assert.Equal(2, state.Count);
+        Assert.Empty(canonicalizations);
+        Assert.Contains(state, finding => finding.StableId == "F-1");
+        Assert.Contains(state, finding => finding.StableId == "F-2");
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_does_not_canonicalize_when_two_open_priors_are_omitted")]
+    public void ReviewFindingConvergenceDoesNotCanonicalizeWhenTwoOpenPriorsAreOmitted()
+    {
+        var anchorA = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, anchorA, "First issue."),
+            new ReviewFinding(
+                "F-2",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/B.cs", "B.Run", "guard"),
+                "Second issue.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-NEW", ReviewFindingState.Open, anchorA, "First issue.")],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next, out _));
+
+        Assert.Equal(ReviewFindingConvergence.RecycledAnchorIdentityViolationCode, error.Code);
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_new_stable_id_at_resolved_anchor")]
@@ -330,6 +409,10 @@ public sealed class WorkerResultBlockersTests
             () => ReviewFindingConvergence.ApplyRound(previous, next));
 
         Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+        Assert.Equal("F-1", error.Violation.PriorStableId);
+        Assert.Equal("F-1", error.Violation.SubmittedStableId);
+        Assert.Equal(previous[0].Location, error.Violation.PriorLocation);
+        Assert.Equal(next.Findings[0].Location, error.Violation.SubmittedLocation);
     }
 
     [Xunit.Theory(DisplayName = "ReviewFindingConvergence_keeps_identity_across_region_paraphrases_and_refreshes_raw_region")]

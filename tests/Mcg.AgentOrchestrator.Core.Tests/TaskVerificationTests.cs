@@ -447,6 +447,38 @@ public sealed class TaskVerificationTests
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
 }
 
+    [Xunit.Fact(DisplayName = "TaskVerification_contract_violation_round_trips_through_snapshot")]
+    public void TaskVerificationContractViolationRoundTripsThroughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Round-trip reviewer contract violation");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var reviewer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+        var violation = new ReviewFindingContractViolation(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            "Finding moved.",
+            "F-1",
+            "F-1",
+            new ReviewFindingLocation("src/A.cs", "A.Run"),
+            new ReviewFindingLocation("src/B.cs", "B.Run"));
+        reviewer.RecordVerification(new TaskVerificationRecord(
+            "review",
+            "C:\\repo",
+            1,
+            "invalid round",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            ReviewFindingContractViolation: violation));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredViolation = restored
+            .GetTask(goal.Id, reviewer.Id)
+            .LastVerification!
+            .ReviewFindingContractViolation;
+
+        Assert.Equal(violation, restoredViolation);
+    }
+
 private static void AssertRetainedTextBounded(string text)
 {
     Assert.True(text.Length <= VerificationTextBounds.MaxRetainedChars, $"Expected retained text <= {VerificationTextBounds.MaxRetainedChars} chars, actual {text.Length}.");

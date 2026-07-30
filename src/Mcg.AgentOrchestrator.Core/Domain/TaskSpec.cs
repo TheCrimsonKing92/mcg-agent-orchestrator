@@ -101,7 +101,8 @@ public sealed class TaskSpec
                     LastVerification.ReviewFindingTouchedAnchors,
                     LastVerification.ReviewedCommit,
                     LastVerification.MergedReviewFindings,
-                    LastVerification.WorkerResultPresent),
+                    LastVerification.WorkerResultPresent,
+                    LastVerification.ReviewFindingContractViolation),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -117,7 +118,8 @@ public sealed class TaskSpec
                     verification.ReviewFindingTouchedAnchors,
                     verification.ReviewedCommit,
                     verification.MergedReviewFindings,
-                    verification.WorkerResultPresent))
+                    verification.WorkerResultPresent,
+                    verification.ReviewFindingContractViolation))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -224,7 +226,8 @@ public sealed class TaskSpec
                     WorkerResultPresent: verification.WorkerResultPresent,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
                     ReviewedCommit: verification.ReviewedCommit,
-                    MergedReviewFindings: verification.MergedReviewFindings));
+                    MergedReviewFindings: verification.MergedReviewFindings,
+                    ReviewFindingContractViolation: verification.ReviewFindingContractViolation));
             }
         }
 
@@ -244,7 +247,8 @@ public sealed class TaskSpec
                 WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
                 ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
-                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings);
+                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings,
+                ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);

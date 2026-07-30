@@ -117,7 +117,8 @@ public sealed record TaskVerificationSnapshot(
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     string? ReviewedCommit = null,
     IReadOnlyList<ReviewFinding>? MergedReviewFindings = null,
-    bool WorkerResultPresent = false)
+    bool WorkerResultPresent = false,
+    ReviewFindingContractViolation? ReviewFindingContractViolation = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

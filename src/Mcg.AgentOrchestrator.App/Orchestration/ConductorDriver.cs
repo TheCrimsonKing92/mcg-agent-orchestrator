@@ -27,6 +27,10 @@ internal sealed class ConductorDriver
     // must NOT advance the evidence-round boundary (otherwise the per-round bound would never apply);
     // any other reviewer retry (operator recover, fresh review) begins a new evidence round.
     private const string ReviewerEvidenceRetryMessagePrefix = "reviewer evidence-on-demand:";
+    private const int MaxReviewFindingContractRepairsPerRound = 2;
+    private const string ReviewContractRepairRetryMessagePrefix = "reviewer contract-repair:";
+    private static readonly string[] MechanicalReviewerRetryMessagePrefixes =
+        [ReviewerEvidenceRetryMessagePrefix, ReviewContractRepairRetryMessagePrefix];
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -954,7 +958,8 @@ internal sealed class ConductorDriver
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
-            if (TryBuildVerifyingFindingAutoRetry(goal, policy, out var autoRetry))
+            if (TryBuildReviewContractRepairRetry(goal, out var autoRetry) ||
+                TryBuildVerifyingFindingAutoRetry(goal, policy, out autoRetry))
             {
                 if (autoRetry.ShouldEscalate)
                 {
@@ -1018,6 +1023,65 @@ internal sealed class ConductorDriver
     }
 
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
+
+    private bool TryBuildReviewContractRepairRetry(
+        Goal goal,
+        out VerifyingFindingAutoRetryDecision decision)
+    {
+        decision = VerifyingFindingAutoRetryDecision.None;
+        var reviewerTask = goal.Tasks.FirstOrDefault(task =>
+            task.RequiredRole == AgentRole.Reviewer &&
+            task.Status == WorkTaskStatus.Failed &&
+            task.LastVerification?.ReviewFindingContractViolation is not null);
+        if (reviewerTask?.LastVerification?.ReviewFindingContractViolation is not { } violation)
+        {
+            return false;
+        }
+
+        IReadOnlyList<ReviewFinding> canonicalLedger;
+        try
+        {
+            canonicalLedger = AutoReviewRetryConvergenceBriefBuilder
+                .ReadStructuredReviewFindingState(goal, reviewerTask);
+        }
+        catch (Exception ex) when (
+            ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"Reviewer contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
+                $"violation={violation.Code}; diagnostic={TrimForConductorMessage(ex.Message)}; operator action required.");
+            return true;
+        }
+
+        var priorRepairs = CountReviewerContractRepairsInCurrentRound(goal, reviewerTask);
+        if (priorRepairs >= MaxReviewFindingContractRepairsPerRound)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"Reviewer exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
+                $"violation_code={violation.Code}; prior_stable_id={violation.PriorStableId ?? "none"}; " +
+                $"submitted_stable_id={violation.SubmittedStableId ?? "none"}; " +
+                $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
+                $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
+                $"canonical_open_count={canonicalLedger.Count(finding => finding.State == ReviewFindingState.Open)}. " +
+                "Operator remedy: retry <goal> <task#> \"<reason>\" --mechanical, then progress <task#> completed and verify-manual <task#> passed.");
+            return true;
+        }
+
+        var attempt = priorRepairs + 1;
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
+            goal,
+            reviewerTask,
+            violation,
+            attempt,
+            MaxReviewFindingContractRepairsPerRound,
+            FormatVerifyingRoleOutputArtifact(reviewerTask));
+        decision = VerifyingFindingAutoRetryDecision.Retry(
+            reviewerTask,
+            brief,
+            null,
+            RetryRoundKind.Mechanical);
+        return true;
+    }
 
     private bool TryBuildVerifyingFindingAutoRetry(
         Goal goal,
@@ -1279,24 +1343,38 @@ internal sealed class ConductorDriver
 
     private static int CountReviewerEvidenceRequestsInCurrentRound(Goal goal, TaskSpec reviewerTask)
     {
-        // The current evidence round starts at the most recent retry that begins a FRESH review:
-        // any non-reviewer (Developer/Tester) retry, or a non-mechanical retry of the reviewer task
-        // itself (operator recover / fresh review). The mechanical evidence re-dispatch retries the
-        // reviewer task only to attach receipts within the SAME round, so it must not advance the boundary.
-        var currentRoundStartedAt = goal.Timeline
-            .Where(evt =>
-                evt.Kind == ProgressKind.TaskRetried &&
-                evt.TaskId is not null &&
-                (evt.TaskId != reviewerTask.Id ||
-                    !evt.Message.StartsWith(ReviewerEvidenceRetryMessagePrefix, StringComparison.Ordinal)))
-            .Select(evt => evt.OccurredAt)
-            .DefaultIfEmpty(DateTimeOffset.MinValue)
-            .Max();
-
+        var currentRoundStartedAt = GetCurrentReviewerRoundStart(goal, reviewerTask);
         return goal.Timeline.Count(evt =>
             evt.TaskId == reviewerTask.Id &&
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.OccurredAt >= currentRoundStartedAt);
+    }
+
+    private static int CountReviewerContractRepairsInCurrentRound(Goal goal, TaskSpec reviewerTask)
+    {
+        var currentRoundStartedAt = GetCurrentReviewerRoundStart(goal, reviewerTask);
+        return goal.Timeline.Count(evt =>
+            evt.TaskId == reviewerTask.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.StartsWith(ReviewContractRepairRetryMessagePrefix, StringComparison.Ordinal) &&
+            evt.OccurredAt >= currentRoundStartedAt);
+    }
+
+    private static DateTimeOffset GetCurrentReviewerRoundStart(Goal goal, TaskSpec reviewerTask)
+    {
+        // A fresh review starts at any non-reviewer retry or any reviewer retry that is not one of
+        // the bounded mechanical receipt/contract repairs. Mechanical retries remain in the same
+        // round so neither budget can be reset by alternating the two repair paths.
+        return goal.Timeline
+            .Where(evt =>
+                evt.Kind == ProgressKind.TaskRetried &&
+                evt.TaskId is not null &&
+                (evt.TaskId != reviewerTask.Id ||
+                    !MechanicalReviewerRetryMessagePrefixes.Any(prefix =>
+                        evt.Message.StartsWith(prefix, StringComparison.Ordinal))))
+            .Select(evt => evt.OccurredAt)
+            .DefaultIfEmpty(DateTimeOffset.MinValue)
+            .Max();
     }
 
     private static string FormatFocusedEvidenceResult(FocusedEvidenceRunResult evidence)
