@@ -1132,6 +1132,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
+    Assert.Contains("### 1. Spec compliance (do this first)", prompt, StringComparison.Ordinal);
+    Assert.Contains("### 2. Code quality (only after section 1)", prompt, StringComparison.Ordinal);
+    Assert.Contains("criteria_verdicts:", prompt, StringComparison.Ordinal);
     Assert.Contains("git diff --name-only main...HEAD", prompt, StringComparison.Ordinal);
     Assert.Contains("git diff main...HEAD", prompt, StringComparison.Ordinal);
     Assert.Contains("Merge-tree status: clean against current main", prompt, StringComparison.Ordinal);

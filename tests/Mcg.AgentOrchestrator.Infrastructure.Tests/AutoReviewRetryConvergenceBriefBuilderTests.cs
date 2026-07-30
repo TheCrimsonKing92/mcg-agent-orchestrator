@@ -6,6 +6,59 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.ChaosGateGit)]
 public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
+    public void OrdersSpecFindingsAndPreservesLegacyCategorylessShape()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Typed review convergence");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "QUALITY",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/B.cs", "B.Run"),
+                    "Polish.",
+                    Category: FindingCategory.CodeQuality),
+                new ReviewFinding(
+                    "SPEC",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run"),
+                    "Contract gap.",
+                    Category: FindingCategory.SpecCompliance)
+            ],
+            []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal, developer, reviewer, "findings", "verdict=needs-work",
+            AgentRole.Developer, 1, "review.out", ["src/A.cs", "src/B.cs"]);
+
+        Assert.True(
+            brief.IndexOf("stable_id: SPEC", StringComparison.Ordinal) <
+            brief.IndexOf("stable_id: QUALITY", StringComparison.Ordinal));
+        Assert.Contains("category: spec-compliance", brief, StringComparison.Ordinal);
+
+        var legacyFinding = new ReviewFinding(
+            "LEGACY",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run"),
+            "Legacy.");
+        kernel.RetryTask(goal.Id, reviewer.Id, "legacy round");
+        RecordReviewerRound(kernel, goal, reviewer, "needs-work", [legacyFinding], []);
+        var legacyBrief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal, developer, reviewer, "legacy", "verdict=needs-work",
+            AgentRole.Developer, 2, "review.out", ["src/A.cs"]);
+        Assert.DoesNotContain("category: unspecified", legacyBrief, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_SQLite_rounds_shrink_A_B_to_accept")]
     public async Task SqliteRoundsShrinkFindingsMonotonicallyToAccept()
     {

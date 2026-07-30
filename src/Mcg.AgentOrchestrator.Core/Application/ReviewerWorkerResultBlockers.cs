@@ -1,6 +1,13 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
+
+public sealed record CriterionVerdict(
+    [property: JsonPropertyName("criterion_index")] int CriterionIndex,
+    [property: JsonPropertyName("verdict")] string Verdict,
+    [property: JsonPropertyName("evidence")] string Evidence);
 
 public static class WorkerResultBlockers
 {
@@ -193,6 +200,59 @@ public static class WorkerResultBlockers
             TouchedAnchors = verification.ReviewFindingTouchedAnchors ?? []
         };
         return true;
+    }
+
+    public static bool TryFindCriteriaVerdicts(
+        TaskVerificationRecord? verification,
+        out IReadOnlyList<CriterionVerdict> verdicts,
+        out string diagnostic)
+    {
+        verdicts = [];
+        diagnostic = string.Empty;
+        if (verification is null)
+        {
+            diagnostic = "reviewer verification is missing.";
+            return false;
+        }
+
+        string? verdictsJson = null;
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "criteria_verdicts", out var value))
+            {
+                verdictsJson = value;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(verdictsJson))
+        {
+            diagnostic = "reviewer WORKER_RESULT does not contain a one-line criteria_verdicts JSON array.";
+            return false;
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<List<CriterionVerdict>>(
+                verdictsJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (parsed is null ||
+                parsed.Any(item =>
+                    item.CriterionIndex < 0 ||
+                    item.Verdict is not ("met" or "not-met" or "not-verifiable") ||
+                    string.IsNullOrWhiteSpace(item.Evidence)))
+            {
+                diagnostic = "criteria_verdicts JSON contains an invalid criterion_index, verdict, or evidence value.";
+                return false;
+            }
+
+            verdicts = parsed;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            diagnostic = ex.Message;
+            return false;
+        }
     }
 
     public static bool TryFindPassVerdict(TaskVerificationRecord? verification)

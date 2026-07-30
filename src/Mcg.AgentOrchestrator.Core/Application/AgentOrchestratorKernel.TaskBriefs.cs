@@ -501,9 +501,31 @@ public sealed partial class AgentOrchestratorKernel
             "Operator feedback (verbatim):",
             retryEvent.Message,
             string.Empty,
-            "Failing tests/checks:",
         };
-        lines.AddRange(failure.FailedChecks.Select(check => $"- {check}"));
+        if (!string.IsNullOrWhiteSpace(failure.BaselineAttestation))
+        {
+            lines.Add(
+                $"Clean-test baseline: main {FormatAcceptanceSha(failure.MainHeadSha)} {failure.BaselineAttestation}.");
+            lines.Add(string.Empty);
+        }
+
+        lines.Add("Failing tests/checks:");
+        lines.AddRange(failure.FailedChecks.Select(check =>
+        {
+            var attribution = failure.CheckAttributions?.FirstOrDefault(item =>
+                item.CheckName.Equals(check, StringComparison.Ordinal));
+            return attribution is null
+                ? $"- {check}"
+                : $"- {check} [{FormatAcceptanceFailureOrigin(attribution.Origin)}: {attribution.Evidence}]";
+        }));
+        if (failure.CheckAttributions is { Count: > 0 } attributions &&
+            failure.FailedChecks.All(check => attributions.Any(item =>
+                item.CheckName.Equals(check, StringComparison.Ordinal) &&
+                item.Origin == AcceptanceFailureOrigin.Inherited)))
+        {
+            lines.Add("Do NOT attempt to fix these; they are not attributable to your diff. Report them and address only the introduced/unattributed checks.");
+        }
+
         lines.AddRange(BuildStructuredFailureReceiptLines(
             "acceptance/verification",
             failure.FailedChecks,
@@ -513,6 +535,22 @@ public sealed partial class AgentOrchestratorKernel
         lines.Add("<!-- ACCEPTANCE_FAILURE_END -->");
         lines.Add(string.Empty);
         return lines;
+    }
+
+    private static string FormatAcceptanceFailureOrigin(AcceptanceFailureOrigin origin) =>
+        origin switch
+        {
+            AcceptanceFailureOrigin.Inherited => "inherited",
+            AcceptanceFailureOrigin.Introduced => "introduced",
+            _ => "unattributed"
+        };
+
+    private static string FormatAcceptanceSha(string? sha)
+    {
+        var normalized = sha?.Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? "unknown"
+            : normalized[..Math.Min(8, normalized.Length)];
     }
 
     private static List<string> BuildAccumulatedRetryFeedbackBriefBlock(

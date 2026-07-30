@@ -85,7 +85,7 @@ public sealed class TaskBriefTests
     Assert.Contains("Operator corrections in this overlay supersede conflicting brief text", brief, StringComparison.Ordinal);
     Assert.Contains("Do not enforce or re-raise findings that apply only to superseded criteria", brief, StringComparison.Ordinal);
     Assert.Contains("focused build-check evidence is sufficient for this slice", brief, StringComparison.Ordinal);
-    Assert.Contains("suspected-defective-criterion", brief, StringComparison.Ordinal);
+    Assert.Contains("category: spec-defect", brief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_convergence_scope_preserves_finding_severity")]
@@ -297,12 +297,12 @@ public sealed class TaskBriefTests
     var normalBrief = kernel.BuildTaskBrief(normalGoal.Id, normalReviewer.Id).Content;
 
     Assert.Contains("High-risk review enumeration contract", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("list all acceptance-blocking findings", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("list all acceptance-blocking findings in one ranked pass", highRiskBrief, StringComparison.Ordinal);
     Assert.Contains("do not stop at the first blocker", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("WORKER_RESULT blockers field format unchanged", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("put exactly the complete ranked open blocking set in `blockers`", highRiskBrief, StringComparison.Ordinal);
     Assert.Contains("High-risk review enumeration contract", complexBrief, StringComparison.Ordinal);
     Assert.DoesNotContain("High-risk review enumeration contract", normalBrief, StringComparison.Ordinal);
-    Assert.DoesNotContain("list all acceptance-blocking findings", normalBrief, StringComparison.Ordinal);
+    Assert.DoesNotContain("list all acceptance-blocking findings in one ranked pass", normalBrief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_reviewer_staleness_policy")]
@@ -322,11 +322,10 @@ public sealed class TaskBriefTests
     var simpleBrief = kernel.BuildTaskBrief(simpleGoal.Id, simpleReviewer.Id).Content;
     var complexBrief = kernel.BuildTaskBrief(complexGoal.Id, complexReviewer.Id).Content;
 
-    Assert.Contains("branch-behind-main alone is NOT a blocker", simpleBrief, StringComparison.Ordinal);
-    Assert.Contains("deterministic acceptance gate rebases and verifies the integrated result", simpleBrief, StringComparison.Ordinal);
-    Assert.Contains("merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies", simpleBrief, StringComparison.Ordinal);
-    Assert.Contains("branch-behind-main alone is NOT a blocker", complexBrief, StringComparison.Ordinal);
-    Assert.Contains("deterministic acceptance gate rebases and verifies the integrated result", complexBrief, StringComparison.Ordinal);
+    Assert.Contains("Branch-behind-main alone is NOT a blocker", simpleBrief, StringComparison.Ordinal);
+    Assert.Contains("block only on concrete conflict, semantic overlap, or a non-applying diff", simpleBrief, StringComparison.Ordinal);
+    Assert.Contains("Branch-behind-main alone is NOT a blocker", complexBrief, StringComparison.Ordinal);
+    Assert.Contains("block only on concrete conflict, semantic overlap, or a non-applying diff", complexBrief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "AgentTaskRunner_includes_complex_response_budget_guidance")]
@@ -940,6 +939,37 @@ public sealed class TaskBriefTests
     Assert.Contains(journalPath, brief, StringComparison.Ordinal);
     Assert.Contains("C:\\repo\\.orchestrator\\logs\\acceptance.out.log", brief, StringComparison.Ordinal);
     Assert.Contains("C:\\repo\\.orchestrator\\logs\\acceptance.err.log", brief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_acceptance_retry_renders_clean_baseline_attribution")]
+    public void BuildTaskBriefAcceptanceRetryRendersCleanBaselineAttribution()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Recover attributed acceptance failure", [developer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordAcceptanceFailure(
+        goal.Id,
+        ["inherited check", "introduced check", "unknown check"],
+        "branch123456",
+        "main123456",
+        [
+            new AcceptanceCheckAttribution("inherited check", AcceptanceFailureOrigin.Inherited, "also failed for goal deadbeef at main main1234"),
+            new AcceptanceCheckAttribution("introduced check", AcceptanceFailureOrigin.Introduced, "main main1234 is attested green"),
+            new AcceptanceCheckAttribution("unknown check", AcceptanceFailureOrigin.Unattributed, "no baseline evidence at main main1234")
+        ],
+        "attested-red; identical check failed across two goals");
+    clock.Advance();
+    kernel.RetryTask(goal.Id, developer.Id, "Fix attributable failures.");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+    Assert.Contains("Clean-test baseline: main main1234 attested-red", brief, StringComparison.Ordinal);
+    Assert.Contains("- inherited check [inherited:", brief, StringComparison.Ordinal);
+    Assert.Contains("- introduced check [introduced:", brief, StringComparison.Ordinal);
+    Assert.Contains("- unknown check [unattributed:", brief, StringComparison.Ordinal);
+    Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_operator_retry_includes_last_failed_verification_receipt")]

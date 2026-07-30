@@ -22,7 +22,7 @@ public static class AgentOutputDirectives
         role switch
         {
             AgentRole.Researcher => [.. BaseWorkerResultFields, "citations"],
-            AgentRole.Reviewer => [.. BaseWorkerResultFields, "findings", "touched_anchors", "verdict"],
+            AgentRole.Reviewer => [.. BaseWorkerResultFields, "findings", "touched_anchors", "criteria_verdicts", "verdict"],
             _ => BaseWorkerResultFields
         };
 
@@ -46,8 +46,9 @@ public static class AgentOutputDirectives
         else if (role == AgentRole.Reviewer)
         {
             lines.Add("evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>");
-            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,location:{file,region,hunk?},description}; severity is required; [] when none>");
+            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned,location:{file,region,hunk?},description}; severity is required; category defaults to unspecified; [] when none>");
             lines.Add("touched_anchors: <one-line JSON array of {file,region,hunk?} for prior finding anchors touched by this round's diff; [] when none>");
+            lines.Add("criteria_verdicts: <one-line JSON array of {criterion_index,verdict:met|not-met|not-verifiable,evidence}; [] when the goal has no refined acceptance criteria>");
             lines.Add("verdict: <pass|needs-work|fail>");
         }
 

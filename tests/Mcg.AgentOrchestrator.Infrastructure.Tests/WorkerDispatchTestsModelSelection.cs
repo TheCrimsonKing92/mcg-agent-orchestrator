@@ -1995,6 +1995,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         blockers: retry requested for unrelated operator feedback
         findings: [{"stable_id":"F-RETRY","state":"open","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Retry requested for unrelated operator feedback."}]
         touched_anchors: []
+        criteria_verdicts: []
         verdict: needs-work
         model_fit: Anthropic/claude-haiku-4-5 - adequate - review shape - returned verdict and blocker status
         skills: none
@@ -2045,6 +2046,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         files: none
         commands: none
         tests: fail - missing review blockers
+        findings: []
+        touched_anchors: []
+        criteria_verdicts: []
         verdict: fail
         model_fit: Anthropic/claude-haiku-4-5 - underpowered - review shape - omitted blockers
         skills: none

@@ -363,6 +363,35 @@ public sealed class ConductorDriverTests
 
     // ── Empty-batch escalation diagnostics ───────────────────────────────
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_named_failure_normalization_preserves_baseline_attribution")]
+    public void ConductorDriverNamedFailureNormalizationPreservesBaselineAttribution()
+    {
+        var testResultPaths = new[] { "C:\\tmp\\focused.trx" };
+        var attributions = new[]
+        {
+            new AcceptanceCheckAttribution(
+                "core tests",
+                AcceptanceFailureOrigin.Inherited,
+                "also failed on main")
+        };
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [],
+            "core tests failed",
+            ["core tests"],
+            "branch-a",
+            "main-a",
+            testResultPaths,
+            attributions,
+            "attested-red");
+
+        var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(acceptance);
+
+        Assert.Equal(testResultPaths, normalized.TestResultPaths);
+        Assert.Equal(attributions, normalized.CheckAttributions);
+        Assert.Equal("attested-red", normalized.BaselineAttestation);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_match_per_goal_read_path")]
     public void ConductorDriverRealFactsMatchPerGoalReadPath()
     {
@@ -2030,6 +2059,52 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
         Assert.Contains("- stable_id: F-OPEN", retryMessage);
         Assert.Contains("Developer must restore the guard.", retryMessage);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_typed_test_evidence_reviewer_finding_routes_tester")]
+    public void ConductorDriverTypedTestEvidenceReviewerFindingRoutesTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        DispatchTask(kernel, goal, reviewer, "review");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            "blockers: focused receipt is missing",
+            """findings: [{"stable_id":"F-TEST","state":"open","severity":"blocking","category":"test-evidence","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt is missing."}]""",
+            "touched_anchors: []",
+            "verdict: needs-work",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            0,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        TaskId? retriedTask = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (goalId, taskId, message) =>
+            {
+                retriedTask = taskId;
+                return kernel.RetryTask(goalId, taskId, message);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTask);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 

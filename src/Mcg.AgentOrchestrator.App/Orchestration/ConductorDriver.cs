@@ -12,6 +12,7 @@ internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
+    private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
     // Reviewer evidence-on-demand is bounded per review round to break request loops while still
     // letting a reviewer legitimately request focused receipts for more than one changed area
@@ -46,7 +47,13 @@ internal sealed class ConductorDriver
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRunRecorded;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
-    private readonly Action<Goal, IReadOnlyList<string>, string?, string?> _recordAcceptanceFailure;
+    private readonly Action<
+        Goal,
+        IReadOnlyList<string>,
+        string?,
+        string?,
+        IReadOnlyList<AcceptanceCheckAttribution>?,
+        string?> _recordAcceptanceFailure;
     private readonly Action<Goal> _clearAcceptanceFailure;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
@@ -261,6 +268,61 @@ internal sealed class ConductorDriver
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var branchHeadSha = TryResolveGitHead(worktreePath);
             var mainHeadSha = TryResolveGitHead(dir);
+            IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> baselineJournals =
+                new Dictionary<GoalId, GoalOperationJournalSummary>();
+            var baselineReceipt = CleanTestBaseline.Unattested(mainHeadSha);
+            try
+            {
+                baselineJournals = GoalOperationJournal.ReadAll(dir);
+                baselineReceipt = CleanTestBaseline.Resolve(
+                    baselineJournals,
+                    goal.Id,
+                    mainHeadSha ?? string.Empty,
+                    mergeBaseSha: null);
+                GoalOperationJournal.Begin(
+                    dir,
+                    goal,
+                    "conductor:clean-baseline",
+                    "Resolving clean-test baseline from acceptance journals.",
+                    mainHeadSha);
+                GoalOperationJournal.Completed(
+                    dir,
+                    goal,
+                    "conductor:clean-baseline",
+                    CleanTestBaseline.FormatJournalDetail(baselineReceipt),
+                    mainHeadSha);
+            }
+            catch
+            {
+                baselineReceipt = CleanTestBaseline.Unattested(mainHeadSha);
+                try
+                {
+                    GoalOperationJournal.Failed(
+                        dir,
+                        goal,
+                        "conductor:clean-baseline",
+                        CleanTestBaseline.FormatJournalDetail(baselineReceipt),
+                        mainHeadSha);
+                }
+                catch
+                {
+                    // Baseline observability is advisory; journal failures must not affect the gate.
+                }
+            }
+
+            try
+            {
+                ReconcileCleanBaselineAttention(
+                    CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                    goal,
+                    mainHeadSha,
+                    baselineReceipt);
+            }
+            catch
+            {
+                // Operator attention is advisory; collaboration failures must not affect the gate.
+            }
+
             AcceptanceVerificationResult verification;
             try
             {
@@ -316,6 +378,29 @@ internal sealed class ConductorDriver
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions = null;
+            if (!verification.Passed)
+            {
+                try
+                {
+                    checkAttributions = CleanTestBaseline.Attribute(
+                        baselineReceipt,
+                        failedChecks,
+                        baselineJournals,
+                        goal.Id,
+                        mainHeadSha ?? string.Empty);
+                }
+                catch
+                {
+                    baselineReceipt = CleanTestBaseline.Unattested(mainHeadSha);
+                    checkAttributions = failedChecks
+                        .Select(check => new AcceptanceCheckAttribution(
+                            check,
+                            AcceptanceFailureOrigin.Unattributed,
+                            $"no baseline evidence at main {FormatShortSha(mainHeadSha)}"))
+                        .ToArray();
+                }
+            }
             if (verification.Passed)
                 GoalOperationJournal.AcceptancePassed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     unmetCriteria.Length == 0
@@ -327,12 +412,14 @@ internal sealed class ConductorDriver
                 GoalOperationJournal.AcceptanceBlocked(dir, goal, "conductor:acceptance", "timeout", branchHeadSha, mainHeadSha,
                     $"Acceptance blocked:timeout for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}",
                     acceptanceAttemptStartedAt,
-                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
+                    failedChecks);
             else
                 GoalOperationJournal.AcceptanceFailed(dir, goal, "conductor:acceptance", branchHeadSha, mainHeadSha,
                     $"Acceptance failed for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)} (exit {verification.ExitCode}).{FormatFailureTail(verification.OutputTail)}",
                     acceptanceAttemptStartedAt,
-                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+                    GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
+                    failedChecks);
             return new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
@@ -340,7 +427,9 @@ internal sealed class ConductorDriver
                 failedChecks,
                 branchHeadSha,
                 mainHeadSha,
-                testResultPaths);
+                testResultPaths,
+                checkAttributions,
+                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt));
         };
 
         _runFocusedEvidence = (goal, request) =>
@@ -382,8 +471,20 @@ internal sealed class ConductorDriver
             kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message);
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
-        _recordAcceptanceFailure = (goal, failedChecks, branchHeadSha, mainHeadSha) =>
-            kernel.RecordAcceptanceFailure(goal.Id, failedChecks, branchHeadSha, mainHeadSha);
+        _recordAcceptanceFailure = (
+            goal,
+            failedChecks,
+            branchHeadSha,
+            mainHeadSha,
+            checkAttributions,
+            baselineAttestation) =>
+            kernel.RecordAcceptanceFailure(
+                goal.Id,
+                failedChecks,
+                branchHeadSha,
+                mainHeadSha,
+                checkAttributions,
+                baselineAttestation);
         _clearAcceptanceFailure = goal => kernel.ClearAcceptanceFailure(goal.Id);
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
@@ -561,6 +662,13 @@ internal sealed class ConductorDriver
         Action<TimeSpan>? emptyOutputBackoffDelay = null,
         Func<Goal, DispatchReadinessVerdict>? evaluateReadiness = null,
         Action<Goal, IReadOnlyList<string>, string?, string?>? recordAcceptanceFailure = null,
+        Action<
+            Goal,
+            IReadOnlyList<string>,
+            string?,
+            string?,
+            IReadOnlyList<AcceptanceCheckAttribution>?,
+            string?>? recordAcceptanceFailureWithAttribution = null,
         Action<Goal>? clearAcceptanceFailure = null,
         Action<Goal>? completeGoal = null,
         Func<Goal, string, bool>? normalizeLifecycleState = null,
@@ -612,7 +720,11 @@ internal sealed class ConductorDriver
         _recordReviewerEvidenceRunRecorded = recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
-        _recordAcceptanceFailure = recordAcceptanceFailure ?? ((_, _, _, _) => { });
+        _recordAcceptanceFailure = recordAcceptanceFailureWithAttribution
+            ?? (recordAcceptanceFailure is null
+                ? ((_, _, _, _, _, _) => { })
+                : ((goal, checks, branch, main, _, _) =>
+                    recordAcceptanceFailure(goal, checks, branch, main)));
         _clearAcceptanceFailure = clearAcceptanceFailure ?? (_ => { });
         _rebaseOntoMain = rebaseOntoMain;
         _land = land;
@@ -977,18 +1089,34 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
-            IsOperatorOwnedReviewBlocker(trigger.Finding))
+        ReviewRetryRoute? reviewerRoute = null;
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer)
         {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
-                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
-            return true;
+            if (goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 } &&
+                !WorkerResultBlockers.TryFindCriteriaVerdicts(
+                    triggeringTask.LastVerification,
+                    out _,
+                    out var criteriaDiagnostic))
+            {
+                _recordTaskNote(
+                    goal.Id,
+                    triggeringTask.Id,
+                    $"CRITERIA_ATTESTATION missing: {TrimForConductorMessage(criteriaDiagnostic)}");
+            }
+
+            reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
+            if (reviewerRoute.EscalateToOperator)
+            {
+                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                    $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
+                    $"Route: {reviewerRoute.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
+                return true;
+            }
         }
 
         var targetRole = triggeringTask.RequiredRole == AgentRole.Tester
             ? AgentRole.Developer
-            : InferReviewRetryTargetRole(trigger.Finding);
+            : reviewerRoute?.TargetRole ?? AgentRole.Developer;
         var targetTask = trigger.TargetTask ?? goal.Tasks
             .TakeWhile(t => t.Id != triggeringTask.Id)
             .LastOrDefault(t => t.RequiredRole == targetRole);
@@ -1105,30 +1233,26 @@ internal sealed class ConductorDriver
         }
     }
 
-    private static AgentRole InferReviewRetryTargetRole(string blocker)
+    private static ReviewRetryRoute ResolveReviewerRetryRoute(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string blockerProse)
     {
-        var text = blocker.ToLowerInvariant();
-        return text.Contains("tester", StringComparison.Ordinal) ||
-            text.Contains("test-execution", StringComparison.Ordinal) ||
-            text.Contains("test execution", StringComparison.Ordinal) ||
-            text.Contains("test receipt", StringComparison.Ordinal) ||
-            text.Contains("verification command", StringComparison.Ordinal)
-            ? AgentRole.Tester
-            : AgentRole.Developer;
-    }
-
-    private static bool IsOperatorOwnedReviewBlocker(string blocker)
-    {
-        var text = blocker.ToLowerInvariant();
-        return text.Contains("operator-owned", StringComparison.Ordinal) ||
-            text.Contains("operator owned", StringComparison.Ordinal) ||
-            text.Contains("operator receipt", StringComparison.Ordinal) ||
-            text.Contains("operator receipts", StringComparison.Ordinal) ||
-            text.Contains("measurement mandate", StringComparison.Ordinal) ||
-            text.Contains("measurement mandates", StringComparison.Ordinal) ||
-            text.Contains("operator evidence", StringComparison.Ordinal) ||
-            text.Contains("human_input", StringComparison.Ordinal) ||
-            text.Contains("human input", StringComparison.Ordinal);
+        try
+        {
+            var openBlockingFindings = AutoReviewRetryConvergenceBriefBuilder
+                .ReadStructuredReviewFindingState(goal, reviewerTask)
+                .Where(finding =>
+                    finding.State == ReviewFindingState.Open &&
+                    finding.Severity == FindingSeverity.Blocking)
+                .ToArray();
+            return ReviewFindingRouting.Resolve(openBlockingFindings, blockerProse);
+        }
+        catch (Exception ex) when (
+            ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
+        {
+            return ReviewFindingRouting.Resolve([], blockerProse);
+        }
     }
 
     private static bool HasCommittedOutput(TaskSpec task)
@@ -1416,7 +1540,7 @@ internal sealed class ConductorDriver
             (task.Status == WorkTaskStatus.Completed &&
              task.LastVerification is { Succeeded: true }));
 
-    private static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
+    internal static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
     {
         if (acceptance.Passed ||
             acceptance.RequiredUnmetCriteria.Count > 0 ||
@@ -1439,7 +1563,55 @@ internal sealed class ConductorDriver
             acceptance.FailureDetail,
             acceptance.FailedChecks,
             acceptance.BranchHeadSha,
-            acceptance.MainHeadSha);
+            acceptance.MainHeadSha,
+            acceptance.TestResultPaths,
+            acceptance.CheckAttributions,
+            acceptance.BaselineAttestation);
+    }
+
+    internal static void ReconcileCleanBaselineAttention(
+        ICollaborationItemStore store,
+        Goal goal,
+        string? mainHeadSha,
+        CleanTestBaselineReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(receipt);
+
+        var currentCorrelationKey =
+            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
+        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
+            ? currentCorrelationKey
+            : null;
+        if (activeCorrelationKey is not null)
+        {
+            store.RaiseAsync(
+                CollaborationItemType.Decision,
+                goal.Id.Value,
+                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
+                CleanTestBaseline.FormatJournalDetail(receipt),
+                activeCorrelationKey,
+                CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
+            .GetAwaiter()
+            .GetResult()
+            .Where(item =>
+                item.CorrelationKey is { Length: > 0 } key &&
+                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
+                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
+                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
+                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
+            .ToArray();
+        foreach (var item in staleItems)
+        {
+            store.TryResolveAsync(
+                item.CorrelationKey!,
+                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
+                CancellationToken.None).GetAwaiter().GetResult();
+        }
     }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
@@ -2134,7 +2306,13 @@ internal sealed class ConductorDriver
             var timedOut = failedChecks.Any(IsBlockingTimeoutCheck);
             if (!timedOut && acceptance.FailedChecks is { Count: > 0 })
             {
-                _recordAcceptanceFailure(goal, failedChecks, acceptance.BranchHeadSha, acceptance.MainHeadSha);
+                _recordAcceptanceFailure(
+                    goal,
+                    failedChecks,
+                    acceptance.BranchHeadSha,
+                    acceptance.MainHeadSha,
+                    acceptance.CheckAttributions,
+                    acceptance.BaselineAttestation);
             }
 
             return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,

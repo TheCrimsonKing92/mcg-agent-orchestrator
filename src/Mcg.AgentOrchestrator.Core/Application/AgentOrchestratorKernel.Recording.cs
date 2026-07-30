@@ -272,6 +272,41 @@ public sealed partial class AgentOrchestratorKernel
         bool enforceFailureEvidenceRule)
     {
         var goal = GetGoal(goalId);
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 } refinedSpec)
+        {
+            if (!WorkerResultBlockers.TryFindCriteriaVerdicts(
+                    verification,
+                    out var criterionVerdicts,
+                    out var criteriaDiagnostic))
+            {
+                ReportTaskProgress(
+                    goalId,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    $"Reviewer WORKER_RESULT criteria attestation invalid: {criteriaDiagnostic}");
+                return true;
+            }
+
+            var actualIndices = criterionVerdicts
+                .Select(item => item.CriterionIndex)
+                .OrderBy(index => index)
+                .ToArray();
+            var expectedIndices = Enumerable.Range(0, refinedSpec.AcceptanceCriteria.Count).ToArray();
+            if (!actualIndices.SequenceEqual(expectedIndices))
+            {
+                ReportTaskProgress(
+                    goalId,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    "Reviewer WORKER_RESULT criteria attestation invalid: " +
+                    $"expected exactly criterion_index {string.Join(", ", expectedIndices)}; " +
+                    $"received {string.Join(", ", actualIndices)}.");
+                return true;
+            }
+        }
+
         IReadOnlyList<ReviewFinding> mergedFindings = verification.MergedReviewFindings ?? [];
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&

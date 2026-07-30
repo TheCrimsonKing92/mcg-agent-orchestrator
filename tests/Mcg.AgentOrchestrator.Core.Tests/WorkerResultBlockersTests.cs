@@ -482,6 +482,42 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(FindingSeverity.Blocking, Assert.Single(round.Findings).Severity);
     }
 
+    [Xunit.Theory(DisplayName = "ReviewFinding_invalid_or_missing_category_defaults_to_unspecified")]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(",\"category\":null")]
+    [Xunit.InlineData(",\"category\":42")]
+    [Xunit.InlineData(",\"category\":[]")]
+    [Xunit.InlineData(",\"category\":{}")]
+    [Xunit.InlineData(",\"category\":\"unknown\"")]
+    public void ReviewFindingInvalidOrMissingCategoryDefaultsToUnspecified(string categoryJson)
+    {
+        var findingsJson =
+            $$"""[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."{{categoryJson}}}]""";
+
+        Assert.True(
+            ReviewFindingConvergence.TryParseJson(findingsJson, "[]", out var round, out var diagnostic),
+            diagnostic);
+        Assert.Equal(FindingCategory.Unspecified, Assert.Single(round.Findings).Category);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFinding_category_round_trips_with_wire_name")]
+    public void ReviewFindingCategoryRoundTripsWithWireName()
+    {
+        var finding = new ReviewFinding(
+            "F-1",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run"),
+            "Missing guard.",
+            FindingSeverity.Blocking,
+            FindingCategory.SpecCompliance);
+
+        var json = JsonSerializer.Serialize(finding);
+        var restored = JsonSerializer.Deserialize<ReviewFinding>(json);
+
+        Assert.Contains("\"category\":\"spec-compliance\"", json, StringComparison.Ordinal);
+        Assert.Equal(FindingCategory.SpecCompliance, restored!.Category);
+    }
+
     [Xunit.Fact(DisplayName = "TryFindNeedsWorkVerdict_uses_open_structured_findings_when_blockers_is_none")]
     public void TryFindNeedsWorkVerdictUsesOpenStructuredFindingsWhenBlockersIsNone()
     {

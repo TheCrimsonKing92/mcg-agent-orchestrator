@@ -23,6 +23,17 @@ public sealed class AgentOutputDirectivesTests
             line => line.StartsWith("touched_anchors:", StringComparison.Ordinal));
         Assert.Contains(
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line => line.StartsWith("criteria_verdicts:", StringComparison.Ordinal));
+        Assert.Contains(
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line =>
+                line.StartsWith("findings:", StringComparison.Ordinal) &&
+                line.Contains("category:spec-compliance|spec-defect|correctness", StringComparison.Ordinal));
+        Assert.Contains(
+            "criteria_verdicts",
+            AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(AgentRole.Reviewer));
+        Assert.Contains(
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
             line =>
                 line.StartsWith("blockers:", StringComparison.Ordinal) &&
                 line.Contains("none - token first when verdict is pass", StringComparison.Ordinal) &&
@@ -40,6 +51,42 @@ public sealed class AgentOutputDirectivesTests
             "requires `needs-work` or `fail`",
             SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer),
             StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Reviewer_requirements_order_spec_before_quality_within_budget")]
+    public void ReviewerRequirementsOrderSpecBeforeQualityWithinBudget()
+    {
+        const int preChangeComplexChars = 3156;
+        const int preChangeCompactChars = 2346;
+        var complex = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer);
+        var compact = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer, TaskComplexity.Simple);
+
+        Assert.True(
+            complex.IndexOf("### 1. Spec compliance", StringComparison.Ordinal) <
+            complex.IndexOf("### 2. Code quality", StringComparison.Ordinal));
+        Assert.True(
+            compact.IndexOf("### 1. Spec compliance", StringComparison.Ordinal) <
+            compact.IndexOf("### 2. Code quality", StringComparison.Ordinal));
+        Assert.Contains(
+            "not-verifiable with file+line or concrete task evidence",
+            complex,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion",
+            complex,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "zero-based `criterion_index` values (0..N-1), exactly one per criterion",
+            compact,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("not-verifiable-from-diff", complex, StringComparison.Ordinal);
+        Assert.DoesNotContain("not-verifiable-from-diff", compact, StringComparison.Ordinal);
+        Assert.True(
+            complex.Length <= SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars,
+            $"Complex Reviewer requirements grew from {preChangeComplexChars} to {complex.Length} chars.");
+        Assert.True(
+            compact.Length <= SdlcRolePromptRequirements.ReviewerCompactRequirementsMaxChars,
+            $"Compact Reviewer requirements grew from {preChangeCompactChars} to {compact.Length} chars.");
     }
 
     [Xunit.Fact(DisplayName = "Role_requirements_define_canonical_inconclusive_and_premise_invalid_results")]

@@ -42,7 +42,9 @@ public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,
     IReadOnlyList<string> FailedChecks,
     string? BranchHeadSha = null,
-    string? MainHeadSha = null);
+    string? MainHeadSha = null,
+    IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
+    string? BaselineAttestation = null);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,
