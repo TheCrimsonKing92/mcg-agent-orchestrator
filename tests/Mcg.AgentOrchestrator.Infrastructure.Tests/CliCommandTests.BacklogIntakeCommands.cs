@@ -699,6 +699,53 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(bodyContent, item.Body);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_dependency_commands_add_show_remove_and_clear")]
+    public async Task CliBacklogDependencyCommandsAddShowRemoveAndClear()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var prerequisite = await store.AddAsync("Backlog prerequisite");
+        var kernel = new AgentOrchestratorKernel();
+        var goalPrerequisite = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Goal prerequisite");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            [
+                "backlog-add", "Dependent item",
+                "--depends-on", prerequisite.Id[..8],
+                "--depends-on", goalPrerequisite.Id.Value[..8]
+            ],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var dependent = (await store.ListAsync(includeAll: true))
+            .Single(item => item.Title == "Dependent item");
+        Xunit.Assert.Equal(
+            [prerequisite.Id, goalPrerequisite.Id.Value],
+            dependent.Dependencies.Select(edge => edge.PrerequisiteId));
+
+        var shown = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", dependent.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        Xunit.Assert.Contains("Dependencies:", shown);
+        Xunit.Assert.Contains(prerequisite.Id, shown);
+        Xunit.Assert.Contains(goalPrerequisite.Id.Value, shown);
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-depends", dependent.Id[..8], "--remove", prerequisite.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-depends", dependent.Id[..8], "--clear"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        Xunit.Assert.Empty((await store.GetByExactIdAsync(dependent.Id))!.Dependencies);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_backlog_add_text_file_alias_creates_item_with_file_content")]
     public async Task CliBacklogAddTextFileAliasCreatesItemWithFileContent()

@@ -732,7 +732,8 @@ internal static class CliPersistentStateRunner
         AgentOrchestratorKernel LoadLoopKernel() =>
             LoadConductLoopKernel(
                 stateRepository,
-                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult());
+                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult(),
+                workspace.ExecutionDirectory);
         var kernel = LoadLoopKernel();
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
@@ -871,7 +872,8 @@ internal static class CliPersistentStateRunner
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
         ITransactionalOrchestratorStateRepository stateRepository,
-        IReadOnlyCollection<string>? additionalHydratedGoalIds = null)
+        IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
+        string? executionDirectory = null)
     {
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var terminalSummaries = summaries
@@ -890,7 +892,7 @@ internal static class CliPersistentStateRunner
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
-            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
+            .Where(summary => IsConductLoopCompletedDependency(summary, executionDirectory))
             .Select(summary => new GoalId(summary.Id)));
 
         var loadedIds = hydratedIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
@@ -912,7 +914,7 @@ internal static class CliPersistentStateRunner
         kernel.MarkKnownDependencyGoalStatuses(missingDependencySummaries.Select(summary =>
             new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
         var completedDependencyIds = missingDependencySummaries
-            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
+            .Where(summary => IsConductLoopCompletedDependency(summary, executionDirectory))
             .Select(summary => new GoalId(summary.Id))
             .ToArray();
         kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
@@ -1067,8 +1069,11 @@ internal static class CliPersistentStateRunner
         status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsConductLoopCompletedDependencyStatus(string status) =>
-        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase);
+    private static bool IsConductLoopCompletedDependency(GoalSummary summary, string? executionDirectory) =>
+        summary.Status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase) ||
+        executionDirectory is not null &&
+        GoalOperationJournal.HasCompletedLandingEvidence(
+            GoalOperationJournal.Read(executionDirectory, new GoalId(summary.Id)));
 
     private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
     {

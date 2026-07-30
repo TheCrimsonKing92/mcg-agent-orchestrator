@@ -4063,8 +4063,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Empty(createdWorkspaces);
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_advances_when_parked_dependency_completes_in_metadata")]
-    public void BatchLoopDependentGoalAdvancesWhenParkedDependencyCompletesInMetadata()
+    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_holds_when_dependency_is_completed_without_landing")]
+    public void BatchLoopDependentGoalHoldsWhenDependencyIsCompletedWithoutLanding()
     {
         var dependencyId = GoalId.New();
         var kernel = new AgentOrchestratorKernel();
@@ -4095,9 +4095,49 @@ public sealed class ConductorBatchLoopTests
 
         Assert.DoesNotContain(kernel.Goals, goal => goal.Id == dependencyId);
         Assert.False(kernel.IsKnownCompletedDependencyGoal(dependencyId));
-        Assert.Equal(1, summary.Advanced);
-        Assert.Equal(0, summary.Held);
-        Assert.Contains(active.Id, createdWorkspaces);
+        Assert.Equal(0, summary.Advanced);
+        Assert.Equal(1, summary.Held);
+        Assert.Empty(createdWorkspaces);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_terminal_unlanded_dependency_escalates_without_worker_start")]
+    public void BatchLoopTerminalUnlandedDependencyEscalatesWithoutWorkerStart()
+    {
+        var dependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "dependent");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [dependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Failed.ToString())
+        ]);
+        var workerStarts = 0;
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(
+                createWorkspace: _ => throw new Xunit.Sdk.XunitException("held goal must not create a workspace"),
+                dispatchAndStart: _ =>
+                {
+                    workerStarts++;
+                    return DispatchStartOutcome.Started();
+                }),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(0, workerStarts);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Contains(
+            active.Timeline,
+            progress => progress.Message.Contains(
+                $"dependency-terminal-without-landing: {dependencyId.Value[..8]}",
+                StringComparison.Ordinal));
     }
 
     // ── Dynamic goal pickup: a goal ingested mid-run via the sweep is driven ──

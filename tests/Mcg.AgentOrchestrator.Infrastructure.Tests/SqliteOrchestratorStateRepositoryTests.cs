@@ -1721,7 +1721,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.All(snapshots, snapshot =>
         {
             var goalId = new GoalId(snapshot.Id);
-            Assert.True(kernel.IsKnownCompletedDependencyGoal(goalId));
+            Assert.False(kernel.IsKnownCompletedDependencyGoal(goalId));
             Assert.True(kernel.TryGetKnownDependencyGoalStatus(goalId, out var status));
             Assert.Equal(GoalStatus.Completed.ToString(), status);
         });
@@ -1741,7 +1741,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.False(kernel.IsKnownCompletedDependencyGoal(new GoalId(failed.Id)));
         Assert.True(kernel.TryGetKnownDependencyGoalStatus(new GoalId(failed.Id), out var failedStatus));
         Assert.Equal(GoalStatus.Failed.ToString(), failedStatus);
-        Assert.True(kernel.IsKnownCompletedDependencyGoal(new GoalId(completed.Id)));
+        Assert.False(kernel.IsKnownCompletedDependencyGoal(new GoalId(completed.Id)));
         Assert.True(kernel.TryGetKnownDependencyGoalStatus(new GoalId(completed.Id), out var completedStatus));
         Assert.Equal(GoalStatus.Completed.ToString(), completedStatus);
     }
@@ -1772,7 +1772,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
 
         var conductKernel = CliPersistentStateRunner.LoadConductLoopKernel(repo);
         Assert.Empty(conductKernel.Goals);
-        Assert.True(conductKernel.IsKnownCompletedDependencyGoal(goalId));
+        Assert.False(conductKernel.IsKnownCompletedDependencyGoal(goalId));
 
         var hydrated = await repo.LoadGoalsAsync([goalId]);
         var goal = hydrated.Goals.Single();

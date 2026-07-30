@@ -140,6 +140,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "backlog-supersede",
     "backlog-unsupersede",
     "backlog-link",
+    "backlog-depends",
     "backlog-reopen",
     "backlog-view",
     "goals-prune",

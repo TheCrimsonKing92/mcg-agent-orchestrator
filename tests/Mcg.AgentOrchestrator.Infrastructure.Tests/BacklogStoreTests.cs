@@ -351,6 +351,77 @@ public sealed class BacklogStoreTests
         Assert.Equal(BacklogItemStatus.Done, all.Single().Status);
     }
 
+    [Xunit.Fact(DisplayName = "BacklogStore_dependencies_roundtrip_in_order_and_expose_dependents")]
+    public async Task DependenciesRoundtripInOrderAndExposeDependents()
+    {
+        var path = TempDb();
+        var store = new BacklogStore(path);
+        var first = await store.AddAsync("First prerequisite");
+        var second = await store.AddAsync("Second prerequisite");
+        var dependent = await store.AddWithDependenciesAsync(
+            "Dependent",
+            "",
+            [
+                new(first.Id, BacklogDependencyTargetKind.Backlog),
+                new(second.Id, BacklogDependencyTargetKind.Backlog),
+                new(first.Id, BacklogDependencyTargetKind.Backlog)
+            ]);
+
+        var reloaded = new BacklogStore(path);
+        var found = await reloaded.GetByExactIdAsync(dependent.Id);
+        var prerequisite = await reloaded.GetByExactIdAsync(first.Id);
+
+        Assert.Equal([first.Id, second.Id], found!.Dependencies.Select(edge => edge.PrerequisiteId));
+        Assert.Contains(prerequisite!.Dependents, edge => edge.DependentId == dependent.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_dependency_add_remove_clear_are_idempotent_or_loud")]
+    public async Task DependencyAddRemoveClearAreIdempotentOrLoud()
+    {
+        var store = new BacklogStore(TempDb());
+        var first = await store.AddAsync("First");
+        var second = await store.AddAsync("Second");
+        var dependent = await store.AddAsync("Dependent");
+        var firstTarget = new BacklogDependencyTarget(first.Id, BacklogDependencyTargetKind.Backlog);
+
+        await store.AddDependencyAsync(dependent.Id, firstTarget);
+        await store.AddDependencyAsync(dependent.Id, firstTarget);
+        await store.AddDependencyAsync(
+            dependent.Id,
+            new BacklogDependencyTarget(second.Id, BacklogDependencyTargetKind.Backlog));
+        Assert.Equal(2, (await store.GetByExactIdAsync(dependent.Id))!.Dependencies.Count);
+
+        await store.RemoveDependencyAsync(dependent.Id, first.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.RemoveDependencyAsync(dependent.Id, first.Id));
+        await store.ClearDependenciesAsync(dependent.Id);
+        Assert.Empty((await store.GetByExactIdAsync(dependent.Id))!.Dependencies);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.ClearDependenciesAsync(dependent.Id));
+    }
+
+    [Xunit.Fact(DisplayName = "BacklogStore_dependency_rejects_self_and_transitive_cycles_without_mutation")]
+    public async Task DependencyRejectsSelfAndTransitiveCyclesWithoutMutation()
+    {
+        var store = new BacklogStore(TempDb());
+        var a = await store.AddAsync("A");
+        var b = await store.AddAsync("B");
+        var c = await store.AddAsync("C");
+
+        var self = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.AddDependencyAsync(a.Id, new(a.Id, BacklogDependencyTargetKind.Backlog)));
+        Assert.Contains("itself", self.Message, StringComparison.OrdinalIgnoreCase);
+
+        await store.AddDependencyAsync(a.Id, new(b.Id, BacklogDependencyTargetKind.Backlog));
+        await store.AddDependencyAsync(b.Id, new(c.Id, BacklogDependencyTargetKind.Backlog));
+        var cycle = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.AddDependencyAsync(c.Id, new(a.Id, BacklogDependencyTargetKind.Backlog)));
+
+        Assert.Contains("cycle", cycle.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(a.Id[..8], cycle.Message, StringComparison.Ordinal);
+        Assert.Empty((await store.GetByExactIdAsync(c.Id))!.Dependencies);
+    }
+
     // ── View rendering ────────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_view_renders_open_and_done_sections")]

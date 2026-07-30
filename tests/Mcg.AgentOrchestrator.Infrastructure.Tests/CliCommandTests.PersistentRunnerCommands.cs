@@ -1542,8 +1542,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id.Value == id));
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == failed.Id);
-        Xunit.Assert.All(terminalGoalIds.Take(3), id => Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
-        Xunit.Assert.All(terminalGoalIds.Skip(3), id => Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
+        Xunit.Assert.All(terminalGoalIds, id => Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(new GoalId(id))));
         var expectedLoadedIds = new[] { active.Id.Value, failed.Id.Value }
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
@@ -2197,8 +2196,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_preserves_terminal_dependency_readiness_without_loading_dependency")]
-    public void PersistentRunnerConductLoopPreservesTerminalDependencyReadinessWithoutLoadingDependency()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_does_not_treat_completed_metadata_as_landed")]
+    public void PersistentRunnerConductLoopDoesNotTreatCompletedMetadataAsLanded()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -2221,10 +2220,9 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains(active.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Contains(loaded.Goals, goal => goal.Id == active.Id);
         Xunit.Assert.DoesNotContain(loaded.Goals, goal => goal.Id == completed.Id);
-        Xunit.Assert.True(loaded.IsKnownCompletedDependencyGoal(completed.Id));
-        Xunit.Assert.Single(plan.Candidates);
-        Xunit.Assert.Contains(active.Id.Value, plan.FirstBatchCandidates.Select(candidate => candidate.GoalId));
-        Xunit.Assert.DoesNotContain(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
+        Xunit.Assert.False(loaded.IsKnownCompletedDependencyGoal(completed.Id));
+        Xunit.Assert.Empty(plan.FirstBatchCandidates);
+        Xunit.Assert.Contains(plan.ParallelPlan.Decisions.SelectMany(decision => decision.Reasons),
             reason => reason.Equals("dependency could not be scheduled", StringComparison.OrdinalIgnoreCase));
     }
 

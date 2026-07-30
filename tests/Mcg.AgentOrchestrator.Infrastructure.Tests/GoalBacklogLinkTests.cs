@@ -60,6 +60,62 @@ public sealed class GoalBacklogLinkTests
         Assert.Equal(item.Id, restored.GetGoal(currentGoal.Id).SourceBacklogItemId);
     }
 
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_promotion_wires_existing_promoted_prerequisite")]
+    public async Task PromotionWiresExistingPromotedPrerequisite()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var prerequisiteItem = await store.AddAsync("Prerequisite");
+        var dependentItem = await store.AddAsync("Dependent");
+        await store.AddDependencyAsync(
+            dependentItem.Id,
+            new(prerequisiteItem.Id, BacklogDependencyTargetKind.Backlog));
+        var kernel = new AgentOrchestratorKernel();
+        var prerequisiteGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Promoted prerequisite");
+        kernel.SetGoalSourceBacklogItemId(prerequisiteGoal.Id, prerequisiteItem.Id);
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.NotNull(currentGoal);
+        Assert.Contains(prerequisiteGoal.Id, currentGoal!.DependsOn);
+        Assert.Single((await store.GetByExactIdAsync(dependentItem.Id))!.Dependencies);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_promotion_blocks_unpromoted_prerequisite_before_goal_creation")]
+    public async Task PromotionBlocksUnpromotedPrerequisiteBeforeGoalCreation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var prerequisiteItem = await store.AddAsync("Unpromoted prerequisite");
+        var dependentItem = await store.AddAsync("Dependent");
+        await store.AddDependencyAsync(
+            dependentItem.Id,
+            new(prerequisiteItem.Id, BacklogDependencyTargetKind.Backlog));
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Contains("waiting on open prerequisite", error.Message, StringComparison.Ordinal);
+        Assert.Empty(kernel.Goals);
+    }
+
     [Xunit.Fact(DisplayName = "GoalBacklogLink_backlog_intake_backlog_item_flag_resolves_prefix_and_creates_linked_goal")]
     public async Task BacklogIntakeBacklogItemFlagResolvesPrefixAndCreatesLinkedGoal()
     {

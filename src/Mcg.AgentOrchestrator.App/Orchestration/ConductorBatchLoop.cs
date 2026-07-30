@@ -630,7 +630,9 @@ internal sealed class ConductorBatchLoop
                 }
 
                 // Dependency gate: check all DependsOn goals before advancing.
-                var depHoldReason = GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
+                var depHoldReason = goal.Tasks.Any(task => task.LastProcess is not null)
+                    ? null
+                    : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
                 if (depHoldReason is not null)
                 {
                     var progressLine = $"GOAL goal={label} result=held reason={Sanitize(depHoldReason)}";
@@ -642,7 +644,8 @@ internal sealed class ConductorBatchLoop
                     }
                     // A goal held due to a failed/escalated dependency will never unblock unless
                     // future condition-specific re-entry logic says otherwise.
-                    if (depHoldReason.StartsWith("dependency escalated", StringComparison.Ordinal))
+                    if (depHoldReason.StartsWith("dependency escalated", StringComparison.Ordinal) ||
+                        depHoldReason.StartsWith("dependency-terminal-without-landing", StringComparison.Ordinal))
                     {
                         escalatedGoals.Add(goal.Id.Value);
                         SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals);
@@ -2254,7 +2257,7 @@ internal sealed class ConductorBatchLoop
         return outcome switch
         {
             ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}{slot}",
-            ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot}",
+            ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot} reason={Sanitize(h.Reason)}",
             ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}{slot} reason={Sanitize(e.Reason)}",
             ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}{slot}",
             _                                   => $"GOAL goal={label} result=unknown{slot}"
@@ -2270,6 +2273,12 @@ internal sealed class ConductorBatchLoop
     {
         foreach (var depId in goal.DependsOn)
         {
+            if (kernel.TryGetKnownDependencyGoalStatus(depId, out var terminalStatus) &&
+                IsTerminalWithoutLandingDependencyStatus(terminalStatus))
+            {
+                return $"dependency-terminal-without-landing: {depId.Value[..8]} state={terminalStatus}";
+            }
+
             if (escalatedGoals.Contains(depId.Value))
                 return $"dependency escalated: {depId.Value[..8]}";
 
@@ -2295,8 +2304,12 @@ internal sealed class ConductorBatchLoop
     }
 
     private static bool IsMetadataSatisfiedDependencyStatus(string status) =>
-        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTerminalWithoutLandingDependencyStatus(string status) =>
+        status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase);
 
     private static void MarkCompletedDependencyGoals(
         AgentOrchestratorKernel kernel,
@@ -2332,7 +2345,7 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            if (state != GoalLifecycleState.CleanedUp)
+            if (state is not (GoalLifecycleState.Merged or GoalLifecycleState.Recorded or GoalLifecycleState.CleanedUp))
             {
                 continue;
             }

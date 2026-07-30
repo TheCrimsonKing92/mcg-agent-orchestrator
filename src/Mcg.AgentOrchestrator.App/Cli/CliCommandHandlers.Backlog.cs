@@ -26,7 +26,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 return false;
             }
             foreach (var item in items)
-                Console.WriteLine($"{RenderBacklogListTag(item)} {item.Id} - {item.Title}{RenderBacklogListSuffix(item)}");
+                Console.WriteLine($"{RenderBacklogListTag(item)} {item.Id} - {item.Title}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)}");
             return false;
         }
 
@@ -46,7 +46,12 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var title = parts[1];
             var body = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: "", "--body-file", "--text-file") ?? "";
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
-            var item = store.AddAsync(title, body).GetAwaiter().GetResult();
+            var dependencies = GetFlagValues(parts, "--depends-on")
+                .Select(prefix => ResolveBacklogDependencyTarget(context, store, prefix))
+                .ToArray();
+            var item = dependencies.Length == 0
+                ? store.AddAsync(title, body).GetAwaiter().GetResult()
+                : store.AddWithDependenciesAsync(title, body, dependencies).GetAwaiter().GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
             return false;
         }
@@ -87,6 +92,20 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 {
                     Console.WriteLine($"- {goal.Id.Value[..8]} status={goal.Status} landing={ResolveBacklogShowGoalLandingState(context, goal)}");
                 }
+            }
+            if (item.Dependencies.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Dependencies:");
+                foreach (var dependency in item.Dependencies)
+                    Console.WriteLine($"- {dependency.PrerequisiteId} state={RenderBacklogDependencyState(context, store, dependency)}");
+            }
+            if (item.Dependents.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Dependents:");
+                foreach (var dependent in item.Dependents)
+                    Console.WriteLine($"- {dependent.DependentId}");
             }
             if (!string.IsNullOrWhiteSpace(item.Body))
             {
@@ -165,6 +184,39 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             return false;
         }
 
+        case "backlog-depends":
+        {
+            CliArgumentParser.RequirePartCount(parts, 3, CliCommandHelp.BacklogDependsUsage);
+            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var item = ResolveBacklogItemByPrefix(store, parts[1]);
+            var on = GetFlagValue(parts, "--on");
+            var remove = GetFlagValue(parts, "--remove");
+            var clear = HasCliConfirmation(parts, "--clear");
+            if ((on is not null ? 1 : 0) + (remove is not null ? 1 : 0) + (clear ? 1 : 0) != 1)
+                throw new ArgumentException(CliCommandHelp.BacklogDependsUsage);
+
+            if (clear)
+            {
+                store.ClearDependenciesAsync(item.Id).GetAwaiter().GetResult();
+                Console.WriteLine($"Dependencies cleared: {ShortBacklogId(item.Id)}");
+                return false;
+            }
+
+            var prefix = on ?? remove!;
+            var target = ResolveBacklogDependencyTarget(context, store, prefix);
+            if (on is not null)
+            {
+                store.AddDependencyAsync(item.Id, target).GetAwaiter().GetResult();
+                Console.WriteLine($"Dependency set: {ShortBacklogId(item.Id)} depends on {ShortBacklogId(target.Id)}");
+            }
+            else
+            {
+                store.RemoveDependencyAsync(item.Id, target.Id).GetAwaiter().GetResult();
+                Console.WriteLine($"Dependency removed: {ShortBacklogId(item.Id)} no longer depends on {ShortBacklogId(target.Id)}");
+            }
+            return false;
+        }
+
         case "backlog-reopen":
         {
             CliArgumentParser.RequirePartCount(parts, 2, "backlog-reopen <id-prefix> [reason]");
@@ -207,6 +259,90 @@ private static string ResolveBacklogShowGoalLandingState(CliExecutionContext con
 private static BacklogItem ResolveBacklogItemByPrefix(BacklogStore store, string prefix) =>
     store.GetByIdPrefixAsync(prefix).GetAwaiter().GetResult()
         ?? throw new InvalidOperationException($"No backlog item found with id prefix '{prefix}'.");
+
+private static BacklogDependencyTarget ResolveBacklogDependencyTarget(
+    CliExecutionContext context,
+    BacklogStore store,
+    string prefix)
+{
+    var backlogMatches = store.FindByIdPrefixAsync(prefix).GetAwaiter().GetResult();
+    var goalMatches = context.Kernel.Goals
+        .Where(goal => goal.Id.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+        .ToArray();
+    var candidateCount = backlogMatches.Count + goalMatches.Length;
+    if (candidateCount == 0)
+        throw new InvalidOperationException($"No backlog item or goal found with id prefix '{prefix}'.");
+    if (candidateCount > 1)
+    {
+        var candidates = backlogMatches.Select(item => $"backlog:{item.Id}")
+            .Concat(goalMatches.Select(goal => $"goal:{goal.Id.Value}"));
+        throw new InvalidOperationException(
+            $"Ambiguous dependency prefix '{prefix}' matches: {string.Join(", ", candidates)}.");
+    }
+
+    var backlog = backlogMatches.SingleOrDefault();
+    return backlog is not null
+        ? new BacklogDependencyTarget(backlog.Id, BacklogDependencyTargetKind.Backlog)
+        : new BacklogDependencyTarget(goalMatches[0].Id.Value, BacklogDependencyTargetKind.Goal);
+}
+
+private static string RenderBacklogDependencyState(
+    CliExecutionContext context,
+    BacklogStore store,
+    BacklogDependency dependency)
+{
+    if (dependency.TargetKind == BacklogDependencyTargetKind.Goal)
+    {
+        var goal = context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId);
+        return goal is null
+            ? "missing"
+            : $"{goal.Status}/{ResolveBacklogShowGoalLandingState(context, goal)}";
+    }
+
+    var item = store.GetByExactIdAsync(dependency.PrerequisiteId).GetAwaiter().GetResult();
+    if (item is null)
+        return "missing";
+    var promotedGoal = context.Kernel.FindGoalBySourceBacklogItemId(item.Id);
+    return promotedGoal is null
+        ? item.Status.ToString()
+        : $"{item.Status}/{promotedGoal.Status}/{ResolveBacklogShowGoalLandingState(context, promotedGoal)}";
+}
+
+private static string RenderBacklogReadinessSuffix(
+    BacklogItem item,
+    CliExecutionContext context,
+    BacklogStore store)
+{
+    foreach (var dependency in item.Dependencies)
+    {
+        Goal? goal;
+        if (dependency.TargetKind == BacklogDependencyTargetKind.Goal)
+        {
+            goal = context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId);
+        }
+        else
+        {
+            var prerequisite = store.GetByExactIdAsync(dependency.PrerequisiteId).GetAwaiter().GetResult();
+            goal = prerequisite is null ? null : context.Kernel.FindGoalBySourceBacklogItemId(prerequisite.Id);
+            if (goal is null)
+                return $" [Blocked: waiting on open prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
+        }
+
+        if (goal is null)
+            return $" [Blocked: missing prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
+        var landingState = ResolveBacklogShowGoalLandingState(context, goal);
+        if (landingState is "Merged" or "Recorded" or "CleanedUp")
+            continue;
+        if (goal.Status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        {
+            return $" [Blocked: dependency-terminal-without-landing {ShortBacklogId(goal.Id.Value)} state={goal.Status}]";
+        }
+        return $" [Blocked: waiting on active prerequisite goal {ShortBacklogId(goal.Id.Value)}]";
+    }
+
+    return item.Dependencies.Count == 0 ? "" : " [Ready: dependencies landed]";
+}
 
 private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> parts)
 {

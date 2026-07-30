@@ -160,6 +160,15 @@ public sealed class Goal
 
     internal void AddDependency(GoalId dependencyId) => _dependsOn.Add(dependencyId);
 
+    internal bool RemoveDependency(GoalId dependencyId) => _dependsOn.Remove(dependencyId);
+
+    internal int ClearDependencies()
+    {
+        var count = _dependsOn.Count;
+        _dependsOn.Clear();
+        return count;
+    }
+
     internal bool AddEffectiveAcceptanceCriteriaCorrection(EffectiveAcceptanceCriteriaCorrection correction)
     {
         var normalizedSuperseded = RequireText(correction.SupersededCriterion, nameof(correction.SupersededCriterion));
