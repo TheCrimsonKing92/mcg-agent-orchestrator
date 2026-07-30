@@ -301,6 +301,17 @@ internal static class GoalOperationJournal
         GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
         AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
 
+    public static void AcceptanceGatePassed(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? detail = null,
+        DateTimeOffset? attemptStartedAt = null,
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "gate-passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
+
     public static void AcceptanceFailed(
         string executionDirectory,
         Goal goal,
@@ -488,10 +499,13 @@ internal static class GoalOperationJournal
         string? mainHeadSha)
     {
         return journal.Entries
-            .Where(entry =>
-                !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome) &&
-                entry.HasCandidate(branchHeadSha, mainHeadSha))
-            .OrderByDescending(entry => entry.At)
+            .Select((entry, index) => (Entry: entry, Index: index))
+            .Where(item =>
+                !string.IsNullOrWhiteSpace(item.Entry.AcceptanceOutcome) &&
+                item.Entry.HasCandidate(branchHeadSha, mainHeadSha))
+            .OrderByDescending(item => item.Entry.At)
+            .ThenByDescending(item => item.Index)
+            .Select(item => item.Entry)
             .ToArray();
     }
 

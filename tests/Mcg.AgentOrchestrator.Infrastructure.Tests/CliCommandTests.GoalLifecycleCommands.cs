@@ -3152,6 +3152,83 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             second => Xunit.Assert.Equal("failed", second.AcceptanceOutcome));
     }
 
+    [Xunit.Fact(DisplayName = "Acceptance_outcomes_for_candidate_prefer_later_append_at_same_timestamp")]
+    public void AcceptanceOutcomesForCandidatePreferLaterAppendAtSameTimestamp()
+    {
+        var goalId = new GoalId("99992222333344445555666677778888");
+        var at = DateTimeOffset.Parse("2026-07-20T12:00:00Z");
+        var journal = new GoalOperationJournalSummary(
+            "journal.jsonl",
+            [
+                new GoalOperationJournalEntry("failed", goalId, "acceptance", GoalOperationStatus.Failed, at, "failed", "branch", "main", "failed"),
+                new GoalOperationJournalEntry("gate-passed", goalId, "acceptance", GoalOperationStatus.Completed, at, "gate passed", "branch", "main", "gate-passed")
+            ],
+            [],
+            []);
+
+        var outcomes = GoalOperationJournal.AcceptanceOutcomesForCandidate(
+            journal,
+            "branch",
+            "main");
+
+        Xunit.Assert.Equal("gate-passed", outcomes[0].AcceptanceOutcome);
+        Xunit.Assert.Equal("failed", outcomes[1].AcceptanceOutcome);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_acceptance_current_green_rerun_supersedes_same_candidate_failure")]
+    public void CliAcceptanceCurrentGreenRerunSupersedesSameCandidateFailure()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retry same acceptance candidate", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-07-06T15:00:00Z")));
+        var mainSha = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var branchSha = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+        kernel.RecordAcceptanceFailure(goal.Id, ["interrupted gate"], branchSha, mainSha);
+        GoalOperationJournal.AcceptanceFailed(
+            root,
+            goal,
+            "acceptance",
+            branchSha,
+            mainSha,
+            "Interrupted gate failed for this candidate.");
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace", "--no-record"],
+            kernel,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: new ProbeAcceptanceVerifier(() => { }),
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("Verification: passed", output);
+        Xunit.Assert.DoesNotContain("Acceptance evidence: blocked", output);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id)!.Status);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.Contains(journal.Entries, entry =>
+            entry.AcceptanceOutcome == "gate-passed" &&
+            entry.HasCandidate(branchSha, mainSha));
+        var outcomes = GoalOperationJournal.AcceptanceOutcomesForCandidate(
+            journal,
+            branchSha,
+            mainSha);
+        Xunit.Assert.Equal("passed", outcomes[0].AcceptanceOutcome);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_treats_old_candidate_failure_as_historical_after_rebase")]
     public void CliAcceptanceTreatsOldCandidateFailureAsHistoricalAfterRebase()
     {

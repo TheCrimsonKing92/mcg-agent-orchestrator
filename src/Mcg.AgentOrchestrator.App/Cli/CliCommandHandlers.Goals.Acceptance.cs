@@ -232,7 +232,20 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             ("reason", "no-worktree"));
     }
 
-    if (skipVerify || verification is { Passed: true })
+    if (verification is { Passed: true })
+    {
+        context.Kernel.ClearAcceptanceFailure(goal.Id);
+        GoalOperationJournal.AcceptanceGatePassed(
+            context.Workspace.ExecutionDirectory,
+            goal,
+            "acceptance",
+            testedWorktreeHead,
+            testedMainHead,
+            $"Acceptance gate passed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}; merge pending.",
+            acceptanceAttemptStartedAt,
+            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+    }
+    else if (skipVerify)
     {
         context.Kernel.ClearAcceptanceFailure(goal.Id);
     }
@@ -293,7 +306,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         var failedChecks = verification?.Checks?
             .Where(c => !c.Passed && !c.Advisory)
             .Select(c => c.Name)
-            .ToList() ?? ["acceptance evidence blocked"];
+            .ToList();
+        if (failedChecks is null or { Count: 0 })
+        {
+            failedChecks = ["acceptance evidence blocked"];
+        }
         context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
         GoalOperationJournal.AcceptanceFailed(
             context.Workspace.ExecutionDirectory,
