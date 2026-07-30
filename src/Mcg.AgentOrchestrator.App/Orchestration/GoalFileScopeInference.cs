@@ -19,7 +19,33 @@ internal sealed record GoalFileScopeDerivation(
     IReadOnlyList<string> Includes,
     IReadOnlyList<string> Exclusions,
     RepositoryScopeConfidence Confidence,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public bool Equals(GoalFileScopeDerivation? other) =>
+        other is not null &&
+        Confidence == other.Confidence &&
+        Includes.SequenceEqual(other.Includes, StringComparer.Ordinal) &&
+        Exclusions.SequenceEqual(other.Exclusions, StringComparer.Ordinal) &&
+        Warnings.SequenceEqual(other.Warnings, StringComparer.Ordinal);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Confidence);
+        AddValues(ref hash, Includes);
+        AddValues(ref hash, Exclusions);
+        AddValues(ref hash, Warnings);
+        return hash.ToHashCode();
+    }
+
+    private static void AddValues(ref HashCode hash, IReadOnlyList<string> values)
+    {
+        foreach (var value in values)
+        {
+            hash.Add(value, StringComparer.Ordinal);
+        }
+    }
+}
 
 internal static class GoalFileScopeInference
 {
@@ -28,11 +54,11 @@ internal static class GoalFileScopeInference
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex InclusionConstraintRegex = new(
-        @"(?:touch\s+only|changes?\s+must\s+be\s+confined\s+to)\s+(?<targets>[^.;\r\n]+)",
+        @"(?:touch\s+only|changes?\s+must\s+be\s+confined\s+to)\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex ExclusionConstraintRegex = new(
-        @"(?:do\s+not\s+touch|don't\s+touch|must\s+not\s+touch)\s+(?<targets>[^.;\r\n]+)",
+        @"(?:do\s+not\s+touch|don't\s+touch|must\s+not\s+touch)\s+(?<targets>.*?)(?=;|\.(?:\s|$)|\r?$|\n)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly Regex TargetSeparatorRegex = new(
