@@ -100,6 +100,11 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
 
     var plan = GoalDependencyPlanner.Build(intake);
     ConsoleViews.PrintGoalDependencyPlan(plan);
+    foreach (var node in plan.Nodes)
+    {
+        PrintScopeCollisionAdvisory(context, node.ReadyObjective, node.Intake.Id, node.Heading);
+    }
+
     if (!createGoals && !createSimpleGoals)
     {
         return false;
@@ -115,6 +120,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         context.CurrentGoal = createSimpleGoals
             ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter)
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter);
+        context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, node.Intake.Id);
         Console.WriteLine(createSimpleGoals
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
             : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");

@@ -28,7 +28,7 @@ public sealed class DashboardHostTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
         CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", "Simple hosted dashboard goal"],
+            ["simple-goal", "Hosted self collision change src/Hosted/Self.cs"],
             kernel,
             workspace,
             ref agents,
@@ -36,6 +36,16 @@ public sealed class DashboardHostTests
             ref profiles,
             ref currentGoal);
         var goal = currentGoal ?? throw new InvalidOperationException("Expected simple-goal to create a current goal.");
+        var backlogItem = await new BacklogStore(workspace.BacklogStorePath)
+            .AddAsync("Hosted self collision change src/Hosted/Self.cs");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
+        var differentlyLinkedGoal = kernel.CreateGoal(
+            "Hosted unrelated collision change src/Hosted/Self.cs",
+            [new TaskSpec(TaskId.New(), "Implement other hosted change.", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(differentlyLinkedGoal.Id, "different-backlog-item");
+        var unlinkedGoal = kernel.CreateGoal(
+            "Hosted unlinked collision change src/Hosted/Self.cs",
+            [new TaskSpec(TaskId.New(), "Implement unlinked hosted change.", AgentRole.Developer)]);
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         var task = goal.Tasks.Single();
         var port = GetAvailablePort();
@@ -54,6 +64,9 @@ public sealed class DashboardHostTests
             var taskWorkSummary = await GetRequiredStringAsync(client, new Uri(new Uri(url), $"api/tasks/{task.Id.Value}/work-summary"));
             var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=8"));
             var defaultSourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey"));
+            var scopeCollisionAdvisory = await GetRequiredStringAsync(
+                client,
+                new Uri(new Uri(url), "api/goals/scope-collision-advisory?heading=Hosted%20self%20collision&max=1"));
             using var createGoalResponse = await client.PostAsync(
                 new Uri(new Uri(url), "api/goals"),
                 new StringContent(
@@ -88,6 +101,22 @@ public sealed class DashboardHostTests
                 AssertArchitectureArrayContains(report.GetProperty("StateStores"), workspace.ContinuationStorePath);
                 AssertArchitectureArrayContains(report.GetProperty("DistributedBoundaries"), "Subscription execution leaves process boundaries");
                 AssertArchitectureArrayContains(report.GetProperty("SafetyGates"), "Tenant names are normalized");
+            }
+            using (var advisoryDocument = JsonDocument.Parse(scopeCollisionAdvisory))
+            {
+                var advisory = advisoryDocument.RootElement;
+                var report = Assert.Single(advisory.GetProperty("Reports").EnumerateArray());
+                Assert.Equal(backlogItem.Id, report.GetProperty("IntakeItemId").GetString());
+                Assert.Equal(backlogItem.Title, report.GetProperty("Heading").GetString());
+                Assert.Equal(2, report.GetProperty("ComparedGoalCount").GetInt32());
+                var conflictingGoalIds = report.GetProperty("ConflictingGoalIds")
+                    .EnumerateArray()
+                    .Select(id => id.GetString())
+                    .ToArray();
+                Assert.DoesNotContain(goal.Id.Value, conflictingGoalIds);
+                Assert.Contains(differentlyLinkedGoal.Id.Value, conflictingGoalIds);
+                Assert.Contains(unlinkedGoal.Id.Value, conflictingGoalIds);
+                Assert.NotEmpty(report.GetProperty("Collisions").EnumerateArray());
             }
 
             using (var goalSummaryDocument = JsonDocument.Parse(goalWorkSummary))
