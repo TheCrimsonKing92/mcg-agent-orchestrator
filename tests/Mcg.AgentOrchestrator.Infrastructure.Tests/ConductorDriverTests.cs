@@ -2892,14 +2892,14 @@ public sealed class ConductorDriverTests
                 Name: "core",
                 Files: new[] { "src/Mcg.AgentOrchestrator.Core/Domain/TaskSpec.cs" },
                 MappingNeedsInput: false,
-                NoApplicableTests: false,
-                RequestFragment: "Core.Tests: mapped-project"),
+                NoApplicableTests: true,
+                RequestFragment: (string?)null),
             (
                 Name: "infrastructure",
                 Files: new[] { "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerResultParser.cs" },
                 MappingNeedsInput: false,
-                NoApplicableTests: false,
-                RequestFragment: "Infrastructure.Tests: mapped-project"),
+                NoApplicableTests: true,
+                RequestFragment: (string?)null),
             (
                 Name: "dashboard",
                 Files: new[] { "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs" },
@@ -2924,14 +2924,14 @@ public sealed class ConductorDriverTests
                     .Select(index => $"src/Mcg.AgentOrchestrator.Core/Domain/Changed{index}.cs")
                     .ToArray(),
                 MappingNeedsInput: false,
-                NoApplicableTests: false,
-                RequestFragment: "Core.Tests: mapped-project"),
+                NoApplicableTests: true,
+                RequestFragment: (string?)null),
             (
                 Name: "full-suite",
                 Files: new[] { "Directory.Build.props" },
                 MappingNeedsInput: false,
-                NoApplicableTests: false,
-                RequestFragment: "Core.Tests: mapped-project; Infrastructure.Tests: mapped-project"),
+                NoApplicableTests: true,
+                RequestFragment: (string?)null),
             (
                 Name: "generated-unmapped",
                 Files: new[] { "src/Mcg.AgentOrchestrator.Core/bin/Debug/generated.dll" },
@@ -3155,10 +3155,68 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Completed, developer.Status);
         Assert.Equal(WorkTaskStatus.Completed, tester.Status);
         Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
-        Assert.StartsWith("reviewer contract-repair:", retryMessage, StringComparison.Ordinal);
+        Assert.StartsWith("review-finding contract-repair:", retryMessage, StringComparison.Ordinal);
         Assert.Contains("ERR_REVIEW_FINDING_IDENTITY_MOVED", retryMessage, StringComparison.Ordinal);
         Assert.Contains("avoided_developer_reopen=1", retryMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("auto-review-retry", retryMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_tester_contract_violation_mechanically_retries_the_same_tester")]
+    public void ConductorDriverTesterContractViolationMechanicallyRetriesSameTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer);
+
+        DispatchTask(kernel, goal, tester, "test-1");
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
+            "test-1",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithAdvisory(
+                "T-1",
+                new ReviewFindingLocation("tests/A.cs", "A.Tests", "guard")),
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        kernel.RetryTask(goal.Id, tester.Id, "recheck");
+        DispatchTask(kernel, goal, tester, "test-2");
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
+            "test-2",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithAdvisory(
+                "T-1",
+                new ReviewFindingLocation("tests/B.cs", "B.Tests", "guard")),
+            "",
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\tester.out.log",
+            WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.NotNull(tester.LastVerification!.ReviewFindingContractViolation);
+
+        TaskId? retriedTaskId = null;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTaskId);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.StartsWith("review-finding contract-repair:", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("Tester task", retryMessage, StringComparison.Ordinal);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -3178,7 +3236,7 @@ public sealed class ConductorDriverTests
             kernel.RetryTask(
                 goal.Id,
                 reviewer.Id,
-                $"reviewer contract-repair: attempt {attempt}/2",
+                $"review-finding contract-repair: attempt {attempt}/2",
                 retryRoundKind: RetryRoundKind.Mechanical);
             RecordMovedReviewerIdentityViolation(kernel, goal, reviewer);
         }
@@ -3221,7 +3279,7 @@ public sealed class ConductorDriverTests
         kernel.RetryTask(
             goal.Id,
             reviewer.Id,
-            "reviewer contract-repair: prior mechanical repair",
+            "review-finding contract-repair: prior mechanical repair",
             retryRoundKind: RetryRoundKind.Mechanical);
         FailReviewerNeedsWork(
             kernel,

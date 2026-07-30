@@ -332,7 +332,7 @@ After a durable landing, the conductor enqueues mirror debt and starts a trusted
 
 Two independent constraints bound useful parallelism:
 
-**Build capacity and test artifacts.** Builds share two machine-wide file locks under the isolated dotnet root. Test execution is not slot-confined: each gate/evidence attempt writes receipts beneath `.orchestrator/acceptance-gate-attempts/<goal-id>/`, and operator test commands use invocation-owned directories. Per-goal build artifacts remain reusable under the isolated dotnet goal root.
+**Build capacity and test artifacts.** Builds share two machine-wide file locks under the isolated dotnet root. Test execution is not slot-confined: acceptance receipts live beneath `.orchestrator/acceptance-gate-attempts/<goal-id>/`, pre-review focused receipts beneath `.orchestrator/pre-review-evidence-attempts/<goal-id>/`, and operator test commands use invocation-owned directories. Both receipt roots follow the goal artifact retention plan and `Show-TestDurations.ps1` reads both by default. Per-goal build artifacts remain reusable under the isolated dotnet goal root.
 
 After the slot-free gate has soaked cleanly for at least three days, an administrator may remove the obsolete inbound rules once:
 

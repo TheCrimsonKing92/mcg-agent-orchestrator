@@ -278,6 +278,22 @@ try {
     Assert-True ($gateClassRows[0].Class -eq 'Mcg.Acceptance.InfrastructureTests') 'Expected goal-based per-class output to include the infrastructure lane class.'
     Assert-True (-not (($gateByClass.Output -join "`n") -match 'CoreTests')) 'Expected goal-based per-class output to exclude core test receipts.'
 
+    $preReviewRoot = Join-Path $work 'pre-review-evidence-attempts'
+    $preReviewGoalDirectory = Join-Path $preReviewRoot $goalId
+    New-Item -ItemType Directory -Force $preReviewGoalDirectory | Out-Null
+    $preReviewTrx = Write-TrxFixture 'pre-review-source.trx' @(
+        @{ Name = 'Mcg.Acceptance.PreReviewFocused'; Class = 'Mcg.Acceptance.PreReviewTests'; Outcome = 'Passed'; Duration = '00:00:07.0000000' }
+    )
+    $preReviewReceipt = Join-Path $preReviewGoalDirectory '11112222-pre-review-20260717170000000-abcdef.infrastructure-tests-focused.trx'
+    Copy-Item -LiteralPath $preReviewTrx -Destination $preReviewReceipt
+    $combined = Invoke-DurationScript @(
+        '-AttemptsRoot', $attemptRoot,
+        '-PreReviewAttemptsRoot', $preReviewRoot,
+        '-Goal', '11112222',
+        '-Top', '10')
+    Assert-True ($combined.ExitCode -eq 0) "Expected combined acceptance/pre-review invocation to pass. Output: $($combined.Output -join ' | ')"
+    Assert-True (($combined.Output -join "`n") -match 'PreReviewFocused') 'Expected pre-review focused receipt timing to be included.'
+
     $missing = Invoke-DurationScript @((Join-Path $work 'missing.trx'))
     Assert-True ($missing.ExitCode -ne 0) 'Expected missing input to fail.'
     Assert-True (($missing.Output -join "`n") -match 'Input not found or unreadable') 'Expected clear missing-input error.'

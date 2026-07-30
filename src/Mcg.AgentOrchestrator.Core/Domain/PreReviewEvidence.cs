@@ -53,8 +53,7 @@ public sealed record PreReviewEvidenceReceipt(
         Checks.Zip(other.Checks).All(pair => CheckContentEquals(pair.First, pair.Second)) &&
         FailingTestIdentities.SequenceEqual(other.FailingTestIdentities, StringComparer.Ordinal) &&
         string.Equals(MappingReason, other.MappingReason, StringComparison.Ordinal) &&
-        string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase) &&
-        RecordedAt == other.RecordedAt;
+        string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase);
 
     private static bool CheckContentEquals(
         PreReviewEvidenceCheckReceipt left,

@@ -20,6 +20,7 @@ internal enum RetentionArtifactKind
     ContextPackage,
     WorkerLogs,
     BuildLease,
+    TestEvidence,
     OperationJournal,
     Transcript
 }
@@ -65,6 +66,14 @@ internal static class GoalArtifactRetentionPlanner
         var contextPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator-context", goal.Id.Value);
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
         var transcriptPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "transcripts", $"{goalPrefix}.md");
+        var acceptanceEvidencePath = Path.Combine(
+            workspace.OrchestratorDirectory,
+            "acceptance-gate-attempts",
+            goal.Id.Value);
+        var preReviewEvidencePath = Path.Combine(
+            workspace.OrchestratorDirectory,
+            "pre-review-evidence-attempts",
+            goal.Id.Value);
 
         var items = new List<GoalArtifactRetentionItem>
         {
@@ -72,6 +81,8 @@ internal static class GoalArtifactRetentionPlanner
             ContextItem(state, contextPath),
             LogsItem(state, workspace.LogDirectory),
             BuildLeaseItem(state, buildLease),
+            TestEvidenceItem(state, acceptanceEvidencePath, "acceptance-gate"),
+            TestEvidenceItem(state, preReviewEvidencePath, "pre-review"),
             JournalItem(journal.Path),
             TranscriptItem(transcriptPath)
         };
@@ -193,6 +204,26 @@ internal static class GoalArtifactRetentionPlanner
             path,
             File.Exists(path),
             "Operation journal is durable lifecycle audit evidence.",
+            null);
+    }
+
+    private static GoalArtifactRetentionItem TestEvidenceItem(
+        RetentionGoalState state,
+        string path,
+        string evidenceKind)
+    {
+        var decision = state is RetentionGoalState.AcceptedCleaned or
+            RetentionGoalState.Failed or
+            RetentionGoalState.Abandoned or
+            RetentionGoalState.Superseded
+                ? RetentionDecision.Archive
+                : RetentionDecision.Keep;
+        return new GoalArtifactRetentionItem(
+            RetentionArtifactKind.TestEvidence,
+            decision,
+            path,
+            Directory.Exists(path),
+            $"{evidenceKind} receipts are goal-owned audit evidence and follow the goal retention lifecycle.",
             null);
     }
 

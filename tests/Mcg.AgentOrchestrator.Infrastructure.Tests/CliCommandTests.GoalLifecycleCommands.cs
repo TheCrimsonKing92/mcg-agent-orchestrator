@@ -1362,6 +1362,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator-context", goal.Id.Value));
+        Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "pre-review-evidence-attempts", goal.Id.Value));
 
         var output = CaptureConsole(() =>
         {
@@ -1379,6 +1380,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("State: Active", output);
         Xunit.Assert.Contains("Dry run: True", output);
         Xunit.Assert.Contains("ContextPackage: Keep; exists=True", output);
+        Xunit.Assert.Contains("TestEvidence: Keep; exists=True", output);
         Xunit.Assert.Contains("Worktree: Keep", output);
     }
 
@@ -1398,6 +1400,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         kernel.ActivateGoal(goal.Id, agents);
         kernel.CancelGoal(goal.Id, "Abandoned during retention test.");
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator-context", goal.Id.Value));
+        Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "pre-review-evidence-attempts", goal.Id.Value));
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "retention");
         MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
 
@@ -1418,6 +1421,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
             Xunit.Assert.Contains("State: Abandoned", output);
             Xunit.Assert.Contains("ContextPackage: Archive; exists=True", output);
+            Xunit.Assert.Contains("TestEvidence: Archive; exists=True", output);
             Xunit.Assert.Contains("BuildLease: DeleteNow; exists=True", output);
             Xunit.Assert.Contains("command: build-lease-cleanup --confirm-build-lease-cleanup", output);
         }

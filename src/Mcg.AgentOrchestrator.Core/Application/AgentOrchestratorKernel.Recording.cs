@@ -290,6 +290,16 @@ public sealed partial class AgentOrchestratorKernel
                 $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
                 $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
                 $"reviewer_wall_ms={reviewerWallMilliseconds}.");
+
+            if (task.RequiredRole == AgentRole.Tester)
+            {
+                ReportTaskProgress(
+                    goalId,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    $"Tester WORKER_RESULT structured findings invalid: {violation.Message}");
+                return true;
+            }
         }
 
         if (verification.WorkerResultPresent &&

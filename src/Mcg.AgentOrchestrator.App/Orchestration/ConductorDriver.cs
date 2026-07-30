@@ -36,7 +36,7 @@ internal sealed class ConductorDriver
     // any other reviewer retry (operator recover, fresh review) begins a new evidence round.
     private const string ReviewerEvidenceRetryMessagePrefix = "reviewer evidence-on-demand:";
     private const int MaxReviewFindingContractRepairsPerRound = 2;
-    private const string ReviewContractRepairRetryMessagePrefix = "reviewer contract-repair:";
+    private const string ReviewContractRepairRetryMessagePrefix = "review-finding contract-repair:";
     private static readonly string[] MechanicalReviewerRetryMessagePrefixes =
         [ReviewerEvidenceRetryMessagePrefix, ReviewContractRepairRetryMessagePrefix];
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
@@ -1057,7 +1057,7 @@ internal sealed class ConductorDriver
     {
         decision = VerifyingFindingAutoRetryDecision.None;
         var reviewerTask = goal.Tasks.FirstOrDefault(task =>
-            task.RequiredRole == AgentRole.Reviewer &&
+            (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester) &&
             task.Status == WorkTaskStatus.Failed &&
             task.LastVerification?.ReviewFindingContractViolation is not null);
         if (reviewerTask?.LastVerification?.ReviewFindingContractViolation is not { } violation)
@@ -1075,7 +1075,7 @@ internal sealed class ConductorDriver
             ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
         {
             decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"Reviewer contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
+                $"{reviewerTask.RequiredRole} contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
                 $"violation={violation.Code}; diagnostic={TrimForConductorMessage(ex.Message)}; operator action required.");
             return true;
         }
@@ -1084,7 +1084,7 @@ internal sealed class ConductorDriver
         if (priorRepairs >= MaxReviewFindingContractRepairsPerRound)
         {
             decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"Reviewer exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
+                $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
                 $"violation_code={violation.Code}; prior_stable_id={violation.PriorStableId ?? "none"}; " +
                 $"submitted_stable_id={violation.SubmittedStableId ?? "none"}; " +
                 $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
@@ -2164,9 +2164,23 @@ internal sealed class ConductorDriver
                 MappingNeedsInput: generatedArtifactsBlock);
         }
 
-        var selected = plan.Checks.Select(check => check.CommandLine).ToArray();
+        var focusedChecks = plan.Checks
+            .Where(check => FindArgument(check.Command, "--filter") >= 0)
+            .ToArray();
+        if (focusedChecks.Length == 0)
+        {
+            return new PreReviewEvidenceContext(
+                candidateSha,
+                [],
+                null,
+                $"{plan.Summary} No filtered test target mapped; project-wide checks are deferred to the acceptance gate.",
+                NoApplicableTests: true,
+                MappingNeedsInput: false);
+        }
+
+        var selected = focusedChecks.Select(check => check.CommandLine).ToArray();
         var requests = new List<string>();
-        foreach (var check in plan.Checks)
+        foreach (var check in focusedChecks)
         {
             var filterIndex = FindArgument(check.Command, "--filter");
             var project = check.Command.FirstOrDefault(argument =>
@@ -2209,10 +2223,7 @@ internal sealed class ConductorDriver
                     MappingNeedsInput: true);
             }
 
-            requests.Add(
-                filterIndex < 0
-                    ? $"{alias}: mapped-project"
-                    : $"{alias}: {check.Command[filterIndex + 1]}");
+            requests.Add($"{alias}: {check.Command[filterIndex + 1]}");
         }
 
         return new PreReviewEvidenceContext(

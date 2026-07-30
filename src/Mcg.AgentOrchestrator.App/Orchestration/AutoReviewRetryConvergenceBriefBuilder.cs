@@ -251,7 +251,10 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         ArgumentNullException.ThrowIfNull(reviewerTask);
         ArgumentNullException.ThrowIfNull(violation);
 
-        var open = ReadStructuredReviewFindingState(goal, reviewerTask)
+        var open = ReadStructuredReviewFindingState(
+                goal,
+                reviewerTask.RequiredRole,
+                reviewerTask.LastVerification!.CompletedAt)
             .Where(finding => finding.State == ReviewFindingState.Open)
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();
@@ -268,8 +271,8 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 : [];
         var lines = new List<string>
         {
-            $"reviewer contract-repair: attempt {attempt}/{maxAttempts}; avoided_developer_reopen=1; Reviewer task {reviewerTask.Id.Value[..8]}",
-            "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME review conclusion; do not re-review the code and do not change your verdict.",
+            $"review-finding contract-repair: attempt {attempt}/{maxAttempts}; avoided_developer_reopen=1; {reviewerTask.RequiredRole} task {reviewerTask.Id.Value[..8]}",
+            "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME conclusion; do not repeat the work and do not change your verdict.",
             $"violation_code: {violation.Code}",
             $"violation_prior_stable_id: {violation.PriorStableId ?? "none"}",
             $"violation_submitted_stable_id: {violation.SubmittedStableId ?? "none"}",
@@ -299,7 +302,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             open.Length == 0
                 ? "Rules: the canonical ledger is empty; report every finding as newly opened. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed."
                 : "Rules: reuse every carried stable_id and location exactly as printed. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed.");
-        lines.Add($"Full reviewer output: {outputArtifact}");
+        lines.Add($"Full {reviewerTask.RequiredRole} output: {outputArtifact}");
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -308,7 +311,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         TaskSpec triggeringTask)
         => ReadStructuredReviewFindingState(
             goal,
-            AgentRole.Reviewer,
+            triggeringTask.RequiredRole,
             triggeringTask.LastVerification!.CompletedAt);
 
     private static IReadOnlyList<StructuredFindingSource> ReadStructuredReviewFindingStates(

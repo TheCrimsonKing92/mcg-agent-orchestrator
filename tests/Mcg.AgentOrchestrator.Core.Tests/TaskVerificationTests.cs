@@ -42,6 +42,7 @@ public sealed class TaskVerificationTests
         var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
         var goal = kernel.CreateGoal("Persist one current-head receipt", [reviewer]);
         var recordedAt = DateTimeOffset.UtcNow;
+        var receiptNumber = 0;
         PreReviewEvidenceReceipt CreateReceipt() =>
             new(
                 goal.Id.Value,
@@ -63,7 +64,7 @@ public sealed class TaskVerificationTests
                 [],
                 "mapped",
                 "receipt\\result.trx",
-                recordedAt);
+                recordedAt.AddSeconds(receiptNumber++));
 
         kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
         kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());

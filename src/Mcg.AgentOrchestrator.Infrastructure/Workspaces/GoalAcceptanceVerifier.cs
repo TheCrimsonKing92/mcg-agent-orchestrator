@@ -585,10 +585,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 dotnetTestBuildPhase,
                 cancellationToken).ConfigureAwait(false);
             checks.Add(checkResult.Result);
-            if (!checkResult.Result.Passed)
-            {
-                break;
-            }
         }
 
         var failed = checks.FirstOrDefault(check => !check.Passed);

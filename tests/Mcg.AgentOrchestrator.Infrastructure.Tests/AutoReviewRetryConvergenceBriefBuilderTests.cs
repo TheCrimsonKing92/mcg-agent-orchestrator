@@ -748,7 +748,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             2,
             @"C:\tmp\reviewer.out.log");
 
-        Assert.StartsWith("reviewer contract-repair: attempt 1/2", brief, StringComparison.Ordinal);
+        Assert.StartsWith("review-finding contract-repair: attempt 1/2", brief, StringComparison.Ordinal);
         Assert.Contains("violation_code: ERR_REVIEW_FINDING_IDENTITY_MOVED", brief, StringComparison.Ordinal);
         Assert.Contains("open_count: 2", brief, StringComparison.Ordinal);
         Assert.Contains($"stable_id: F-1 | severity=advisory | {firstLocation}", brief, StringComparison.Ordinal);

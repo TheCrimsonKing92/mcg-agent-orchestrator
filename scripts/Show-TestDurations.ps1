@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Reads explicit TRX files, directories, wildcard paths, or recent
-  acceptance-gate attempts and prints a compact globally ranked table. Output
+  acceptance-gate or pre-review evidence attempts and prints a compact globally ranked table. Output
   is capped to the top 20 tests by default.
 
   Use -ByClass to sum test durations by class within each gate receipt set and
@@ -31,6 +31,8 @@ param(
     [string]$Goal,
 
     [string]$AttemptsRoot,
+
+    [string]$PreReviewAttemptsRoot,
 
     [switch]$ByClass,
 
@@ -94,6 +96,44 @@ function Resolve-AttemptsRoot {
     return Join-Path $repoRoot '.orchestrator\acceptance-gate-attempts'
 }
 
+function Resolve-PreReviewAttemptsRoot {
+    param(
+        [string]$ExplicitRoot,
+        [string]$AcceptanceRoot
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitRoot)) {
+        return $ExplicitRoot
+    }
+
+    return Join-Path (Split-Path -Parent $AcceptanceRoot) 'pre-review-evidence-attempts'
+}
+
+function Resolve-RecentPreReviewTrx {
+    param(
+        [string]$Root,
+        [string]$GoalFilter,
+        [int]$Count
+    )
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        return
+    }
+
+    $goalDirectories = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction Stop)
+    if (-not [string]::IsNullOrWhiteSpace($GoalFilter)) {
+        $goalDirectories = @($goalDirectories | Where-Object {
+            $_.Name.Equals($GoalFilter, [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.StartsWith($GoalFilter, [StringComparison]::OrdinalIgnoreCase)
+        })
+    }
+
+    $goalDirectories |
+        ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter '*.trx' -File -ErrorAction SilentlyContinue } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First $Count
+}
+
 function Test-PassedGateAttemptOutcome {
     param([object]$Outcome)
 
@@ -109,7 +149,7 @@ function Resolve-RecentGateAttemptTrx {
     )
 
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
-        throw "Acceptance gate attempts root not found: $Root"
+        return
     }
 
     $goalDirectories = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction Stop)
@@ -119,7 +159,7 @@ function Resolve-RecentGateAttemptTrx {
                 $_.Name.StartsWith($GoalFilter, [StringComparison]::OrdinalIgnoreCase)
         })
         if ($goalDirectories.Count -eq 0) {
-            throw "No acceptance gate attempt directory matched goal: $GoalFilter"
+            return
         }
     }
 
@@ -193,7 +233,7 @@ function Resolve-RecentGateAttemptTrx {
 
     $recent = @($attempts | Sort-Object StartedAt -Descending | Select-Object -First $Count)
     if ($recent.Count -eq 0) {
-        throw "No clean, complete acceptance gate TRX receipt sets found under: $Root"
+        return
     }
 
     $allFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
@@ -274,7 +314,14 @@ try {
         @(Resolve-TrxInput $Path)
     } else {
         $runCount = if ($ByClass) { $RecentRuns } else { 1 }
-        $recentFiles = @(Resolve-RecentGateAttemptTrx (Resolve-AttemptsRoot $AttemptsRoot) $Goal $runCount)
+        $acceptanceRoot = Resolve-AttemptsRoot $AttemptsRoot
+        $recentFiles = @(
+            @(Resolve-RecentGateAttemptTrx $acceptanceRoot $Goal $runCount)
+            @(Resolve-RecentPreReviewTrx (Resolve-PreReviewAttemptsRoot $PreReviewAttemptsRoot $acceptanceRoot) $Goal $runCount)
+        )
+        if ($recentFiles.Count -eq 0) {
+            throw "No acceptance or pre-review TRX receipt sets found for the selected goal."
+        }
         if ($ByClass) {
             $recentFiles = @($recentFiles | Where-Object {
                 $_.BaseName.IndexOf('.infrastructure-tests-', [StringComparison]::OrdinalIgnoreCase) -ge 0
