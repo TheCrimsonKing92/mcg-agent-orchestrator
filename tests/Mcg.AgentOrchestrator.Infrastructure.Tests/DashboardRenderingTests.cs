@@ -3567,7 +3567,9 @@ public sealed class GoalScopeCollisionDashboardMapperTests
             "Also change src/Feature/File.cs.",
             "workspace",
             "acceptance",
-            "follow-up");
+            "follow-up",
+            RepositoryScopeConfidence.Precise,
+            []);
 
         var dto = DashboardResponseMapper.ToGoalScopeCollisionAdvisoryDto([(item, report)]);
 

@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -16,17 +15,19 @@ internal sealed record BacklogIntakeItem(
     string SuggestedObjective,
     string WorkspacePlan,
     string AcceptanceChecks,
-    string FollowUpUpdates);
+    string FollowUpUpdates,
+    RepositoryScopeConfidence ScopeConfidence,
+    IReadOnlyList<string> ExcludedTargetFiles);
 
 internal sealed record BacklogIntakePlan(string BacklogPath, IReadOnlyList<BacklogIntakeItem> Items);
 
 internal static class BacklogIntakePlanner
 {
     internal const string TargetScopeHeadingLine = "Target files/scopes:";
-
-    private static readonly Regex PathRegex = new(
-        @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents|\.github)[\\/][A-Za-z0-9_.\\/\-]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    internal const string PreciseScopeMarkerLine = "Scope confidence: precise";
+    internal const string UnknownScopeMarkerLine = "Scope confidence: unknown";
+    internal const string ScopeIncludesHeadingLine = "Includes:";
+    internal const string ScopeExclusionsHeadingLine = "Exclusions:";
 
     public static BacklogIntakePlan Build(string backlogStorePath, string? headingFilter = null, int maxItems = 5)
     {
@@ -44,7 +45,11 @@ internal static class BacklogIntakePlanner
             .Where(item => !item.Title.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
             .Where(item => MatchesFilter(item, headingFilter))
             .Take(maxItems)
-            .Select(item => BuildItem(item.Id, item.Title, item.Body))
+            .Select(item => BuildItem(
+                item.Id,
+                item.Title,
+                item.Body,
+                ResolveRepositoryRoot(backlogStorePath)))
             .ToList();
 
         return new BacklogIntakePlan("backlog store", items);
@@ -62,20 +67,26 @@ internal static class BacklogIntakePlanner
             item.Body.Contains(headingFilter, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static BacklogIntakeItem BuildItem(string id, string heading, string body)
+    private static BacklogIntakeItem BuildItem(string id, string heading, string body, string repositoryRoot)
     {
         var text = $"{heading}\n{body}";
-        var targetFiles = InferTargetFiles(text);
+        var scope = GoalFileScopeInference.DeriveForIntake(body, repositoryRoot);
+        if (GoalFileScopeInference.IsKnownBoilerplateScopeSet(scope.Includes))
+        {
+            throw new InvalidOperationException(
+                "Newly refined target scope matched the known intake boilerplate set.");
+        }
+
         var roles = InferRoles(text);
         var risks = InferRisks(text);
         var verification = InferVerification(text);
         var dependencies = InferDependencies(text);
-        var objective = BuildObjective(heading, body, targetFiles, verification);
+        var objective = BuildObjective(heading, body, scope, verification);
         return new BacklogIntakeItem(
             id,
             heading,
             body,
-            targetFiles,
+            scope.Includes,
             roles,
             risks,
             verification,
@@ -83,41 +94,9 @@ internal static class BacklogIntakePlanner
             objective,
             "Run `workspace create <goal-prefix>` before file-touching work; use the goal worktree for dispatch, tests, acceptance, and cleanup.",
             "Inspect goal-branch diff, run focused tests named in the plan, verify worker result/evidence records, then run acceptance before merge.",
-            "Close or update the backlog item (`backlog-close`) and record goal-boundary evidence with `dogfood-log add <goal-prefix>`; durable entries live in `.orchestrator/dogfood-log.db`.");
-    }
-
-    private static List<string> InferTargetFiles(string text)
-    {
-        var paths = PathRegex.Matches(text)
-            .Select(match => match.Value.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']'))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (ContainsAny(text, "dashboard", "operator inbox", "work-summary"))
-        {
-            Add(paths, "src/Mcg.AgentOrchestrator.App/Dashboard");
-            Add(paths, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DashboardRenderingTests.cs");
-        }
-
-        if (ContainsAny(text, "lifecycle", "run-goal", "acceptance", "workspace"))
-        {
-            Add(paths, "src/Mcg.AgentOrchestrator.App/Cli");
-            Add(paths, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalWorktreeTests.cs");
-        }
-
-        if (ContainsAny(text, "subscription", "worker", "dispatch", "preflight"))
-        {
-            Add(paths, "src/Mcg.AgentOrchestrator.Infrastructure/Workers");
-            Add(paths, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs");
-        }
-
-        if (ContainsAny(text, "build", "build/test", "dotnet test", "CS2012", "MSBuild", "VBCSCompiler"))
-        {
-            Add(paths, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces");
-            Add(paths, "scripts/Invoke-IsolatedDotnet.ps1");
-        }
-
-        return paths;
+            "Close or update the backlog item (`backlog-close`) and record goal-boundary evidence with `dogfood-log add <goal-prefix>`; durable entries live in `.orchestrator/dogfood-log.db`.",
+            scope.Confidence,
+            scope.Exclusions);
     }
 
     private static List<AgentRole> InferRoles(string text)
@@ -206,7 +185,11 @@ internal static class BacklogIntakePlanner
         return dependencies.Count == 0 ? ["none"] : dependencies;
     }
 
-    private static string BuildObjective(string heading, string body, IReadOnlyList<string> targetFiles, IReadOnlyList<string> verification)
+    private static string BuildObjective(
+        string heading,
+        string body,
+        GoalFileScopeDerivation scope,
+        IReadOnlyList<string> verification)
     {
         return string.Join(Environment.NewLine, [
             $"Backlog slice: {heading}",
@@ -214,7 +197,13 @@ internal static class BacklogIntakePlanner
             body,
             string.Empty,
             TargetScopeHeadingLine,
-            .. targetFiles.Select(path => $"- {path}"),
+            scope.Confidence == RepositoryScopeConfidence.Precise
+                ? PreciseScopeMarkerLine
+                : UnknownScopeMarkerLine,
+            ScopeIncludesHeadingLine,
+            .. (scope.Includes.Count == 0 ? ["- none"] : scope.Includes.Select(path => $"- {path}")),
+            ScopeExclusionsHeadingLine,
+            .. (scope.Exclusions.Count == 0 ? ["- none"] : scope.Exclusions.Select(path => $"- {path}")),
             string.Empty,
             "Verification:",
             .. verification.Select(check => $"- {check}")
@@ -226,11 +215,15 @@ internal static class BacklogIntakePlanner
         return needles.Any(needle => text.Contains(needle, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static void Add(List<string> paths, string path)
+    private static string ResolveRepositoryRoot(string backlogStorePath)
     {
-        if (!paths.Contains(path, StringComparer.OrdinalIgnoreCase))
+        var storeDirectory = Path.GetDirectoryName(Path.GetFullPath(backlogStorePath))
+            ?? Environment.CurrentDirectory;
+        if (Path.GetFileName(storeDirectory).Equals(".orchestrator", StringComparison.OrdinalIgnoreCase))
         {
-            paths.Add(path);
+            return Directory.GetParent(storeDirectory)?.FullName ?? storeDirectory;
         }
+
+        return storeDirectory;
     }
 }

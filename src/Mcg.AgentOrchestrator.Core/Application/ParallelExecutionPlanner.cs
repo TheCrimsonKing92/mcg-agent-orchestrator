@@ -146,6 +146,15 @@ public static class ParallelExecutionPlanner
                 return true;
             }
 
+            if ((intent.ScopeConfidence == RepositoryScopeConfidence.Unknown ||
+                 other.ScopeConfidence == RepositoryScopeConfidence.Unknown) &&
+                TouchesWorkspace(intent) &&
+                TouchesWorkspace(other))
+            {
+                reason = "unknown repository scope requires serialization";
+                return true;
+            }
+
             if (OverlapsPaths(intent.TargetPaths, other.TargetPaths))
             {
                 reason = "target path overlap";
@@ -195,7 +204,8 @@ public static class ParallelExecutionPlanner
             intent.RequiresOperatorApproval,
             intent.ProviderKey,
             intent.ProviderSlots,
-            intent.DependsOn);
+            intent.DependsOn,
+            intent.ScopeConfidence);
     }
 
     private static List<string> BuildApprovalReasons(
@@ -224,7 +234,10 @@ public static class ParallelExecutionPlanner
 
     private static bool TouchesWorkspace(ParallelExecutionIntent intent)
     {
-        return intent.TargetPaths.Count > 0 || intent.MutatesWorkspaceLifecycle || intent.RunsAcceptance;
+        return intent.ScopeConfidence == RepositoryScopeConfidence.Unknown ||
+            intent.TargetPaths.Count > 0 ||
+            intent.MutatesWorkspaceLifecycle ||
+            intent.RunsAcceptance;
     }
 
     private static bool SharesGoal(ParallelExecutionIntent left, ParallelExecutionIntent right)
@@ -255,11 +268,18 @@ public sealed record ParallelExecutionIntent(
     bool RequiresOperatorApproval = false,
     string? ProviderKey = null,
     int ProviderSlots = 1,
-    IReadOnlyList<string>? DependsOn = null)
+    IReadOnlyList<string>? DependsOn = null,
+    RepositoryScopeConfidence ScopeConfidence = RepositoryScopeConfidence.Precise)
 {
     public IReadOnlyList<string> TargetPaths { get; } = TargetPaths ?? [];
     public IReadOnlyList<string> RequiredResources { get; } = RequiredResources ?? [];
     public IReadOnlyList<string> DependsOn { get; } = DependsOn ?? [];
+}
+
+public enum RepositoryScopeConfidence
+{
+    Precise,
+    Unknown
 }
 
 public sealed record ParallelExecutionProviderQuota(string ProviderKey, int AvailableSlots);

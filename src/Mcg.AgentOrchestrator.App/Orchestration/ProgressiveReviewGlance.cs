@@ -42,6 +42,7 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int DiffCharacterLimit = 8000,
     int TranscriptCharacterLimit = 3000,
     int TranscriptTailByteLimit = ProgressiveReviewGlanceLimits.DefaultTranscriptTailByteLimit,
+    int TaskBriefCharacterLimit = 4000,
     TimeSpan? DispatchTimeout = null)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
@@ -56,11 +57,14 @@ internal sealed record ProgressiveReviewGlanceInputs(
     ProgressiveReviewGlanceTriggerKind Trigger,
     string TriggerDetail,
     string GoalObjective,
+    string TaskBrief,
     string AcceptanceSection,
     IReadOnlyList<string> CriteriaCorrectionOverlay,
     IReadOnlyList<string> ChangedFiles,
     string DiffExcerpt,
-    string TranscriptTail);
+    string TranscriptTail,
+    IReadOnlyList<string> TrustedScopePaths,
+    RepositoryScopeConfidence ScopeConfidence);
 
 internal sealed record ProgressiveReviewGlanceDispatchResult(
     ProgressiveReviewGlanceVerdict Verdict,
@@ -213,9 +217,16 @@ Return only JSON:
 {"verdict":"on-track|concern|fundamental-misdirection","note":"short evidence-grounded note","evidenceLine":"single strongest evidence line"}
 
 High bar: use fundamental-misdirection only for a defective criterion, forbidden scope, or provably impossible task. Concerns are queued advisory evidence only. Never ask to cancel unless the evidence is fundamental.
+The current task brief and trusted scope below are authoritative over generated intake fallback text. Unknown scope is absence of evidence: it must never justify a scope-deviation verdict.
 
 Goal:
 {{inputs.GoalObjective}}
+
+Current task brief:
+{{inputs.TaskBrief}}
+
+Trusted repository scope ({{inputs.ScopeConfidence}}):
+{{(inputs.TrustedScopePaths.Count == 0 ? "unknown" : string.Join(Environment.NewLine, inputs.TrustedScopePaths.Select(path => "- " + path)))}}
 
 Acceptance and criteria:
 {{inputs.AcceptanceSection}}
@@ -323,12 +334,14 @@ Transcript tail:
             return;
         }
 
+        var scope = GoalFileScopeInference.ForScheduling(goal, task);
         var inputs = new ProgressiveReviewGlanceInputs(
             goal.Id.Value,
             task.Id.Value,
             trigger.Value,
             triggerDetail,
             BoundBlock(goal.Objective, _options.ObjectiveCharacterLimit),
+            BoundBlock(task.Description, _options.TaskBriefCharacterLimit),
             BuildAcceptanceSection(goal, task, _options.AcceptanceCharacterLimit),
             BoundList(
                 FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections),
@@ -337,7 +350,9 @@ Transcript tail:
                 CriteriaCorrectionLabel),
             BoundChangedFiles(snapshot),
             BoundBlock(_diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit), _options.DiffCharacterLimit),
-            BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit));
+            BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit),
+            scope.Includes,
+            scope.Confidence);
         var inputHash = HashInputs(inputs);
         var stopwatch = Stopwatch.StartNew();
         Task<ProgressiveReviewGlanceDispatchResult> run;
@@ -398,7 +413,7 @@ Transcript tail:
 
             _running.RemoveAt(index);
             running.Stopwatch.Stop();
-            var result = Complete(running);
+            var result = GuardUnsupportedScopeVerdict(running.Inputs, Complete(running));
             var inputTokens = result.InputTokens ?? EstimateTokens(BuildPrompt(running.Inputs));
             var outputTokens = result.OutputTokens ?? EstimateTokens(result.Note + result.EvidenceLine);
             var totalTokens = inputTokens + outputTokens;
@@ -521,6 +536,48 @@ Transcript tail:
                 BoundSingleLine(ex.Message, 300));
         }
     }
+
+    internal static ProgressiveReviewGlanceDispatchResult GuardUnsupportedScopeVerdict(
+        ProgressiveReviewGlanceInputs inputs,
+        ProgressiveReviewGlanceDispatchResult result)
+    {
+        if (result.Verdict != ProgressiveReviewGlanceVerdict.FundamentalMisdirection ||
+            !LooksLikeScopeDeviation(result.Note + " " + result.EvidenceLine))
+        {
+            return result;
+        }
+
+        var changedFiles = inputs.ChangedFiles
+            .Where(path => !path.Contains("more changed file", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var allChangesWithinTrustedScope =
+            inputs.ScopeConfidence == RepositoryScopeConfidence.Precise &&
+            inputs.TrustedScopePaths.Count > 0 &&
+            changedFiles.Length > 0 &&
+            changedFiles.All(changed => inputs.TrustedScopePaths.Any(scope =>
+                changed.Equals(scope, StringComparison.OrdinalIgnoreCase) ||
+                changed.StartsWith(scope.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)));
+        if (inputs.ScopeConfidence != RepositoryScopeConfidence.Unknown && !allChangesWithinTrustedScope)
+        {
+            return result;
+        }
+
+        var reason = inputs.ScopeConfidence == RepositoryScopeConfidence.Unknown
+            ? "scope is unknown"
+            : "changed files are within the authoritative task scope";
+        return result with
+        {
+            Verdict = ProgressiveReviewGlanceVerdict.Concern,
+            Note = $"Scope-only fundamental verdict downgraded because {reason}: {result.Note}"
+        };
+    }
+
+    private static bool LooksLikeScopeDeviation(string text) =>
+        text.Contains("scope deviation", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("outside scope", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("outside the scope", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("forbidden scope", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("target file", StringComparison.OrdinalIgnoreCase);
 
     private void RaiseMisdirectionAttention(RunningGlance running, ProgressiveReviewGlanceDispatchResult result)
     {

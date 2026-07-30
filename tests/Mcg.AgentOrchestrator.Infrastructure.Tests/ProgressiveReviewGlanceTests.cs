@@ -5,6 +5,64 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ProgressiveReviewGlanceTests
 {
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_goal_625_core_first_scope_does_not_steer_from_canned_intake")]
+    public void Goal625CoreFirstScopeDoesNotSteerFromCannedIntake()
+    {
+        var inputs = new ProgressiveReviewGlanceInputs(
+            "goal-625",
+            "developer",
+            ProgressiveReviewGlanceTriggerKind.ChangedFiles,
+            "changed_files=3",
+            $"Canned intake{Environment.NewLine}{BacklogIntakePlanner.TargetScopeHeadingLine}{Environment.NewLine}- src/Mcg.AgentOrchestrator.App/Cli",
+            "Implement the plan-aligned Core-first increment in src/Mcg.AgentOrchestrator.Core.",
+            "Pass focused tests.",
+            [],
+            ["src/Mcg.AgentOrchestrator.Core/Application/ParallelExecutionPlanner.cs"],
+            "diff",
+            "transcript",
+            ["src/Mcg.AgentOrchestrator.Core"],
+            RepositoryScopeConfidence.Precise);
+        var modelResult = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Core is outside the scope listed by canned intake target files.",
+            "target file differs from App/Cli");
+
+        var guarded = ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(inputs, modelResult);
+        var prompt = ProgressiveReviewGlanceCoordinator.BuildPrompt(inputs);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, guarded.Verdict);
+        Xunit.Assert.Contains("Current task brief", prompt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Core-first increment", prompt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("authoritative over generated intake fallback", prompt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_unknown_scope_cannot_support_scope_deviation_steer")]
+    public void UnknownScopeCannotSupportScopeDeviationSteer()
+    {
+        var inputs = new ProgressiveReviewGlanceInputs(
+            "goal-unknown",
+            "developer",
+            ProgressiveReviewGlanceTriggerKind.ChangedFiles,
+            "changed_files=3",
+            "No declared paths.",
+            "Implement the current task.",
+            "Pass focused tests.",
+            [],
+            ["src/Feature/File.cs"],
+            "diff",
+            "transcript",
+            [],
+            RepositoryScopeConfidence.Unknown);
+        var modelResult = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "Changed file is outside scope.",
+            "scope deviation");
+
+        var guarded = ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(inputs, modelResult);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, guarded.Verdict);
+    }
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_triggers_on_file_count_elapsed_budget_and_concurrent_cap")]
     public void TriggersOnFileCountElapsedBudgetAndConcurrentCap()
     {
