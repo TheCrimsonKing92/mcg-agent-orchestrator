@@ -350,7 +350,8 @@ public sealed partial class AgentOrchestratorKernel
                 priorEvidenceLines,
                 [
                     "## Prior Task Evidence",
-                    "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit; open prior-task-evidence.md second only when fuller verification output is needed.",
+                    "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit. " +
+                    "When a completed Planner is present, read its complete Durable Planner Plan in prior-task-evidence.md before implementation; otherwise open fuller evidence only when needed.",
                     string.Empty
                 ],
                 CollapsePriority: 10));

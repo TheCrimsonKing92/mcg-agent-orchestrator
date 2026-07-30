@@ -9,12 +9,25 @@ public static class AgentOutputDirectives
     public static IReadOnlyList<string> WorkerResultTemplateLines =>
         WorkerResultTemplateLinesForRole(null);
 
-    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role) =>
-    [
-        "WORKER_RESULT:",
-        .. WorkerResultFieldTemplateLinesForRole(role),
-        "END_WORKER_RESULT"
-    ];
+    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role)
+    {
+        var lines = new List<string>();
+        if (role == AgentRole.Planner)
+        {
+            lines.Add(
+                "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; a summary or private model-home file path alone is invalid. " +
+                "Use these exact substantive headings: ## Premise validity; ## Acceptance criteria mapping; ## Target seams and symbols; " +
+                "## Ownership and lifecycle; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
+                "State valid/invalid premise evidence, criterion mappings, backticked file/symbol citations, the owner/lifecycle decision, integration sequence, " +
+                "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
+                "Cited repository paths must exist unless explicitly marked as a new file to create.");
+        }
+
+        lines.Add("WORKER_RESULT:");
+        lines.AddRange(WorkerResultFieldTemplateLinesForRole(role));
+        lines.Add("END_WORKER_RESULT");
+        return lines;
+    }
 
     public static IReadOnlyList<string> WorkerResultFieldNames => BaseWorkerResultFields;
 

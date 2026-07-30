@@ -557,6 +557,11 @@ internal sealed class WorkerArtifactWriter
             lines.Add($"Verification result: {SummarizeVerificationResult(verification)}");
             lines.Add($"Risks: {SummarizeRisks(verification)}");
             lines.Add($"Model fit: {SummarizeModelFit(verification)}");
+            if (priorTask.RequiredRole == AgentRole.Planner &&
+                TryResolveDurablePlannerPlan(verification, out _))
+            {
+                lines.Add("Durable plan: complete Planner plan is in prior-task-evidence.md and is required implementation input.");
+            }
         }
 
         return string.Join(Environment.NewLine, lines);
@@ -590,8 +595,21 @@ internal sealed class WorkerArtifactWriter
             }
 
             lines.Add(string.Empty);
-            lines.Add("### Stdout");
-            lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, PriorVerificationMaxChars));
+            if (priorTask.RequiredRole == AgentRole.Planner &&
+                TryResolveDurablePlannerPlan(verification, out var plannerPlan))
+            {
+                lines.Add("### Durable Planner Plan");
+                lines.Add(plannerPlan);
+                lines.Add(string.Empty);
+                lines.Add("### Planner WORKER_RESULT Receipt");
+                lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, SummaryFieldMaxChars * 4));
+            }
+            else
+            {
+                lines.Add("### Stdout");
+                lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, PriorVerificationMaxChars));
+            }
+
             if (!string.IsNullOrWhiteSpace(verification.StandardError))
             {
                 lines.Add(string.Empty);
@@ -601,6 +619,25 @@ internal sealed class WorkerArtifactWriter
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static bool TryResolveDurablePlannerPlan(
+        TaskVerificationRecord verification,
+        out string plan)
+    {
+        var capturedOutput = verification.StandardOutput;
+        if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
+            File.Exists(verification.StandardOutputPath))
+        {
+            capturedOutput = PlannerOutputContract.ReadCapturedOutputTail(verification.StandardOutputPath);
+        }
+
+        var result = PlannerOutputContract.Resolve(
+            capturedOutput,
+            verification.StandardError,
+            verification.WorkingDirectory);
+        plan = result.Plan ?? string.Empty;
+        return result.Succeeded && plan.Length > 0;
     }
 
     private static List<string> CopyGuidanceFiles(string workingDirectory, string contextDirectory)

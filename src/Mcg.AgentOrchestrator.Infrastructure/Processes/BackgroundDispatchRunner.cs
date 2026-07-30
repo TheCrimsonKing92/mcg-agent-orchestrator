@@ -960,6 +960,44 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var task = kernel.GetTask(goalId, taskId);
+        var ingestedPlannerReceipt = string.Empty;
+        if (task.RequiredRole == AgentRole.Planner && exitCode == 0)
+        {
+            var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
+            var plannerContract = PlannerOutputContract.Resolve(
+                capturedPlannerOutput,
+                decisionStandardError,
+                processRecord.WorkingDirectory);
+            if (!plannerContract.Succeeded || plannerContract.Plan is null)
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    plannerContract.Diagnostic);
+            }
+            else if (plannerContract.IngestedPath is { } ingestedPath)
+            {
+                ingestedPlannerReceipt = PlannerOutputContract.BuildIngestedReceipt(
+                    ingestedPath,
+                    plannerContract.Plan);
+                if (!PlannerOutputContract.TryAppendIngestedReceipt(
+                        processRecord.StandardOutputPath,
+                        ingestedPath,
+                        plannerContract.Plan,
+                        out var appendDiagnostic))
+                {
+                    exitCode = 1;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        $"Planner output contract could not make the external plan durable: {appendDiagnostic}. Retry Planner for contract repair.");
+                }
+                else
+                {
+                    decisionStandardOutput += ingestedPlannerReceipt;
+                }
+            }
+        }
+
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
         var hasCommittedChanges = false;
@@ -1129,7 +1167,7 @@ public sealed class BackgroundDispatchRunner
 
         var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
             ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
-        var standardOutput = outputSnapshot.BoundedText;
+        var standardOutput = outputSnapshot.BoundedText + ingestedPlannerReceipt;
         var standardError = AppendDiagnostic(
             errorSnapshot.BoundedText,
             standardErrorDiagnostic);

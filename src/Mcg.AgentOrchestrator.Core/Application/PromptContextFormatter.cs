@@ -219,6 +219,11 @@ internal static class PromptContextFormatter
             "## Prior Task Evidence",
             "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit; open prior-task-evidence.md second only when fuller verification output is needed."
         };
+        if (priorCompletedTasks.Any(task => task.RequiredRole == AgentRole.Planner))
+        {
+            lines.Add("A completed Planner is present: read its complete Durable Planner Plan in prior-task-evidence.md before implementation; a summary or external path is not the downstream handoff.");
+        }
+
         foreach (var priorTask in priorCompletedTasks)
         {
             var verification = priorTask.LastVerification!;
