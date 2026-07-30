@@ -4134,7 +4134,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, workerStarts);
         Assert.Equal(1, summary.Escalated);
         Assert.Contains(
-            active.Timeline,
+            kernel.GetGoal(active.Id).Timeline,
             progress => progress.Message.Contains(
                 $"dependency-terminal-without-landing: {dependencyId.Value[..8]}",
                 StringComparison.Ordinal));
