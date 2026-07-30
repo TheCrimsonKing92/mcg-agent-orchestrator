@@ -376,7 +376,8 @@ public sealed class DispatchProcessHostTests
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { });
 
             var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
             Assert.True(Directory.Exists(sandboxBin));
@@ -412,7 +413,8 @@ public sealed class DispatchProcessHostTests
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
@@ -447,7 +449,8 @@ public sealed class DispatchProcessHostTests
             DispatchProcessHost.ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))));
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));

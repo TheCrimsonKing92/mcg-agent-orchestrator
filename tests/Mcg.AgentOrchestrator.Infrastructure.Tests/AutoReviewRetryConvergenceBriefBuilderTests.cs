@@ -109,7 +109,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 reviewerScopeChangedFiles: ["src/B.cs"],
                 reviewerRoundTouchedAnchors: reviewer.LastDispatch.ReviewFindingTouchedAnchors);
             Assert.Contains("OPEN_ACTIVE_RECHECK count=1", reviewerBrief.Content);
-            Assert.Contains($"- F-B | {anchorB}", reviewerBrief.Content);
+            Assert.Contains($"- F-B | severity=blocking | {anchorB}", reviewerBrief.Content);
             Assert.Contains("RESOLVED_CARRIED count=1", reviewerBrief.Content);
             var openScope = reviewerBrief.Content[
                 reviewerBrief.Content.IndexOf("OPEN_ACTIVE_RECHECK", StringComparison.Ordinal)..
