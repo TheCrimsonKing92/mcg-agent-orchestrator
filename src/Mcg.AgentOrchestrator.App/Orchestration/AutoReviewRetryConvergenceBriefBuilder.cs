@@ -47,6 +47,19 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 changedFileScopes);
         }
 
+        if (triggeringTask.RequiredRole == AgentRole.Tester &&
+            triggeringTask.LastVerification?.MergedReviewFindings is { Count: > 0 } testerFindings)
+        {
+            return BuildStructuredConvergenceBrief(
+                round,
+                triggeringTask,
+                triggerLabel,
+                targetRole,
+                outputArtifact,
+                testerFindings,
+                changedFileScopes);
+        }
+
         var accumulatedFindings = CollectAccumulatedTesterFindings(goal, targetTask, triggeringTask, currentFinding);
         return BuildConvergenceBrief(
             round,
@@ -86,7 +99,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
 
         var lines = new List<string>
         {
-            $"auto-review-retry round {round} convergence brief: Reviewer task {triggeringTask.Id.Value[..8]} {triggerLabel}; retry upstream {targetRole} task.",
+            $"auto-review-retry round {round} convergence brief: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} {triggerLabel}; retry upstream {targetRole} task.",
             AcceptedShapePreamble,
             "## RESIDUAL_OPEN_ACTION_ITEMS",
             $"open_count: {open.Length}"
@@ -207,12 +220,12 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 if (task.RequiredRole == AgentRole.Tester &&
                     WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var testerBlocker))
                 {
-                    findings.AddRange(SplitConvergenceFindings(testerBlocker));
+                    findings.Add(testerBlocker.Trim());
                 }
             }
         }
 
-        findings.AddRange(SplitConvergenceFindings(currentFinding));
+        findings.Add(currentFinding.Trim());
         return findings;
     }
 

@@ -333,6 +333,7 @@ public sealed partial class AgentOrchestratorKernel
             verification.MergedReviewFindings is null &&
             !TryBuildMergedReviewFindingState(
                 goal,
+                AgentRole.Reviewer,
                 verification,
                 out mergedFindings,
                 out var findingDiagnostic,
@@ -471,13 +472,22 @@ public sealed partial class AgentOrchestratorKernel
         TaskVerificationRecord verification)
     {
         if (!verification.WorkerResultPresent ||
-            task.RequiredRole != AgentRole.Reviewer)
+            task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
+            return verification;
+        }
+
+        if (task.RequiredRole == AgentRole.Tester &&
+            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _))
+        {
+            // Structured Tester findings are opt-in so existing Tester workers remain compatible.
+            // When present they use the same stable-identity ledger as Reviewer findings.
             return verification;
         }
 
         if (!TryBuildMergedReviewFindingState(
                 goal,
+                task.RequiredRole,
                 verification,
                 out var mergedFindings,
                 out _,
@@ -493,7 +503,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 task.Id,
                 ProgressKind.TaskNote,
-                $"Canonicalized Reviewer finding identity at exact anchor {canonicalization.Anchor}: " +
+                $"Canonicalized {task.RequiredRole} finding identity at exact anchor {canonicalization.Anchor}: " +
                 $"submitted_stable_id={canonicalization.SubmittedStableId}; " +
                 $"canonical_stable_id={canonicalization.PriorStableId}.");
         }
@@ -503,6 +513,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private static bool TryBuildMergedReviewFindingState(
         Goal goal,
+        AgentRole role,
         TaskVerificationRecord currentVerification,
         out IReadOnlyList<ReviewFinding> state,
         out string diagnostic,
@@ -514,7 +525,7 @@ public sealed partial class AgentOrchestratorKernel
         violation = null;
         canonicalizations = [];
         var historicalVerifications = goal.Tasks
-            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+            .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
             .Where(candidate => !ReferenceEquals(candidate, currentVerification));
         foreach (var verification in historicalVerifications

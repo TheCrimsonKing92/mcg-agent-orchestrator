@@ -2,6 +2,39 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskVerificationTests
 {
+    [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_round_trips_through_snapshot")]
+    public void PreReviewEvidenceReceiptRoundTripsThroughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist pre-review evidence", [reviewer]);
+        kernel.RecordPreReviewEvidence(
+            goal.Id,
+            reviewer.Id,
+            new PreReviewEvidenceReceipt(
+                goal.Id.Value,
+                3,
+                "candidate-sha",
+                ["dotnet test --filter FocusedTests"],
+                PreReviewEvidenceDisposition.Green,
+                1,
+                0,
+                [new PreReviewEvidenceCheckReceipt("focused", "dotnet test --filter FocusedTests", true, 0, "receipt")],
+                [],
+                "mapped",
+                "receipt\\result.trx",
+                DateTimeOffset.UtcNow));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var receipt = restored.GetGoal(goal.Id).FindTask(reviewer.Id).PreReviewEvidenceReceipt;
+
+        Assert.NotNull(receipt);
+        Assert.Equal(3, receipt.ReviewerRound);
+        Assert.Equal("candidate-sha", receipt.CandidateSha);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, receipt.Disposition);
+        Assert.Equal("receipt\\result.trx", receipt.EvidencePointer);
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_persists_result_and_timeline_event")]
     public void RecordTaskVerificationPersistsResultAndTimelineEvent()
 {

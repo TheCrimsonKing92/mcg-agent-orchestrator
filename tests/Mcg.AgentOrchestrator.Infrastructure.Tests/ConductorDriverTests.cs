@@ -305,7 +305,9 @@ public sealed class ConductorDriverTests
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
         TimeSpan? buildServerShutdownTimeout = null,
-        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null)
+        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null,
+        Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
+        Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -344,8 +346,53 @@ public sealed class ConductorDriverTests
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
             retryTaskWithRoundKind: retryTaskWithRoundKind,
             buildServerShutdownTimeout: buildServerShutdownTimeout,
-            writeEscalationWithResult: writeEscalationWithResult);
+            writeEscalationWithResult: writeEscalationWithResult,
+            getPreReviewEvidenceContext: getPreReviewEvidenceContext,
+            recordPreReviewEvidence: recordPreReviewEvidence);
     }
+
+    private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
+        new(
+            sha,
+            [
+                "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter FullyQualifiedName~ConductorDriverTests"
+            ],
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests",
+            "Orchestration change mapped to ConductorDriverTests.",
+            NoApplicableTests: false,
+            MappingNeedsInput: false);
+
+    private static FocusedEvidenceRunResult PassingPreReviewEvidence(string request) =>
+        new(
+            request,
+            Accepted: true,
+            Passed: true,
+            Summary: "focused evidence passed: 1 check",
+            Checks:
+            [
+                new AcceptanceCheckResult(
+                    "pre-review focused evidence",
+                    true,
+                    0,
+                    "Passed: 7",
+                    ArtifactsPath: "C:\\receipts\\green",
+                    TestResultPaths: ["C:\\receipts\\green\\result.trx"])
+            ]);
+
+    private static PreReviewEvidenceReceipt GreenPreReviewReceipt(Goal goal, string sha) =>
+        new(
+            goal.Id.Value,
+            1,
+            sha,
+            FocusedPreReviewContext(sha).SelectedFocusedTests,
+            PreReviewEvidenceDisposition.Green,
+            PassedCheckCount: 1,
+            FailedCheckCount: 0,
+            Checks: [],
+            FailingTestIdentities: [],
+            MappingReason: "seed",
+            EvidencePointer: "C:\\receipts\\seed",
+            RecordedAt: DateTimeOffset.UtcNow);
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
     {
@@ -2550,6 +2597,204 @@ public sealed class ConductorDriverTests
         Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived);
         Assert.Contains(goal.Timeline, evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_missing_receipt_runs_mapped_focused_tests_before_reviewer_dispatch")]
+    public void ConductorDriverPreReviewMissingReceiptRunsMappedFocusedTestsBeforeReviewerDispatch()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var focusedRuns = 0;
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => FocusedPreReviewContext("abc123"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                Assert.Contains("ConductorDriverTests", request, StringComparison.Ordinal);
+                return PassingPreReviewEvidence(request);
+            },
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            dispatchAndStart: _ =>
+            {
+                Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.Equal(1, dispatches);
+        Assert.Equal("abc123", reviewer.PreReviewEvidenceReceipt?.CandidateSha);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_stale_sha_reruns_and_same_sha_green_is_idempotent")]
+    public void ConductorDriverPreReviewStaleShaRerunsAndSameShaGreenIsIdempotent()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        kernel.RecordPreReviewEvidence(
+            goal.Id,
+            reviewer.Id,
+            GreenPreReviewReceipt(goal, "old-sha"));
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => FocusedPreReviewContext("new-sha"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return PassingPreReviewEvidence(request);
+            },
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.Equal("new-sha", reviewer.PreReviewEvidenceReceipt?.CandidateSha);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_red_routes_developer_with_exact_failing_test_ids")]
+    public void ConductorDriverPreReviewRedRoutesDeveloperWithExactFailingTestIds()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => FocusedPreReviewContext("red-sha"),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: false,
+                Summary: "one focused test failed",
+                Checks:
+                [
+                    new AcceptanceCheckResult(
+                        "pre-review focused evidence",
+                        false,
+                        1,
+                        "[FAIL] Mcg.Tests.ConductorDriverBlocksReview: expected true",
+                        ArtifactsPath: "C:\\receipts\\red",
+                        TestResultPaths: ["C:\\receipts\\red\\result.trx"])
+                ]),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Contains("Mcg.Tests.ConductorDriverBlocksReview", retryMessage, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(PreReviewEvidenceDisposition.Red, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Equal(
+            ["Mcg.Tests.ConductorDriverBlocksReview"],
+            reviewer.PreReviewEvidenceReceipt?.FailingTestIdentities);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_no_applicable_tests_is_explicit_green_path")]
+    public void ConductorDriverPreReviewNoApplicableTestsIsExplicitGreenPath()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var focusedRuns = 0;
+        var dispatched = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "docs-sha",
+                [],
+                null,
+                "Documentation-only change; no build or test command is required.",
+                NoApplicableTests: true,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return PassingPreReviewEvidence(request);
+            },
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            dispatchAndStart: _ =>
+            {
+                dispatched = true;
+                return DispatchStartOutcome.Started();
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.True(dispatched);
+        Assert.Equal(PreReviewEvidenceDisposition.NoApplicableTests, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Contains("Documentation-only", reviewer.PreReviewEvidenceReceipt?.MappingReason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_mapping_needs_input_blocks_paid_reviewer_start")]
+    public void ConductorDriverPreReviewMappingNeedsInputBlocksPaidReviewerStart()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var dispatched = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "unmapped-sha",
+                ["dotnet test broad"],
+                null,
+                "Changed files do not map to a focused target.",
+                NoApplicableTests: false,
+                MappingNeedsInput: true),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            dispatchAndStart: _ =>
+            {
+                dispatched = true;
+                return DispatchStartOutcome.Started();
+            },
+            writeEscalation: (_, _, message) => escalation = message);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(dispatched);
+        Assert.Contains("PRE_REVIEW_MAPPING_NEEDS_INPUT", escalation, StringComparison.Ordinal);
+        Assert.Equal(PreReviewEvidenceDisposition.MappingNeedsInput, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_contract_violation_mechanically_retries_the_same_reviewer")]

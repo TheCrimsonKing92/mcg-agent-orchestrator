@@ -8,6 +8,17 @@ using System.Text.Json.Nodes;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_pre_review_attempt_namespace_cannot_collide_with_acceptance")]
+    public void GoalAcceptanceVerifierPreReviewAttemptNamespaceCannotCollideWithAcceptance()
+    {
+        var preReview = GoalAcceptanceVerifier.OwnerResultsAttemptRoot("pre-review");
+        var acceptance = GoalAcceptanceVerifier.OwnerResultsAttemptRoot("gate");
+
+        Assert.Equal("pre-review-evidence-attempts", preReview);
+        Assert.Equal("acceptance-gate-attempts", acceptance);
+        Assert.NotEqual(preReview, acceptance);
+    }
+
     [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_decodes_legacy_console_bytes_without_replacement")]
     [Xunit.InlineData(0xFA)]
     [Xunit.InlineData(0xB7)]

@@ -6,6 +6,55 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.ChaosGateGit)]
 public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "BuildConvergenceBrief_preserves_every_typed_tester_finding")]
+    public void BuildConvergenceBriefPreservesEveryTypedTesterFinding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Repair.", AgentRole.Developer);
+        var tester = new TaskSpec(TaskId.New(), "Verify.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Preserve tester findings", [developer, tester]);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                "test",
+                "C:\\repo",
+                1,
+                "typed tester findings",
+                "",
+                DateTimeOffset.UtcNow,
+                MergedReviewFindings:
+                [
+                    new ReviewFinding(
+                        "tester-alpha",
+                        ReviewFindingState.Open,
+                        new ReviewFindingLocation("tests/A.cs", "CaseA"),
+                        "First Tester failure."),
+                    new ReviewFinding(
+                        "tester-beta",
+                        ReviewFindingState.Open,
+                        new ReviewFindingLocation("tests/B.cs", "CaseB"),
+                        "Second Tester failure.")
+                ]));
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            tester,
+            "fallback blocker text",
+            "reported typed failures",
+            AgentRole.Developer,
+            1,
+            "C:\\logs\\tester.out",
+            ["tests/A.cs", "tests/B.cs"]);
+
+        Assert.Contains("stable_id: tester-alpha", brief, StringComparison.Ordinal);
+        Assert.Contains("First Tester failure.", brief, StringComparison.Ordinal);
+        Assert.Contains("stable_id: tester-beta", brief, StringComparison.Ordinal);
+        Assert.Contains("Second Tester failure.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("fallback blocker text", brief, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
     public void OrdersSpecFindingsAndPreservesLegacyCategorylessShape()
     {

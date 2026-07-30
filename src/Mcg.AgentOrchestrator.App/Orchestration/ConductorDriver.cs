@@ -8,6 +8,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal sealed record PreReviewEvidenceContext(
+    string? CandidateSha,
+    IReadOnlyList<string> SelectedFocusedTests,
+    string? FocusedRequest,
+    string MappingReason,
+    bool NoApplicableTests,
+    bool MappingNeedsInput);
+
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
@@ -45,6 +53,8 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
+    private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
+    private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRequestReceived;
@@ -473,6 +483,8 @@ internal sealed class ConductorDriver
             kernel.RecordReviewerEvidenceRequestReceived(goalId, taskId, message);
         _recordReviewerEvidenceRunRecorded = (goalId, taskId, message) =>
             kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message);
+        _recordPreReviewEvidence = (goalId, taskId, receipt) =>
+            kernel.RecordPreReviewEvidence(goalId, taskId, receipt);
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
         _recordAcceptanceFailure = (
@@ -641,6 +653,10 @@ internal sealed class ConductorDriver
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
         };
+        _getPreReviewEvidenceContext = goal =>
+            BuildPreReviewEvidenceContext(
+                TryResolveAcceptanceBranchHead(goal),
+                _getLandingFileScopes(goal));
     }
 
     internal ConductorDriver(
@@ -691,7 +707,9 @@ internal sealed class ConductorDriver
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
         TimeSpan? buildServerShutdownTimeout = null,
-        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null)
+        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null,
+        Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
+        Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -715,6 +733,15 @@ internal sealed class ConductorDriver
             Passed: false,
             Summary: "focused evidence runner was not configured",
             Checks: []));
+        _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
+            (_ => new PreReviewEvidenceContext(
+                CandidateSha: "test-constructor-candidate",
+                SelectedFocusedTests: [],
+                FocusedRequest: null,
+                MappingReason: "test constructor supplied no changed-file mapping",
+                NoApplicableTests: true,
+                MappingNeedsInput: false));
+        _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _retryTask = retryTaskWithRoundKind
             ?? (retryTask is not null
                 ? ((goalId, taskId, message, _) => retryTask(goalId, taskId, message))
@@ -1739,6 +1766,11 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         GoalLifecycleState fromState)
     {
+        if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
+        {
+            return preReviewResult;
+        }
+
         var running = _getRunningPaidWorkerCount();
         var workerCap = policy.MaxConcurrentPaidWorkers;
         if (_hasGateReadyGoal())
@@ -1846,6 +1878,328 @@ internal sealed class ConductorDriver
 
         return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
     }
+
+    private bool TryRunPreReviewEvidenceStage(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState fromState,
+        out ConductorAdvanceResult result)
+    {
+        result = default!;
+        var reviewerTask = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Reviewer);
+        if (reviewerTask is null ||
+            reviewerTask.Status != WorkTaskStatus.Assigned ||
+            !TasksBefore(goal, reviewerTask).All(task => task.Status == WorkTaskStatus.Completed))
+        {
+            return false;
+        }
+
+        var context = _getPreReviewEvidenceContext(goal);
+        if (string.IsNullOrWhiteSpace(context.CandidateSha))
+        {
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                "PRE_REVIEW_MAPPING_NEEDS_INPUT: current candidate HEAD could not be resolved; Reviewer dispatch is blocked.");
+            return true;
+        }
+
+        var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
+        if (reviewerTask.PreReviewEvidenceReceipt is { } current &&
+            current.Matches(goal.Id.Value, round, context.CandidateSha, context.SelectedFocusedTests))
+        {
+            if (current.Disposition is PreReviewEvidenceDisposition.Green or PreReviewEvidenceDisposition.NoApplicableTests)
+            {
+                return false;
+            }
+
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_{current.Disposition.ToString().ToUpperInvariant()}: current receipt for round {round}, " +
+                $"candidate {context.CandidateSha} is not Reviewer-eligible; pointer={current.EvidencePointer ?? "none"}.");
+            return true;
+        }
+
+        if (context.NoApplicableTests)
+        {
+            RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.NoApplicableTests,
+                [],
+                [],
+                evidencePointer: null);
+            return false;
+        }
+
+        if (context.MappingNeedsInput || string.IsNullOrWhiteSpace(context.FocusedRequest))
+        {
+            var receipt = RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.MappingNeedsInput,
+                [],
+                [],
+                evidencePointer: null);
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: deterministic test-impact mapping requires typed operator/Tester selection; " +
+                $"Reviewer dispatch is blocked for candidate {context.CandidateSha}. Reason: {context.MappingReason}. " +
+                $"Receipt round={receipt.ReviewerRound}.");
+            return true;
+        }
+
+        var evidence = _runFocusedEvidence(goal, context.FocusedRequest);
+        var evidencePointer = BuildPreReviewEvidencePointer(evidence);
+        if (!evidence.Accepted)
+        {
+            RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.MappingNeedsInput,
+                evidence.Checks,
+                [],
+                evidencePointer);
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: mapped focused evidence request was rejected; Reviewer dispatch is blocked. " +
+                $"{FormatFocusedEvidenceResult(evidence)}");
+            return true;
+        }
+
+        if (evidence.Passed)
+        {
+            RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.Green,
+                evidence.Checks,
+                [],
+                evidencePointer);
+            return false;
+        }
+
+        var failingTests = ExtractFailingTestIdentities(evidence.Checks);
+        if (failingTests.Count == 0)
+        {
+            RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.MappingNeedsInput,
+                evidence.Checks,
+                [],
+                evidencePointer);
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                "PRE_REVIEW_MAPPING_NEEDS_INPUT: focused checks were red but produced no exact failing test identities; " +
+                $"Reviewer and Developer dispatch are blocked pending typed evidence. Pointer={evidencePointer ?? "none"}.");
+            return true;
+        }
+
+        RecordPreReviewReceipt(
+            goal,
+            reviewerTask,
+            context,
+            round,
+            PreReviewEvidenceDisposition.Red,
+            evidence.Checks,
+            failingTests,
+            evidencePointer);
+        var developerTask = TasksBefore(goal, reviewerTask)
+            .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
+        if (developerTask is null)
+        {
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_RED: no responsible Developer task exists. Failing tests: {string.Join(", ", failingTests)}. " +
+                $"Pointer={evidencePointer ?? "none"}.");
+            return true;
+        }
+
+        _retryTask(
+            goal.Id,
+            developerTask.Id,
+            $"pre-review focused-test repair: candidate {context.CandidateSha}; exact failing tests: " +
+            $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}",
+            RetryRoundKind.Mechanical);
+        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+        return true;
+    }
+
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
+        string? candidateSha,
+        IReadOnlyList<string> changedFiles)
+    {
+        var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        if (!plan.RequiresBuild &&
+            plan.Checks.Count > 0 &&
+            plan.Checks.All(check => check.Command.Count == 0))
+        {
+            var generatedArtifactsBlock = plan.Summary.Contains(
+                "Generated artifacts",
+                StringComparison.OrdinalIgnoreCase);
+            return new PreReviewEvidenceContext(
+                candidateSha,
+                [],
+                null,
+                plan.Summary,
+                NoApplicableTests: !generatedArtifactsBlock,
+                MappingNeedsInput: generatedArtifactsBlock);
+        }
+
+        var selected = plan.Checks.Select(check => check.CommandLine).ToArray();
+        var requests = new List<string>();
+        foreach (var check in plan.Checks)
+        {
+            var filterIndex = FindArgument(check.Command, "--filter");
+            var project = check.Command.FirstOrDefault(argument =>
+                argument.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+            if (filterIndex < 0 ||
+                filterIndex + 1 >= check.Command.Count ||
+                string.IsNullOrWhiteSpace(project))
+            {
+                return new PreReviewEvidenceContext(
+                    candidateSha,
+                    selected,
+                    null,
+                    plan.Summary,
+                    NoApplicableTests: false,
+                    MappingNeedsInput: true);
+            }
+
+            var alias = project.Contains("Core.Tests", StringComparison.OrdinalIgnoreCase)
+                ? "Core.Tests"
+                : project.Contains("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
+                    ? "Infrastructure.Tests"
+                    : null;
+            if (alias is null)
+            {
+                return new PreReviewEvidenceContext(
+                    candidateSha,
+                    selected,
+                    null,
+                    $"Mapped project is not supported by the focused evidence broker: {project}",
+                    NoApplicableTests: false,
+                    MappingNeedsInput: true);
+            }
+
+            requests.Add($"{alias}: {check.Command[filterIndex + 1]}");
+        }
+
+        return new PreReviewEvidenceContext(
+            candidateSha,
+            selected,
+            string.Join("; ", requests),
+            plan.Summary,
+            NoApplicableTests: false,
+            MappingNeedsInput: requests.Count == 0);
+    }
+
+    private PreReviewEvidenceReceipt RecordPreReviewReceipt(
+        Goal goal,
+        TaskSpec reviewerTask,
+        PreReviewEvidenceContext context,
+        int round,
+        PreReviewEvidenceDisposition disposition,
+        IReadOnlyList<AcceptanceCheckResult> checks,
+        IReadOnlyList<string> failingTests,
+        string? evidencePointer)
+    {
+        var receipt = new PreReviewEvidenceReceipt(
+            goal.Id.Value,
+            round,
+            context.CandidateSha!,
+            context.SelectedFocusedTests,
+            disposition,
+            checks.Count(check => check.Passed),
+            checks.Count(check => !check.Passed),
+            checks.Select((check, index) => new PreReviewEvidenceCheckReceipt(
+                check.Name,
+                index < context.SelectedFocusedTests.Count
+                    ? context.SelectedFocusedTests[index]
+                    : context.FocusedRequest ?? "(mapped focused evidence)",
+                check.Passed,
+                check.ExitCode,
+                check.ArtifactsPath,
+                check.TestResultPaths)).ToArray(),
+            failingTests,
+            context.MappingReason,
+            evidencePointer,
+            DateTimeOffset.UtcNow);
+        _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
+        return receipt;
+    }
+
+    private static IReadOnlyList<TaskSpec> TasksBefore(Goal goal, TaskSpec task)
+        => goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id).ToArray();
+
+    private static int GetCurrentReviewerRoundNumber(Goal goal, TaskSpec reviewerTask) =>
+        1 + goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.TaskId is not null &&
+            (evt.TaskId != reviewerTask.Id ||
+                !MechanicalReviewerRetryMessagePrefixes.Any(prefix =>
+                    evt.Message.StartsWith(prefix, StringComparison.Ordinal))));
+
+    private static int FindArgument(IReadOnlyList<string> arguments, string value)
+    {
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (arguments[index].Equals(value, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static IReadOnlyList<string> ExtractFailingTestIdentities(
+        IEnumerable<AcceptanceCheckResult> checks) =>
+        checks
+            .SelectMany(check => Regex.Matches(
+                    check.OutputTail ?? string.Empty,
+                    @"(?m)^\[FAIL\]\s+(?<test>[^:\r\n]+):",
+                    RegexOptions.CultureInvariant)
+                .Select(match => match.Groups["test"].Value.Trim()))
+            .Where(identity => identity.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string? BuildPreReviewEvidencePointer(FocusedEvidenceRunResult evidence) =>
+        evidence.Checks
+            .SelectMany(check =>
+                (check.TestResultPaths ?? [])
+                    .Concat(string.IsNullOrWhiteSpace(check.ArtifactsPath) ? [] : [check.ArtifactsPath!]))
+            .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
 
     private bool TryRecoverSandboxPrep(DispatchStartOutcome outcome, string goalPrefix, out string failureReason)
     {

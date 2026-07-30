@@ -159,6 +159,37 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordPreReviewEvidence(
+        GoalId goalId,
+        TaskId reviewerTaskId,
+        PreReviewEvidenceReceipt receipt)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(reviewerTaskId);
+        if (task.RequiredRole != AgentRole.Reviewer)
+        {
+            throw new InvalidOperationException("Pre-review evidence can only be attached to a Reviewer task.");
+        }
+
+        if (!string.Equals(receipt.GoalId, goalId.Value, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Pre-review evidence goal identity does not match the target goal.");
+        }
+
+        if (task.RecordPreReviewEvidence(receipt))
+        {
+            Append(
+                goal,
+                reviewerTaskId,
+                ProgressKind.PreReviewEvidenceRecorded,
+                $"Pre-review evidence {receipt.Disposition} for round {receipt.ReviewerRound}, candidate {receipt.CandidateSha}; " +
+                $"selected={receipt.SelectedFocusedTests.Count}, passed={receipt.PassedCheckCount}, failed={receipt.FailedCheckCount}, " +
+                $"pointer={receipt.EvidencePointer ?? "none"}.");
+        }
+
+        return task;
+    }
+
     public TaskSpec RetryTask(
         GoalId goalId,
         TaskId taskId,

@@ -84,7 +84,8 @@ public sealed record TaskSnapshot(
     IReadOnlyList<string>? CriterionRetryFeedback = null,
     int EmptyOutputRetryCount = 0,
     DateTimeOffset? LatestRetryAt = null,
-    RetryRoundKind? PendingRetryRoundKind = null);
+    RetryRoundKind? PendingRetryRoundKind = null,
+    PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

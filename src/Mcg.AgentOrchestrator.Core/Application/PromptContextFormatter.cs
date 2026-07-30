@@ -258,6 +258,7 @@ internal static class PromptContextFormatter
             ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
             ProgressKind.ReviewerEvidenceRequestReceived or
             ProgressKind.ReviewerEvidenceRunRecorded or
+            ProgressKind.PreReviewEvidenceRecorded or
             ProgressKind.GoalPolicyDecision;
     }
 }

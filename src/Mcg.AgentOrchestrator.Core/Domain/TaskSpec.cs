@@ -54,6 +54,8 @@ public sealed class TaskSpec
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
+    public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
+
     internal void AssignTo(AgentId agentId)
     {
         AssignedAgentId = agentId;
@@ -178,7 +180,8 @@ public sealed class TaskSpec
             CriterionRetryFeedback,
             EmptyOutputRetryCount,
             LatestRetryAt,
-            PendingRetryRoundKind);
+            PendingRetryRoundKind,
+            PreReviewEvidenceReceipt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -318,6 +321,7 @@ public sealed class TaskSpec
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
         return task;
     }
 
@@ -366,6 +370,18 @@ public sealed class TaskSpec
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 
     internal void ClearSubscriptionRetryAfter() => SubscriptionRetryAfter = null;
+
+    internal bool RecordPreReviewEvidence(PreReviewEvidenceReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (PreReviewEvidenceReceipt == receipt)
+        {
+            return false;
+        }
+
+        PreReviewEvidenceReceipt = receipt;
+        return true;
+    }
 
     internal void RecordRetry(DateTimeOffset retriedAt, RetryRoundKind? retryRoundKind = null)
     {

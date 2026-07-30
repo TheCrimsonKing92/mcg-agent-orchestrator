@@ -550,7 +550,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
         using var engineScope = PushEngineSettings(engineSettings);
-        using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "evidence");
+        using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "pre-review");
         using var runEnvironmentScope = PushManagedRunEnvironmentScope();
 
         if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
@@ -4821,10 +4821,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             string.IsNullOrWhiteSpace(repositoryRoot) ? worktreePath : repositoryRoot);
 
         var owner = goalId?.Value ?? "operator";
+        var attemptRoot = OwnerResultsAttemptRoot(ownerKind);
         var directory = Path.Combine(
             repositoryRoot,
             ".orchestrator",
-            "acceptance-gate-attempts",
+            attemptRoot,
             owner);
         Directory.CreateDirectory(directory);
         var prefix = Path.Combine(
@@ -4832,6 +4833,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"{owner[..Math.Min(8, owner.Length)]}-{ownerKind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
         return PushAcceptanceAttemptResultsPrefix(prefix);
     }
+
+    internal static string OwnerResultsAttemptRoot(string ownerKind) =>
+        ownerKind.Equals("pre-review", StringComparison.Ordinal)
+            ? "pre-review-evidence-attempts"
+            : "acceptance-gate-attempts";
 
     internal static string ResolveOwnerResultsRepositoryRoot(string worktreePath)
     {

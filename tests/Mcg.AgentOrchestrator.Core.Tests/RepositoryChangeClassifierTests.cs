@@ -394,6 +394,23 @@ public sealed class RepositoryChangeClassifierTests
         Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_test_classes_for_orchestration_changes")]
+    public void RepositoryTestImpactPlannerSelectsFocusedTestClassesForOrchestrationChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs",
+            "src/Mcg.AgentOrchestrator.App/Orchestration/AutoReviewRetryConvergenceBriefBuilder.cs"
+        ]);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused orchestration infrastructure tests", check.Name);
+        Assert.Contains("--filter", check.Command);
+        Assert.Contains(check.Command, argument => argument.Contains("ConductorDriverTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("AutoReviewRetryConvergenceBriefBuilderTests", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_dashboard_filter_for_dashboard_only_changes")]
     public void RepositoryTestImpactPlannerSelectsFocusedDashboardFilterForDashboardOnlyChanges()
     {
