@@ -35,6 +35,14 @@ public static class ReviewFindingRouting
             return new ReviewRetryRoute(AgentRole.Developer, false, "typed finding requires source work");
         }
 
+        if (openBlockingFindings.Any(finding => finding.Category != FindingCategory.Unspecified))
+        {
+            return new ReviewRetryRoute(
+                AgentRole.Developer,
+                false,
+                "mixed typed and unspecified findings require source-capable review");
+        }
+
         if (IsOperatorOwnedReviewBlocker(blockerProse))
         {
             return new ReviewRetryRoute(null, true, "legacy prose identifies operator-owned evidence");

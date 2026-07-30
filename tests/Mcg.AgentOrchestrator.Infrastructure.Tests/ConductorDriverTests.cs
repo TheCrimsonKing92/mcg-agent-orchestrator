@@ -2033,6 +2033,52 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_typed_test_evidence_reviewer_finding_routes_tester")]
+    public void ConductorDriverTypedTestEvidenceReviewerFindingRoutesTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        DispatchTask(kernel, goal, reviewer, "review");
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            "blockers: focused receipt is missing",
+            """findings: [{"stable_id":"F-TEST","state":"open","severity":"blocking","category":"test-evidence","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt is missing."}]""",
+            "touched_anchors: []",
+            "verdict: needs-work",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review",
+            "C:\\tmp",
+            0,
+            stdout,
+            "",
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        TaskId? retriedTask = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (goalId, taskId, message) =>
+            {
+                retriedTask = taskId;
+                return kernel.RetryTask(goalId, taskId, message);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTask);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_tester_worker_result_blocker_auto_retries_developer_with_convergence_brief")]
     public void ConductorDriverTesterWorkerResultBlockerAutoRetriesDeveloperWithConvergenceBrief()
     {

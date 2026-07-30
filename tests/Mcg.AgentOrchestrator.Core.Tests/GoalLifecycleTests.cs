@@ -360,13 +360,24 @@ public sealed class GoalLifecycleTests
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
     kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
 
-    var changed = kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["TestClass.FailingCase"], "exit artifact failed", "branch-sha", "main-sha");
+    var changed = kernel.ReconcileGoalAcceptanceFailed(
+        goal.Id,
+        ["TestClass.FailingCase"],
+        "exit artifact failed",
+        "branch-sha",
+        "main-sha",
+        [new AcceptanceCheckAttribution("TestClass.FailingCase", AcceptanceFailureOrigin.Inherited, "also failed elsewhere")],
+        "attested-red; shared failure");
 
     Assert.True(changed);
     Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
     Assert.Equal(GoalLifecycleState.AcceptanceFailed, GoalLifecycle.ResolveState(goal));
     Assert.NotNull(goal.LatestAcceptanceFailure);
     Assert.Contains("TestClass.FailingCase", goal.LatestAcceptanceFailure!.FailedChecks);
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+    var restoredFailure = restored.GetGoal(goal.Id).LatestAcceptanceFailure!;
+    Assert.Equal(AcceptanceFailureOrigin.Inherited, Assert.Single(restoredFailure.CheckAttributions!).Origin);
+    Assert.Equal("attested-red; shared failure", restoredFailure.BaselineAttestation);
 }
 
     [Xunit.Fact(DisplayName = "ResolveState_returns_Verified_for_completed_goal_without_integration_cleanup_facts")]

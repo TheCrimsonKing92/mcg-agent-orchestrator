@@ -70,6 +70,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
     {
         var open = findings
             .Where(finding => finding.State == ReviewFindingState.Open)
+            .OrderBy(finding => finding.Category == FindingCategory.SpecCompliance ? 0 : 1)
             .ToArray();
         var accepted = findings
             .Where(finding => finding.State == ReviewFindingState.Resolved)
@@ -94,6 +95,10 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         foreach (var finding in open)
         {
             lines.Add($"- stable_id: {finding.StableId}");
+            if (finding.Category != FindingCategory.Unspecified)
+            {
+                lines.Add($"  category: {FindingCategoryJsonConverter.ToWireValue(finding.Category)}");
+            }
             lines.Add($"  location: {finding.Location}");
             lines.Add($"  description: {finding.Description}");
         }

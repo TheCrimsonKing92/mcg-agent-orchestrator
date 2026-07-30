@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -9,7 +10,9 @@ internal sealed record AcceptanceVerificationSummary(
     IReadOnlyList<string>? FailedChecks = null,
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
-    IReadOnlyList<string>? TestResultPaths = null)
+    IReadOnlyList<string>? TestResultPaths = null,
+    IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
+    string? BaselineAttestation = null)
 {
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

@@ -1794,7 +1794,9 @@ internal sealed class ConductorBatchLoop
             BuildFailedAcceptanceChecks(run, attempt),
             $"Batch loop reconciled background acceptance gate {attempt.AttemptId} terminal artifact ({disposition}); goal moved to AcceptanceFailed.",
             run.Candidate.BranchHeadSha ?? attempt.BranchHeadSha,
-            run.Candidate.MainHeadSha ?? attempt.MainHeadSha);
+            run.Candidate.MainHeadSha ?? attempt.MainHeadSha,
+            run.Acceptance?.CheckAttributions,
+            run.Acceptance?.BaselineAttestation);
     }
 
     private static void ReconcileParallelAcceptanceTerminalState(

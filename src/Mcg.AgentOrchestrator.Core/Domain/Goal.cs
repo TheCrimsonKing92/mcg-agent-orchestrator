@@ -120,7 +120,9 @@ public sealed class Goal
         IReadOnlyList<string> failedChecks,
         DateTimeOffset occurredAt,
         string? branchHeadSha = null,
-        string? mainHeadSha = null)
+        string? mainHeadSha = null,
+        IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions = null,
+        string? baselineAttestation = null)
     {
         var checks = failedChecks
             .Select(item => item.Trim())
@@ -129,7 +131,13 @@ public sealed class Goal
             .ToArray();
         LatestAcceptanceFailure = checks.Length == 0
             ? null
-            : new AcceptanceFailureSummary(occurredAt, checks, NormalizeSha(branchHeadSha), NormalizeSha(mainHeadSha));
+            : new AcceptanceFailureSummary(
+                occurredAt,
+                checks,
+                NormalizeSha(branchHeadSha),
+                NormalizeSha(mainHeadSha),
+                checkAttributions,
+                string.IsNullOrWhiteSpace(baselineAttestation) ? null : baselineAttestation.Trim());
     }
 
     internal void ClearAcceptanceFailure() => LatestAcceptanceFailure = null;
@@ -227,7 +235,9 @@ public sealed class Goal
                     LatestAcceptanceFailure.OccurredAt,
                     LatestAcceptanceFailure.FailedChecks.ToList(),
                     LatestAcceptanceFailure.BranchHeadSha,
-                    LatestAcceptanceFailure.MainHeadSha),
+                    LatestAcceptanceFailure.MainHeadSha,
+                    LatestAcceptanceFailure.CheckAttributions?.ToList(),
+                    LatestAcceptanceFailure.BaselineAttestation),
             _effectiveAcceptanceCriteriaCorrections.Count == 0
                 ? null
                 : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
@@ -298,7 +308,9 @@ public sealed class Goal
                 failure.FailedChecks,
                 failure.OccurredAt,
                 failure.BranchHeadSha,
-                failure.MainHeadSha);
+                failure.MainHeadSha,
+                failure.CheckAttributions,
+                failure.BaselineAttestation);
         }
 
         foreach (var correction in snapshot.EffectiveAcceptanceCriteriaCorrections ?? [])
@@ -356,8 +368,22 @@ public sealed class Goal
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 }
 
+public enum AcceptanceFailureOrigin
+{
+    Inherited,
+    Introduced,
+    Unattributed
+}
+
+public sealed record AcceptanceCheckAttribution(
+    string CheckName,
+    AcceptanceFailureOrigin Origin,
+    string Evidence);
+
 public sealed record AcceptanceFailureSummary(
     DateTimeOffset OccurredAt,
     IReadOnlyList<string> FailedChecks,
     string? BranchHeadSha = null,
-    string? MainHeadSha = null);
+    string? MainHeadSha = null,
+    IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
+    string? BaselineAttestation = null);

@@ -3,6 +3,8 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class SdlcRolePromptRequirements
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
+    internal const int ReviewerComplexRequirementsMaxChars = 3556;
+    internal const int ReviewerCompactRequirementsMaxChars = 2546;
 
     public static IReadOnlyList<string> Build(AgentRole role)
     {
@@ -66,19 +68,20 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
-                "- Review in code-review form: findings first, ordered by severity.",
-                "- First-review breadth: cover every in-scope changed file end-to-end before your first verdict, and state your coverage explicitly - every changed file examined, or name exactly what you could not examine and why. A SHALLOW finding surfacing in a later round on unchanged in-scope code is a coverage defect. Going DEEPER on later rounds is desired, not a defect: once surface findings resolve, deeper analysis layers (concurrency, durability, fault ordering, security) are exactly what review is for. Never withhold a finding you have identified, in any round.",
+                "### 1. Spec compliance (do this first)",
+                "- Walk the RefinedSpec acceptance criteria in order, one at a time. For each criterion report met, not-met, or not-verifiable-from-diff with file+line or concrete task evidence in `criteria_verdicts`.",
+                "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
-                "- For independent changed-file scope checks, use git diff main...HEAD; do not use two-dot diffs, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence.",
-                "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
+                "### 2. Code quality (only after section 1)",
+                "- Review in code-review form: findings first, ordered by severity. First-review breadth must cover every in-scope changed file end-to-end; state coverage or name exactly what you could not examine. A SHALLOW later-round finding on unchanged code is a coverage defect; going DEEPER later (concurrency, durability, fault ordering, security) is desired. Never withhold an identified finding.",
+                "- For independent scope checks use git diff main...HEAD; do not use two-dot, HEAD-only, status, or working-tree-only comparisons. Branch-behind-main alone is NOT a blocker; require concrete merge conflict, semantic overlap, or non-applying diff evidence, otherwise record staleness as advisory.",
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
-                "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
-                "- Treat the structured Review Convergence Scope as authoritative: actively re-check OPEN findings and net-new diff code; carry RESOLVED findings forward without re-review unless this round's diff touched that finding's exact structural anchor.",
-                "- Emit every finding in the one-line `findings` JSON field with stable_id, open|resolved state, required severity (`blocking` or `advisory`), structural location (file + region + optional hunk), and description. Missing or unrecognized severity is treated as blocking. Any remediable open blocking finding requires `needs-work` plus its exact blocker in `blockers`; reserve `fail` for a non-remediable stop that should escalate instead of auto-retry. When no open blocking findings remain, use `verdict: pass` and `blockers: none` even when open advisory findings remain; advisories belong only in `findings`. Emit exact prior anchors touched by this round in `touched_anchors`; similar defects on newly introduced code get new stable IDs.",
-                "- State residual risk, test gaps, and whether acceptance is justified.",
-                "- Do not approve based only on a summary from another role.",
+                "- Classify findings with `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, or `operator-owned`; mixed source/test findings are correctness work for Developer.",
+                "- Treat the structured Review Convergence Scope as authoritative: re-check OPEN findings and net-new diff code; carry RESOLVED findings without re-review unless this round's diff touched the exact structural anchor.",
+                "- Emit every finding in one-line `findings` JSON with stable_id, state, required severity, category, structural location, and description. Missing severity is blocking; missing category is unspecified. Any remediable open blocking finding requires `needs-work` plus its exact blocker in `blockers`; reserve `fail` for a non-remediable stop. When no open blocking findings remain, use `verdict: pass` and `blockers: none` even when open advisory findings remain; advisories belong only in `findings`. Emit exact prior anchors touched in `touched_anchors`; similar defects on new code get new stable IDs.",
+                "- State residual risk, test gaps, and whether acceptance is justified; do not approve from another role's summary alone.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []
@@ -180,14 +183,15 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
-                "- Review in code-review form: findings first, ordered by severity, with file/evidence references.",
-                "- First-review breadth: cover every in-scope changed file end-to-end before your first verdict; state coverage or name exactly what you could not examine. A SHALLOW later-round finding on unchanged in-scope code is a coverage defect; going DEEPER in later rounds (concurrency, durability, fault ordering) is desired. Never withhold a finding you have identified.",
-                "- Use git diff main...HEAD for independent scope checks; reject two-dot or working-tree-only scope verdict evidence.",
-                "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
+                "### 1. Spec compliance (do this first)",
+                "- Walk RefinedSpec acceptance criteria in order. Record each as met, not-met, or not-verifiable-from-diff with file+line evidence in `criteria_verdicts`; not-met uses `category: spec-compliance`, while a criterion contradicting main uses `category: spec-defect`.",
+                "### 2. Code quality (only after section 1)",
+                "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
+                "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
-                "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
-                "- Treat structured Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings without re-review unless their exact anchor was touched. Every one-line `findings` JSON item requires severity `blocking` or `advisory`; missing severity is blocking. Any remediable open blocker requires `needs-work` plus its exact text in `blockers`; reserve `fail` for a non-remediable stop that should escalate instead of auto-retry. When none remain, use `verdict: pass` and `blockers: none` even with open advisories, which belong only in `findings`. Emit `touched_anchors`; similar defects on new code get new stable IDs.",
-                "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
+                "- Classify findings as `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, or `operator-owned`.",
+                "- Treat structured Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings unless their exact anchor was touched. Findings require severity and category; missing severity is blocking and missing category unspecified. Any remediable open blocker requires `needs-work` plus exact `blockers`; reserve `fail` for non-remediable stops. When none remain, use `verdict: pass` and `blockers: none` even with open advisories. Emit `touched_anchors`; new-code defects get new stable IDs.",
+                "- Challenge generic summaries by comparing implementation and verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],

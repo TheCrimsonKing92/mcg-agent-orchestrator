@@ -44,7 +44,8 @@ internal sealed record GoalOperationJournalEntry(
     string? OperatorReason = null,
     string? PriorGateMainSha = null,
     string? CurrentHeadMainSha = null,
-    int? OperatorRegateCount = null)
+    int? OperatorRegateCount = null,
+    IReadOnlyList<string>? FailedCheckNames = null)
 {
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
@@ -193,14 +194,56 @@ internal static class GoalOperationJournal
         File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
     }
 
-    public static void Begin(string executionDirectory, Goal goal, string operation, string? detail = null) =>
-        Append(executionDirectory, goal.Id, operation, GoalOperationStatus.Begin, detail);
+    public static void Begin(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? detail = null,
+        string? mainHeadSha = null) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, operation),
+            operation,
+            GoalOperationStatus.Begin,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: NormalizeSha(mainHeadSha),
+            acceptanceOutcome: null);
 
-    public static void Completed(string executionDirectory, Goal goal, string operation, string? detail = null) =>
-        Append(executionDirectory, goal.Id, operation, GoalOperationStatus.Completed, detail);
+    public static void Completed(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? detail = null,
+        string? mainHeadSha = null) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, operation),
+            operation,
+            GoalOperationStatus.Completed,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: NormalizeSha(mainHeadSha),
+            acceptanceOutcome: null);
 
-    public static void Failed(string executionDirectory, Goal goal, string operation, string? detail = null) =>
-        Append(executionDirectory, goal.Id, operation, GoalOperationStatus.Failed, detail);
+    public static void Failed(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? detail = null,
+        string? mainHeadSha = null) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, operation),
+            operation,
+            GoalOperationStatus.Failed,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: NormalizeSha(mainHeadSha),
+            acceptanceOutcome: null);
 
     public static void RecordLandingIntent(
         string executionDirectory,
@@ -256,7 +299,7 @@ internal static class GoalOperationJournal
         string? detail = null,
         DateTimeOffset? attemptStartedAt = null,
         GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
-        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt);
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Completed, "passed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
 
     public static void AcceptanceFailed(
         string executionDirectory,
@@ -266,8 +309,9 @@ internal static class GoalOperationJournal
         string? mainHeadSha,
         string? detail = null,
         DateTimeOffset? attemptStartedAt = null,
-        GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
-        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt);
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null,
+        IReadOnlyList<string>? failedCheckNames = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames);
 
     public static void AcceptanceRetried(
         string executionDirectory,
@@ -380,7 +424,8 @@ internal static class GoalOperationJournal
         string? mainHeadSha,
         string? detail = null,
         DateTimeOffset? attemptStartedAt = null,
-        GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null,
+        IReadOnlyList<string>? failedCheckNames = null) =>
         AppendAcceptanceOutcome(
             executionDirectory,
             goal,
@@ -391,7 +436,8 @@ internal static class GoalOperationJournal
             mainHeadSha,
             detail,
             attemptStartedAt,
-            attemptReceipt);
+            attemptReceipt,
+            failedCheckNames);
 
     public static void AcceptanceSkippedAlreadyMerged(
         string executionDirectory,
@@ -411,7 +457,8 @@ internal static class GoalOperationJournal
             mainHeadSha,
             detail,
             skippedAt,
-            attemptReceipt: null);
+            attemptReceipt: null,
+            failedCheckNames: null);
 
     public static GoalAcceptanceAttemptReceipt? TryExtractBaseBuildCacheReceipt(AcceptanceVerificationResult? verification)
     {
@@ -702,7 +749,8 @@ internal static class GoalOperationJournal
         string? mainHeadSha,
         string? detail,
         DateTimeOffset? attemptStartedAt,
-        GoalAcceptanceAttemptReceipt? attemptReceipt)
+        GoalAcceptanceAttemptReceipt? attemptReceipt,
+        IReadOnlyList<string>? failedCheckNames)
     {
         Append(
             executionDirectory,
@@ -715,7 +763,8 @@ internal static class GoalOperationJournal
             NormalizeSha(mainHeadSha),
             acceptanceOutcome,
             attemptStartedAt,
-            attemptReceipt);
+            attemptReceipt,
+            failedCheckNames: failedCheckNames);
     }
 
     private static void Append(
@@ -733,7 +782,8 @@ internal static class GoalOperationJournal
         string? operatorReason = null,
         string? priorGateMainSha = null,
         string? currentHeadMainSha = null,
-        int? operatorRegateCount = null)
+        int? operatorRegateCount = null,
+        IReadOnlyList<string>? failedCheckNames = null)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -761,7 +811,8 @@ internal static class GoalOperationJournal
             OperatorReason: operatorReason,
             PriorGateMainSha: priorGateMainSha,
             CurrentHeadMainSha: currentHeadMainSha,
-            OperatorRegateCount: operatorRegateCount);
+            OperatorRegateCount: operatorRegateCount,
+            FailedCheckNames: failedCheckNames);
         File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
         TryAppendRunEvent(executionDirectory, entry);
     }

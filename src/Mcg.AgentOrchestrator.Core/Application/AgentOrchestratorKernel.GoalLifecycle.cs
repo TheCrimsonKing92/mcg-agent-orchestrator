@@ -324,7 +324,9 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<string> failedChecks,
         string reason,
         string? branchHeadSha = null,
-        string? mainHeadSha = null)
+        string? mainHeadSha = null,
+        IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions = null,
+        string? baselineAttestation = null)
     {
         var goal = GetGoal(goalId);
         if (goal.Status != GoalStatus.Verifying)
@@ -332,7 +334,13 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        goal.RecordAcceptanceFailure(failedChecks, _clock.UtcNow, branchHeadSha, mainHeadSha);
+        goal.RecordAcceptanceFailure(
+            failedChecks,
+            _clock.UtcNow,
+            branchHeadSha,
+            mainHeadSha,
+            checkAttributions,
+            baselineAttestation);
         goal.SetStatus(GoalStatus.AcceptanceFailed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
@@ -381,10 +389,18 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         IReadOnlyList<string> failedChecks,
         string? branchHeadSha = null,
-        string? mainHeadSha = null)
+        string? mainHeadSha = null,
+        IReadOnlyList<AcceptanceCheckAttribution>? checkAttributions = null,
+        string? baselineAttestation = null)
     {
         var goal = GetGoal(goalId);
-        goal.RecordAcceptanceFailure(failedChecks, _clock.UtcNow, branchHeadSha, mainHeadSha);
+        goal.RecordAcceptanceFailure(
+            failedChecks,
+            _clock.UtcNow,
+            branchHeadSha,
+            mainHeadSha,
+            checkAttributions,
+            baselineAttestation);
     }
 
     public void ClearAcceptanceFailure(GoalId goalId)
