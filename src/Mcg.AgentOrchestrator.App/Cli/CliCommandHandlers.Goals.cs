@@ -80,9 +80,25 @@ private static int PersistResolvedParkedHumanWaitsForNextTick(
 private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
     GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
 
-private static void PrintScopeCollisionAdvisory(CliExecutionContext context, string rawObjective) =>
+private static void PrintScopeCollisionAdvisory(
+    CliExecutionContext context,
+    string rawObjective,
+    string? intakeItemId = null,
+    string? heading = null)
+{
+    var comparedGoals = string.IsNullOrWhiteSpace(intakeItemId)
+        ? context.Kernel.Goals
+        : context.Kernel.Goals
+            .Where(goal => !string.Equals(
+                goal.SourceBacklogItemId,
+                intakeItemId,
+                StringComparison.Ordinal))
+            .ToArray();
     ConsoleViews.PrintGoalScopeCollisionReport(
-        GoalScopeCollisionAdvisor.Build([rawObjective], context.Kernel.Goals));
+        GoalScopeCollisionAdvisor.Build([rawObjective], comparedGoals),
+        intakeItemId,
+        heading);
+}
 
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {

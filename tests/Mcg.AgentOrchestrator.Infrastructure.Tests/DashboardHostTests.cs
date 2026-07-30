@@ -28,7 +28,7 @@ public sealed class DashboardHostTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
         CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", "Simple hosted dashboard goal"],
+            ["simple-goal", "Hosted self collision change src/Hosted/Self.cs"],
             kernel,
             workspace,
             ref agents,
@@ -36,6 +36,9 @@ public sealed class DashboardHostTests
             ref profiles,
             ref currentGoal);
         var goal = currentGoal ?? throw new InvalidOperationException("Expected simple-goal to create a current goal.");
+        var backlogItem = await new BacklogStore(workspace.BacklogStorePath)
+            .AddAsync("Hosted self collision change src/Hosted/Self.cs");
+        kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         var task = goal.Tasks.Single();
         var port = GetAvailablePort();
@@ -54,6 +57,9 @@ public sealed class DashboardHostTests
             var taskWorkSummary = await GetRequiredStringAsync(client, new Uri(new Uri(url), $"api/tasks/{task.Id.Value}/work-summary"));
             var sourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey?max=8"));
             var defaultSourceSurvey = await client.GetStringAsync(new Uri(new Uri(url), "api/source-survey"));
+            var scopeCollisionAdvisory = await GetRequiredStringAsync(
+                client,
+                new Uri(new Uri(url), "api/goals/scope-collision-advisory?heading=Hosted%20self%20collision&max=1"));
             using var createGoalResponse = await client.PostAsync(
                 new Uri(new Uri(url), "api/goals"),
                 new StringContent(
@@ -88,6 +94,15 @@ public sealed class DashboardHostTests
                 AssertArchitectureArrayContains(report.GetProperty("StateStores"), workspace.ContinuationStorePath);
                 AssertArchitectureArrayContains(report.GetProperty("DistributedBoundaries"), "Subscription execution leaves process boundaries");
                 AssertArchitectureArrayContains(report.GetProperty("SafetyGates"), "Tenant names are normalized");
+            }
+            using (var advisoryDocument = JsonDocument.Parse(scopeCollisionAdvisory))
+            {
+                var advisory = advisoryDocument.RootElement;
+                var report = Assert.Single(advisory.GetProperty("Reports").EnumerateArray());
+                Assert.Equal(backlogItem.Id, report.GetProperty("IntakeItemId").GetString());
+                Assert.Equal(0, report.GetProperty("ComparedGoalCount").GetInt32());
+                Assert.Empty(report.GetProperty("ConflictingGoalIds").EnumerateArray());
+                Assert.Empty(report.GetProperty("Collisions").EnumerateArray());
             }
 
             using (var goalSummaryDocument = JsonDocument.Parse(goalWorkSummary))

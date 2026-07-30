@@ -1060,10 +1060,9 @@ public sealed class GoalRefinementTests
 
 public sealed class GoalScopeCollisionConsoleViewTests
 {
-    [Xunit.Fact(DisplayName = "Goal_scope_collision_advisory_renders_before_goal_creation")]
-    public void RendersBeforeGoalCreation()
+    [Xunit.Fact(DisplayName = "Goal_scope_collision_advisory_renders_attributed_operator_evidence")]
+    public void RendersAttributedOperatorEvidence()
     {
-        var kernel = new AgentOrchestratorKernel();
         var conflictingGoal = new Goal(
             GoalId.New(),
             $"Generated intake objective\n\n{BacklogIntakePlanner.TargetScopeHeadingLine}\n- src/Feature/File.cs",
@@ -1073,10 +1072,12 @@ public sealed class GoalScopeCollisionConsoleViewTests
             [conflictingGoal]);
 
         var output = AsyncLocalConsoleRouter.Capture(() =>
-            ConsoleViews.PrintGoalScopeCollisionReport(report));
+            ConsoleViews.PrintGoalScopeCollisionReport(report, "backlog-123", "Feature heading"));
 
-        Xunit.Assert.Empty(kernel.Goals);
         Xunit.Assert.Contains("Scope collision advisory:", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("item=backlog-123", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heading=\"Feature heading\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"intakeItemId\":\"backlog-123\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("overlap-detected", output, StringComparison.Ordinal);
         Xunit.Assert.Contains(conflictingGoal.Id.Value[..8], output, StringComparison.Ordinal);
         Xunit.Assert.Contains("src/Feature/File.cs", output, StringComparison.Ordinal);

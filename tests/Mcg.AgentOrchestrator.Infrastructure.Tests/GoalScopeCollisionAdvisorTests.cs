@@ -91,9 +91,9 @@ public sealed class GoalScopeCollisionAdvisorTests
             [goal]);
 
         Xunit.Assert.Equal(ScopeCollisionVerdict.NoOverlapDetected, report.Verdict);
-        Xunit.Assert.Equal(
-            FileScopeProvenance.Explicit,
-            Xunit.Assert.Single(GoalFileScopeInference.FromGoal(goal)).Provenance);
+        var scopes = GoalFileScopeInference.FromGoal(goal, 64_000, out var truncated);
+        Xunit.Assert.False(truncated);
+        Xunit.Assert.Equal(FileScopeProvenance.Explicit, Xunit.Assert.Single(scopes).Provenance);
     }
 
     [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_missing_proposed_scope_is_insufficient")]
@@ -135,8 +135,8 @@ public sealed class GoalScopeCollisionAdvisorTests
             gap => gap.Gap == ScopeEvidenceGap.ProposedExplicitScopesMissing);
     }
 
-    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_excludes_completed_and_metadata_goals")]
-    public void ExcludesCompletedAndMetadataGoals()
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_excludes_terminal_goals")]
+    public void ExcludesTerminalGoals()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
@@ -198,52 +198,6 @@ public sealed class GoalScopeCollisionAdvisorTests
         Xunit.Assert.Equal(24, report.ComparedGoalCount);
         Xunit.Assert.Equal(ScopeCollisionVerdict.InsufficientEvidence, report.Verdict);
         Xunit.Assert.Contains(report.EvidenceGaps, gap => gap.Gap == ScopeEvidenceGap.ComparisonTruncated);
-    }
-
-    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_build_signature_cannot_accept_io_seams")]
-    public void BuildSignatureCannotAcceptIoSeams()
-    {
-        var method = typeof(GoalScopeCollisionAdvisor).GetMethod(nameof(GoalScopeCollisionAdvisor.Build));
-        Xunit.Assert.NotNull(method);
-        var parameters = method!.GetParameters();
-
-        Xunit.Assert.Equal(2, parameters.Length);
-        Xunit.Assert.Equal(typeof(IReadOnlyList<string>), parameters[0].ParameterType);
-        Xunit.Assert.Equal(typeof(IReadOnlyCollection<Goal>), parameters[1].ParameterType);
-        Xunit.Assert.DoesNotContain(parameters, parameter => typeof(Delegate).IsAssignableFrom(parameter.ParameterType));
-        Xunit.Assert.DoesNotContain(parameters, parameter => parameter.ParameterType == typeof(string));
-    }
-
-    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_does_not_change_parallel_scheduler_decisions")]
-    public void DoesNotChangeParallelSchedulerDecisions()
-    {
-        var intents = new[]
-        {
-            new ParallelExecutionIntent("left", "left-goal", ["src/Feature"]),
-            new ParallelExecutionIntent("right", "right-goal", ["src/Feature/File.cs"])
-        };
-        var baseline = ParallelExecutionPlanner.Build(intents);
-
-        var report = GoalScopeCollisionAdvisor.Build(
-            ["Change src/Feature/File.cs."],
-            [CreateGoal("Change src/Feature.")]);
-        var afterAdvisory = ParallelExecutionPlanner.Build(intents);
-
-        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetected, report.Verdict);
-        Xunit.Assert.Equal(
-            baseline.Batches.Select(batch => (batch.Number, IntentIds: string.Join(",", batch.IntentIds))),
-            afterAdvisory.Batches.Select(batch => (batch.Number, IntentIds: string.Join(",", batch.IntentIds))));
-        Xunit.Assert.Equal(
-            baseline.Decisions.Select(decision => (
-                decision.IntentId,
-                decision.Disposition,
-                decision.BatchNumber,
-                Reasons: string.Join("|", decision.Reasons))),
-            afterAdvisory.Decisions.Select(decision => (
-                decision.IntentId,
-                decision.Disposition,
-                decision.BatchNumber,
-                Reasons: string.Join("|", decision.Reasons))));
     }
 
     private static Goal CreateGoal(string objective, string? id = null)

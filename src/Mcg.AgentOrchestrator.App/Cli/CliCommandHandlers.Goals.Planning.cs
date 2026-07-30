@@ -102,7 +102,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
     ConsoleViews.PrintGoalDependencyPlan(plan);
     foreach (var node in plan.Nodes)
     {
-        PrintScopeCollisionAdvisory(context, node.ReadyObjective);
+        PrintScopeCollisionAdvisory(context, node.ReadyObjective, node.Intake.Id, node.Heading);
     }
 
     if (!createGoals && !createSimpleGoals)

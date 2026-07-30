@@ -87,7 +87,7 @@ internal static class GoalScopeCollisionAdvisor
         AddProposedEvidenceGap(proposedScopes, gaps);
 
         var eligibleGoals = goals
-            .Where(goal => !goal.IsMetadataOnly && !goal.IsTerminal)
+            .Where(goal => !goal.IsTerminal)
             .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
             .ToArray();
         if (eligibleGoals.Length > MaximumCandidateGoals)
@@ -102,8 +102,8 @@ internal static class GoalScopeCollisionAdvisor
         var collisions = new List<ScopeCollision>();
         foreach (var goal in candidates)
         {
-            var candidateScopes = GoalFileScopeInference.FromTextParts(
-                GoalTextParts(goal),
+            var candidateScopes = GoalFileScopeInference.FromGoal(
+                goal,
                 MaximumTextCharacters,
                 out var candidateTextTruncated);
             if (candidateTextTruncated)
@@ -158,19 +158,6 @@ internal static class GoalScopeCollisionAdvisor
             verdict,
             orderedCollisions,
             gaps.ToArray());
-    }
-
-    private static IEnumerable<string> GoalTextParts(Goal goal)
-    {
-        yield return goal.Objective;
-        foreach (var task in goal.Tasks)
-        {
-            yield return task.Description;
-            if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
-            {
-                yield return task.VerificationPlan;
-            }
-        }
     }
 
     private static void AddProposedEvidenceGap(

@@ -11,13 +11,21 @@ internal static partial class ConsoleViews
         WriteIndented = false
     };
 
-    public static void PrintGoalScopeCollisionReport(GoalScopeCollisionReport report)
+    public static void PrintGoalScopeCollisionReport(
+        GoalScopeCollisionReport report,
+        string? intakeItemId = null,
+        string? heading = null)
     {
+        var subject = string.IsNullOrWhiteSpace(intakeItemId) && string.IsNullOrWhiteSpace(heading)
+            ? string.Empty
+            : $" item={intakeItemId ?? "unknown"} heading={JsonSerializer.Serialize(heading ?? string.Empty)}";
         Console.WriteLine(
-            $"Scope collision advisory: {report.VerdictToken} conflicts={report.Collisions.Count} " +
+            $"Scope collision advisory:{subject} {report.VerdictToken} conflicts={report.Collisions.Count} " +
             $"comparedGoals={report.ComparedGoalCount} explicitConflicts={report.ExplicitCollisionCount}");
         Console.WriteLine(JsonSerializer.Serialize(new
         {
+            intakeItemId,
+            heading,
             verdict = report.VerdictToken,
             report.ComparedGoalCount,
             report.ExplicitCollisionCount,

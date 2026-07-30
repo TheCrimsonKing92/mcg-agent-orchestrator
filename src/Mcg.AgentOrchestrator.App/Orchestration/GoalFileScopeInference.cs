@@ -60,19 +60,11 @@ internal static class GoalFileScopeInference
             .ToArray();
     }
 
-    public static IReadOnlyList<DeclaredFileScope> FromGoal(Goal goal)
-    {
-        return Merge([
-            FromText(goal.Objective),
-            .. goal.Tasks.Select(task => FromText(task.Description)),
-            .. goal.Tasks
-                .Where(task => !string.IsNullOrWhiteSpace(task.VerificationPlan))
-                .Select(task => FromText(task.VerificationPlan!))
-        ]);
-    }
-
-    public static IReadOnlyList<string> PathsOnly(string text) =>
-        FromText(text).Select(scope => scope.Path).ToArray();
+    public static IReadOnlyList<DeclaredFileScope> FromGoal(
+        Goal goal,
+        int maximumCharacters,
+        out bool truncated) =>
+        FromTextParts(GoalTextParts(goal), maximumCharacters, out truncated);
 
     internal static IReadOnlyList<DeclaredFileScope> FromTextParts(
         IEnumerable<string> parts,
@@ -101,6 +93,19 @@ internal static class GoalFileScopeInference
         }
 
         return Merge(selected);
+    }
+
+    private static IEnumerable<string> GoalTextParts(Goal goal)
+    {
+        yield return goal.Objective;
+        foreach (var task in goal.Tasks)
+        {
+            yield return task.Description;
+            if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
+            {
+                yield return task.VerificationPlan;
+            }
+        }
     }
 
     private static IReadOnlyList<DeclaredFileScope> Merge(IEnumerable<IReadOnlyList<DeclaredFileScope>> groups)

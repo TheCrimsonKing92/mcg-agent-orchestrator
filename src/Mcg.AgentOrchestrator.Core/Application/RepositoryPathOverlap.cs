@@ -11,8 +11,11 @@ public static class RepositoryPathOverlap
 {
     public static string Normalize(string path)
     {
-        return path.Replace('\\', '/').Trim('/').Trim();
+        return path.Replace('\\', '/').Trim().Trim('/');
     }
+
+    public static bool Overlaps(string left, string right) =>
+        Classify(left, right) != PathOverlapKind.None;
 
     public static PathOverlapKind Classify(string left, string right)
     {
